@@ -1,0 +1,98 @@
+"""Application configuration settings."""
+
+import secrets
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Union
+
+from pydantic import AnyHttpUrl, PostgresDsn, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application settings."""
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_ignore_empty=True,
+        extra="ignore",
+    )
+    
+    # Basic settings
+    PROJECT_NAME: str = "EnergyExe Core Backend"
+    DEBUG: bool = False
+    API_V1_STR: str = "/api/v1"
+    SECRET_KEY: str = secrets.token_urlsafe(32)
+    
+    # Server settings
+    HOST: str = "0.0.0.0"
+    PORT: int = 8000
+    RELOAD: bool = False
+    
+    # Security
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ALLOWED_HOSTS: List[str] = ["*"]
+    
+    # CORS
+    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
+    
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> Union[List[str], str]:
+        """Parse CORS origins."""
+        if isinstance(v, str) and not v.startswith("["):
+            return [i.strip() for i in v.split(",")]
+        elif isinstance(v, (list, str)):
+            return v
+        raise ValueError(v)
+    
+    # Database
+    DATABASE_URL: Optional[PostgresDsn] = None
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_ECHO: bool = False
+    
+    # Redis (optional)
+    REDIS_URL: Optional[str] = None
+    
+    # Email settings (optional)
+    SMTP_TLS: bool = True
+    SMTP_PORT: Optional[int] = None
+    SMTP_HOST: Optional[str] = None
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    EMAILS_FROM_EMAIL: Optional[str] = None
+    EMAILS_FROM_NAME: Optional[str] = None
+    
+    # Testing
+    TESTING: bool = False
+    
+    # Logging
+    LOG_LEVEL: str = "INFO"
+    
+    @property
+    def database_url_sync(self) -> str:
+        """Get synchronous database URL for Alembic."""
+        if not self.DATABASE_URL:
+            return "postgresql://user:password@localhost/energyexe_db"
+        
+        url = str(self.DATABASE_URL)
+        if url.startswith("postgresql+asyncpg://"):
+            return url.replace("postgresql+asyncpg://", "postgresql://")
+        return url
+    
+    @property
+    def database_url_async(self) -> str:
+        """Get asynchronous database URL for SQLAlchemy."""
+        if not self.DATABASE_URL:
+            return "postgresql+asyncpg://user:password@localhost/energyexe_db"
+        
+        url = str(self.DATABASE_URL)
+        if url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
+            return url.replace("postgresql://", "postgresql+asyncpg://")
+        return url
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    """Get cached application settings."""
+    return Settings()
