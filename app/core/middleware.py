@@ -71,9 +71,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         
         # Add security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        
+        # Allow frames for docs endpoints, otherwise deny
+        if request.url.path in ["/docs", "/redoc"]:
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        else:
+            response.headers["X-Frame-Options"] = "DENY"
         
         return response
 

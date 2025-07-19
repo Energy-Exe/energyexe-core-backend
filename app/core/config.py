@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     def database_url_sync(self) -> str:
         """Get synchronous database URL for Alembic."""
         if not self.DATABASE_URL:
-            return "postgresql://user:password@localhost/energyexe_db"
+            return "postgresql://postgres:RwaN9FJDCgP2AhuALxZ4Wa7QfvbKXQ647AAickORJ0rq5N6lUG19UneFJJTJ9Jnv@146.235.201.245:5432/energyexe_db"
         
         url = str(self.DATABASE_URL)
         if url.startswith("postgresql+asyncpg://"):
@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     def database_url_async(self) -> str:
         """Get asynchronous database URL for SQLAlchemy."""
         if not self.DATABASE_URL:
-            return "postgresql+asyncpg://user:password@localhost/energyexe_db"
+            return "postgresql+asyncpg://postgres:RwaN9FJDCgP2AhuALxZ4Wa7QfvbKXQ647AAickORJ0rq5N6lUG19UneFJJTJ9Jnv@146.235.201.245:5432/energyexe_db"
         
         url = str(self.DATABASE_URL)
         if url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
