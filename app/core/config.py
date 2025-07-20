@@ -101,7 +101,6 @@ class Settings(BaseSettings):
         return url
 
 
-@lru_cache()
 def get_settings() -> Settings:
-    """Get cached application settings."""
+    """Get application settings."""
     return Settings()

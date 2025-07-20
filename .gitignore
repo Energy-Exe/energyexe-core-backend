@@ -187,3 +187,4 @@ logs/
 *.log 
 
 .env
+file::*

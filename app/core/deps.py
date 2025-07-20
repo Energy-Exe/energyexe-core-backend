@@ -7,7 +7,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import async_session_factory
+from app.core.database import get_session_factory
 from app.core.exceptions import AuthenticationException
 from app.core.security import verify_token
 from app.models.user import User
@@ -19,7 +19,7 @@ security = HTTPBearer()
 
 async def get_db() -> AsyncSession:
     """Get database session."""
-    async with async_session_factory() as session:
+    async with get_session_factory()() as session:
         try:
             yield session
         except Exception:
