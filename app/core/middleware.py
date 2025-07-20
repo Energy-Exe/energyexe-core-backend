@@ -13,15 +13,15 @@ logger = structlog.get_logger()
 
 class LoggingMiddleware(BaseHTTPMiddleware):
     """Middleware for request/response logging."""
-    
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process request and log details."""
         request_id = str(uuid.uuid4())
         start_time = time.time()
-        
+
         # Add request ID to request state
         request.state.request_id = request_id
-        
+
         # Log request
         logger.info(
             "Request started",
@@ -30,13 +30,13 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             url=str(request.url),
             client_ip=request.client.host if request.client else None,
         )
-        
+
         try:
             response = await call_next(request)
-            
+
             # Calculate processing time
             process_time = time.time() - start_time
-            
+
             # Log response
             logger.info(
                 "Request completed",
@@ -44,13 +44,13 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 status_code=response.status_code,
                 process_time=round(process_time, 4),
             )
-            
+
             # Add headers
             response.headers["X-Request-ID"] = request_id
             response.headers["X-Process-Time"] = str(round(process_time, 4))
-            
+
             return response
-            
+
         except Exception as e:
             process_time = time.time() - start_time
             logger.error(
@@ -64,26 +64,26 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Middleware for adding security headers."""
-    
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Add security headers to response."""
         response = await call_next(request)
-        
+
         # Add security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        
+
         # Allow frames for docs endpoints, otherwise deny
         if request.url.path in ["/docs", "/redoc"]:
             response.headers["X-Frame-Options"] = "SAMEORIGIN"
         else:
             response.headers["X-Frame-Options"] = "DENY"
-        
+
         return response
 
 
 def add_middleware(app: FastAPI) -> None:
     """Add all middleware to the FastAPI app."""
     app.add_middleware(SecurityHeadersMiddleware)
-    app.add_middleware(LoggingMiddleware) 
+    app.add_middleware(LoggingMiddleware)

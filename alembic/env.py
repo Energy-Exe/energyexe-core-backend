@@ -8,10 +8,10 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from app.core.config import get_settings
 
 # Import your model's metadata
 from app.core.database import Base
-from app.core.config import get_settings
 
 # Import all models to ensure they are registered
 from app.models import user  # noqa: F401
@@ -99,4 +99,4 @@ def run_migrations_online() -> None:
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    run_migrations_online() 
+    run_migrations_online()

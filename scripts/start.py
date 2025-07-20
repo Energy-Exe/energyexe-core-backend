@@ -7,8 +7,8 @@ Or use the Poetry command directly:
     poetry run uvicorn app.main:app --reload
 """
 
-import uvicorn
 import structlog
+import uvicorn
 
 from app.core.config import get_settings
 
@@ -23,7 +23,7 @@ structlog.configure(
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
         structlog.processors.UnicodeDecoder(),
-        structlog.processors.JSONRenderer()
+        structlog.processors.JSONRenderer(),
     ],
     context_class=dict,
     logger_factory=structlog.stdlib.LoggerFactory(),
@@ -37,7 +37,7 @@ logger = structlog.get_logger()
 def main():
     """Main function to start the application."""
     settings = get_settings()
-    
+
     logger.info(
         "Starting EnergyExe Core Backend",
         host=settings.HOST,
@@ -45,7 +45,7 @@ def main():
         debug=settings.DEBUG,
         reload=settings.RELOAD,
     )
-    
+
     uvicorn.run(
         "app.main:app",
         host=settings.HOST,
@@ -56,4 +56,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()

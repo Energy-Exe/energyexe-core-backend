@@ -26,4 +26,4 @@ def test_openapi_docs_available_in_debug(client: TestClient):
     """Test that OpenAPI docs are available when in debug mode."""
     # Note: This test assumes DEBUG=True in test environment
     response = client.get("/docs")
-    assert response.status_code == 200 
+    assert response.status_code == 200

@@ -1,15 +1,16 @@
 """Pytest configuration and fixtures."""
 
 import asyncio
+import os
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from app.main import create_application
 from app.core.database import Base
 from app.core.deps import get_db
-import os
+from app.main import create_application
 
 # Import all models here to ensure they are registered on Base.metadata
 from app.models import user  # noqa: F401
@@ -38,13 +39,13 @@ async def test_engine():
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
-    
+
     # Create all tables
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
-    
+
     yield engine
-    
+
     # Drop all tables and dispose engine
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
@@ -57,7 +58,7 @@ async def test_session(test_engine):
     session_factory = async_sessionmaker(
         bind=test_engine, class_=AsyncSession, expire_on_commit=False
     )
-    
+
     async with session_factory() as session:
         yield session
 
@@ -66,16 +67,16 @@ async def test_session(test_engine):
 def client(test_session, event_loop):
     """Create a test client with database dependency override."""
     app = create_application()
-    
+
     # Override get_db dependency to return our test session
     async def override_get_db():
         yield test_session
-    
+
     app.dependency_overrides[get_db] = override_get_db
-    
+
     with TestClient(app) as test_client:
         yield test_client
-    
+
     # Clear overrides
     app.dependency_overrides.clear()
 
@@ -90,4 +91,4 @@ def user_data():
         "first_name": "Test",
         "last_name": "User",
         "is_active": True,
-    } 
+    }

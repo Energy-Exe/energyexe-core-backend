@@ -4,7 +4,7 @@ from typing import Generator
 
 import structlog
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session_factory
@@ -36,19 +36,19 @@ async def get_current_user(
     """Get current authenticated user."""
     token = credentials.credentials
     username = verify_token(token)
-    
+
     if username is None:
         raise AuthenticationException("Could not validate credentials")
-    
+
     user_service = UserService(db)
     user = await user_service.get_by_username(username)
-    
+
     if user is None:
         raise AuthenticationException("User not found")
-    
+
     if not user.is_active:
         raise AuthenticationException("Inactive user")
-    
+
     return user
 
 
@@ -66,8 +66,5 @@ async def get_current_superuser(
 ) -> User:
     """Get current superuser."""
     if not current_user.is_superuser:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not enough permissions"
-        )
-    return current_user 
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
+    return current_user

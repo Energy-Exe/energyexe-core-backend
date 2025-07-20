@@ -1,1 +1,1 @@
-"""Core module for application configuration and utilities.""" 
+"""Core module for application configuration and utilities."""

@@ -13,6 +13,7 @@ logger = structlog.get_logger()
 _engine = None
 _async_session_factory = None
 
+
 def get_engine():
     """Get or create the async engine."""
     global _engine
@@ -22,7 +23,7 @@ def get_engine():
             "echo": settings.DB_ECHO,
             "future": True,
         }
-        
+
         if "sqlite" in settings.database_url_async:
             # For SQLite, use StaticPool without pool size parameters
             engine_kwargs["poolclass"] = StaticPool
@@ -31,12 +32,10 @@ def get_engine():
             # For PostgreSQL, use pool settings
             engine_kwargs["pool_size"] = settings.DB_POOL_SIZE
             engine_kwargs["max_overflow"] = settings.DB_MAX_OVERFLOW
-        
-        _engine = create_async_engine(
-            settings.database_url_async,
-            **engine_kwargs
-        )
+
+        _engine = create_async_engine(settings.database_url_async, **engine_kwargs)
     return _engine
+
 
 def get_session_factory():
     """Get or create the async session factory."""
@@ -52,6 +51,7 @@ def get_session_factory():
 
 class Base(DeclarativeBase):
     """Base class for all database models."""
+
     pass
 
 
@@ -72,11 +72,11 @@ async def init_db() -> None:
     try:
         # Import all models here to ensure they are registered
         from app.models import user  # noqa: F401
-        
+
         # Create tables
         async with get_engine().begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        
+
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error("Failed to initialize database", error=str(e))
@@ -86,4 +86,4 @@ async def init_db() -> None:
 async def close_db() -> None:
     """Close database connections."""
     await get_engine().dispose()
-    logger.info("Database connections closed") 
+    logger.info("Database connections closed")

@@ -33,7 +33,7 @@ async def update_current_user_profile(
 ):
     """Update current user profile."""
     user_service = UserService(db)
-    
+
     try:
         updated_user = await user_service.update(current_user.id, user_data)
         logger.info("User profile updated", user_id=current_user.id)
@@ -46,7 +46,9 @@ async def update_current_user_profile(
 async def get_users(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
-    search: str = Query(None, description="Search term to filter users by username, email, first_name, or last_name"),
+    search: str = Query(
+        None, description="Search term to filter users by username, email, first_name, or last_name"
+    ),
     current_user: User = Depends(get_current_superuser),
     db: AsyncSession = Depends(get_db),
 ):
@@ -65,10 +67,10 @@ async def get_user_by_id(
     """Get user by ID (superuser only)."""
     user_service = UserService(db)
     user = await user_service.get_by_id(user_id)
-    
+
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    
+
     return user
 
 
@@ -81,7 +83,7 @@ async def update_user(
 ):
     """Update user (superuser only)."""
     user_service = UserService(db)
-    
+
     try:
         updated_user = await user_service.update(user_id, user_data)
         logger.info("User updated by admin", user_id=user_id, admin_id=current_user.id)
@@ -99,15 +101,14 @@ async def delete_user(
     """Delete user (superuser only)."""
     if user_id == current_user.id:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete your own account"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete your own account"
         )
-    
+
     user_service = UserService(db)
-    
+
     try:
         await user_service.delete(user_id)
         logger.info("User deleted by admin", user_id=user_id, admin_id=current_user.id)
         return {"message": "User deleted successfully"}
     except NotFoundException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message) 
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)

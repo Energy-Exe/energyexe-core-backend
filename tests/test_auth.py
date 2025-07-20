@@ -30,7 +30,7 @@ def test_register_duplicate_email(client: TestClient, user_data):
     """Test registration with duplicate email fails."""
     # Register first user
     client.post("/api/v1/auth/register", json=user_data)
-    
+
     # Try to register another user with same email
     user_data_2 = user_data.copy()
     user_data_2["username"] = "testuser2"
@@ -43,7 +43,7 @@ def test_register_duplicate_username(client: TestClient, user_data):
     """Test registration with duplicate username fails."""
     # Register first user
     client.post("/api/v1/auth/register", json=user_data)
-    
+
     # Try to register another user with same username
     user_data_2 = user_data.copy()
     user_data_2["email"] = "test2@example.com"
@@ -57,7 +57,7 @@ def test_login_success(client: TestClient, user_data):
     # Register user first
     register_response = client.post("/api/v1/auth/register", json=user_data)
     assert register_response.status_code == 201
-    
+
     # Login with JSON data
     login_data = {
         "username": user_data["username"],
@@ -74,7 +74,7 @@ def test_login_invalid_credentials(client: TestClient, user_data):
     """Test login with invalid credentials."""
     # Register user first
     client.post("/api/v1/auth/register", json=user_data)
-    
+
     # Try login with wrong password
     login_data = {
         "username": user_data["username"],
@@ -93,4 +93,4 @@ def test_login_nonexistent_user(client: TestClient):
     }
     response = client.post("/api/v1/auth/login", json=login_data)
     assert response.status_code == 401
-    assert "incorrect" in response.json()["error"]["message"].lower() 
+    assert "incorrect" in response.json()["error"]["message"].lower()

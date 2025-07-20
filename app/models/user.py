@@ -1,6 +1,7 @@
 """User model."""
 
 from datetime import datetime
+
 from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -9,9 +10,9 @@ from app.core.database import Base
 
 class User(Base):
     """User model."""
-    
+
     __tablename__ = "users"
-    
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     username: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
@@ -24,7 +25,7 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
-    
+
     def __repr__(self) -> str:
         """String representation of User."""
-        return f"<User(id={self.id}, email='{self.email}', username='{self.username}')>" 
+        return f"<User(id={self.id}, email='{self.email}', username='{self.username}')>"
