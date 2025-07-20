@@ -1,0 +1,79 @@
+from datetime import datetime, date
+from typing import Optional
+from decimal import Decimal
+from pydantic import BaseModel, Field
+
+
+class WindfarmBase(BaseModel):
+    code: str = Field(..., min_length=1, max_length=50)
+    name: str = Field(..., min_length=1, max_length=255)
+    country_id: int
+    state_id: int
+    region_id: Optional[int] = None
+    bidzone_id: Optional[int] = None
+    market_balance_area_id: Optional[int] = None
+    control_area_id: Optional[int] = None
+    nameplate_capacity_mw: Optional[int] = None
+    project_id: Optional[int] = None
+    owner_id: Optional[int] = None
+    commercial_operational_date: Optional[date] = None
+    first_power_date: Optional[date] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    polygon_wkt: Optional[str] = None
+    foundation_type: Optional[str] = Field(None, pattern="^(fixed|floating)$")
+    location_type: Optional[str] = Field(None, pattern="^(onshore|offshore)$")
+    status: Optional[str] = Field(None, pattern="^(operational|decommissioned|under_installation)$")
+    notes: Optional[str] = Field(None, max_length=300)
+    alternate_name: Optional[str] = Field(None, max_length=255)
+    environmental_assessment_status: Optional[str] = Field(None, max_length=100)
+    permits_obtained: bool = False
+    grid_connection_status: Optional[str] = Field(None, max_length=100)
+    total_investment_amount: Optional[Decimal] = None
+    investment_currency: Optional[str] = Field(None, max_length=3)
+    address: Optional[str] = None
+    postal_code: Optional[str] = Field(None, max_length=20)
+
+
+class WindfarmCreate(WindfarmBase):
+    pass
+
+
+class WindfarmUpdate(BaseModel):
+    code: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    country_id: Optional[int] = None
+    state_id: Optional[int] = None
+    region_id: Optional[int] = None
+    bidzone_id: Optional[int] = None
+    market_balance_area_id: Optional[int] = None
+    control_area_id: Optional[int] = None
+    nameplate_capacity_mw: Optional[int] = None
+    project_id: Optional[int] = None
+    owner_id: Optional[int] = None
+    commercial_operational_date: Optional[date] = None
+    first_power_date: Optional[date] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    polygon_wkt: Optional[str] = None
+    foundation_type: Optional[str] = Field(None, pattern="^(fixed|floating)$")
+    location_type: Optional[str] = Field(None, pattern="^(onshore|offshore)$")
+    status: Optional[str] = Field(None, pattern="^(operational|decommissioned|under_installation)$")
+    notes: Optional[str] = Field(None, max_length=300)
+    alternate_name: Optional[str] = Field(None, max_length=255)
+    environmental_assessment_status: Optional[str] = Field(None, max_length=100)
+    permits_obtained: Optional[bool] = None
+    grid_connection_status: Optional[str] = Field(None, max_length=100)
+    total_investment_amount: Optional[Decimal] = None
+    investment_currency: Optional[str] = Field(None, max_length=3)
+    address: Optional[str] = None
+    postal_code: Optional[str] = Field(None, max_length=20)
+
+
+class Windfarm(WindfarmBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

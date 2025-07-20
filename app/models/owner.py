@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -13,3 +14,8 @@ class Owner(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    windfarms = relationship("Windfarm", back_populates="owner")
+    substations = relationship("Substation", back_populates="owner")
+    cables = relationship("Cable", back_populates="owner")

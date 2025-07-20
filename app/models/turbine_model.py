@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, DateTime, DECIMAL
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -23,3 +24,6 @@ class TurbineModel(Base):
     
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    turbine_units = relationship("TurbineUnit", back_populates="turbine_model")

@@ -19,5 +19,6 @@ class State(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    # Relationship
+    # Relationships
     country = relationship("Country", back_populates="states")
+    windfarms = relationship("Windfarm", back_populates="state")
