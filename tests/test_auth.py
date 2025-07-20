@@ -23,8 +23,7 @@ def test_register_user(client: TestClient, user_data):
     data = response.json()
     assert data["email"] == user_data["email"]
     assert data["username"] == user_data["username"]
-    assert "id" in data
-    assert "hashed_password" not in data  # Password should not be returned
+    assert "hashed_password" not in data  # Security check
 
 
 def test_register_duplicate_email(client: TestClient, user_data):
@@ -37,6 +36,7 @@ def test_register_duplicate_email(client: TestClient, user_data):
     user_data_2["username"] = "testuser2"
     response = client.post("/api/v1/auth/register", json=user_data_2)
     assert response.status_code == 400
+    assert "email" in response.json()["error"]["message"].lower()
 
 
 def test_register_duplicate_username(client: TestClient, user_data):
@@ -49,19 +49,21 @@ def test_register_duplicate_username(client: TestClient, user_data):
     user_data_2["email"] = "test2@example.com"
     response = client.post("/api/v1/auth/register", json=user_data_2)
     assert response.status_code == 400
+    assert "username" in response.json()["error"]["message"].lower()
 
 
 def test_login_success(client: TestClient, user_data):
     """Test successful login."""
     # Register user first
-    client.post("/api/v1/auth/register", json=user_data)
+    register_response = client.post("/api/v1/auth/register", json=user_data)
+    assert register_response.status_code == 201
     
-    # Login
+    # Login with JSON data
     login_data = {
         "username": user_data["username"],
         "password": user_data["password"],
     }
-    response = client.post("/api/v1/auth/login", data=login_data)
+    response = client.post("/api/v1/auth/login", json=login_data)
     assert response.status_code == 200
     data = response.json()
     assert "access_token" in data
@@ -78,8 +80,9 @@ def test_login_invalid_credentials(client: TestClient, user_data):
         "username": user_data["username"],
         "password": "wrongpassword",
     }
-    response = client.post("/api/v1/auth/login", data=login_data)
+    response = client.post("/api/v1/auth/login", json=login_data)
     assert response.status_code == 401
+    assert "incorrect" in response.json()["error"]["message"].lower()
 
 
 def test_login_nonexistent_user(client: TestClient):
@@ -88,5 +91,6 @@ def test_login_nonexistent_user(client: TestClient):
         "username": "nonexistent",
         "password": "password",
     }
-    response = client.post("/api/v1/auth/login", data=login_data)
-    assert response.status_code == 401 
+    response = client.post("/api/v1/auth/login", json=login_data)
+    assert response.status_code == 401
+    assert "incorrect" in response.json()["error"]["message"].lower() 

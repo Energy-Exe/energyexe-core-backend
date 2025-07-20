@@ -11,6 +11,7 @@ from app.core.database import init_db
 from app.core.exceptions import add_exception_handlers
 from app.core.middleware import add_middleware
 from app.api.v1.router import api_router
+import os
 
 logger = structlog.get_logger()
 
@@ -20,8 +21,10 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     logger.info("Starting up application")
     
-    # Initialize database
-    await init_db()
+    # Skip database initialization during testing
+    if not os.getenv("TESTING", "false").lower() == "true":
+        # Initialize database
+        await init_db()
     
     yield
     
@@ -32,6 +35,9 @@ def create_application() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
     
+    # Skip lifespan during testing
+    lifespan_context = None if os.getenv("TESTING", "false").lower() == "true" else lifespan
+    
     app = FastAPI(
         title=settings.PROJECT_NAME,
         description="EnergyExe Core Backend API",
@@ -39,7 +45,7 @@ def create_application() -> FastAPI:
         openapi_url=f"{settings.API_V1_STR}/openapi.json" if settings.DEBUG else None,
         docs_url="/docs" if settings.DEBUG else None,
         redoc_url="/redoc" if settings.DEBUG else None,
-        lifespan=lifespan,
+        lifespan=lifespan_context,
     )
     
     # Add middleware
@@ -68,23 +74,23 @@ def create_application() -> FastAPI:
     # Include API router
     app.include_router(api_router, prefix=settings.API_V1_STR)
     
+    # Add root endpoints
+    @app.get("/")
+    async def root():
+        """Root endpoint."""
+        return {
+            "message": "EnergyExe Core Backend API",
+            "version": "0.1.0",
+            "status": "healthy"
+        }
+
+    @app.get("/health")
+    async def health_check():
+        """Health check endpoint."""
+        return {"status": "healthy"}
+    
     return app
 
 
-app = create_application()
-
-
-@app.get("/")
-async def root():
-    """Root endpoint."""
-    return {
-        "message": "EnergyExe Core Backend API",
-        "version": "0.1.0",
-        "status": "healthy"
-    }
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy"} 
+# Create the app instance
+app = create_application() 

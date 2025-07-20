@@ -46,12 +46,13 @@ async def update_current_user_profile(
 async def get_users(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
+    search: str = Query(None, description="Search term to filter users by username, email, first_name, or last_name"),
     current_user: User = Depends(get_current_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all users (superuser only)."""
     user_service = UserService(db)
-    users = await user_service.get_all(skip=skip, limit=limit)
+    users = await user_service.get_all(skip=skip, limit=limit, search=search)
     return users
 
 

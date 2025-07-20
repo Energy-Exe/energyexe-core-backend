@@ -1,6 +1,7 @@
 """Application configuration settings."""
 
 import secrets
+import os
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 
@@ -33,7 +34,7 @@ class Settings(BaseSettings):
     ALLOWED_HOSTS: List[str] = ["*"]
     
     # CORS
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
+    BACKEND_CORS_ORIGINS: List[str] = []
     
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
@@ -64,7 +65,7 @@ class Settings(BaseSettings):
     EMAILS_FROM_NAME: Optional[str] = None
     
     # Testing
-    TESTING: bool = False
+    TESTING: bool = os.getenv("TESTING", "false").lower() == "true"
     
     # Logging
     LOG_LEVEL: str = "INFO"
@@ -72,6 +73,10 @@ class Settings(BaseSettings):
     @property
     def database_url_sync(self) -> str:
         """Get synchronous database URL for Alembic."""
+        # Use SQLite for testing
+        if self.TESTING:
+            return "sqlite:///./test.db"
+        
         if not self.DATABASE_URL:
             return "postgresql://postgres:RwaN9FJDCgP2AhuALxZ4Wa7QfvbKXQ647AAickORJ0rq5N6lUG19UneFJJTJ9Jnv@146.235.201.245:5432/energyexe_db"
         
@@ -83,6 +88,10 @@ class Settings(BaseSettings):
     @property
     def database_url_async(self) -> str:
         """Get asynchronous database URL for SQLAlchemy."""
+        # Use SQLite for testing
+        if self.TESTING:
+            return "sqlite+aiosqlite:///:memory:"
+        
         if not self.DATABASE_URL:
             return "postgresql+asyncpg://postgres:RwaN9FJDCgP2AhuALxZ4Wa7QfvbKXQ647AAickORJ0rq5N6lUG19UneFJJTJ9Jnv@146.235.201.245:5432/energyexe_db"
         

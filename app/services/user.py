@@ -3,7 +3,7 @@
 from typing import List, Optional
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundException, ValidationException
@@ -35,11 +35,24 @@ class UserService:
         result = await self.db.execute(select(User).where(User.username == username))
         return result.scalar_one_or_none()
     
-    async def get_all(self, skip: int = 0, limit: int = 100) -> List[User]:
-        """Get all users with pagination."""
-        result = await self.db.execute(
-            select(User).offset(skip).limit(limit).order_by(User.id)
-        )
+    async def get_all(self, skip: int = 0, limit: int = 100, search: Optional[str] = None) -> List[User]:
+        """Get all users with pagination and optional search."""
+        query = select(User)
+        
+        # Add search functionality if search term is provided
+        if search:
+            search_term = f"%{search}%"
+            query = query.where(
+                or_(
+                    User.username.ilike(search_term),
+                    User.email.ilike(search_term),
+                    User.first_name.ilike(search_term),
+                    User.last_name.ilike(search_term)
+                )
+            )
+        
+        query = query.offset(skip).limit(limit).order_by(User.id)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
     
     async def create(self, user_data: UserCreate) -> User:
@@ -117,17 +130,18 @@ class UserService:
         return True
     
     async def authenticate(self, username: str, password: str) -> Optional[User]:
-        """Authenticate a user."""
+        """Authenticate a user by username or email and password."""
+        # Try to get user by username first
         user = await self.get_by_username(username)
         
+        # If not found by username, try email
         if not user:
-            # Try email as well
             user = await self.get_by_email(username)
-        
-        if not user or not verify_password(password, user.hashed_password):
+            
+        if not user:
             return None
         
-        if not user.is_active:
+        if not verify_password(password, user.hashed_password):
             return None
         
-        return user 
+        return user
