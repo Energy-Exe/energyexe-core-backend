@@ -2,7 +2,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.schemas.market_balance_area import MarketBalanceArea, MarketBalanceAreaCreate, MarketBalanceAreaUpdate
+from app.schemas import MarketBalanceArea, MarketBalanceAreaCreate, MarketBalanceAreaUpdate
 from app.services.market_balance_area import MarketBalanceAreaService
 
 router = APIRouter()

@@ -2,7 +2,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.schemas.control_area import ControlArea, ControlAreaCreate, ControlAreaUpdate
+from app.schemas import ControlArea, ControlAreaCreate, ControlAreaUpdate
 from app.services.control_area import ControlAreaService
 
 router = APIRouter()

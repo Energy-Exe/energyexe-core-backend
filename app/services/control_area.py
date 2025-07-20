@@ -2,6 +2,7 @@ from typing import List, Optional
 from sqlalchemy import and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 from app.models.control_area import ControlArea
 from app.schemas.control_area import ControlAreaCreate, ControlAreaUpdate
 
@@ -16,6 +17,7 @@ class ControlAreaService:
     ) -> List[ControlArea]:
         result = await db.execute(
             select(ControlArea)
+            .options(selectinload(ControlArea.country))
             .offset(skip)
             .limit(limit)
             .order_by(ControlArea.created_at.desc())
@@ -24,12 +26,20 @@ class ControlAreaService:
     
     @staticmethod
     async def get_control_area(db: AsyncSession, control_area_id: int) -> Optional[ControlArea]:
-        result = await db.execute(select(ControlArea).where(ControlArea.id == control_area_id))
+        result = await db.execute(
+            select(ControlArea)
+            .options(selectinload(ControlArea.country))
+            .where(ControlArea.id == control_area_id)
+        )
         return result.scalar_one_or_none()
     
     @staticmethod
     async def get_control_area_by_code(db: AsyncSession, code: str) -> Optional[ControlArea]:
-        result = await db.execute(select(ControlArea).where(ControlArea.code == code))
+        result = await db.execute(
+            select(ControlArea)
+            .options(selectinload(ControlArea.country))
+            .where(ControlArea.code == code)
+        )
         return result.scalar_one_or_none()
     
     @staticmethod
@@ -42,6 +52,7 @@ class ControlAreaService:
         search_pattern = f"%{query}%"
         result = await db.execute(
             select(ControlArea)
+            .options(selectinload(ControlArea.country))
             .where(
                 and_(
                     ControlArea.name.ilike(search_pattern)
@@ -79,7 +90,14 @@ class ControlAreaService:
         
         await db.commit()
         await db.refresh(db_control_area)
-        return db_control_area
+        
+        # Fetch with country relationship
+        result = await db.execute(
+            select(ControlArea)
+            .options(selectinload(ControlArea.country))
+            .where(ControlArea.id == control_area_id)
+        )
+        return result.scalar_one_or_none()
     
     @staticmethod
     async def delete_control_area(db: AsyncSession, control_area_id: int) -> Optional[ControlArea]:

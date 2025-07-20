@@ -2,6 +2,7 @@ from typing import List, Optional
 from sqlalchemy import and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 from app.models.market_balance_area import MarketBalanceArea
 from app.schemas.market_balance_area import MarketBalanceAreaCreate, MarketBalanceAreaUpdate
 
@@ -16,6 +17,7 @@ class MarketBalanceAreaService:
     ) -> List[MarketBalanceArea]:
         result = await db.execute(
             select(MarketBalanceArea)
+            .options(selectinload(MarketBalanceArea.country))
             .offset(skip)
             .limit(limit)
             .order_by(MarketBalanceArea.created_at.desc())
@@ -24,12 +26,20 @@ class MarketBalanceAreaService:
     
     @staticmethod
     async def get_market_balance_area(db: AsyncSession, market_balance_area_id: int) -> Optional[MarketBalanceArea]:
-        result = await db.execute(select(MarketBalanceArea).where(MarketBalanceArea.id == market_balance_area_id))
+        result = await db.execute(
+            select(MarketBalanceArea)
+            .options(selectinload(MarketBalanceArea.country))
+            .where(MarketBalanceArea.id == market_balance_area_id)
+        )
         return result.scalar_one_or_none()
     
     @staticmethod
     async def get_market_balance_area_by_code(db: AsyncSession, code: str) -> Optional[MarketBalanceArea]:
-        result = await db.execute(select(MarketBalanceArea).where(MarketBalanceArea.code == code))
+        result = await db.execute(
+            select(MarketBalanceArea)
+            .options(selectinload(MarketBalanceArea.country))
+            .where(MarketBalanceArea.code == code)
+        )
         return result.scalar_one_or_none()
     
     @staticmethod
@@ -42,6 +52,7 @@ class MarketBalanceAreaService:
         search_pattern = f"%{query}%"
         result = await db.execute(
             select(MarketBalanceArea)
+            .options(selectinload(MarketBalanceArea.country))
             .where(
                 and_(
                     MarketBalanceArea.name.ilike(search_pattern)
@@ -79,7 +90,14 @@ class MarketBalanceAreaService:
         
         await db.commit()
         await db.refresh(db_market_balance_area)
-        return db_market_balance_area
+        
+        # Fetch with country relationship
+        result = await db.execute(
+            select(MarketBalanceArea)
+            .options(selectinload(MarketBalanceArea.country))
+            .where(MarketBalanceArea.id == market_balance_area_id)
+        )
+        return result.scalar_one_or_none()
     
     @staticmethod
     async def delete_market_balance_area(db: AsyncSession, market_balance_area_id: int) -> Optional[MarketBalanceArea]:

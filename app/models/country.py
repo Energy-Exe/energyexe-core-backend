@@ -23,3 +23,5 @@ class Country(Base):
     states = relationship("State", back_populates="country")
     windfarms = relationship("Windfarm", back_populates="country")
     bidzones = relationship("Bidzone", secondary=bidzone_countries, back_populates="countries")
+    control_areas = relationship("ControlArea", back_populates="country")
+    market_balance_areas = relationship("MarketBalanceArea", back_populates="country")

@@ -37,6 +37,8 @@ from scripts.seeds.seed_countries import seed_countries
 from scripts.seeds.seed_states import seed_states
 from scripts.seeds.seed_regions import seed_regions
 from scripts.seeds.seed_bidzones import seed_bidzones
+from scripts.seeds.seed_control_areas import seed_control_areas
+from scripts.seeds.seed_market_balance_areas import seed_market_balance_areas
 
 
 def get_sync_db_session():
@@ -75,6 +77,16 @@ def run_seeds():
         seed_bidzones(db)
         print("✅ Bidzones seeded successfully")
         
+        # Seed control areas (depends on countries)
+        print("\n🎛️ Seeding control areas...")
+        seed_control_areas(db)
+        print("✅ Control areas seeded successfully")
+        
+        # Seed market balance areas (depends on countries)
+        print("\n⚖️ Seeding market balance areas...")
+        seed_market_balance_areas(db)
+        print("✅ Market balance areas seeded successfully")
+        
         print("\n🎉 Database seeding completed successfully!")
         
     except Exception as e:
@@ -92,6 +104,8 @@ def check_existing_data(db: Session) -> Dict[str, int]:
         "states": db.query(State).count(),
         "regions": db.query(Region).count(),
         "bidzones": db.query(Bidzone).count(),
+        "control_areas": db.query(ControlArea).count(),
+        "market_balance_areas": db.query(MarketBalanceArea).count(),
     }
     return counts
 
