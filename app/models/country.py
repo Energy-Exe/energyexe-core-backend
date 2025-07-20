@@ -4,6 +4,7 @@ from sqlalchemy import Column, DateTime, Float, Integer, String, Text, func
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+from app.models.bidzone_country import bidzone_countries
 
 
 class Country(Base):
@@ -21,3 +22,4 @@ class Country(Base):
     # Relationships
     states = relationship("State", back_populates="country")
     windfarms = relationship("Windfarm", back_populates="country")
+    bidzones = relationship("Bidzone", secondary=bidzone_countries, back_populates="countries")
