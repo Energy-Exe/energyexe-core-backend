@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     ALLOWED_HOSTS: List[str] = ["*"]
 
     # CORS
-    BACKEND_CORS_ORIGINS: List[str] = []
+    BACKEND_CORS_ORIGINS: List[str] = ["https://dashboard.energyexe.com"]
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
