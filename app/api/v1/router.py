@@ -2,7 +2,23 @@
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, countries, states, users, regions, bidzones, market_balance_areas, control_areas, owners, projects, turbine_models, windfarms, substations, turbine_units, cables
+from app.api.v1.endpoints import (
+    auth,
+    bidzones,
+    cables,
+    control_areas,
+    countries,
+    market_balance_areas,
+    owners,
+    projects,
+    regions,
+    states,
+    substations,
+    turbine_models,
+    turbine_units,
+    users,
+    windfarms,
+)
 
 api_router = APIRouter()
 
@@ -13,7 +29,9 @@ api_router.include_router(countries.router, prefix="/countries", tags=["countrie
 api_router.include_router(states.router, prefix="/states", tags=["states"])
 api_router.include_router(regions.router, prefix="/regions", tags=["regions"])
 api_router.include_router(bidzones.router, prefix="/bidzones", tags=["bidzones"])
-api_router.include_router(market_balance_areas.router, prefix="/market-balance-areas", tags=["market-balance-areas"])
+api_router.include_router(
+    market_balance_areas.router, prefix="/market-balance-areas", tags=["market-balance-areas"]
+)
 api_router.include_router(control_areas.router, prefix="/control-areas", tags=["control-areas"])
 api_router.include_router(owners.router, prefix="/owners", tags=["owners"])
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])

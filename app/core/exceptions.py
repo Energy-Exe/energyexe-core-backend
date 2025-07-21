@@ -9,6 +9,17 @@ from sqlalchemy.exc import SQLAlchemyError
 logger = structlog.get_logger()
 
 
+def add_cors_headers(response: JSONResponse, request: Request) -> JSONResponse:
+    """Add CORS headers to a JSONResponse."""
+    origin = request.headers.get("origin")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
+
+
 class BaseCustomException(Exception):
     """Base class for custom exceptions."""
 
@@ -58,7 +69,7 @@ async def custom_exception_handler(request: Request, exc: BaseCustomException) -
         status_code=exc.status_code,
     )
 
-    return JSONResponse(
+    response = JSONResponse(
         status_code=exc.status_code,
         content={
             "error": {
@@ -68,6 +79,8 @@ async def custom_exception_handler(request: Request, exc: BaseCustomException) -
             }
         },
     )
+
+    return add_cors_headers(response, request)
 
 
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
@@ -81,7 +94,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         detail=exc.detail,
     )
 
-    return JSONResponse(
+    response = JSONResponse(
         status_code=exc.status_code,
         content={
             "error": {
@@ -91,6 +104,8 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
             }
         },
     )
+
+    return add_cors_headers(response, request)
 
 
 async def validation_exception_handler(request: Request, exc: ValidationError) -> JSONResponse:
@@ -103,7 +118,7 @@ async def validation_exception_handler(request: Request, exc: ValidationError) -
         errors=exc.errors(),
     )
 
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "error": {
@@ -114,6 +129,8 @@ async def validation_exception_handler(request: Request, exc: ValidationError) -
             }
         },
     )
+
+    return add_cors_headers(response, request)
 
 
 async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError) -> JSONResponse:
@@ -126,7 +143,7 @@ async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError) -
         error=str(exc),
     )
 
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "error": {
@@ -136,6 +153,8 @@ async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError) -
             }
         },
     )
+
+    return add_cors_headers(response, request)
 
 
 async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -149,7 +168,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         error=str(exc),
     )
 
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "error": {
@@ -159,6 +178,8 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
             }
         },
     )
+
+    return add_cors_headers(response, request)
 
 
 def add_exception_handlers(app: FastAPI) -> None:

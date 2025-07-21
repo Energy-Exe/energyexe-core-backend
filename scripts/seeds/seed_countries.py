@@ -4,8 +4,8 @@ Seed script for countries table
 """
 
 from sqlalchemy.orm import Session
-from app.models.country import Country
 
+from app.models.country import Country
 
 COUNTRIES_DATA = [
     {
@@ -16,7 +16,7 @@ COUNTRIES_DATA = [
     },
     {
         "code": "CAN",
-        "name": "Canada", 
+        "name": "Canada",
         "lat": 56.1304,
         "lng": -106.3468,
     },
@@ -357,23 +357,23 @@ COUNTRIES_DATA = [
 def seed_countries(db: Session):
     """Seed countries table with initial data"""
     print(f"  Checking for existing countries...")
-    
+
     # Get existing country codes
     existing_codes = {c.code for c in db.query(Country.code).all()}
-    
+
     # Filter out countries that already exist
     countries_to_add = []
     for country_data in COUNTRIES_DATA:
         if country_data["code"] not in existing_codes:
             countries_to_add.append(Country(**country_data))
-    
+
     if not countries_to_add:
         print(f"  Found {len(existing_codes)} existing countries, no new countries to add")
         return
-    
+
     print(f"  Adding {len(countries_to_add)} new countries...")
-    
+
     db.add_all(countries_to_add)
     db.commit()
-    
+
     print(f"  Successfully added {len(countries_to_add)} countries")

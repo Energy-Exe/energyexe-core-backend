@@ -50,6 +50,7 @@ class Settings(BaseSettings):
             else:
                 # Handle JSON array string format
                 import json
+
                 try:
                     return json.loads(v)
                 except json.JSONDecodeError:

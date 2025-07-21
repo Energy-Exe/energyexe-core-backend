@@ -1,13 +1,17 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
+
 from pydantic import BaseModel, Field
+
 from app.schemas.country import Country
 
 
 class BidzoneBase(BaseModel):
     code: str = Field(..., min_length=1, max_length=50)
     name: str = Field(..., min_length=1, max_length=255)
-    bidzone_type: Optional[str] = Field(None, max_length=50)  # "national", "regional", "interconnector", "virtual"
+    bidzone_type: Optional[str] = Field(
+        None, max_length=50
+    )  # "national", "regional", "interconnector", "virtual"
     lat: Optional[float] = None
     lng: Optional[float] = None
     polygon_wkt: Optional[str] = None

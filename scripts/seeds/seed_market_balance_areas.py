@@ -4,13 +4,18 @@ Seed script for market_balance_areas table
 """
 
 from sqlalchemy.orm import Session
-from app.models.market_balance_area import MarketBalanceArea
-from app.models.country import Country
 
+from app.models.country import Country
+from app.models.market_balance_area import MarketBalanceArea
 
 # Market balance area data with country mapping
 MARKET_BALANCE_AREAS_DATA = [
-    {"code": "10Y1001A1001A016", "name": "SEM", "acronym": "SEM", "country_name": "United Kingdom"},  # Northern Ireland
+    {
+        "code": "10Y1001A1001A016",
+        "name": "SEM",
+        "acronym": "SEM",
+        "country_name": "United Kingdom",
+    },  # Northern Ireland
     {"code": "10Y1001A1001A39I", "name": "EE", "acronym": "EE", "country_name": "Estonia"},
     {"code": "10Y1001A1001A44P", "name": "SE1", "acronym": "SE1", "country_name": "Sweden"},
     {"code": "10Y1001A1001A45N", "name": "SE2", "acronym": "SE2", "country_name": "Sweden"},
@@ -20,29 +25,109 @@ MARKET_BALANCE_AREAS_DATA = [
     {"code": "10Y1001A1001A49F", "name": "RU", "acronym": "RU", "country_name": "Russia"},
     {"code": "10Y1001A1001A50U", "name": "RU-KGD", "acronym": "RU-KGD", "country_name": "Russia"},
     {"code": "10Y1001A1001A51S", "name": "BY", "acronym": "BY", "country_name": "Belarus"},
-    {"code": "10Y1001A1001A59C", "name": "IE(SEM)", "acronym": "IE(SEM)", "country_name": "Ireland"},
-    {"code": "10Y1001A1001A699", "name": "IT-Z-Brindisi", "acronym": "IT-Z-Brindisi", "country_name": "Italy"},
-    {"code": "10Y1001A1001A70O", "name": "IT-Z-Centre-North", "acronym": "IT-Z-Centre-North", "country_name": "Italy"},
-    {"code": "10Y1001A1001A71M", "name": "IT-Z-Centre-South", "acronym": "IT-Z-Centre-South", "country_name": "Italy"},
-    {"code": "10Y1001A1001A72K", "name": "IT-Z-Foggia", "acronym": "IT-Z-Foggia", "country_name": "Italy"},
-    {"code": "10Y1001A1001A73I", "name": "IT-Z-North", "acronym": "IT-Z-North", "country_name": "Italy"},
-    {"code": "10Y1001A1001A74G", "name": "IT-Z-Sardinia", "acronym": "IT-Z-Sardinia", "country_name": "Italy"},
-    {"code": "10Y1001A1001A75E", "name": "IT-Z-Sicily", "acronym": "IT-Z-Sicily", "country_name": "Italy"},
-    {"code": "10Y1001A1001A76C", "name": "IT-Z-Priolo", "acronym": "IT-Z-Priolo", "country_name": "Italy"},
-    {"code": "10Y1001A1001A77A", "name": "IT-Z-Rossano", "acronym": "IT-Z-Rossano", "country_name": "Italy"},
-    {"code": "10Y1001A1001A788", "name": "IT-Z-South", "acronym": "IT-Z-South", "country_name": "Italy"},
-    {"code": "10Y1001A1001A82H", "name": "DE-LU", "acronym": "DE-LU", "country_name": "Germany"},  # Germany-Luxembourg, assigned to Germany
-    {"code": "10Y1001A1001A84D", "name": "IT-MACRZONENORTH", "acronym": "IT-MACRZONENORTH", "country_name": "Italy"},
-    {"code": "10Y1001A1001A85B", "name": "IT-MACRZONESOUTH", "acronym": "IT-MACRZONESOUTH", "country_name": "Italy"},
+    {
+        "code": "10Y1001A1001A59C",
+        "name": "IE(SEM)",
+        "acronym": "IE(SEM)",
+        "country_name": "Ireland",
+    },
+    {
+        "code": "10Y1001A1001A699",
+        "name": "IT-Z-Brindisi",
+        "acronym": "IT-Z-Brindisi",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A70O",
+        "name": "IT-Z-Centre-North",
+        "acronym": "IT-Z-Centre-North",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A71M",
+        "name": "IT-Z-Centre-South",
+        "acronym": "IT-Z-Centre-South",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A72K",
+        "name": "IT-Z-Foggia",
+        "acronym": "IT-Z-Foggia",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A73I",
+        "name": "IT-Z-North",
+        "acronym": "IT-Z-North",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A74G",
+        "name": "IT-Z-Sardinia",
+        "acronym": "IT-Z-Sardinia",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A75E",
+        "name": "IT-Z-Sicily",
+        "acronym": "IT-Z-Sicily",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A76C",
+        "name": "IT-Z-Priolo",
+        "acronym": "IT-Z-Priolo",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A77A",
+        "name": "IT-Z-Rossano",
+        "acronym": "IT-Z-Rossano",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A788",
+        "name": "IT-Z-South",
+        "acronym": "IT-Z-South",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A82H",
+        "name": "DE-LU",
+        "acronym": "DE-LU",
+        "country_name": "Germany",
+    },  # Germany-Luxembourg, assigned to Germany
+    {
+        "code": "10Y1001A1001A84D",
+        "name": "IT-MACRZONENORTH",
+        "acronym": "IT-MACRZONENORTH",
+        "country_name": "Italy",
+    },
+    {
+        "code": "10Y1001A1001A85B",
+        "name": "IT-MACRZONESOUTH",
+        "acronym": "IT-MACRZONESOUTH",
+        "country_name": "Italy",
+    },
     {"code": "10Y1001A1001A93C", "name": "MT", "acronym": "MT", "country_name": "Malta"},
     {"code": "10Y1001A1001A990", "name": "MD", "acronym": "MD", "country_name": "Moldova"},
     {"code": "10Y1001A1001B012", "name": "GE", "acronym": "GE", "country_name": "Georgia"},
     {"code": "10Y1001C--00003F", "name": "UA", "acronym": "UA", "country_name": "Ukraine"},
     {"code": "10Y1001C--000182", "name": "UA-IPS", "acronym": "UA-IPS", "country_name": "Ukraine"},
-    {"code": "10Y1001C--00096J", "name": "IT-Z-Calabria", "acronym": "IT-Z-Calabria", "country_name": "Italy"},
+    {
+        "code": "10Y1001C--00096J",
+        "name": "IT-Z-Calabria",
+        "acronym": "IT-Z-Calabria",
+        "country_name": "Italy",
+    },
     {"code": "10Y1001C--00100H", "name": "XK", "acronym": "XK", "country_name": "Kosovo"},
     {"code": "10YAT-APG------L", "name": "AT", "acronym": "AT", "country_name": "Austria"},
-    {"code": "10YBA-JPCC-----D", "name": "BA", "acronym": "BA", "country_name": "Bosnia and Herzegovina"},
+    {
+        "code": "10YBA-JPCC-----D",
+        "name": "BA",
+        "acronym": "BA",
+        "country_name": "Bosnia and Herzegovina",
+    },
     {"code": "10YBE----------2", "name": "BE", "acronym": "BE", "country_name": "Belgium"},
     {"code": "10YCH-SWISSGRIDZ", "name": "CH", "acronym": "CH", "country_name": "Switzerland"},
     {"code": "10YCS-CG-TSO---S", "name": "ME", "acronym": "ME", "country_name": "Montenegro"},
@@ -57,7 +142,12 @@ MARKET_BALANCE_AREAS_DATA = [
     {"code": "10YGR-HTSO-----Y", "name": "GR", "acronym": "GR", "country_name": "Greece"},
     {"code": "10YHR-HEP------M", "name": "HR", "acronym": "HR", "country_name": "Croatia"},
     {"code": "10YHU-MAVIR----U", "name": "HU", "acronym": "HU", "country_name": "Hungary"},
-    {"code": "10YIE-1001A00010", "name": "SEM(EirGrid)", "acronym": "SEM(EirGrid)", "country_name": "Ireland"},
+    {
+        "code": "10YIE-1001A00010",
+        "name": "SEM(EirGrid)",
+        "acronym": "SEM(EirGrid)",
+        "country_name": "Ireland",
+    },
     {"code": "10YIT-GRTN-----B", "name": "IT", "acronym": "IT", "country_name": "Italy"},
     {"code": "10YLT-1001A0008Q", "name": "LT", "acronym": "LT", "country_name": "Lithuania"},
     {"code": "10YLV-1001A00074", "name": "LV", "acronym": "LV", "country_name": "Latvia"},
@@ -122,58 +212,60 @@ COUNTRY_NAME_TO_ISO3 = {
 def seed_market_balance_areas(db: Session):
     """Seed market_balance_areas table with initial data"""
     print(f"  Checking for existing market balance areas...")
-    
+
     # Get existing market balance area codes
     existing_codes = {mba.code for mba in db.query(MarketBalanceArea.code).all()}
-    
+
     # Get all countries for mapping
     countries = db.query(Country).all()
     country_map = {c.code: c for c in countries}
-    
+
     # Filter out market balance areas that already exist
     market_balance_areas_to_add = []
     skipped_count = 0
     warnings = []
-    
+
     for mba_data in MARKET_BALANCE_AREAS_DATA:
         if mba_data["code"] in existing_codes:
             skipped_count += 1
             continue
-        
+
         # Map country name to ISO3 code
         country_name = mba_data["country_name"]
         country_iso3 = COUNTRY_NAME_TO_ISO3.get(country_name)
-        
+
         country_id = None
         if country_iso3 and country_iso3 in country_map:
             country_id = country_map[country_iso3].id
         else:
-            warnings.append(f"Country not found: {country_name} (ISO3: {country_iso3}) for market balance area {mba_data['name']}")
-        
+            warnings.append(
+                f"Country not found: {country_name} (ISO3: {country_iso3}) for market balance area {mba_data['name']}"
+            )
+
         # Create market balance area
         market_balance_area = MarketBalanceArea(
-            code=mba_data["code"],
-            name=mba_data["name"],
-            country_id=country_id
+            code=mba_data["code"], name=mba_data["name"], country_id=country_id
         )
-        
+
         market_balance_areas_to_add.append(market_balance_area)
-    
+
     if not market_balance_areas_to_add:
-        print(f"  Found {len(existing_codes)} existing market balance areas, no new market balance areas to add")
+        print(
+            f"  Found {len(existing_codes)} existing market balance areas, no new market balance areas to add"
+        )
         if skipped_count > 0:
             print(f"  Skipped {skipped_count} existing market balance areas")
         return
-    
+
     print(f"  Adding {len(market_balance_areas_to_add)} new market balance areas...")
     if skipped_count > 0:
         print(f"  Skipping {skipped_count} existing market balance areas")
-    
+
     # Print warnings
     for warning in warnings:
         print(f"  Warning: {warning}")
-    
+
     db.add_all(market_balance_areas_to_add)
     db.commit()
-    
+
     print(f"  Successfully added {len(market_balance_areas_to_add)} market balance areas")

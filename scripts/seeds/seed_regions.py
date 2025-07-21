@@ -4,8 +4,8 @@ Seed script for regions table
 """
 
 from sqlalchemy.orm import Session
-from app.models.region import Region
 
+from app.models.region import Region
 
 REGIONS_DATA = [
     {
@@ -112,21 +112,21 @@ REGIONS_DATA = [
 def seed_regions(db: Session):
     """Seed regions table with initial data"""
     print(f"  Checking for existing regions...")
-    
+
     # Check if regions already exist
     existing_count = db.query(Region).count()
     if existing_count > 0:
         print(f"  Found {existing_count} existing regions, skipping...")
         return
-    
+
     print(f"  Adding {len(REGIONS_DATA)} regions...")
-    
+
     regions_to_add = []
     for region_data in REGIONS_DATA:
         region = Region(**region_data)
         regions_to_add.append(region)
-    
+
     db.add_all(regions_to_add)
     db.commit()
-    
+
     print(f"  Successfully added {len(regions_to_add)} regions")

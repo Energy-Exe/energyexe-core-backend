@@ -15,21 +15,21 @@ from app.core.database import Base
 
 # Import all models to ensure they are registered
 from app.models import (  # noqa: F401
-    user,
-    country,
-    state,
-    region,
     bidzone,
     bidzone_country,
-    market_balance_area,
-    control_area,
-    project,
-    owner,
-    windfarm,
-    substation,
     cable,
+    control_area,
+    country,
+    market_balance_area,
+    owner,
+    project,
+    region,
+    state,
+    substation,
     turbine_model,
     turbine_unit,
+    user,
+    windfarm,
 )
 
 # this is the Alembic Config object, which provides

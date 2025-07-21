@@ -74,6 +74,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
+        # Add HSTS header for HTTPS connections to prevent mixed content issues
+        if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+            response.headers[
+                "Strict-Transport-Security"
+            ] = "max-age=31536000; includeSubDomains; preload"
+
         # Allow frames for docs endpoints, otherwise deny
         if request.url.path in ["/docs", "/redoc"]:
             response.headers["X-Frame-Options"] = "SAMEORIGIN"

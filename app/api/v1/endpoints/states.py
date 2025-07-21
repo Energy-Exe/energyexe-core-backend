@@ -57,7 +57,7 @@ async def read_states_by_country(
     country = await country_service.get(db, id=country_id)
     if not country:
         raise HTTPException(status_code=404, detail="Country not found")
-    
+
     states = await state_service.get_by_country(db, country_id=country_id, skip=skip, limit=limit)
     return states
 
@@ -76,12 +76,14 @@ async def create_state(
     country = await country_service.get(db, id=state_in.country_id)
     if not country:
         raise HTTPException(status_code=400, detail="Country not found")
-    
+
     # Check if state with same code already exists
     existing = await state_service.get_by_code(db, code=state_in.code)
     if existing:
-        raise HTTPException(status_code=400, detail=f"State with code {state_in.code} already exists")
-    
+        raise HTTPException(
+            status_code=400, detail=f"State with code {state_in.code} already exists"
+        )
+
     state = await state_service.create(db, obj_in=state_in)
     return await state_service.get_with_country(db, id=state.id)
 
@@ -132,19 +134,21 @@ async def update_state(
     state = await state_service.get(db, id=state_id)
     if not state:
         raise HTTPException(status_code=404, detail="State not found")
-    
+
     # Check if updating country to one that exists
     if state_in.country_id and state_in.country_id != state.country_id:
         country = await country_service.get(db, id=state_in.country_id)
         if not country:
             raise HTTPException(status_code=400, detail="Country not found")
-    
+
     # Check if updating code to one that already exists
     if state_in.code and state_in.code != state.code:
         existing = await state_service.get_by_code(db, code=state_in.code)
         if existing:
-            raise HTTPException(status_code=400, detail=f"State with code {state_in.code} already exists")
-    
+            raise HTTPException(
+                status_code=400, detail=f"State with code {state_in.code} already exists"
+            )
+
     state = await state_service.update(db, db_obj=state, obj_in=state_in)
     return await state_service.get_with_country(db, id=state.id)
 

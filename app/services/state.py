@@ -35,9 +35,7 @@ class StateService:
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def get_multi(
-        db: AsyncSession, *, skip: int = 0, limit: int = 100
-    ) -> List[State]:
+    async def get_multi(db: AsyncSession, *, skip: int = 0, limit: int = 100) -> List[State]:
         result = await db.execute(
             select(State)
             .options(selectinload(State.country))
@@ -67,9 +65,7 @@ class StateService:
         return result.scalar_one()
 
     @staticmethod
-    async def update(
-        db: AsyncSession, *, db_obj: State, obj_in: StateUpdate
-    ) -> State:
+    async def update(db: AsyncSession, *, db_obj: State, obj_in: StateUpdate) -> State:
         update_data = obj_in.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             setattr(db_obj, field, value)
