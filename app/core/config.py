@@ -34,7 +34,11 @@ class Settings(BaseSettings):
     ALLOWED_HOSTS: List[str] = ["*"]
 
     # CORS
-    BACKEND_CORS_ORIGINS: List[str] = ["https://dashboard.energyexe.com"]
+    BACKEND_CORS_ORIGINS: List[str] = [
+        "https://dashboard.energyexe.com",
+        "http://localhost:5173",  # Vite dev server
+        "http://localhost:3000",  # Alternative dev server
+    ]
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod

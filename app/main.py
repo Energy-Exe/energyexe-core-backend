@@ -49,18 +49,18 @@ def create_application() -> FastAPI:
         lifespan=lifespan_context,
     )
 
-    # Add middleware
-    add_middleware(app)
-
-    # Add CORS middleware
+    # Add CORS middleware first (must be before other middleware)
     if settings.BACKEND_CORS_ORIGINS:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=[str(origin) for origin in settings.BACKEND_CORS_ORIGINS],
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    # Add other middleware
+    add_middleware(app)
 
     # Add trusted host middleware
     if settings.ALLOWED_HOSTS:
