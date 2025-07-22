@@ -15,7 +15,7 @@ from typing import Optional
 # Add the parent directory to sys.path to import app modules
 sys.path.append(".")
 
-from app.core.database import async_session_factory
+from app.core.database import get_session_factory
 from app.core.security import get_password_hash
 from app.schemas.user import UserCreate
 from app.services.user import UserService
@@ -27,7 +27,7 @@ async def promote_user_to_superuser(email: Optional[str] = None, username: Optio
         print("Error: Either email or username must be provided")
         return False
 
-    async with async_session_factory() as db:
+    async with get_session_factory()() as db:
         user_service = UserService(db)
 
         # Find the user
@@ -63,7 +63,7 @@ async def create_superuser(
     last_name: Optional[str] = None,
 ):
     """Create a new superuser account."""
-    async with async_session_factory() as db:
+    async with get_session_factory()() as db:
         user_service = UserService(db)
 
         # Check if user already exists
@@ -103,7 +103,7 @@ async def create_superuser(
 
 async def list_users():
     """List all users and their superuser status."""
-    async with async_session_factory() as db:
+    async with get_session_factory()() as db:
         user_service = UserService(db)
         users = await user_service.get_all(skip=0, limit=1000)
 

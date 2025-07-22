@@ -13,7 +13,7 @@ from app.core.deps import get_db
 from app.main import create_application
 
 # Import all models here to ensure they are registered on Base.metadata
-from app.models import user  # noqa: F401
+from app.models import audit_log, user  # noqa: F401
 
 # Force testing environment
 os.environ["TESTING"] = "true"
