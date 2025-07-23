@@ -38,6 +38,7 @@ from scripts.seeds.seed_market_balance_areas import seed_market_balance_areas
 from scripts.seeds.seed_owners import seed_owners
 from scripts.seeds.seed_regions import seed_regions
 from scripts.seeds.seed_states import seed_states
+from scripts.seeds.seed_turbine_models import seed_turbine_models
 
 
 def get_sync_db_session():
@@ -91,6 +92,11 @@ def run_seeds():
         seed_owners(db)
         print("✅ Owners seeded successfully")
 
+        # Seed turbine models (no dependencies)
+        print("\n⚙️ Seeding turbine models...")
+        seed_turbine_models(db)
+        print("✅ Turbine models seeded successfully")
+
         print("\n🎉 Database seeding completed successfully!")
 
     except Exception as e:
@@ -111,6 +117,7 @@ def check_existing_data(db: Session) -> Dict[str, int]:
         "control_areas": db.query(ControlArea).count(),
         "market_balance_areas": db.query(MarketBalanceArea).count(),
         "owners": db.query(Owner).count(),
+        "turbine_models": db.query(TurbineModel).count(),
     }
     return counts
 
@@ -126,7 +133,7 @@ def main():
         for table, count in counts.items():
             print(f"  {table}: {count}")
 
-        if any(count > 0 for count in counts.values()):
+        if "-y" not in sys.argv and any(count > 0 for count in counts.values()):
             response = input("\n⚠️  Database already contains data. Continue? (y/N): ")
             if response.lower() != "y":
                 print("Seeding cancelled.")
