@@ -1,8 +1,10 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional, TYPE_CHECKING
+from pydantic import BaseModel, Field, ConfigDict
 
-from pydantic import BaseModel, Field
+if TYPE_CHECKING:
+    from .windfarm_owner import WindfarmOwnerWithDetails
 
 
 class WindfarmBase(BaseModel):
@@ -16,13 +18,12 @@ class WindfarmBase(BaseModel):
     control_area_id: Optional[int] = None
     nameplate_capacity_mw: Optional[int] = None
     project_id: Optional[int] = None
-    owner_id: Optional[int] = None
     commercial_operational_date: Optional[date] = None
     first_power_date: Optional[date] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
     polygon_wkt: Optional[str] = None
-    foundation_type: Optional[str] = Field(None, pattern="^(fixed|floating)$")
+    foundation_type: Optional[str] = Field(None, max_length=100)
     location_type: Optional[str] = Field(None, pattern="^(onshore|offshore)$")
     status: Optional[str] = Field(None, pattern="^(operational|decommissioned|under_installation)$")
     notes: Optional[str] = Field(None, max_length=300)
@@ -51,13 +52,12 @@ class WindfarmUpdate(BaseModel):
     control_area_id: Optional[int] = None
     nameplate_capacity_mw: Optional[int] = None
     project_id: Optional[int] = None
-    owner_id: Optional[int] = None
     commercial_operational_date: Optional[date] = None
     first_power_date: Optional[date] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
     polygon_wkt: Optional[str] = None
-    foundation_type: Optional[str] = Field(None, pattern="^(fixed|floating)$")
+    foundation_type: Optional[str] = Field(None, max_length=100)
     location_type: Optional[str] = Field(None, pattern="^(onshore|offshore)$")
     status: Optional[str] = Field(None, pattern="^(operational|decommissioned|under_installation)$")
     notes: Optional[str] = Field(None, max_length=300)
@@ -76,5 +76,17 @@ class Windfarm(WindfarmBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WindfarmWithOwners(Windfarm):
+    windfarm_owners: List[dict] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WindfarmCreateWithOwners(BaseModel):
+    windfarm: WindfarmCreate
+    owners: List[dict] = Field(..., description="List of {owner_id: int, ownership_percentage: Decimal}")
+
+    model_config = ConfigDict(from_attributes=True)

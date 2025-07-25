@@ -1,7 +1,10 @@
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from .windfarm_owner import WindfarmOwner
 
 
 class OwnerBase(BaseModel):
@@ -30,6 +33,13 @@ class Owner(OwnerBase):
     id: int
     created_at: datetime
     updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class OwnerWithWindfarms(Owner):
+    windfarm_owners: List['WindfarmOwner'] = []
 
     class Config:
         from_attributes = True

@@ -3,8 +3,10 @@ from typing import List, Optional
 from sqlalchemy import and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.models.windfarm import Windfarm
+from app.models.windfarm_owner import WindfarmOwner
 from app.schemas.windfarm import WindfarmCreate, WindfarmUpdate
 
 
@@ -19,6 +21,22 @@ class WindfarmService:
     @staticmethod
     async def get_windfarm(db: AsyncSession, windfarm_id: int) -> Optional[Windfarm]:
         result = await db.execute(select(Windfarm).where(Windfarm.id == windfarm_id))
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_windfarm_with_owners(db: AsyncSession, windfarm_id: int) -> Optional[Windfarm]:
+        result = await db.execute(
+            select(Windfarm)
+            .where(Windfarm.id == windfarm_id)
+            .options(
+                selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
+                selectinload(Windfarm.country),
+                selectinload(Windfarm.state),
+                selectinload(Windfarm.bidzone),
+                selectinload(Windfarm.market_balance_area),
+                selectinload(Windfarm.project)
+            )
+        )
         return result.scalar_one_or_none()
 
     @staticmethod

@@ -19,6 +19,6 @@ class Owner(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
-    windfarms = relationship("Windfarm", back_populates="owner")
+    windfarm_owners = relationship("WindfarmOwner", back_populates="owner")
     substations = relationship("Substation", back_populates="owner")
     cables = relationship("Cable", back_populates="owner")
