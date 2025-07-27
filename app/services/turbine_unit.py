@@ -3,6 +3,7 @@ from typing import List, Optional
 from sqlalchemy import and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.models.turbine_unit import TurbineUnit
 from app.schemas.turbine_unit import TurbineUnitCreate, TurbineUnitUpdate
@@ -14,13 +15,27 @@ class TurbineUnitService:
         db: AsyncSession, skip: int = 0, limit: int = 100
     ) -> List[TurbineUnit]:
         result = await db.execute(
-            select(TurbineUnit).offset(skip).limit(limit).order_by(TurbineUnit.created_at.desc())
+            select(TurbineUnit)
+            .options(
+                selectinload(TurbineUnit.windfarm),
+                selectinload(TurbineUnit.turbine_model)
+            )
+            .offset(skip)
+            .limit(limit)
+            .order_by(TurbineUnit.created_at.desc())
         )
         return result.scalars().all()
 
     @staticmethod
     async def get_turbine_unit(db: AsyncSession, turbine_unit_id: int) -> Optional[TurbineUnit]:
-        result = await db.execute(select(TurbineUnit).where(TurbineUnit.id == turbine_unit_id))
+        result = await db.execute(
+            select(TurbineUnit)
+            .options(
+                selectinload(TurbineUnit.windfarm),
+                selectinload(TurbineUnit.turbine_model)
+            )
+            .where(TurbineUnit.id == turbine_unit_id)
+        )
         return result.scalar_one_or_none()
 
     @staticmethod
@@ -35,7 +50,11 @@ class TurbineUnitService:
         search_pattern = f"%{query}%"
         result = await db.execute(
             select(TurbineUnit)
-            .where(and_(TurbineUnit.name.ilike(search_pattern)))
+            .options(
+                selectinload(TurbineUnit.windfarm),
+                selectinload(TurbineUnit.turbine_model)
+            )
+            .where(and_(TurbineUnit.code.ilike(search_pattern)))
             .offset(skip)
             .limit(limit)
             .order_by(TurbineUnit.created_at.desc())

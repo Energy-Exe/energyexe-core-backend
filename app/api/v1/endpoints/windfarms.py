@@ -91,6 +91,11 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
             "code": windfarm.state.code,
             "name": windfarm.state.name,
         } if windfarm.state else None,
+        "region": {
+            "id": windfarm.region.id,
+            "code": windfarm.region.code,
+            "name": windfarm.region.name,
+        } if windfarm.region else None,
         "bidzone": {
             "id": windfarm.bidzone.id,
             "code": windfarm.bidzone.code,
@@ -218,6 +223,11 @@ async def create_windfarm_with_owners(
             "code": windfarm_with_owners.state.code,
             "name": windfarm_with_owners.state.name,
         } if windfarm_with_owners.state else None,
+        "region": {
+            "id": windfarm_with_owners.region.id,
+            "code": windfarm_with_owners.region.code,
+            "name": windfarm_with_owners.region.name,
+        } if windfarm_with_owners.region else None,
         "bidzone": {
             "id": windfarm_with_owners.bidzone.id,
             "code": windfarm_with_owners.bidzone.code,

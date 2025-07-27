@@ -32,6 +32,7 @@ class WindfarmService:
                 selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
                 selectinload(Windfarm.country),
                 selectinload(Windfarm.state),
+                selectinload(Windfarm.region),
                 selectinload(Windfarm.bidzone),
                 selectinload(Windfarm.market_balance_area),
                 selectinload(Windfarm.project)

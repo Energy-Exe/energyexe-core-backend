@@ -5,6 +5,26 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+# Embedded schemas to avoid circular imports
+class WindfarmBasic(BaseModel):
+    id: int
+    code: str
+    name: str
+
+    class Config:
+        from_attributes = True
+
+
+class TurbineModelBasic(BaseModel):
+    id: int
+    model: str
+    supplier: str
+    rated_power_kw: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
 class TurbineUnitBase(BaseModel):
     code: str = Field(..., min_length=1, max_length=50)
     windfarm_id: int
@@ -33,6 +53,8 @@ class TurbineUnit(TurbineUnitBase):
     id: int
     created_at: datetime
     updated_at: datetime
+    windfarm: Optional[WindfarmBasic] = None
+    turbine_model: Optional[TurbineModelBasic] = None
 
     class Config:
         from_attributes = True
