@@ -41,6 +41,7 @@ from scripts.seeds.seed_regions import seed_regions
 from scripts.seeds.seed_states import seed_states
 from scripts.seeds.seed_turbine_models import seed_turbine_models
 from scripts.seeds.seed_windfarms import seed_windfarms
+from scripts.seeds.seed_turbine_units import seed_turbine_units
 
 
 def get_sync_db_session():
@@ -104,6 +105,11 @@ def run_seeds():
         seed_windfarms(db)
         print("✅ Windfarms seeded successfully")
 
+        # Seed turbine units (depends on windfarms and turbine models)
+        print("\n🔧 Seeding turbine units...")
+        seed_turbine_units(db)
+        print("✅ Turbine units seeded successfully")
+
         print("\n🎉 Database seeding completed successfully!")
 
     except Exception as e:
@@ -126,6 +132,7 @@ def check_existing_data(db: Session) -> Dict[str, int]:
         "owners": db.query(Owner).count(),
         "turbine_models": db.query(TurbineModel).count(),
         "windfarms": db.query(Windfarm).count(),
+        "turbine_units": db.query(TurbineUnit).count(),
     }
     return counts
 

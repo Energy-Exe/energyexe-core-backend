@@ -1,0 +1,25 @@
+{
+  "summary": {
+    "total_attempted": 1037,
+    "successful": 1025,
+    "failed": 12,
+    "timestamp": "2025-07-27T02:32:29.228439"
+  },
+  "failures": [
+    {
+      "windfarm_name": "Alpha Ventus",
+      "turbine_model": "AD5-116",
+      "error": "Turbine model 'AD5-116' not found"
+    },
+    {
+      "windfarm_name": "Belwind 1",
+      "turbine_model": "Haliade 150-6",
+      "error": "Turbine model 'Haliade 150-6' not found"
+    },
+    {
+      "windfarm_name": "Block Island",
+      "turbine_model": "Haliade 150-6",
+      "error": "Turbine model 'Haliade 150-6' not found"
+    }
+  ]
+}

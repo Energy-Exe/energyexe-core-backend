@@ -643,14 +643,28 @@ def lookup_project_id(db: Session, project_name: str) -> Optional[int]:
     project = db.query(Project).filter(Project.name == project_name.strip()).first()
     return project.id if project else None
 
-def generate_windfarm_code(name: str) -> str:
-    """Generate a code from windfarm name"""
-    # Simple approach: take uppercase letters and numbers, replace spaces/special chars with underscores
-    import re
-    code = re.sub(r'[^A-Za-z0-9]', '_', name.upper())
-    code = re.sub(r'_+', '_', code)  # Replace multiple underscores with single
-    code = code.strip('_')  # Remove leading/trailing underscores
-    return code[:50]  # Limit to 50 characters
+def generate_windfarm_code(name: str, location_type: str, turbine_count: int, sequence_number: int) -> str:
+    """Generate a code following format: [WF]_[OF/ON]_[turbine unit count in 4 digits]_[6 DIGIT sequential code]
+    
+    Args:
+        name: Windfarm name
+        location_type: Either 'offshore' or 'onshore'
+        turbine_count: Total number of turbines
+        sequence_number: Sequential number for this windfarm
+    
+    Returns:
+        Formatted code like: WF_OF_0087_000001
+    """
+    # Determine offshore/onshore code
+    location_code = "OF" if location_type == "offshore" else "ON"
+    
+    # Format turbine count as 4 digits
+    turbine_str = str(turbine_count).zfill(4)
+    
+    # Format sequence number as 6 digits
+    sequence_str = str(sequence_number).zfill(6)
+    
+    return f"WF_{location_code}_{turbine_str}_{sequence_str}"
 
 def seed_windfarms(db: Session):
     """Seed windfarms table with initial data and create ownership relationships"""
@@ -659,9 +673,19 @@ def seed_windfarms(db: Session):
     # Get existing windfarm names
     existing_names = {wf.name for wf in db.query(Windfarm.name).all()}
     
+    # Get the current max sequence number from existing windfarms
+    max_sequence = 0
+    existing_windfarms = db.query(Windfarm.code).all()
+    for wf in existing_windfarms:
+        if wf.code and '_' in wf.code:
+            parts = wf.code.split('_')
+            if len(parts) == 4 and parts[-1].isdigit():
+                max_sequence = max(max_sequence, int(parts[-1]))
+    
     success_count = 0
     failure_count = 0
     failures = []
+    sequence_number = max_sequence
     
     for windfarm_data in WINDFARMS_DATA:
         windfarm_name = windfarm_data["name"]
@@ -704,9 +728,17 @@ def seed_windfarms(db: Session):
                     "percentage": Decimal(str(owner_data["percentage"]))
                 })
             
+            # Increment sequence number for new windfarm
+            sequence_number += 1
+            
             # Create windfarm
             windfarm = Windfarm(
-                code=generate_windfarm_code(windfarm_name),
+                code=generate_windfarm_code(
+                    windfarm_name,
+                    windfarm_data.get("location_type", "offshore"),
+                    windfarm_data.get("total_turbine_count", 0),
+                    sequence_number
+                ),
                 name=windfarm_name,
                 country_id=country_id,
                 state_id=state_id,
