@@ -14,11 +14,11 @@ def get_client_ip(request: Request) -> Optional[str]:
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    
+
     real_ip = request.headers.get("X-Real-IP")
     if real_ip:
         return real_ip
-    
+
     return request.client.host if request.client else None
 
 
@@ -35,7 +35,7 @@ def serialize_for_audit(obj: Any) -> Dict[str, Any]:
         for key, value in obj.__dict__.items():
             if key.startswith("_"):
                 continue
-            
+
             if hasattr(value, "isoformat"):  # datetime objects
                 result[key] = value.isoformat()
             elif isinstance(value, (str, int, float, bool, type(None))):
@@ -46,21 +46,21 @@ def serialize_for_audit(obj: Any) -> Dict[str, Any]:
                 result[key] = {k: serialize_for_audit(v) for k, v in value.items()}
             else:
                 result[key] = str(value)
-        
+
         return result
-    
+
     elif isinstance(value, (list, tuple)):
         return [serialize_for_audit(item) for item in obj]
-    
+
     elif isinstance(value, dict):
         return {k: serialize_for_audit(v) for k, v in obj.items()}
-    
+
     elif hasattr(obj, "isoformat"):  # datetime objects
         return obj.isoformat()
-    
+
     elif isinstance(obj, (str, int, float, bool, type(None))):
         return obj
-    
+
     else:
         return str(obj)
 
@@ -75,7 +75,7 @@ def audit_action(
 ):
     """
     Decorator to automatically audit API endpoint actions.
-    
+
     Args:
         action: The type of action being performed
         resource_type: The type of resource being acted upon
@@ -84,6 +84,7 @@ def audit_action(
         description: Optional description of the action
         track_changes: Whether to track before/after changes for UPDATE actions
     """
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(*args, **kwargs):
@@ -91,27 +92,27 @@ def audit_action(
             db: Optional[AsyncSession] = None
             request: Optional[Request] = None
             current_user = None
-            
+
             # Find dependencies in kwargs
             for key, value in kwargs.items():
                 if isinstance(value, AsyncSession):
                     db = value
                 elif isinstance(value, Request):
                     request = value
-                elif hasattr(value, 'email') and hasattr(value, 'id'):
+                elif hasattr(value, "email") and hasattr(value, "id"):
                     current_user = value
-            
+
             # If db not in kwargs, check args (for positional arguments)
             if not db:
                 for arg in args:
                     if isinstance(arg, AsyncSession):
                         db = arg
                         break
-            
+
             if not db:
                 # If we can't find db session, execute without audit logging
                 return await func(*args, **kwargs)
-            
+
             # Get old values for UPDATE actions
             old_values = None
             if action == AuditAction.UPDATE and track_changes:
@@ -126,72 +127,72 @@ def audit_action(
                             if isinstance(arg, int):
                                 resource_id = str(arg)
                                 break
-                        
+
                         for key, value in kwargs.items():
-                            if key.endswith('_id') and isinstance(value, int):
+                            if key.endswith("_id") and isinstance(value, int):
                                 resource_id = str(value)
                                 break
-                    
+
                     if resource_id:
                         # This would need to be customized per resource type
                         # For now, we'll skip old values extraction
                         pass
                 except Exception:
                     pass
-            
+
             # Execute the original function
             result = await func(*args, **kwargs)
-            
+
             # Extract audit information
             resource_id = None
             resource_name = None
             new_values = None
-            
+
             if get_resource_id:
                 try:
                     resource_id = get_resource_id(result, *args, **kwargs)
                 except Exception:
                     pass
-            elif hasattr(result, 'id'):
+            elif hasattr(result, "id"):
                 resource_id = str(result.id)
-            
+
             if get_resource_name:
                 try:
                     resource_name = get_resource_name(result, *args, **kwargs)
                 except Exception:
                     pass
-            elif hasattr(result, 'name'):
+            elif hasattr(result, "name"):
                 resource_name = result.name
-            elif hasattr(result, 'code'):
+            elif hasattr(result, "code"):
                 resource_name = result.code
-            elif hasattr(result, 'email'):
+            elif hasattr(result, "email"):
                 resource_name = result.email
-            
+
             if action in [AuditAction.CREATE, AuditAction.UPDATE] and result:
                 try:
                     new_values = serialize_for_audit(result)
                 except Exception:
                     pass
-            
+
             # Get request context
             ip_address = None
             user_agent = None
             endpoint = None
             method = None
-            
+
             if request:
                 ip_address = get_client_ip(request)
                 user_agent = get_user_agent(request)
                 endpoint = str(request.url.path)
                 method = request.method
-            
+
             # Get user information
             user_id = None
             user_email = None
             if current_user:
-                user_id = getattr(current_user, 'id', None)
-                user_email = getattr(current_user, 'email', None)
-            
+                user_id = getattr(current_user, "id", None)
+                user_email = getattr(current_user, "email", None)
+
             # Create audit log
             try:
                 await AuditLogService.log_action(
@@ -214,16 +215,17 @@ def audit_action(
             except Exception as e:
                 # Log the error but don't fail the main operation
                 print(f"Failed to create audit log: {e}")
-            
+
             return result
-        
+
         return wrapper
+
     return decorator
 
 
 class AuditContext:
     """Context manager for manual audit logging."""
-    
+
     def __init__(
         self,
         db: AsyncSession,
@@ -247,23 +249,23 @@ class AuditContext:
         self.request = request
         self.old_values = None
         self.new_values = None
-    
+
     async def __aenter__(self):
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:  # Only log if no exception occurred
             ip_address = None
             user_agent = None
             endpoint = None
             method = None
-            
+
             if self.request:
                 ip_address = get_client_ip(self.request)
                 user_agent = get_user_agent(self.request)
                 endpoint = str(self.request.url.path)
                 method = self.request.method
-            
+
             try:
                 await AuditLogService.log_action(
                     db=self.db,
@@ -284,15 +286,15 @@ class AuditContext:
                 )
             except Exception as e:
                 print(f"Failed to create audit log: {e}")
-    
+
     def set_old_values(self, values: Any):
         """Set the old values for update operations."""
         self.old_values = serialize_for_audit(values)
-    
+
     def set_new_values(self, values: Any):
         """Set the new values for create/update operations."""
         self.new_values = serialize_for_audit(values)
-    
+
     def set_resource_info(self, resource_id: str, resource_name: Optional[str] = None):
         """Set resource identification information."""
         self.resource_id = resource_id

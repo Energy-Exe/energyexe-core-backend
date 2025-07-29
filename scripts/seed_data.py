@@ -21,6 +21,7 @@ from app.models.control_area import ControlArea
 
 # Import all models to ensure relationships are properly configured
 from app.models.country import Country
+from app.models.generation_unit import GenerationUnit
 from app.models.market_balance_area import MarketBalanceArea
 from app.models.owner import Owner
 from app.models.project import Project
@@ -35,13 +36,14 @@ from app.models.windfarm_owner import WindfarmOwner
 from scripts.seeds.seed_bidzones import seed_bidzones
 from scripts.seeds.seed_control_areas import seed_control_areas
 from scripts.seeds.seed_countries import seed_countries
+from scripts.seeds.seed_generation_units import seed_generation_units
 from scripts.seeds.seed_market_balance_areas import seed_market_balance_areas
 from scripts.seeds.seed_owners import seed_owners
 from scripts.seeds.seed_regions import seed_regions
 from scripts.seeds.seed_states import seed_states
 from scripts.seeds.seed_turbine_models import seed_turbine_models
-from scripts.seeds.seed_windfarms import seed_windfarms
 from scripts.seeds.seed_turbine_units import seed_turbine_units
+from scripts.seeds.seed_windfarms import seed_windfarms
 
 
 def get_sync_db_session():
@@ -105,6 +107,11 @@ def run_seeds():
         seed_windfarms(db)
         print("✅ Windfarms seeded successfully")
 
+        # Seed generation units (depends on windfarms)
+        print("\n⚡ Seeding generation units...")
+        seed_generation_units(db)
+        print("✅ Generation units seeded successfully")
+
         # Seed turbine units (depends on windfarms and turbine models)
         print("\n🔧 Seeding turbine units...")
         seed_turbine_units(db)
@@ -132,6 +139,7 @@ def check_existing_data(db: Session) -> Dict[str, int]:
         "owners": db.query(Owner).count(),
         "turbine_models": db.query(TurbineModel).count(),
         "windfarms": db.query(Windfarm).count(),
+        "generation_units": db.query(GenerationUnit).count(),
         "turbine_units": db.query(TurbineUnit).count(),
     }
     return counts

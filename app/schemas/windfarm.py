@@ -1,7 +1,8 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional, TYPE_CHECKING
-from pydantic import BaseModel, Field, ConfigDict
+from typing import TYPE_CHECKING, List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from .windfarm_owner import WindfarmOwnerWithDetails
@@ -87,6 +88,8 @@ class WindfarmWithOwners(Windfarm):
 
 class WindfarmCreateWithOwners(BaseModel):
     windfarm: WindfarmCreate
-    owners: List[dict] = Field(..., description="List of {owner_id: int, ownership_percentage: Decimal}")
+    owners: List[dict] = Field(
+        ..., description="List of {owner_id: int, ownership_percentage: Decimal}"
+    )
 
     model_config = ConfigDict(from_attributes=True)

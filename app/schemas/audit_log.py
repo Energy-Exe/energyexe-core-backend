@@ -8,6 +8,7 @@ from app.models.audit_log import AuditAction
 
 class AuditLogBase(BaseModel):
     """Base audit log schema."""
+
     action: AuditAction
     resource_type: str
     resource_id: Optional[str] = None
@@ -24,12 +25,14 @@ class AuditLogBase(BaseModel):
 
 class AuditLogCreate(AuditLogBase):
     """Schema for creating audit log entries."""
+
     user_id: Optional[int] = None
     user_email: Optional[str] = None
 
 
 class AuditLog(AuditLogBase):
     """Complete audit log schema."""
+
     id: int
     user_id: Optional[int] = None
     user_email: Optional[str] = None
@@ -41,6 +44,7 @@ class AuditLog(AuditLogBase):
 
 class AuditLogFilter(BaseModel):
     """Schema for filtering audit logs."""
+
     user_id: Optional[int] = None
     user_email: Optional[str] = None
     action: Optional[AuditAction] = None
@@ -49,11 +53,14 @@ class AuditLogFilter(BaseModel):
     ip_address: Optional[str] = None
     date_from: Optional[datetime] = None
     date_to: Optional[datetime] = None
-    search: Optional[str] = Field(None, description="Search in resource_name, description, or user_email")
+    search: Optional[str] = Field(
+        None, description="Search in resource_name, description, or user_email"
+    )
 
 
 class AuditLogSummary(BaseModel):
     """Summary statistics for audit logs."""
+
     total_actions: int
     actions_by_type: Dict[str, int]
     actions_by_user: List[Dict[str, Any]]

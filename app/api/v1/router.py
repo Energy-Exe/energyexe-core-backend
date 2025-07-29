@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     cables,
     control_areas,
     countries,
+    generation_units,
     market_balance_areas,
     owners,
     projects,
@@ -35,6 +36,9 @@ api_router.include_router(
     market_balance_areas.router, prefix="/market-balance-areas", tags=["market-balance-areas"]
 )
 api_router.include_router(control_areas.router, prefix="/control-areas", tags=["control-areas"])
+api_router.include_router(
+    generation_units.router, prefix="/generation-units", tags=["generation-units"]
+)
 api_router.include_router(owners.router, prefix="/owners", tags=["owners"])
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])
 api_router.include_router(turbine_models.router, prefix="/turbine-models", tags=["turbine-models"])

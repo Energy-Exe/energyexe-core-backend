@@ -1,0 +1,1089 @@
+{
+  "summary": {
+    "total_attempted": 106,
+    "successful": 106,
+    "failed": 0,
+    "timestamp": "2025-07-30T02:39:10.323085",
+    "windfarms_not_found": 98
+  },
+  "successful_entries": [
+    {
+      "code": "17W000001445569U",
+      "name": "Eoliennes Offshore des Hautes Falaises 1",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "F\u00e9camp",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000ABRBO-19",
+      "name": "ABRB0-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Aberdeen",
+      "windfarm_id": 16,
+      "windfarm_found": true
+    },
+    {
+      "code": "17W100P100P0842Y",
+      "name": "ADP A1 DE LA FERME EOLIENNE DE BAIE-DE-ST-BRIEUC",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Saint Brieuc",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "17W100P100P3382R",
+      "name": "ADP A2 DE LA FERME EOLIENNE DE BAIE-DE-ST-BRIEUC",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Saint Brieuc",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "45W000000000046I",
+      "name": "Anholt Generation",
+      "source": "NORDPOOL",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Anholt",
+      "windfarm_id": 20,
+      "windfarm_found": true
+    },
+    {
+      "code": "48W00000BOWLW-1K",
+      "name": "Barrow Offshore Wind Farm BOWLW-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Barrow",
+      "windfarm_id": 29,
+      "windfarm_found": true
+    },
+    {
+      "code": "48W00000BEATO-1T",
+      "name": "Beatrice Offshore Wind Farm",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Beatrice",
+      "windfarm_id": 30,
+      "windfarm_found": true
+    },
+    {
+      "code": "48W00000BEATO-3P",
+      "name": "Beatrice Offshore Wind Farm",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Beatrice",
+      "windfarm_id": 30,
+      "windfarm_found": true
+    },
+    {
+      "code": "48W00000BEATO-2R",
+      "name": "Beatrice Offshore Wind Farm",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Beatrice",
+      "windfarm_id": 30,
+      "windfarm_found": true
+    },
+    {
+      "code": "48W00000BEATO-4N",
+      "name": "Beatrice Offshore Wind Farm",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Beatrice",
+      "windfarm_id": 30,
+      "windfarm_found": true
+    },
+    {
+      "code": "22WBELWIN1500271",
+      "name": "Belwind Phase 1",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Belwind 1",
+      "windfarm_id": 31,
+      "windfarm_found": true
+    },
+    {
+      "code": "48W00000BRBEO-17",
+      "name": "Burbo Extension BRBEO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Burbo Bank Extension",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000BURBW-1L",
+      "name": "Burbo Wind Farm BURBW-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Burbo Bank",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "45W000000000126K",
+      "name": "Danish Kriegers Flak Generation Unit",
+      "source": "NORDPOOL",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Kriegers Flak",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000DBBWO-1D",
+      "name": "Dogger Bank B Unit 1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Dogger Bank A&B",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000DBBWO-2B",
+      "name": "Dogger Bank B Unit 2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Dogger Bank A&B",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000DBBWO-39",
+      "name": "Dogger Bank B Unit 3",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Dogger Bank A&B",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000DBBWO-47",
+      "name": "Dogger Bank B Unit 4",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Dogger Bank A&B",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000DBBWO-55",
+      "name": "Dogger Bank B Unit 5",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Dogger Bank A&B",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000DBAWO-1J",
+      "name": "Dogger Bank Unit 1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Dogger Bank A&B",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000DBAWO-2H",
+      "name": "Dogger Bank Unit 2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Dogger Bank A&B",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000DBAWO-3F",
+      "name": "Dogger Bank Unit 3",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Dogger Bank A&B",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000DBAWO-5B",
+      "name": "Dogger Bank Unit 5",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Dogger Bank A&B",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000DBAWO-4D",
+      "name": "Doggerbank Unit 4",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Dogger Bank A&B",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W000000EAAO-1R",
+      "name": "East Anglia One",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "East Anglia One",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W000000EAAO-2P",
+      "name": "East Anglia One",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "East Anglia One",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "17W0000014455708",
+      "name": "Eoliennes Offshore des Hautes Falaises 2",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "F\u00e9camp",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000GAOFO-13",
+      "name": "Galloper Offshore Wind Farm GAOFO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Galloper",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000GAOFO-21",
+      "name": "Galloper Offshore Wind Farm GAOFO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Galloper",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W10000GAOFO-3N",
+      "name": "Galloper Offshore Wind Farm GAOFO-3",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Galloper",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000GAOFO-4Y",
+      "name": "Galloper Offshore Wind Farm GAOFO-4",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Galloper",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000GRGBW-1V",
+      "name": "Greater Gabbard GRGBW-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Greater Gabbard",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000GRGBW-2T",
+      "name": "Greater Gabbard GRGBW-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Greater Gabbard",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000GRGBW-3R",
+      "name": "Greater Gabbard GRGBW-3",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Greater Gabbard",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000GNFSW-1H",
+      "name": "Gunfleet Sands GNFSW-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Gunfleet Sands 1&2",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000GNFSW-2F",
+      "name": "Gunfleet Sands GNFSW-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Gunfleet Sands 1&2",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W0000GYMRO-15O",
+      "name": "Gwynt Y Mor GYMRO-15",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Gwynt Y Mor",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W0000GYMRO-17K",
+      "name": "Gwynt Y Mor GYMRO-17",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Gwynt Y Mor",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W0000GYMRO-26J",
+      "name": "Gwynt Y Mor GYMRO-26",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Gwynt Y Mor",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W0000GYMRO-28F",
+      "name": "Gwynt Y Mor GYMRO-28",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Gwynt Y Mor",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "45W000000000047G",
+      "name": "Horns Rev A",
+      "source": "NORDPOOL",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Horns Rev",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "45W000000000048E",
+      "name": "Horns Rev B",
+      "source": "NORDPOOL",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Horns Rev",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "45W000000000116N",
+      "name": "Horns Rev C generation unit",
+      "source": "NORDPOOL",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Horns Rev",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000HOWAO-1M",
+      "name": "Hornsea 1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Hornsea 1",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000HOWAO-2K",
+      "name": "Hornsea 1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Hornsea 1",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000HOWAO-3I",
+      "name": "Hornsea 1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Hornsea 1",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000HOWBO-1H",
+      "name": "HOWBO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Hornsea 2",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000HOWBO-2F",
+      "name": "HOWBO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Hornsea 2",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000HOWBO-3D",
+      "name": "HOWBO-3",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Hornsea 2",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000HMGTO-10",
+      "name": "Humber Gateway Offshore Wind Farm HMGTO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Humber Gateway",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000HMGTO-2Z",
+      "name": "Humber Gateway Offshore Wind Farm HMGTO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Humber Gateway",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000HYWDW-1G",
+      "name": "Hywind Wind Farm",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Hywind Scotland",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000LNCSO-1R",
+      "name": "Lincs Wind Farm LNCSO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Lincs",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000LNCSO-2P",
+      "name": "Lincs Wind Farm LNCSO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Lincs",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000LARYO-1Z",
+      "name": "London Array Wind Farm LARYO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "London Array",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000LARYO-2X",
+      "name": "London Array Wind Farm LARYO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "London Array",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000LARYO-3V",
+      "name": "London Array Wind Farm LARYO-3",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "London Array",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000LARYO-4T",
+      "name": "London Array Wind Farm LARYO-4",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "London Array",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "22W20200608B---3",
+      "name": "Mermaid",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Seamade",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W000000MOWEO11",
+      "name": "MOWEO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Moray East",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000MOWEO-2Y",
+      "name": "MOWEO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Moray East",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000MOWEO-3W",
+      "name": "MOWEO-3",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Moray East",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48WW00000MOWWO-Z",
+      "name": "MOWWO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Moray West",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000MOWWO-2I",
+      "name": "MOWWO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Moray West",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000MOWWO-3G",
+      "name": "MOWWO-3",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Moray West",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000MOWWO-4E",
+      "name": "MOWWO-4",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Moray West",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000NNGAO-13",
+      "name": "Neart Na Gaoithe Offshore Wind NNGAO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Neart Na Gaoithe (NnG)",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000NNGAO-21",
+      "name": "Neart Na Gaoithe Offshore Wind NNGAO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Neart Na Gaoithe (NnG)",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "22W20161115----Z",
+      "name": "NOBELWIND Park",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Nobelwind",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "22W201902132---O",
+      "name": "Norther Offshore WP GU",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Norther",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "22W201909151---M",
+      "name": "Northwester 2 Zeebrugge PU",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Northwester 2",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "22WNORTHW150187B",
+      "name": "Northwind",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Northwind",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000OMNDO-1J",
+      "name": "Ormonde Eng Ltd",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Ormonde",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "17W0000014455651",
+      "name": "Parc du Banc de Gu\u00e9rande 1",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Saint-Nazaire",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "17W000001445567Y",
+      "name": "Parc du Banc de Gu\u00e9rande 2",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Saint-Nazaire",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000RMPNO-17",
+      "name": "Rampion Offshore Wind Farm 1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Rampion",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000RMPNO-25",
+      "name": "Rampion Offshore Windfarm",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Rampion",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000RCBKO-1S",
+      "name": "RCBKO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Race Bank",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000RCBKO-2Q",
+      "name": "RCBKO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Race Bank",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "22W20180615----H",
+      "name": "Rentel Offshore WP PU",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Rentel",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W000000RREW-14",
+      "name": "Robin Rigg East RREW-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Robin Rigg",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W000000RRWW-1P",
+      "name": "Robin Rigg West RRWW-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Robin Rigg",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "45W000000000044M",
+      "name": "R\u00f8dsand 1_GU",
+      "source": "NORDPOOL",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Nysted",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "45W000000000045K",
+      "name": "R\u00f8dsand 2_GU",
+      "source": "NORDPOOL",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "R\u00f8dsand II",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000SGRWO-1L",
+      "name": "Seagreen Windfarm SGRWO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Seagreen",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000SGRWO-2J",
+      "name": "Seagreen Windfarm SGRWO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Seagreen",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000SGRWO-3H",
+      "name": "Seagreen Windfarm SGRWO-3",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Seagreen",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000SGRWO-4F",
+      "name": "Seagreen Windfarm SGRWO-4",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Seagreen",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000SGRWO-5D",
+      "name": "Seagreen Windfarm SGRWO-5",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Seagreen",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000SGRWO-6B",
+      "name": "Seagreen Windfarm SGRWO-6",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Seagreen",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "22W20200608D---U",
+      "name": "Seastar",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Seamade",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000SHRSO-1Y",
+      "name": "Sheringham Shoal Wind Farm SHRSO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Sheringham Shoal",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000SHRSO-2W",
+      "name": "Sheringham Shoal Wind Farm SHRSO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Sheringham Shoal",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000THNTO-18",
+      "name": "Thanet Offshore Wind THNTO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Thanet",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000THNTO-26",
+      "name": "Thanet Offshore Wind THNTO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Thanet",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "22WTHORNT150237E",
+      "name": "Thorntonbank - C-Power - Area NE",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Thorntonbank II & III",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "22WTHORNT150238C",
+      "name": "Thorntonbank - C-Power - Area SW",
+      "source": "ENTSOE",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Thorntonbank II & III",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "45W000000000208I",
+      "name": "Vesterhav Nord",
+      "source": "NORDPOOL",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Vesterhav Syd & Nord",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "45W000000000207K",
+      "name": "Vesterhav Syd",
+      "source": "NORDPOOL",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Vesterhav Syd & Nord",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000WLNYO-23",
+      "name": "Walney Ext 2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Walney 1&2",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000WLNYO-31",
+      "name": "Walney Ext 3",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Walney Extension",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000WLNYO-4-",
+      "name": "Walney Ext 4",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Walney Extension",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000WLNYW-1A",
+      "name": "Walney Wind Farm WLNYW-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Walney 1&2",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000WDNSO-1H",
+      "name": "West of Duddon Sands WDNSO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "West of Duddon Sands",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000WDNSO-2F",
+      "name": "West of Duddon Sands WDNSO-2",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "West of Duddon Sands",
+      "windfarm_id": null,
+      "windfarm_found": false
+    },
+    {
+      "code": "48W00000WTMSO-1M",
+      "name": "Westermost Rough W/F WTMSO-1",
+      "source": "ELEXON",
+      "fuel_type": "wind",
+      "technology_type": "wind_offshore",
+      "windfarm_name": "Westermost Rough",
+      "windfarm_id": null,
+      "windfarm_found": false
+    }
+  ],
+  "failures": [],
+  "statistics": {
+    "by_source": {
+      "ENTSOE": 16,
+      "ELEXON": 81,
+      "NORDPOOL": 9
+    },
+    "by_fuel_type": {
+      "wind": 106
+    },
+    "by_technology_type": {
+      "wind_offshore": 106
+    },
+    "by_windfarm_found": {
+      "found": 8,
+      "not_found": 98
+    }
+  }
+}

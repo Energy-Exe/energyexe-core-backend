@@ -41,13 +41,15 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    
+
     # Create indexes
     op.create_index(op.f("ix_audit_logs_id"), "audit_logs", ["id"], unique=False)
     op.create_index(op.f("ix_audit_logs_user_id"), "audit_logs", ["user_id"], unique=False)
     op.create_index(op.f("ix_audit_logs_user_email"), "audit_logs", ["user_email"], unique=False)
     op.create_index(op.f("ix_audit_logs_action"), "audit_logs", ["action"], unique=False)
-    op.create_index(op.f("ix_audit_logs_resource_type"), "audit_logs", ["resource_type"], unique=False)
+    op.create_index(
+        op.f("ix_audit_logs_resource_type"), "audit_logs", ["resource_type"], unique=False
+    )
     op.create_index(op.f("ix_audit_logs_resource_id"), "audit_logs", ["resource_id"], unique=False)
     op.create_index(op.f("ix_audit_logs_ip_address"), "audit_logs", ["ip_address"], unique=False)
     op.create_index(op.f("ix_audit_logs_created_at"), "audit_logs", ["created_at"], unique=False)
@@ -65,7 +67,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_audit_logs_user_email"), table_name="audit_logs")
     op.drop_index(op.f("ix_audit_logs_user_id"), table_name="audit_logs")
     op.drop_index(op.f("ix_audit_logs_id"), table_name="audit_logs")
-    
+
     # Drop audit_logs table
     op.drop_table("audit_logs")
     # ### end Alembic commands ###

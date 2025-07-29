@@ -35,7 +35,7 @@ class WindfarmService:
                 selectinload(Windfarm.region),
                 selectinload(Windfarm.bidzone),
                 selectinload(Windfarm.market_balance_area),
-                selectinload(Windfarm.project)
+                selectinload(Windfarm.project),
             )
         )
         return result.scalar_one_or_none()

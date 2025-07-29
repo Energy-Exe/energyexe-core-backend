@@ -2,6 +2,12 @@
 
 from .control_area import ControlArea, ControlAreaCreate, ControlAreaUpdate
 from .country import Country, CountryCreate, CountryInDB, CountryUpdate
+from .generation_unit import (
+    GenerationUnitCreate,
+    GenerationUnitResponse,
+    GenerationUnitSearchParams,
+    GenerationUnitUpdate,
+)
 from .market_balance_area import MarketBalanceArea, MarketBalanceAreaCreate, MarketBalanceAreaUpdate
 from .state import State, StateCreate, StateInDB, StateUpdate, StateWithCountry
 from .user import Token, TokenData, UserCreate, UserLogin, UserResponse, UserUpdate
@@ -28,6 +34,10 @@ __all__ = [
     "MarketBalanceArea",
     "MarketBalanceAreaCreate",
     "MarketBalanceAreaUpdate",
+    "GenerationUnitCreate",
+    "GenerationUnitUpdate",
+    "GenerationUnitResponse",
+    "GenerationUnitSearchParams",
 ]
 
 # Resolve forward references

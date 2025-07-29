@@ -4,21 +4,21 @@ Seed script for windfarms table with ownership relationships
 """
 
 import json
-from datetime import datetime, date
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from app.models.country import Country
-from app.models.state import State
-from app.models.region import Region
 from app.models.bidzone import Bidzone
-from app.models.market_balance_area import MarketBalanceArea
 from app.models.control_area import ControlArea
+from app.models.country import Country
+from app.models.market_balance_area import MarketBalanceArea
 from app.models.owner import Owner
 from app.models.project import Project
+from app.models.region import Region
+from app.models.state import State
 from app.models.windfarm import Windfarm
 from app.models.windfarm_owner import WindfarmOwner
 
@@ -31,7 +31,7 @@ WINDFARMS_DATA = [
         "state": "",
         "region": "Scottish North Sea",
         "bidzone": "10YGB----------A",
-        "market_balance_area": "10YGB----------A", 
+        "market_balance_area": "10YGB----------A",
         "control_area": "10YGB----------A",
         "nameplate_capacity_mw": 96.8,
         "project": "",
@@ -44,9 +44,7 @@ WINDFARMS_DATA = [
         "status": "operational",
         "notes": "",
         "alternate_name": "",
-        "owners": [
-            {"name": "Vattenfall", "percentage": 100.0}
-        ]
+        "owners": [{"name": "Vattenfall", "percentage": 100.0}],
     },
     {
         "name": "Albatros / Hohe See",
@@ -68,10 +66,7 @@ WINDFARMS_DATA = [
         "status": "operational",
         "notes": "",
         "alternate_name": "",
-        "owners": [
-            {"name": "EnBW", "percentage": 50.1},
-            {"name": "Enbridge", "percentage": 49.9}
-        ]
+        "owners": [{"name": "EnBW", "percentage": 50.1}, {"name": "Enbridge", "percentage": 49.9}],
     },
     {
         "name": "Alpha Ventus",
@@ -96,8 +91,8 @@ WINDFARMS_DATA = [
         "owners": [
             {"name": "EWE", "percentage": 47.5},
             {"name": "Vattenfall", "percentage": 26.25},
-            {"name": "RWE", "percentage": 26.25}
-        ]
+            {"name": "RWE", "percentage": 26.25},
+        ],
     },
     {
         "name": "Amrumbank West",
@@ -119,9 +114,7 @@ WINDFARMS_DATA = [
         "status": "operational",
         "notes": "",
         "alternate_name": "",
-        "owners": [
-            {"name": "RWE", "percentage": 100.0}
-        ]
+        "owners": [{"name": "RWE", "percentage": 100.0}],
     },
     {
         "name": "Anholt",
@@ -146,8 +139,8 @@ WINDFARMS_DATA = [
         "owners": [
             {"name": "Ørsted", "percentage": 50.0},
             {"name": "PKA", "percentage": 20.0},
-            {"name": "Pension Danmark", "percentage": 30.0}
-        ]
+            {"name": "Pension Danmark", "percentage": 30.0},
+        ],
     },
     {
         "name": "Arcadis Ost 1",
@@ -169,9 +162,7 @@ WINDFARMS_DATA = [
         "status": "operational",
         "notes": "",
         "alternate_name": "",
-        "owners": [
-            {"name": "JERA Nex bp", "percentage": 100.0}
-        ]
+        "owners": [{"name": "JERA Nex bp", "percentage": 100.0}],
     },
     {
         "name": "Arkona",
@@ -196,8 +187,8 @@ WINDFARMS_DATA = [
         "owners": [
             {"name": "RWE", "percentage": 50.0},
             {"name": "Equinor", "percentage": 25.0},
-            {"name": "Energy Infrastructure Partners (EIP)", "percentage": 25.0}
-        ]
+            {"name": "Energy Infrastructure Partners (EIP)", "percentage": 25.0},
+        ],
     },
     {
         "name": "Avedøre",
@@ -219,9 +210,7 @@ WINDFARMS_DATA = [
         "status": "operational",
         "notes": "",
         "alternate_name": "",
-        "owners": [
-            {"name": "Ørsted", "percentage": 100.0}
-        ]
+        "owners": [{"name": "Ørsted", "percentage": 100.0}],
     },
     {
         "name": "Baltic 1",
@@ -243,9 +232,7 @@ WINDFARMS_DATA = [
         "status": "operational",
         "notes": "",
         "alternate_name": "",
-        "owners": [
-            {"name": "EnBW", "percentage": 100.0}
-        ]
+        "owners": [{"name": "EnBW", "percentage": 100.0}],
     },
     {
         "name": "Baltic 2",
@@ -270,8 +257,8 @@ WINDFARMS_DATA = [
         "owners": [
             {"name": "EnBW", "percentage": 50.1},
             {"name": "Ärzteversorgung Westfalen-Lippe", "percentage": 22.5},
-            {"name": "Vårgrønn", "percentage": 27.4}
-        ]
+            {"name": "Vårgrønn", "percentage": 27.4},
+        ],
     },
     {
         "name": "Baltic Eagle",
@@ -295,8 +282,8 @@ WINDFARMS_DATA = [
         "alternate_name": "",
         "owners": [
             {"name": "Iberdrola", "percentage": 50.0},
-            {"name": "Masdar", "percentage": 50.0}
-        ]
+            {"name": "Masdar", "percentage": 50.0},
+        ],
     },
     {
         "name": "Baltic Power",
@@ -320,8 +307,8 @@ WINDFARMS_DATA = [
         "alternate_name": "",
         "owners": [
             {"name": "Orlen", "percentage": 51.0},
-            {"name": "Northland Power", "percentage": 49.0}
-        ]
+            {"name": "Northland Power", "percentage": 49.0},
+        ],
     },
     {
         "name": "BARD Offshore 1",
@@ -343,9 +330,7 @@ WINDFARMS_DATA = [
         "status": "operational",
         "notes": "",
         "alternate_name": "",
-        "owners": [
-            {"name": "Macquarie", "percentage": 100.0}
-        ]
+        "owners": [{"name": "Macquarie", "percentage": 100.0}],
     },
     {
         "name": "Barrow",
@@ -367,9 +352,7 @@ WINDFARMS_DATA = [
         "status": "operational",
         "notes": "",
         "alternate_name": "",
-        "owners": [
-            {"name": "Ørsted", "percentage": 100.0}
-        ]
+        "owners": [{"name": "Ørsted", "percentage": 100.0}],
     },
     {
         "name": "Beatrice",
@@ -395,8 +378,8 @@ WINDFARMS_DATA = [
             {"name": "SSE", "percentage": 40.0},
             {"name": "TRIG", "percentage": 17.5},
             {"name": "SDIC Red Rock Power", "percentage": 25.0},
-            {"name": "Equitix", "percentage": 17.5}
-        ]
+            {"name": "Equitix", "percentage": 17.5},
+        ],
     },
     {
         "name": "Belwind 1",
@@ -421,8 +404,8 @@ WINDFARMS_DATA = [
         "owners": [
             {"name": "Meewind", "percentage": 20.0},
             {"name": "Sumitomo", "percentage": 39.0},
-            {"name": "JERA Nex bp", "percentage": 41.0}
-        ]
+            {"name": "JERA Nex bp", "percentage": 41.0},
+        ],
     },
     {
         "name": "Block Island",
@@ -444,9 +427,7 @@ WINDFARMS_DATA = [
         "status": "operational",
         "notes": "",
         "alternate_name": "",
-        "owners": [
-            {"name": "Ørsted", "percentage": 100.0}
-        ]
+        "owners": [{"name": "Ørsted", "percentage": 100.0}],
     },
     {
         "name": "Borkum Riffgat",
@@ -468,10 +449,7 @@ WINDFARMS_DATA = [
         "status": "operational",
         "notes": "According to EWE has capacity of 108 MW",
         "alternate_name": "",
-        "owners": [
-            {"name": "EWE", "percentage": 99.58},
-            {"name": "ENOVA", "percentage": 0.42}
-        ]
+        "owners": [{"name": "EWE", "percentage": 99.58}, {"name": "ENOVA", "percentage": 0.42}],
     },
     {
         "name": "Borkum Riffgrund 1",
@@ -495,8 +473,8 @@ WINDFARMS_DATA = [
         "alternate_name": "",
         "owners": [
             {"name": "Ørsted", "percentage": 50.0},
-            {"name": "Schroders Greencoat", "percentage": 50.0}
-        ]
+            {"name": "Schroders Greencoat", "percentage": 50.0},
+        ],
     },
     {
         "name": "Borkum Riffgrund 2",
@@ -521,26 +499,27 @@ WINDFARMS_DATA = [
         "owners": [
             {"name": "Gulf Energy Development Public Co", "percentage": 25.0},
             {"name": "Ørsted", "percentage": 50.0},
-            {"name": "Keppel Corp and Keppel Infrastructure Fund", "percentage": 25.0}
-        ]
-    }
+            {"name": "Keppel Corp and Keppel Infrastructure Fund", "percentage": 25.0},
+        ],
+    },
 ]
 
 # Country mapping from names to database codes
 COUNTRY_MAPPING = {
     "UK": "GBR",
-    "Germany": "DEU", 
+    "Germany": "DEU",
     "Denmark": "DNK",
     "Poland": "POL",
     "Belgium": "BEL",
-    "USA": "USA"
+    "USA": "USA",
 }
+
 
 def parse_date(date_str: str) -> Optional[date]:
     """Parse date string in various formats"""
     if not date_str or date_str.strip() == "":
         return None
-        
+
     try:
         # Try MM/DD/YYYY format first
         if "/" in date_str:
@@ -551,14 +530,16 @@ def parse_date(date_str: str) -> Optional[date]:
     except (ValueError, AttributeError):
         return None
 
+
 def lookup_country_id(db: Session, country_name: str) -> Optional[int]:
     """Look up country ID by name"""
     country_code = COUNTRY_MAPPING.get(country_name)
     if not country_code:
         return None
-        
+
     country = db.query(Country).filter(Country.code == country_code).first()
     return country.id if country else None
+
 
 def lookup_state_id(db: Session, state_code: str, country_id: int) -> Optional[int]:
     """Look up state ID by code and country, create offshore state if needed"""
@@ -567,13 +548,14 @@ def lookup_state_id(db: Session, state_code: str, country_id: int) -> Optional[i
         country = db.query(Country).filter(Country.id == country_id).first()
         if not country:
             return None
-            
+
         offshore_code = f"{country.code}_OFFSHORE"
-        offshore_state = db.query(State).filter(
-            State.code == offshore_code,
-            State.country_id == country_id
-        ).first()
-        
+        offshore_state = (
+            db.query(State)
+            .filter(State.code == offshore_code, State.country_id == country_id)
+            .first()
+        )
+
         if not offshore_state:
             # Create offshore state for this country
             offshore_state = State(
@@ -581,163 +563,173 @@ def lookup_state_id(db: Session, state_code: str, country_id: int) -> Optional[i
                 name=f"{country.name} Offshore Waters",
                 country_id=country_id,
                 lat=None,
-                lng=None
+                lng=None,
             )
             db.add(offshore_state)
             db.flush()  # Get the ID
             print(f"    Created offshore state for {country.name}: {offshore_state.name}")
-        
+
         return offshore_state.id if offshore_state else None
-        
-    state = db.query(State).filter(
-        State.code == state_code.strip(),
-        State.country_id == country_id
-    ).first()
+
+    state = (
+        db.query(State)
+        .filter(State.code == state_code.strip(), State.country_id == country_id)
+        .first()
+    )
     return state.id if state else None
+
 
 def lookup_region_id(db: Session, region_name: str) -> Optional[int]:
     """Look up region ID by name"""
     if not region_name or region_name.strip() == "":
         return None
-        
+
     region = db.query(Region).filter(Region.name == region_name.strip()).first()
     return region.id if region else None
+
 
 def lookup_bidzone_id(db: Session, bidzone_code: str) -> Optional[int]:
     """Look up bidzone ID by code"""
     if not bidzone_code or bidzone_code.strip() == "":
         return None
-        
+
     bidzone = db.query(Bidzone).filter(Bidzone.code == bidzone_code.strip()).first()
     return bidzone.id if bidzone else None
+
 
 def lookup_market_balance_area_id(db: Session, mba_code: str) -> Optional[int]:
     """Look up market balance area ID by code"""
     if not mba_code or mba_code.strip() == "":
         return None
-        
+
     mba = db.query(MarketBalanceArea).filter(MarketBalanceArea.code == mba_code.strip()).first()
     return mba.id if mba else None
+
 
 def lookup_control_area_id(db: Session, ca_code: str) -> Optional[int]:
     """Look up control area ID by code"""
     if not ca_code or ca_code.strip() == "":
         return None
-        
+
     ca = db.query(ControlArea).filter(ControlArea.code == ca_code.strip()).first()
     return ca.id if ca else None
+
 
 def lookup_owner_id(db: Session, owner_name: str) -> Optional[int]:
     """Look up owner ID by name"""
     if not owner_name or owner_name.strip() == "":
         return None
-        
+
     owner = db.query(Owner).filter(Owner.name == owner_name.strip()).first()
     return owner.id if owner else None
+
 
 def lookup_project_id(db: Session, project_name: str) -> Optional[int]:
     """Look up project ID by name"""
     if not project_name or project_name.strip() == "":
         return None
-        
+
     project = db.query(Project).filter(Project.name == project_name.strip()).first()
     return project.id if project else None
 
-def generate_windfarm_code(name: str, location_type: str, turbine_count: int, sequence_number: int) -> str:
+
+def generate_windfarm_code(
+    name: str, location_type: str, turbine_count: int, sequence_number: int
+) -> str:
     """Generate a code following format: [WF]_[OF/ON]_[turbine unit count in 4 digits]_[6 DIGIT sequential code]
-    
+
     Args:
         name: Windfarm name
         location_type: Either 'offshore' or 'onshore'
         turbine_count: Total number of turbines
         sequence_number: Sequential number for this windfarm
-    
+
     Returns:
         Formatted code like: WF_OF_0087_000001
     """
     # Determine offshore/onshore code
     location_code = "OF" if location_type == "offshore" else "ON"
-    
+
     # Format turbine count as 4 digits
     turbine_str = str(turbine_count).zfill(4)
-    
+
     # Format sequence number as 6 digits
     sequence_str = str(sequence_number).zfill(6)
-    
+
     return f"WF_{location_code}_{turbine_str}_{sequence_str}"
+
 
 def seed_windfarms(db: Session):
     """Seed windfarms table with initial data and create ownership relationships"""
     print(f"  Checking for existing windfarms...")
-    
+
     # Get existing windfarm names
     existing_names = {wf.name for wf in db.query(Windfarm.name).all()}
-    
+
     # Get the current max sequence number from existing windfarms
     max_sequence = 0
     existing_windfarms = db.query(Windfarm.code).all()
     for wf in existing_windfarms:
-        if wf.code and '_' in wf.code:
-            parts = wf.code.split('_')
+        if wf.code and "_" in wf.code:
+            parts = wf.code.split("_")
             if len(parts) == 4 and parts[-1].isdigit():
                 max_sequence = max(max_sequence, int(parts[-1]))
-    
+
     success_count = 0
     failure_count = 0
     failures = []
     sequence_number = max_sequence
-    
+
     for windfarm_data in WINDFARMS_DATA:
         windfarm_name = windfarm_data["name"]
-        
+
         # Skip if already exists
         if windfarm_name in existing_names:
             print(f"    Skipping existing windfarm: {windfarm_name}")
             continue
-            
+
         try:
             # Look up foreign key relationships
             country_id = lookup_country_id(db, windfarm_data["country"])
             if not country_id:
                 raise ValueError(f"Country '{windfarm_data['country']}' not found")
-                
+
             state_id = lookup_state_id(db, windfarm_data["state"], country_id)
             region_id = lookup_region_id(db, windfarm_data["region"])
             bidzone_id = lookup_bidzone_id(db, windfarm_data["bidzone"])
             mba_id = lookup_market_balance_area_id(db, windfarm_data["market_balance_area"])
             ca_id = lookup_control_area_id(db, windfarm_data["control_area"])
             project_id = lookup_project_id(db, windfarm_data["project"])
-            
+
             # Parse dates
             commercial_date = parse_date(windfarm_data["commercial_operational_date"])
             first_power_date = parse_date(windfarm_data["first_power_date"])
-            
+
             # Validate ownership percentages
             total_percentage = sum(owner["percentage"] for owner in windfarm_data["owners"])
             if abs(total_percentage - 100.0) > 0.01:  # Allow small rounding differences
                 raise ValueError(f"Ownership percentages sum to {total_percentage}%, not 100%")
-            
+
             # Look up owner IDs
             owner_lookups = []
             for owner_data in windfarm_data["owners"]:
                 owner_id = lookup_owner_id(db, owner_data["name"])
                 if not owner_id:
                     raise ValueError(f"Owner '{owner_data['name']}' not found")
-                owner_lookups.append({
-                    "owner_id": owner_id,
-                    "percentage": Decimal(str(owner_data["percentage"]))
-                })
-            
+                owner_lookups.append(
+                    {"owner_id": owner_id, "percentage": Decimal(str(owner_data["percentage"]))}
+                )
+
             # Increment sequence number for new windfarm
             sequence_number += 1
-            
+
             # Create windfarm
             windfarm = Windfarm(
                 code=generate_windfarm_code(
                     windfarm_name,
                     windfarm_data.get("location_type", "offshore"),
                     windfarm_data.get("total_turbine_count", 0),
-                    sequence_number
+                    sequence_number,
                 ),
                 name=windfarm_name,
                 country_id=country_id,
@@ -756,54 +748,57 @@ def seed_windfarms(db: Session):
                 location_type=windfarm_data.get("location_type") or None,
                 status=windfarm_data.get("status") or None,
                 notes=windfarm_data.get("notes") or None,
-                alternate_name=windfarm_data.get("alternate_name") or None
+                alternate_name=windfarm_data.get("alternate_name") or None,
             )
-            
+
             db.add(windfarm)
             db.flush()  # Get the windfarm ID
-            
+
             # Create ownership relationships
             for owner_lookup in owner_lookups:
                 windfarm_owner = WindfarmOwner(
                     windfarm_id=windfarm.id,
                     owner_id=owner_lookup["owner_id"],
-                    ownership_percentage=owner_lookup["percentage"]
+                    ownership_percentage=owner_lookup["percentage"],
                 )
                 db.add(windfarm_owner)
-            
+
             success_count += 1
             print(f"    ✅ Added windfarm: {windfarm_name} with {len(owner_lookups)} owners")
-            
+
         except Exception as e:
             failure_count += 1
             error_msg = str(e)
-            failures.append({
-                "windfarm_name": windfarm_name,
-                "error": error_msg,
-                "data": windfarm_data
-            })
+            failures.append(
+                {"windfarm_name": windfarm_name, "error": error_msg, "data": windfarm_data}
+            )
             print(f"    ❌ Failed to add windfarm: {windfarm_name} - {error_msg}")
             db.rollback()  # Rollback this transaction to allow subsequent windfarms to be processed
-    
+
     # Commit successful changes
     if success_count > 0:
         db.commit()
         print(f"  Successfully added {success_count} windfarms")
-    
+
     # Generate failure report
     if failures:
         report_path = Path(__file__).parent / "windfarms_seed_failures.json"
-        with open(report_path, 'w') as f:
-            json.dump({
-                "summary": {
-                    "total_attempted": len(WINDFARMS_DATA),
-                    "successful": success_count,
-                    "failed": failure_count,
-                    "timestamp": datetime.now().isoformat()
+        with open(report_path, "w") as f:
+            json.dump(
+                {
+                    "summary": {
+                        "total_attempted": len(WINDFARMS_DATA),
+                        "successful": success_count,
+                        "failed": failure_count,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                    "failures": failures,
                 },
-                "failures": failures
-            }, f, indent=2, default=str)
+                f,
+                indent=2,
+                default=str,
+            )
         print(f"  Generated failure report: {report_path}")
         print(f"  Failed to add {failure_count} windfarms - see report for details")
-    
+
     print(f"  Windfarm seeding completed: {success_count} successful, {failure_count} failed")

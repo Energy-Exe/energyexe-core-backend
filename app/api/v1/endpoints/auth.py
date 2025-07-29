@@ -72,7 +72,7 @@ async def login(
 
     access_token = create_access_token(subject=user.username)
     logger.info("User logged in successfully", user_id=user.id, username=user.username)
-    
+
     # Log successful login
     await AuditLogService.log_action(
         db=db,
@@ -120,7 +120,11 @@ async def login_for_access_token(
             user_agent=request.headers.get("User-Agent") if request else None,
             endpoint=str(request.url.path) if request else None,
             method=request.method if request else None,
-            extra_metadata={"success": False, "username": form_data.username, "login_type": "oauth2"},
+            extra_metadata={
+                "success": False,
+                "username": form_data.username,
+                "login_type": "oauth2",
+            },
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -130,7 +134,7 @@ async def login_for_access_token(
 
     access_token = create_access_token(subject=user.username)
     logger.info("User logged in successfully", user_id=user.id, username=user.username)
-    
+
     # Log successful login
     await AuditLogService.log_action(
         db=db,

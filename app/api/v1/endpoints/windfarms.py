@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.schemas.windfarm import Windfarm, WindfarmCreate, WindfarmUpdate, WindfarmWithOwners, WindfarmCreateWithOwners
+from app.schemas.windfarm import (
+    Windfarm,
+    WindfarmCreate,
+    WindfarmCreateWithOwners,
+    WindfarmUpdate,
+    WindfarmWithOwners,
+)
 from app.schemas.windfarm_owner import WindfarmOwner, WindfarmOwnerCreate, WindfarmOwnerUpdate
 from app.services.windfarm import WindfarmService
 from app.services.windfarm_owner import WindfarmOwnerService
@@ -48,7 +54,7 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
     windfarm = await WindfarmService.get_windfarm_with_owners(db, windfarm_id)
     if not windfarm:
         raise HTTPException(status_code=404, detail="Windfarm not found")
-    
+
     # Convert ORM objects to dictionaries for JSON serialization
     windfarm_dict = {
         "id": windfarm.id,
@@ -62,8 +68,12 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
         "control_area_id": windfarm.control_area_id,
         "nameplate_capacity_mw": windfarm.nameplate_capacity_mw,
         "project_id": windfarm.project_id,
-        "commercial_operational_date": windfarm.commercial_operational_date.isoformat() if windfarm.commercial_operational_date else None,
-        "first_power_date": windfarm.first_power_date.isoformat() if windfarm.first_power_date else None,
+        "commercial_operational_date": windfarm.commercial_operational_date.isoformat()
+        if windfarm.commercial_operational_date
+        else None,
+        "first_power_date": windfarm.first_power_date.isoformat()
+        if windfarm.first_power_date
+        else None,
         "lat": windfarm.lat,
         "lng": windfarm.lng,
         "polygon_wkt": windfarm.polygon_wkt,
@@ -75,7 +85,9 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
         "environmental_assessment_status": windfarm.environmental_assessment_status,
         "permits_obtained": windfarm.permits_obtained,
         "grid_connection_status": windfarm.grid_connection_status,
-        "total_investment_amount": str(windfarm.total_investment_amount) if windfarm.total_investment_amount else None,
+        "total_investment_amount": str(windfarm.total_investment_amount)
+        if windfarm.total_investment_amount
+        else None,
         "investment_currency": windfarm.investment_currency,
         "address": windfarm.address,
         "postal_code": windfarm.postal_code,
@@ -85,32 +97,44 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
             "id": windfarm.country.id,
             "code": windfarm.country.code,
             "name": windfarm.country.name,
-        } if windfarm.country else None,
+        }
+        if windfarm.country
+        else None,
         "state": {
             "id": windfarm.state.id,
             "code": windfarm.state.code,
             "name": windfarm.state.name,
-        } if windfarm.state else None,
+        }
+        if windfarm.state
+        else None,
         "region": {
             "id": windfarm.region.id,
             "code": windfarm.region.code,
             "name": windfarm.region.name,
-        } if windfarm.region else None,
+        }
+        if windfarm.region
+        else None,
         "bidzone": {
             "id": windfarm.bidzone.id,
             "code": windfarm.bidzone.code,
             "name": windfarm.bidzone.name,
-        } if windfarm.bidzone else None,
+        }
+        if windfarm.bidzone
+        else None,
         "market_balance_area": {
             "id": windfarm.market_balance_area.id,
             "code": windfarm.market_balance_area.code,
             "name": windfarm.market_balance_area.name,
-        } if windfarm.market_balance_area else None,
+        }
+        if windfarm.market_balance_area
+        else None,
         "project": {
             "id": windfarm.project.id,
             "code": windfarm.project.code,
             "name": windfarm.project.name,
-        } if windfarm.project else None,
+        }
+        if windfarm.project
+        else None,
         "windfarm_owners": [
             {
                 "id": wo.id,
@@ -125,12 +149,14 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
                     "name": wo.owner.name,
                     "created_at": wo.owner.created_at.isoformat(),
                     "updated_at": wo.owner.updated_at.isoformat(),
-                } if wo.owner else None
+                }
+                if wo.owner
+                else None,
             }
             for wo in windfarm.windfarm_owners
-        ]
+        ],
     }
-    
+
     return windfarm_dict
 
 
@@ -156,8 +182,7 @@ async def create_windfarm(windfarm: WindfarmCreate, db: AsyncSession = Depends(g
 
 @router.post("/with-owners", status_code=201)
 async def create_windfarm_with_owners(
-    windfarm_data: WindfarmCreateWithOwners, 
-    db: AsyncSession = Depends(get_db)
+    windfarm_data: WindfarmCreateWithOwners, db: AsyncSession = Depends(get_db)
 ):
     """Create a new windfarm with owners"""
     # Check if windfarm with same code already exists
@@ -168,19 +193,18 @@ async def create_windfarm_with_owners(
     # Validate that ownership percentages sum to 100%
     if not await WindfarmOwnerService.validate_ownership_percentages(windfarm_data.owners):
         raise HTTPException(
-            status_code=400, 
-            detail="Ownership percentages must sum to exactly 100%"
+            status_code=400, detail="Ownership percentages must sum to exactly 100%"
         )
 
     # Create the windfarm first
     windfarm = await WindfarmService.create_windfarm(db, windfarm_data.windfarm)
-    
+
     # Then create the ownership relationships
     await WindfarmOwnerService.create_windfarm_owners(db, windfarm.id, windfarm_data.owners)
-    
+
     # Return the windfarm with owners - delegate to the get endpoint logic
     windfarm_with_owners = await WindfarmService.get_windfarm_with_owners(db, windfarm.id)
-    
+
     # Convert ORM objects to dictionaries for JSON serialization
     windfarm_dict = {
         "id": windfarm_with_owners.id,
@@ -194,8 +218,12 @@ async def create_windfarm_with_owners(
         "control_area_id": windfarm_with_owners.control_area_id,
         "nameplate_capacity_mw": windfarm_with_owners.nameplate_capacity_mw,
         "project_id": windfarm_with_owners.project_id,
-        "commercial_operational_date": windfarm_with_owners.commercial_operational_date.isoformat() if windfarm_with_owners.commercial_operational_date else None,
-        "first_power_date": windfarm_with_owners.first_power_date.isoformat() if windfarm_with_owners.first_power_date else None,
+        "commercial_operational_date": windfarm_with_owners.commercial_operational_date.isoformat()
+        if windfarm_with_owners.commercial_operational_date
+        else None,
+        "first_power_date": windfarm_with_owners.first_power_date.isoformat()
+        if windfarm_with_owners.first_power_date
+        else None,
         "lat": windfarm_with_owners.lat,
         "lng": windfarm_with_owners.lng,
         "polygon_wkt": windfarm_with_owners.polygon_wkt,
@@ -207,7 +235,9 @@ async def create_windfarm_with_owners(
         "environmental_assessment_status": windfarm_with_owners.environmental_assessment_status,
         "permits_obtained": windfarm_with_owners.permits_obtained,
         "grid_connection_status": windfarm_with_owners.grid_connection_status,
-        "total_investment_amount": str(windfarm_with_owners.total_investment_amount) if windfarm_with_owners.total_investment_amount else None,
+        "total_investment_amount": str(windfarm_with_owners.total_investment_amount)
+        if windfarm_with_owners.total_investment_amount
+        else None,
         "investment_currency": windfarm_with_owners.investment_currency,
         "address": windfarm_with_owners.address,
         "postal_code": windfarm_with_owners.postal_code,
@@ -217,32 +247,44 @@ async def create_windfarm_with_owners(
             "id": windfarm_with_owners.country.id,
             "code": windfarm_with_owners.country.code,
             "name": windfarm_with_owners.country.name,
-        } if windfarm_with_owners.country else None,
+        }
+        if windfarm_with_owners.country
+        else None,
         "state": {
             "id": windfarm_with_owners.state.id,
             "code": windfarm_with_owners.state.code,
             "name": windfarm_with_owners.state.name,
-        } if windfarm_with_owners.state else None,
+        }
+        if windfarm_with_owners.state
+        else None,
         "region": {
             "id": windfarm_with_owners.region.id,
             "code": windfarm_with_owners.region.code,
             "name": windfarm_with_owners.region.name,
-        } if windfarm_with_owners.region else None,
+        }
+        if windfarm_with_owners.region
+        else None,
         "bidzone": {
             "id": windfarm_with_owners.bidzone.id,
             "code": windfarm_with_owners.bidzone.code,
             "name": windfarm_with_owners.bidzone.name,
-        } if windfarm_with_owners.bidzone else None,
+        }
+        if windfarm_with_owners.bidzone
+        else None,
         "market_balance_area": {
             "id": windfarm_with_owners.market_balance_area.id,
             "code": windfarm_with_owners.market_balance_area.code,
             "name": windfarm_with_owners.market_balance_area.name,
-        } if windfarm_with_owners.market_balance_area else None,
+        }
+        if windfarm_with_owners.market_balance_area
+        else None,
         "project": {
             "id": windfarm_with_owners.project.id,
             "code": windfarm_with_owners.project.code,
             "name": windfarm_with_owners.project.name,
-        } if windfarm_with_owners.project else None,
+        }
+        if windfarm_with_owners.project
+        else None,
         "windfarm_owners": [
             {
                 "id": wo.id,
@@ -257,12 +299,14 @@ async def create_windfarm_with_owners(
                     "name": wo.owner.name,
                     "created_at": wo.owner.created_at.isoformat(),
                     "updated_at": wo.owner.updated_at.isoformat(),
-                } if wo.owner else None
+                }
+                if wo.owner
+                else None,
             }
             for wo in windfarm_with_owners.windfarm_owners
-        ]
+        ],
     }
-    
+
     return windfarm_dict
 
 
@@ -300,15 +344,13 @@ async def get_windfarm_owners(windfarm_id: int, db: AsyncSession = Depends(get_d
     windfarm = await WindfarmService.get_windfarm(db, windfarm_id)
     if not windfarm:
         raise HTTPException(status_code=404, detail="Windfarm not found")
-    
+
     return await WindfarmOwnerService.get_windfarm_owners(db, windfarm_id)
 
 
 @router.post("/{windfarm_id}/owners", response_model=List[WindfarmOwner], status_code=201)
 async def add_windfarm_owners(
-    windfarm_id: int,
-    owners_data: List[dict],
-    db: AsyncSession = Depends(get_db)
+    windfarm_id: int, owners_data: List[dict], db: AsyncSession = Depends(get_db)
 ):
     """Add owners to a windfarm (replaces existing owners)"""
     # Check if windfarm exists
@@ -319,13 +361,12 @@ async def add_windfarm_owners(
     # Validate that ownership percentages sum to 100%
     if not await WindfarmOwnerService.validate_ownership_percentages(owners_data):
         raise HTTPException(
-            status_code=400, 
-            detail="Ownership percentages must sum to exactly 100%"
+            status_code=400, detail="Ownership percentages must sum to exactly 100%"
         )
 
     # Delete existing owners
     await WindfarmOwnerService.delete_all_windfarm_owners(db, windfarm_id)
-    
+
     # Create new owners
     return await WindfarmOwnerService.create_windfarm_owners(db, windfarm_id, owners_data)
 
@@ -335,7 +376,7 @@ async def update_windfarm_owner(
     windfarm_id: int,
     owner_id: int,
     owner_update: WindfarmOwnerUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a specific owner's ownership percentage"""
     updated_owner = await WindfarmOwnerService.update_windfarm_owner(db, owner_id, owner_update)
@@ -346,9 +387,7 @@ async def update_windfarm_owner(
 
 @router.delete("/{windfarm_id}/owners/{owner_id}", response_model=WindfarmOwner)
 async def remove_windfarm_owner(
-    windfarm_id: int,
-    owner_id: int,
-    db: AsyncSession = Depends(get_db)
+    windfarm_id: int, owner_id: int, db: AsyncSession = Depends(get_db)
 ):
     """Remove an owner from a windfarm"""
     deleted_owner = await WindfarmOwnerService.delete_windfarm_owner(db, owner_id)

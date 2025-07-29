@@ -94,7 +94,12 @@ async def get_audit_summary(
 
 
 @router.get("/{log_id}", response_model=AuditLog)
-@audit_action(AuditAction.ACCESS, "audit_log", lambda result, *args, **kwargs: str(kwargs.get('log_id', 'unknown')), description="Viewed audit log")
+@audit_action(
+    AuditAction.ACCESS,
+    "audit_log",
+    lambda result, *args, **kwargs: str(kwargs.get("log_id", "unknown")),
+    description="Viewed audit log",
+)
 async def get_audit_log(
     log_id: int,
     db: AsyncSession = Depends(get_db),
@@ -139,7 +144,7 @@ async def get_user_audit_history(
     # Users can only view their own audit history unless they're superusers
     if not current_user.is_superuser and current_user.id != user_id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    
+
     return await AuditLogService.get_user_audit_history(db, user_id=user_id, skip=skip, limit=limit)
 
 

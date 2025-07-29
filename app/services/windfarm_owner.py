@@ -1,5 +1,5 @@
-from typing import List, Optional
 from decimal import Decimal
+from typing import List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -12,9 +12,7 @@ from app.schemas.windfarm_owner import WindfarmOwnerCreate, WindfarmOwnerUpdate
 
 class WindfarmOwnerService:
     @staticmethod
-    async def get_windfarm_owners(
-        db: AsyncSession, windfarm_id: int
-    ) -> List[WindfarmOwner]:
+    async def get_windfarm_owners(db: AsyncSession, windfarm_id: int) -> List[WindfarmOwner]:
         result = await db.execute(
             select(WindfarmOwner)
             .where(WindfarmOwner.windfarm_id == windfarm_id)
@@ -38,21 +36,21 @@ class WindfarmOwnerService:
     ) -> List[WindfarmOwner]:
         """Create multiple owners for a windfarm"""
         windfarm_owners = []
-        
+
         for owner_data in owners_data:
             db_windfarm_owner = WindfarmOwner(
                 windfarm_id=windfarm_id,
                 owner_id=owner_data["owner_id"],
-                ownership_percentage=Decimal(str(owner_data["ownership_percentage"]))
+                ownership_percentage=Decimal(str(owner_data["ownership_percentage"])),
             )
             db.add(db_windfarm_owner)
             windfarm_owners.append(db_windfarm_owner)
-        
+
         await db.commit()
-        
+
         for owner in windfarm_owners:
             await db.refresh(owner)
-        
+
         return windfarm_owners
 
     @staticmethod
@@ -92,26 +90,20 @@ class WindfarmOwnerService:
         return db_windfarm_owner
 
     @staticmethod
-    async def delete_all_windfarm_owners(
-        db: AsyncSession, windfarm_id: int
-    ) -> None:
+    async def delete_all_windfarm_owners(db: AsyncSession, windfarm_id: int) -> None:
         """Delete all owners for a windfarm"""
         result = await db.execute(
             select(WindfarmOwner).where(WindfarmOwner.windfarm_id == windfarm_id)
         )
         owners = result.scalars().all()
-        
+
         for owner in owners:
             await db.delete(owner)
-        
+
         await db.commit()
 
     @staticmethod
-    async def validate_ownership_percentages(
-        owners_data: List[dict]
-    ) -> bool:
+    async def validate_ownership_percentages(owners_data: List[dict]) -> bool:
         """Validate that ownership percentages sum to 100%"""
-        total_percentage = sum(
-            Decimal(str(owner["ownership_percentage"])) for owner in owners_data
-        )
+        total_percentage = sum(Decimal(str(owner["ownership_percentage"])) for owner in owners_data)
         return total_percentage == Decimal("100.00")

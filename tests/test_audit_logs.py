@@ -119,7 +119,7 @@ class TestAuditLogService:
 
         # Filter by action
         from app.schemas.audit_log import AuditLogFilter
-        
+
         filters = AuditLogFilter(action=AuditAction.CREATE)
         logs = await AuditLogService.get_audit_logs(test_session, filters=filters)
         assert len(logs) == 1
@@ -226,7 +226,7 @@ class TestAuditDecorator:
     @pytest.mark.asyncio
     async def test_audit_decorator_basic(self, test_session: AsyncSession, mock_request):
         """Test basic audit decorator functionality."""
-        
+
         @audit_action(AuditAction.CREATE, "test_resource", description="Test action")
         async def test_function(db: AsyncSession, request, current_user=None):
             return {"id": 123, "name": "Test Resource"}
@@ -236,11 +236,7 @@ class TestAuditDecorator:
         mock_user.id = 1
         mock_user.email = "test@example.com"
 
-        result = await test_function(
-            db=test_session, 
-            request=mock_request, 
-            current_user=mock_user
-        )
+        result = await test_function(db=test_session, request=mock_request, current_user=mock_user)
 
         # Check function result
         assert result["id"] == 123
@@ -249,7 +245,7 @@ class TestAuditDecorator:
         # Check audit log was created
         logs = await AuditLogService.get_audit_logs(test_session)
         assert len(logs) == 1
-        
+
         log = logs[0]
         assert log.action == AuditAction.CREATE
         assert log.resource_type == "test_resource"
@@ -264,17 +260,17 @@ class TestAuditDecorator:
     @pytest.mark.asyncio
     async def test_audit_decorator_without_user(self, test_session: AsyncSession, mock_request):
         """Test audit decorator when no user is provided."""
-        
+
         @audit_action(AuditAction.ACCESS, "test_resource", description="Anonymous access")
         async def test_function(db: AsyncSession, request):
             return {"data": "test"}
 
         result = await test_function(db=test_session, request=mock_request)
-        
+
         # Check audit log was created without user info
         logs = await AuditLogService.get_audit_logs(test_session)
         assert len(logs) == 1
-        
+
         log = logs[0]
         assert log.action == AuditAction.ACCESS
         assert log.resource_type == "test_resource"
@@ -285,13 +281,13 @@ class TestAuditDecorator:
     @pytest.mark.asyncio
     async def test_audit_decorator_error_handling(self, test_session: AsyncSession):
         """Test audit decorator handles database errors gracefully."""
-        
+
         @audit_action(AuditAction.CREATE, "test_resource")
         async def test_function(db: AsyncSession):
             return {"id": 123}
 
         # Mock the AuditLogService.log_action to raise an exception
-        with patch('app.core.audit.AuditLogService.log_action', side_effect=Exception("DB Error")):
+        with patch("app.core.audit.AuditLogService.log_action", side_effect=Exception("DB Error")):
             # Function should still work even if audit logging fails
             result = await test_function(db=test_session)
             assert result["id"] == 123
@@ -318,7 +314,7 @@ class TestAuditContext:
         # Check audit log was created
         logs = await AuditLogService.get_audit_logs(test_session)
         assert len(logs) == 1
-        
+
         log = logs[0]
         assert log.action == AuditAction.UPDATE
         assert log.resource_type == "test_resource"
@@ -370,10 +366,10 @@ class TestSerializeForAudit:
             "string": "value",
             "number": 123,
             "datetime": datetime(2023, 1, 1, 12, 0, 0),
-            "nested": {"key": "value"}
+            "nested": {"key": "value"},
         }
         result = serialize_for_audit(data)
-        
+
         assert result["string"] == "value"
         assert result["number"] == 123
         assert result["datetime"] == datetime(2023, 1, 1, 12, 0, 0).isoformat()
@@ -383,7 +379,7 @@ class TestSerializeForAudit:
         """Test serializing lists."""
         data = [1, "string", datetime(2023, 1, 1)]
         result = serialize_for_audit(data)
-        
+
         assert len(result) == 3
         assert result[0] == 1
         assert result[1] == "string"
@@ -391,16 +387,17 @@ class TestSerializeForAudit:
 
     def test_serialize_object_with_dict(self):
         """Test serializing objects with __dict__."""
+
         class TestObj:
             def __init__(self):
                 self.name = "test"
                 self.value = 123
                 self.created_at = datetime(2023, 1, 1)
                 self._private = "hidden"  # Should be ignored
-        
+
         obj = TestObj()
         result = serialize_for_audit(obj)
-        
+
         assert result["name"] == "test"
         assert result["value"] == 123
         assert result["created_at"] == datetime(2023, 1, 1).isoformat()
@@ -421,43 +418,37 @@ class TestAuditLogsAPI:
         register_response = client.post("/api/v1/auth/register", json=user_data)
         assert register_response.status_code == 201
 
-        login_response = client.post("/api/v1/auth/login", json={
-            "username": user_data["username"],
-            "password": user_data["password"]
-        })
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={"username": user_data["username"], "password": user_data["password"]},
+        )
         assert login_response.status_code == 200
         token = login_response.json()["access_token"]
 
         # Try to access audit logs
-        response = client.get(
-            "/api/v1/audit-logs",
-            headers={"Authorization": f"Bearer {token}"}
-        )
+        response = client.get("/api/v1/audit-logs", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 403
 
     def test_get_audit_logs_superuser(self, client: TestClient, user_data):
         """Test that superusers can access audit logs."""
         # Make user a superuser
         user_data["is_superuser"] = True
-        
+
         # Register and login as superuser
         register_response = client.post("/api/v1/auth/register", json=user_data)
         assert register_response.status_code == 201
 
-        login_response = client.post("/api/v1/auth/login", json={
-            "username": user_data["username"],
-            "password": user_data["password"]
-        })
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={"username": user_data["username"], "password": user_data["password"]},
+        )
         assert login_response.status_code == 200
         token = login_response.json()["access_token"]
 
         # Access audit logs should work
-        response = client.get(
-            "/api/v1/audit-logs",
-            headers={"Authorization": f"Bearer {token}"}
-        )
+        response = client.get("/api/v1/audit-logs", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 200
-        
+
         # Should return list of audit logs (including registration and login)
         data = response.json()
         assert isinstance(data, list)

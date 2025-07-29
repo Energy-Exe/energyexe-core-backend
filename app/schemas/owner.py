@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -39,7 +39,7 @@ class Owner(OwnerBase):
 
 
 class OwnerWithWindfarms(Owner):
-    windfarm_owners: List['WindfarmOwner'] = []
+    windfarm_owners: List["WindfarmOwner"] = []
 
     class Config:
         from_attributes = True

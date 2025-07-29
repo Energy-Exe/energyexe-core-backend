@@ -3,7 +3,9 @@
 Seed script for owners table
 """
 from sqlalchemy.orm import Session
+
 from app.models.owner import Owner
+
 
 # Mapping function to convert detailed types to schema-allowed types
 def map_owner_type(detailed_type: str) -> str:
@@ -11,18 +13,15 @@ def map_owner_type(detailed_type: str) -> str:
     type_mapping = {
         # Utility types
         "UTILITY": "utility",
-        
         # Private equity and investment types
         "PE": "private_equity",
-        "ASSET_MGMT": "private_equity", 
+        "ASSET_MGMT": "private_equity",
         "INFRA_FUND": "private_equity",
         "PENSION": "private_equity",
         "INSURANCE": "private_equity",
-        
         # Oil, gas and energy types
         "ENERGY": "oil_and_gas",
         "OIL_GAS": "oil_and_gas",
-        
         # Investment fund types
         "BANK": "investment_fund",
         "GOVT": "investment_fund",
@@ -32,16 +31,17 @@ def map_owner_type(detailed_type: str) -> str:
         "CONSORTIUM": "investment_fund",
         "COOP": "investment_fund",
         "FIN_SVCS": "investment_fund",
-        "UNKNOWN": "investment_fund"
+        "UNKNOWN": "investment_fund",
     }
     return type_mapping.get(detailed_type, "investment_fund")
+
 
 OWNERS_DATA = [
     {
         "name": "1st Energy Technologies",
         "code": "1ST_ENERGY_TECH",
         "type": "ENERGY",
-        "notes": "Renewable energy technology company focused on innovative solutions for wind and solar projects."
+        "notes": "Renewable energy technology company focused on innovative solutions for wind and solar projects.",
     },
     {
         "name": "AIP Management",
@@ -1782,14 +1782,16 @@ OWNERS_DATA = [
         "code": "VANTAGE_RE",
         "type": "DEVELOPER",
         "notes": "Renewable energy developer and asset manager.",
-    }
+    },
 ]
+
+
 def seed_owners(db: Session):
     """Seed owners table with initial data"""
     print(f"  Checking for existing owners...")
     # Get existing owner codes
     existing_codes = {o.code for o in db.query(Owner.code).all()}
-    
+
     # Filter out owners that already exist and map types
     owners_to_add = []
     for owner_data in OWNERS_DATA:
@@ -1798,32 +1800,32 @@ def seed_owners(db: Session):
             mapped_data = owner_data.copy()
             mapped_data["type"] = map_owner_type(owner_data["type"])
             owners_to_add.append(Owner(**mapped_data))
-    
+
     if not owners_to_add:
         print(f"  Found {len(existing_codes)} existing owners, no new owners to add")
         return
-    
+
     print(f"  Adding {len(owners_to_add)} new owners...")
     db.add_all(owners_to_add)
     db.commit()
     print(f"  Successfully added {len(owners_to_add)} owners")
-    
+
     # Print summary by mapped type
     mapped_type_counts = {}
     for owner_data in OWNERS_DATA:
         mapped_type = map_owner_type(owner_data["type"])
         mapped_type_counts[mapped_type] = mapped_type_counts.get(mapped_type, 0) + 1
-    
+
     print(f"  Owner distribution by mapped type:")
     for owner_type, count in sorted(mapped_type_counts.items()):
         print(f"    {owner_type}: {count}")
-        
+
     # Also show original type distribution
     original_type_counts = {}
     for owner_data in OWNERS_DATA:
         original_type = owner_data["type"]
         original_type_counts[original_type] = original_type_counts.get(original_type, 0) + 1
-    
+
     print(f"  Original type distribution:")
     for owner_type, count in sorted(original_type_counts.items()):
         mapped_type = map_owner_type(owner_type)

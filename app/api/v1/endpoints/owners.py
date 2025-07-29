@@ -42,7 +42,12 @@ async def search_owners(
 
 
 @router.get("/{owner_id}", response_model=Owner)
-@audit_action(AuditAction.ACCESS, "owner", lambda result, *args, **kwargs: str(kwargs.get('owner_id', 'unknown')), description="Viewed owner")
+@audit_action(
+    AuditAction.ACCESS,
+    "owner",
+    lambda result, *args, **kwargs: str(kwargs.get("owner_id", "unknown")),
+    description="Viewed owner",
+)
 async def get_owner(
     owner_id: int,
     db: AsyncSession = Depends(get_db),
@@ -57,7 +62,12 @@ async def get_owner(
 
 
 @router.get("/code/{code}", response_model=Owner)
-@audit_action(AuditAction.ACCESS, "owner", lambda result, *args, **kwargs: kwargs.get('code', 'unknown'), description="Viewed owner by code")
+@audit_action(
+    AuditAction.ACCESS,
+    "owner",
+    lambda result, *args, **kwargs: kwargs.get("code", "unknown"),
+    description="Viewed owner by code",
+)
 async def get_owner_by_code(
     code: str,
     db: AsyncSession = Depends(get_db),
@@ -89,7 +99,12 @@ async def create_owner(
 
 
 @router.put("/{owner_id}", response_model=Owner)
-@audit_action(AuditAction.UPDATE, "owner", lambda result, *args, **kwargs: str(kwargs.get('owner_id', 'unknown')), description="Updated owner")
+@audit_action(
+    AuditAction.UPDATE,
+    "owner",
+    lambda result, *args, **kwargs: str(kwargs.get("owner_id", "unknown")),
+    description="Updated owner",
+)
 async def update_owner(
     owner_id: int,
     owner_update: OwnerUpdate,
@@ -111,7 +126,12 @@ async def update_owner(
 
 
 @router.delete("/{owner_id}", response_model=Owner)
-@audit_action(AuditAction.DELETE, "owner", lambda result, *args, **kwargs: str(kwargs.get('owner_id', 'unknown')), description="Deleted owner")
+@audit_action(
+    AuditAction.DELETE,
+    "owner",
+    lambda result, *args, **kwargs: str(kwargs.get("owner_id", "unknown")),
+    description="Deleted owner",
+)
 async def delete_owner(
     owner_id: int,
     db: AsyncSession = Depends(get_db),

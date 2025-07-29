@@ -16,10 +16,7 @@ class TurbineUnitService:
     ) -> List[TurbineUnit]:
         result = await db.execute(
             select(TurbineUnit)
-            .options(
-                selectinload(TurbineUnit.windfarm),
-                selectinload(TurbineUnit.turbine_model)
-            )
+            .options(selectinload(TurbineUnit.windfarm), selectinload(TurbineUnit.turbine_model))
             .offset(skip)
             .limit(limit)
             .order_by(TurbineUnit.created_at.desc())
@@ -30,10 +27,7 @@ class TurbineUnitService:
     async def get_turbine_unit(db: AsyncSession, turbine_unit_id: int) -> Optional[TurbineUnit]:
         result = await db.execute(
             select(TurbineUnit)
-            .options(
-                selectinload(TurbineUnit.windfarm),
-                selectinload(TurbineUnit.turbine_model)
-            )
+            .options(selectinload(TurbineUnit.windfarm), selectinload(TurbineUnit.turbine_model))
             .where(TurbineUnit.id == turbine_unit_id)
         )
         return result.scalar_one_or_none()
@@ -50,10 +44,7 @@ class TurbineUnitService:
         search_pattern = f"%{query}%"
         result = await db.execute(
             select(TurbineUnit)
-            .options(
-                selectinload(TurbineUnit.windfarm),
-                selectinload(TurbineUnit.turbine_model)
-            )
+            .options(selectinload(TurbineUnit.windfarm), selectinload(TurbineUnit.turbine_model))
             .where(and_(TurbineUnit.code.ilike(search_pattern)))
             .offset(skip)
             .limit(limit)
