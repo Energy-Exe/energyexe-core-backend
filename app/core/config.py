@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
+    # ENTSOE Integration
+    ENTSOE_API_KEY: str = "3b00489d-a886-48a4-95ad-981da57f7b62"
+    ENTSOE_DEFAULT_AREAS: str = "DE_LU,FR,ES,GB,NL,BE"
+    ENTSOE_FETCH_BATCH_DAYS: int = 7
+    ENTSOE_RATE_LIMIT_REQUESTS: int = 100
+    ENTSOE_RATE_LIMIT_PERIOD: int = 60
+
     @property
     def database_url_sync(self) -> str:
         """Get synchronous database URL for Alembic."""

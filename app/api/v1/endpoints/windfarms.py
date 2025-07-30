@@ -330,10 +330,17 @@ async def update_windfarm(
 @router.delete("/{windfarm_id}", response_model=Windfarm)
 async def delete_windfarm(windfarm_id: int, db: AsyncSession = Depends(get_db)):
     """Delete a windfarm"""
-    deleted_windfarm = await WindfarmService.delete_windfarm(db, windfarm_id)
-    if not deleted_windfarm:
-        raise HTTPException(status_code=404, detail="Windfarm not found")
-    return deleted_windfarm
+    try:
+        deleted_windfarm = await WindfarmService.delete_windfarm(db, windfarm_id)
+        if not deleted_windfarm:
+            raise HTTPException(status_code=404, detail="Windfarm not found")
+        return deleted_windfarm
+    except Exception as e:
+        # Log the error for debugging
+        import logging
+
+        logging.error(f"Error deleting windfarm {windfarm_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete windfarm: {str(e)}")
 
 
 # Windfarm Owner endpoints

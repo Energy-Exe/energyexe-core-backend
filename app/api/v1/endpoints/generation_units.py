@@ -13,6 +13,7 @@ from app.schemas.generation_unit import (
     GenerationUnitResponse,
     GenerationUnitSearchParams,
     GenerationUnitUpdate,
+    GenerationUnitWithWindfarm,
 )
 from app.services.generation_unit import GenerationUnitService
 
@@ -85,16 +86,16 @@ async def get_generation_units_count(
         )
 
 
-@router.get("/{unit_id}", response_model=GenerationUnitResponse)
+@router.get("/{unit_id}", response_model=GenerationUnitWithWindfarm)
 async def get_generation_unit(
     unit_id: int,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a specific generation unit by ID."""
+    """Get a specific generation unit by ID with windfarm details."""
     try:
         service = GenerationUnitService(db)
-        generation_unit = await service.get_by_id(unit_id)
+        generation_unit = await service.get_by_id_with_windfarm(unit_id)
 
         if not generation_unit:
             raise HTTPException(

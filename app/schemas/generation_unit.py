@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.windfarm import Windfarm
+
 
 class GenerationUnitBase(BaseModel):
     """Base schema for generation unit."""
@@ -81,3 +83,9 @@ class GenerationUnitSearchParams(BaseModel):
     is_active: Optional[bool] = Field(True, description="Filter by active status")
     limit: int = Field(100, ge=1, le=1000, description="Maximum number of results")
     offset: int = Field(0, ge=0, description="Number of results to skip")
+
+
+class GenerationUnitWithWindfarm(GenerationUnitResponse):
+    """Schema for generation unit response with windfarm details."""
+
+    windfarm: Optional[Windfarm] = None

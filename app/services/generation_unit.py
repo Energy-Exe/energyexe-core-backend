@@ -6,6 +6,7 @@ import structlog
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundException, ValidationException
 from app.models.generation_unit import GenerationUnit
@@ -35,6 +36,21 @@ class GenerationUnitService:
             return result.scalar_one_or_none()
         except Exception as e:
             logger.error("Error getting generation unit by ID", unit_id=unit_id, error=str(e))
+            raise
+
+    async def get_by_id_with_windfarm(self, unit_id: int) -> Optional[GenerationUnit]:
+        """Get a generation unit by ID with windfarm details."""
+        try:
+            result = await self.db.execute(
+                select(GenerationUnit)
+                .options(selectinload(GenerationUnit.windfarm))
+                .where(and_(GenerationUnit.id == unit_id, GenerationUnit.is_active == True))
+            )
+            return result.scalar_one_or_none()
+        except Exception as e:
+            logger.error(
+                "Error getting generation unit with windfarm by ID", unit_id=unit_id, error=str(e)
+            )
             raise
 
     async def get_by_code(self, code: str) -> Optional[GenerationUnit]:

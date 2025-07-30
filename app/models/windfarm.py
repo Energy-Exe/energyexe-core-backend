@@ -25,7 +25,7 @@ class Windfarm(Base):
 
     # Required geography relationships
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=False)
-    state_id = Column(Integer, ForeignKey("states.id"), nullable=False)
+    state_id = Column(Integer, ForeignKey("states.id"), nullable=True)
 
     # Optional geography relationships
     region_id = Column(Integer, ForeignKey("regions.id"), nullable=True)
@@ -83,5 +83,10 @@ class Windfarm(Base):
     market_balance_area = relationship("MarketBalanceArea", back_populates="windfarms")
     control_area = relationship("ControlArea", back_populates="windfarms")
     project = relationship("Project", back_populates="windfarms")
-    windfarm_owners = relationship("WindfarmOwner", back_populates="windfarm")
-    turbine_units = relationship("TurbineUnit", back_populates="windfarm")
+    windfarm_owners = relationship(
+        "WindfarmOwner", back_populates="windfarm", cascade="all, delete-orphan"
+    )
+    turbine_units = relationship(
+        "TurbineUnit", back_populates="windfarm", cascade="all, delete-orphan"
+    )
+    generation_units = relationship("GenerationUnit", back_populates="windfarm")

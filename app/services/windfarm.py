@@ -87,11 +87,26 @@ class WindfarmService:
 
     @staticmethod
     async def delete_windfarm(db: AsyncSession, windfarm_id: int) -> Optional[Windfarm]:
+        from sqlalchemy import update
+
+        from app.models.generation_unit import GenerationUnit
+        from app.models.turbine_unit import TurbineUnit
+
         result = await db.execute(select(Windfarm).where(Windfarm.id == windfarm_id))
         db_windfarm = result.scalar_one_or_none()
 
         if not db_windfarm:
             return None
+
+        # First, set windfarm_id to NULL for any generation units that reference this windfarm
+        await db.execute(
+            update(GenerationUnit)
+            .where(GenerationUnit.windfarm_id == windfarm_id)
+            .values(windfarm_id=None)
+        )
+
+        # Delete related turbine units (cascade delete is configured)
+        # Delete related windfarm owners (cascade delete is configured)
 
         await db.delete(db_windfarm)
         await db.commit()

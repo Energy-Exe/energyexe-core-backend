@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     cables,
     control_areas,
     countries,
+    entsoe,
     generation_units,
     market_balance_areas,
     owners,
@@ -46,3 +47,4 @@ api_router.include_router(windfarms.router, prefix="/windfarms", tags=["windfarm
 api_router.include_router(substations.router, prefix="/substations", tags=["substations"])
 api_router.include_router(turbine_units.router, prefix="/turbine-units", tags=["turbine-units"])
 api_router.include_router(cables.router, prefix="/cables", tags=["cables"])
+api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])

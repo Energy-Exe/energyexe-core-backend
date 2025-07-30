@@ -12,7 +12,7 @@ class WindfarmBase(BaseModel):
     code: str = Field(..., min_length=1, max_length=50)
     name: str = Field(..., min_length=1, max_length=255)
     country_id: int
-    state_id: int
+    state_id: Optional[int] = None
     region_id: Optional[int] = None
     bidzone_id: Optional[int] = None
     market_balance_area_id: Optional[int] = None

@@ -3,8 +3,8 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -24,9 +24,12 @@ class GenerationUnit(Base):
 
     capacity_mw: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=True)
 
-    windfarm_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    windfarm_id: Mapped[int] = mapped_column(Integer, ForeignKey("windfarms.id"), nullable=True)
 
     notes: Mapped[str] = mapped_column(Text, nullable=True)
+
+    # Relationships
+    windfarm = relationship("Windfarm", back_populates="generation_units")
 
     # Audit fields
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
