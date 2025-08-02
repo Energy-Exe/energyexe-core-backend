@@ -17,7 +17,7 @@ class WindfarmBase(BaseModel):
     bidzone_id: Optional[int] = None
     market_balance_area_id: Optional[int] = None
     control_area_id: Optional[int] = None
-    nameplate_capacity_mw: Optional[int] = None
+    nameplate_capacity_mw: Optional[float] = None
     project_id: Optional[int] = None
     commercial_operational_date: Optional[date] = None
     first_power_date: Optional[date] = None
@@ -51,7 +51,7 @@ class WindfarmUpdate(BaseModel):
     bidzone_id: Optional[int] = None
     market_balance_area_id: Optional[int] = None
     control_area_id: Optional[int] = None
-    nameplate_capacity_mw: Optional[int] = None
+    nameplate_capacity_mw: Optional[float] = None
     project_id: Optional[int] = None
     commercial_operational_date: Optional[date] = None
     first_power_date: Optional[date] = None

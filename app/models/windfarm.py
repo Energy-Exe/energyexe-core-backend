@@ -34,7 +34,7 @@ class Windfarm(Base):
     control_area_id = Column(Integer, ForeignKey("control_areas.id"), nullable=True)
 
     # Capacity and technical info
-    nameplate_capacity_mw = Column(Integer, nullable=True)
+    nameplate_capacity_mw = Column(Float, nullable=True)
 
     # Relationships to energy entities
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
