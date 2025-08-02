@@ -128,6 +128,13 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
         }
         if windfarm.market_balance_area
         else None,
+        "control_area": {
+            "id": windfarm.control_area.id,
+            "code": windfarm.control_area.code,
+            "name": windfarm.control_area.name,
+        }
+        if windfarm.control_area
+        else None,
         "project": {
             "id": windfarm.project.id,
             "code": windfarm.project.code,
@@ -277,6 +284,13 @@ async def create_windfarm_with_owners(
             "name": windfarm_with_owners.market_balance_area.name,
         }
         if windfarm_with_owners.market_balance_area
+        else None,
+        "control_area": {
+            "id": windfarm_with_owners.control_area.id,
+            "code": windfarm_with_owners.control_area.code,
+            "name": windfarm_with_owners.control_area.name,
+        }
+        if windfarm_with_owners.control_area
         else None,
         "project": {
             "id": windfarm_with_owners.project.id,

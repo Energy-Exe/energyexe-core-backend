@@ -155,3 +155,101 @@ async def trigger_backfill(
     asyncio.create_task(backfill_historical_data(days_back))
 
     return {"message": f"Backfill started for {days_back} days", "status": "running"}
+
+
+@router.get("/generation/windfarm/{windfarm_id}")
+async def get_windfarm_generation_data(
+    windfarm_id: int,
+    start_date: datetime = Query(..., description="Start date (ISO format)"),
+    end_date: datetime = Query(..., description="End date (ISO format)"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get generation data for a specific windfarm from ENTSOE API.
+
+    This endpoint:
+    1. Fetches the windfarm and its control area
+    2. Uses the control area code to query ENTSOE API
+    3. Returns generation data and attempts to match with generation units
+    """
+    from app.services.windfarm import WindfarmService
+
+    # Get windfarm with control area
+    windfarm = await WindfarmService.get_windfarm(db, windfarm_id)
+    if not windfarm:
+        raise HTTPException(status_code=404, detail="Windfarm not found")
+
+    # Check if windfarm has a control area
+    if not windfarm.control_area_id:
+        raise HTTPException(
+            status_code=400, detail="Windfarm does not have a control area assigned"
+        )
+
+    # Get control area code
+    from app.models.control_area import ControlArea
+    from sqlalchemy import select
+
+    stmt = select(ControlArea).where(ControlArea.id == windfarm.control_area_id)
+    result = await db.execute(stmt)
+    control_area = result.scalar_one_or_none()
+
+    if not control_area:
+        raise HTTPException(status_code=404, detail="Control area not found")
+
+    # Fetch generation data from ENTSOE
+    service = ENTSOEService(db)
+
+    try:
+        # Use control area code as the ENTSOE area code
+        result = await service.fetch_real_time_generation(
+            start_date=start_date,
+            end_date=end_date,
+            area_codes=[control_area.code],
+            production_types=["wind"],  # For windfarms, we're interested in wind data
+            current_user=current_user,
+        )
+
+        # Get generation units for this windfarm
+        from app.models.generation_unit import GenerationUnit
+
+        gen_units_stmt = select(GenerationUnit).where(
+            GenerationUnit.windfarm_id == windfarm_id, GenerationUnit.is_active == True
+        )
+        gen_units_result = await db.execute(gen_units_stmt)
+        generation_units = gen_units_result.scalars().all()
+
+        # Prepare response with windfarm and generation unit info
+        response = {
+            "windfarm": {
+                "id": windfarm.id,
+                "code": windfarm.code,
+                "name": windfarm.name,
+                "control_area": {
+                    "id": control_area.id,
+                    "code": control_area.code,
+                    "name": control_area.name,
+                },
+            },
+            "generation_units": [
+                {
+                    "id": unit.id,
+                    "code": unit.code,
+                    "name": unit.name,
+                    "capacity_mw": float(unit.capacity_mw) if unit.capacity_mw else None,
+                }
+                for unit in generation_units
+            ],
+            "generation_data": result,
+            "metadata": {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "area_code": control_area.code,
+                "production_type": "wind",
+            },
+        }
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

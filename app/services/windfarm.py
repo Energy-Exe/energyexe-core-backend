@@ -35,6 +35,7 @@ class WindfarmService:
                 selectinload(Windfarm.region),
                 selectinload(Windfarm.bidzone),
                 selectinload(Windfarm.market_balance_area),
+                selectinload(Windfarm.control_area),
                 selectinload(Windfarm.project),
             )
         )

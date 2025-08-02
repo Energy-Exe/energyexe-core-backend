@@ -119,6 +119,8 @@ class ENTSOEClient:
                     metadata["success"] = False
                 else:
                     logger.info(f"ENTSOE API returned dataframe with shape: {df.shape}")
+                    logger.info(f"DataFrame columns: {df.columns.tolist()}")
+                    logger.info(f"Is MultiIndex: {isinstance(df.columns, pd.MultiIndex)}")
 
                     # Process the data based on production types
                     for prod_type in production_types:
@@ -157,10 +159,22 @@ class ENTSOEClient:
                                 all_data.append(combined_df)
                         else:
                             # Handle single column case
-                            df["production_type"] = prod_type
-                            df["area_code"] = area_code
-                            df.columns = ["value", "production_type", "area_code"]
-                            all_data.append(df)
+                            # First, ensure we're working with a copy
+                            df_copy = df.copy()
+
+                            # If df has multiple columns, we need to handle it differently
+                            if len(df_copy.columns) > 1:
+                                # Sum all columns to get total generation
+                                df_copy["value"] = df_copy.sum(axis=1)
+                                # Keep only the value column
+                                df_copy = df_copy[["value"]]
+                            else:
+                                # Rename the single column to 'value'
+                                df_copy.columns = ["value"]
+
+                            df_copy["production_type"] = prod_type
+                            df_copy["area_code"] = area_code
+                            all_data.append(df_copy)
 
             except Exception as e:
                 logger.error(f"Error fetching data for {area_code}: {str(e)}")
@@ -168,10 +182,26 @@ class ENTSOEClient:
                 metadata["success"] = False
 
             if all_data:
-                result_df = pd.concat(all_data, axis=0, ignore_index=True)
-                # Ensure we don't have duplicate timestamp columns
-                if "timestamp" not in result_df.columns and "index" in result_df.columns:
+                result_df = pd.concat(all_data, axis=0, ignore_index=False)
+
+                # Reset index to make timestamp a column
+                result_df = result_df.reset_index()
+
+                # Handle different possible timestamp column names
+                if "index" in result_df.columns and "timestamp" not in result_df.columns:
                     result_df.rename(columns={"index": "timestamp"}, inplace=True)
+                elif "level_0" in result_df.columns and "timestamp" not in result_df.columns:
+                    result_df.rename(columns={"level_0": "timestamp"}, inplace=True)
+
+                # Ensure timestamp is in ISO format
+                if "timestamp" in result_df.columns:
+                    result_df["timestamp"] = pd.to_datetime(result_df["timestamp"]).dt.strftime(
+                        "%Y-%m-%dT%H:%M:%S"
+                    )
+
+                # Add unit information
+                result_df["unit"] = "MW"
+
                 metadata["records"] = len(result_df)
             else:
                 result_df = pd.DataFrame()

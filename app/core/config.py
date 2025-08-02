@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     RELOAD: bool = False
 
     # Security
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 14400  # 10 days
     ALLOWED_HOSTS: List[str] = ["*"]
 
     # CORS
