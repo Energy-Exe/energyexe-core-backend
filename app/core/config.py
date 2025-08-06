@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     ENTSOE_RATE_LIMIT_REQUESTS: int = 100
     ENTSOE_RATE_LIMIT_PERIOD: int = 60
 
+    # Elexon Integration
+    ELEXON_API_KEY: str = "ytitiohgylom033"
+
     @property
     def database_url_sync(self) -> str:
         """Get synchronous database URL for Alembic."""

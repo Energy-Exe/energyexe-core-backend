@@ -76,6 +76,30 @@ GENERATION_UNITS_DATA = [
         "windfarm_name": "Beatrice",
     },
     {
+        "code": "T_BEATO-1",
+        "name": "Beatrice Offshore Wind Farm",
+        "source": "ELEXON",
+        "windfarm_name": "Beatrice",
+    },
+    {
+        "code": "T_BEATO-2",
+        "name": "Beatrice Offshore Wind Farm",
+        "source": "ELEXON",
+        "windfarm_name": "Beatrice",
+    },
+    {
+        "code": "T_BEATO-3",
+        "name": "Beatrice Offshore Wind Farm",
+        "source": "ELEXON",
+        "windfarm_name": "Beatrice",
+    },
+    {
+        "code": "T_BEATO-4",
+        "name": "Beatrice Offshore Wind Farm",
+        "source": "ELEXON",
+        "windfarm_name": "Beatrice",
+    },
+    {
         "code": "22WBELWIN1500271",
         "name": "Belwind Phase 1",
         "source": "ENTSOE",

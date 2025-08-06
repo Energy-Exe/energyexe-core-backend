@@ -214,7 +214,9 @@ async def get_windfarm_generation_data(
         from app.models.generation_unit import GenerationUnit
 
         gen_units_stmt = select(GenerationUnit).where(
-            GenerationUnit.windfarm_id == windfarm_id, GenerationUnit.is_active == True
+            GenerationUnit.windfarm_id == windfarm_id,
+            GenerationUnit.is_active == True,
+            GenerationUnit.source == "ENTSOE",
         )
         gen_units_result = await db.execute(gen_units_stmt)
         generation_units = gen_units_result.scalars().all()

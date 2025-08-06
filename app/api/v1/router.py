@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     cables,
     control_areas,
     countries,
+    elexon,
     entsoe,
     generation_units,
     market_balance_areas,
@@ -48,3 +49,4 @@ api_router.include_router(substations.router, prefix="/substations", tags=["subs
 api_router.include_router(turbine_units.router, prefix="/turbine-units", tags=["turbine-units"])
 api_router.include_router(cables.router, prefix="/cables", tags=["cables"])
 api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])
+api_router.include_router(elexon.router, prefix="/elexon", tags=["elexon"])
