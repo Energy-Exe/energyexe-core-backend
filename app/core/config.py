@@ -92,6 +92,9 @@ class Settings(BaseSettings):
 
     # Elexon Integration
     ELEXON_API_KEY: str = "ytitiohgylom033"
+    
+    # EIA Integration
+    EIA_API_KEY: str = "bLXfqlf12SKY6t6kIz03IKGgoTfTBxr9pOLKiZeZ"
 
     @property
     def database_url_sync(self) -> str:

@@ -197,11 +197,7 @@ async def create_windfarm_with_owners(
     if existing_windfarm:
         raise HTTPException(status_code=400, detail="Windfarm with this code already exists")
 
-    # Validate that ownership percentages sum to 100%
-    if not await WindfarmOwnerService.validate_ownership_percentages(windfarm_data.owners):
-        raise HTTPException(
-            status_code=400, detail="Ownership percentages must sum to exactly 100%"
-        )
+    # Validation removed - ownership percentages no longer need to sum to 100%
 
     # Create the windfarm first
     windfarm = await WindfarmService.create_windfarm(db, windfarm_data.windfarm)
@@ -379,11 +375,7 @@ async def add_windfarm_owners(
     if not windfarm:
         raise HTTPException(status_code=404, detail="Windfarm not found")
 
-    # Validate that ownership percentages sum to 100%
-    if not await WindfarmOwnerService.validate_ownership_percentages(owners_data):
-        raise HTTPException(
-            status_code=400, detail="Ownership percentages must sum to exactly 100%"
-        )
+    # Validation removed - ownership percentages no longer need to sum to 100%
 
     # Delete existing owners
     await WindfarmOwnerService.delete_all_windfarm_owners(db, windfarm_id)
