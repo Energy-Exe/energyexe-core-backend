@@ -17,9 +17,7 @@ class ElexonGenerationDataRequest(BaseModel):
     settlement_period_to: Optional[int] = Field(
         None, ge=1, le=50, description="End settlement period (1-50)"
     )
-    bm_units: Optional[List[str]] = Field(
-        None, description="List of BM Unit IDs to filter"
-    )
+    bm_units: Optional[List[str]] = Field(None, description="List of BM Unit IDs to filter")
 
 
 class ElexonDataPoint(BaseModel):
@@ -48,9 +46,7 @@ class ElexonWindfarmGenerationResponse(BaseModel):
     """Response model for windfarm-specific Elexon generation data."""
 
     windfarm: Dict = Field(..., description="Windfarm information")
-    generation_units: List[Dict] = Field(
-        ..., description="Generation units for the windfarm"
-    )
+    generation_units: List[Dict] = Field(..., description="Generation units for the windfarm")
     generation_data: ElexonGenerationDataResponse = Field(
         ..., description="Generation data from Elexon"
     )

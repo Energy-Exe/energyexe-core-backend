@@ -43,10 +43,6 @@ class EIAWindfarmGenerationResponse(BaseModel):
     """Response model for windfarm-specific EIA generation data."""
 
     windfarm: Dict = Field(..., description="Windfarm information")
-    generation_units: List[Dict] = Field(
-        ..., description="Generation units for the windfarm"
-    )
-    generation_data: EIAGenerationDataResponse = Field(
-        ..., description="Generation data from EIA"
-    )
+    generation_units: List[Dict] = Field(..., description="Generation units for the windfarm")
+    generation_data: EIAGenerationDataResponse = Field(..., description="Generation data from EIA")
     metadata: Dict = Field(..., description="Additional metadata")

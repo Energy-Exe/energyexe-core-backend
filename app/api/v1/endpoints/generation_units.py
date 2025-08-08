@@ -27,7 +27,7 @@ async def get_generation_units(
     fuel_type: str = Query(None, description="Filter by fuel type"),
     technology_type: str = Query(None, description="Filter by technology type"),
     is_active: bool = Query(True, description="Filter by active status"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of results"),
+    limit: int = Query(500, ge=1, le=1000, description="Maximum number of results"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),

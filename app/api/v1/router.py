@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     regions,
     states,
     substations,
+    taipower,
     turbine_models,
     turbine_units,
     users,
@@ -52,3 +53,4 @@ api_router.include_router(cables.router, prefix="/cables", tags=["cables"])
 api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])
 api_router.include_router(elexon.router, prefix="/elexon", tags=["elexon"])
 api_router.include_router(eia.router, prefix="/eia", tags=["eia"])
+api_router.include_router(taipower.router, prefix="/taipower", tags=["taipower"])

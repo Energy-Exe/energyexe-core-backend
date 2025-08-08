@@ -34,7 +34,7 @@ async def fetch_windfarm_generation_data(
     1. Fetches the windfarm and its generation units
     2. Uses generation unit codes as plant codes to query EIA API
     3. Returns monthly generation data with matched generation units
-    
+
     - **windfarm_id**: ID of the windfarm
     - **start_year**: Start year for data
     - **start_month**: Start month (1-12)
@@ -63,7 +63,7 @@ async def fetch_windfarm_generation_data(
         )
         gen_units_result = await db.execute(gen_units_stmt)
         generation_units = gen_units_result.scalars().all()
-        
+
         if not generation_units:
             raise HTTPException(
                 status_code=400,
@@ -72,7 +72,7 @@ async def fetch_windfarm_generation_data(
 
     # Extract generation unit codes to use as plant codes
     plant_codes = [unit.code for unit in generation_units if unit.code]
-    
+
     if not plant_codes:
         raise HTTPException(
             status_code=400,

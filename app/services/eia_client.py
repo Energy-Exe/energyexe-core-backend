@@ -66,11 +66,11 @@ class EIAClient:
                 ("offset", "0"),
                 ("length", "5000"),
             ]
-            
+
             # Add plant codes as facets
             for code in plant_codes:
                 params.append(("facets[plantCode][]", code))
-            
+
             # Add API key if available
             if self.api_key:
                 params.append(("api_key", self.api_key))
@@ -104,7 +104,7 @@ class EIAClient:
 
                 # Extract the data array
                 records = data["response"]["data"]
-                
+
                 if not records:
                     logger.warning("EIA API returned empty data array")
                     metadata["records"] = 0
@@ -122,26 +122,28 @@ class EIAClient:
                     if "period" in df.columns:
                         # Convert period to datetime for filtering
                         df["period_date"] = pd.to_datetime(df["period"], format="%Y-%m")
-                        
+
                         start_date = pd.Timestamp(year=start_year, month=start_month, day=1)
                         end_date = pd.Timestamp(year=end_year, month=end_month, day=1)
-                        
+
                         # Filter by date range
                         df = df[(df["period_date"] >= start_date) & (df["period_date"] <= end_date)]
-                        
+
                         # Drop the temporary column
                         df = df.drop("period_date", axis=1)
-                    
+
                     # Track which plant codes were found
                     if "plantCode" in df.columns:
                         # Convert plantCode to string to ensure consistency
                         df["plantCode"] = df["plantCode"].astype(str)
                         metadata["plant_codes_found"] = set(df["plantCode"].unique())
-                    
+
                     # Ensure generation is numeric
                     if "generation" in df.columns:
-                        df["generation"] = pd.to_numeric(df["generation"], errors="coerce").fillna(0)
-                    
+                        df["generation"] = pd.to_numeric(df["generation"], errors="coerce").fillna(
+                            0
+                        )
+
                     metadata["records"] = len(df)
                 else:
                     metadata["records"] = 0
