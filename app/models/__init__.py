@@ -2,6 +2,7 @@
 
 from .audit_log import AuditLog
 from .country import Country
+from .elexon_generation_data import ElexonGenerationData
 from .entsoe_generation_data import ENTSOEGenerationData
 from .generation_unit import GenerationUnit
 from .state import State
@@ -15,5 +16,6 @@ __all__ = [
     "AuditLog",
     "WindfarmOwner",
     "GenerationUnit",
+    "ElexonGenerationData",
     "ENTSOEGenerationData",
 ]

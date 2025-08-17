@@ -1,8 +1,7 @@
 """API endpoints for ENTSOE integration."""
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-from uuid import UUID
+from typing import List
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -18,7 +17,6 @@ from app.schemas.entsoe import (
 )
 from app.services.entsoe_client import ENTSOEClient
 from app.services.entsoe_service import ENTSOEService
-from app.services.entsoe_storage_service import ENTSOEStorageService
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -79,12 +77,16 @@ async def get_windfarm_generation_data(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Get generation data for a specific windfarm from ENTSOE API.
+    Get REGIONAL generation data for the control area containing this windfarm.
 
+    IMPORTANT: ENTSOE provides aggregated data at the control area level only.
+    This endpoint returns total wind generation for ALL wind farms in the control area,
+    not individual windfarm data.
+    
     This endpoint:
     1. Fetches the windfarm and its control area
-    2. Uses the control area code to query ENTSOE API
-    3. Returns generation data and attempts to match with generation units
+    2. Uses the control area code to query ENTSOE API for REGIONAL data
+    3. Returns aggregated regional generation data for the entire control area
     """
     from app.services.windfarm import WindfarmService
 
@@ -161,6 +163,9 @@ async def get_windfarm_generation_data(
                 "end_date": end_date.isoformat(),
                 "area_code": control_area.code,
                 "production_type": "wind",
+                "data_level": "CONTROL_AREA",
+                "data_scope": f"Aggregated data for ALL wind farms in {control_area.name} ({control_area.code})",
+                "note": "ENTSOE provides regional aggregated data only, not individual windfarm data"
             },
         }
 
@@ -169,104 +174,6 @@ async def get_windfarm_generation_data(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
-@router.post("/generation/windfarm/{windfarm_id}/store")
-async def store_windfarm_generation_data(
-    windfarm_id: int,
-    request: Dict[str, Any],
-    current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Store fetched windfarm generation data to database.
-    
-    This endpoint stores previously fetched ENTSOE data for a specific windfarm.
-    It handles overlapping data intelligently by using upsert operations.
-    """
-    from app.services.windfarm import WindfarmService
-    
-    # Validate windfarm exists
-    windfarm = await WindfarmService.get_windfarm(db, windfarm_id)
-    if not windfarm:
-        raise HTTPException(status_code=404, detail="Windfarm not found")
-    
-    # Extract data from request
-    data = request.get("data", [])
-    
-    if not data:
-        raise HTTPException(status_code=400, detail="No data to store")
-    
-    storage_service = ENTSOEStorageService(db)
-    
-    try:
-        # Store the data
-        storage_result = await storage_service.store_generation_data(
-            data=data,
-            user=current_user,
-        )
-        
-        if not storage_result.get("success"):
-            raise HTTPException(
-                status_code=500,
-                detail=storage_result.get("error") or "Failed to store data"
-            )
-        
-        # Add windfarm info to response
-        storage_result["windfarm_id"] = windfarm_id
-        storage_result["windfarm_name"] = windfarm.name
-        
-        return storage_result
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error storing windfarm generation data: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/generation/history")
-async def get_stored_generation_data(
-    start_date: datetime = Query(..., description="Start date (ISO format)"),
-    end_date: datetime = Query(..., description="End date (ISO format)"),
-    area_codes: Optional[List[str]] = Query(None, description="Filter by area codes"),
-    production_types: Optional[List[str]] = Query(None, description="Filter by production types"),
-    limit: int = Query(10000, description="Maximum number of records", le=50000),
-    current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Retrieve stored historical generation data from database.
-    
-    - **start_date**: Start date for data query
-    - **end_date**: End date for data query
-    - **area_codes**: Optional filter by area codes
-    - **production_types**: Optional filter by production types
-    - **limit**: Maximum number of records to return (max 50000)
-    """
-    storage_service = ENTSOEStorageService(db)
-    
-    try:
-        data = await storage_service.get_stored_data(
-            start_date=start_date,
-            end_date=end_date,
-            area_codes=area_codes,
-            production_types=production_types,
-            limit=limit,
-        )
-        
-        return {
-            "data": data,
-            "metadata": {
-                "total_records": len(data),
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
-                "area_codes": area_codes,
-                "production_types": production_types,
-            }
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/generation/windfarm/{windfarm_id}/availability")
@@ -282,7 +189,7 @@ async def get_windfarm_data_availability(
     Returns a list of dates that have data stored in the database.
     """
     from app.services.windfarm import WindfarmService
-    from sqlalchemy import func, cast, Date
+    from sqlalchemy import cast, Date
     from calendar import monthrange
     
     # Validate windfarm exists
@@ -334,6 +241,7 @@ async def get_windfarm_data_availability(
         dates_with_data = [date_val for (date_val,) in result.all()]
         
         # Also get summary statistics for the month
+        from sqlalchemy import func
         stmt_stats = (
             select(
                 func.count(ENTSOEGenerationData.id).label("total_records"),
@@ -384,13 +292,16 @@ async def get_stored_windfarm_data(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Get stored generation data for a specific windfarm from the database.
-    Also identifies gaps in the data for the specified date range.
+    Get stored REGIONAL generation data for the control area containing this windfarm.
+    
+    IMPORTANT: Returns aggregated data for ALL wind farms in the control area,
+    not individual windfarm data. ENTSOE only provides control area level aggregation.
+    
+    Also identifies gaps in the regional data for the specified date range.
     """
     from app.services.windfarm import WindfarmService
     from app.models.entsoe_generation_data import ENTSOEGenerationData
     from app.models.control_area import ControlArea
-    from sqlalchemy import func
     from datetime import timedelta
     
     # Validate windfarm exists
@@ -509,7 +420,10 @@ async def get_stored_windfarm_data(
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
                 "area_code": control_area.code,
-                "production_type": "wind"
+                "production_type": "wind",
+                "data_level": "CONTROL_AREA",
+                "data_scope": f"Aggregated data for ALL wind farms in {control_area.name} ({control_area.code})",
+                "note": "This is regional data from ENTSOE, not specific to individual windfarms"
             }
         }
         
