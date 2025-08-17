@@ -13,6 +13,7 @@ class GenerationDataPoint(BaseModel):
     value: float = Field(..., description="Generation value in MW")
     production_type: str = Field(..., description="Type of production (wind, solar)")
     area_code: str = Field(..., description="Area/bidding zone code")
+    unit: str = Field(default="MW", description="Unit of measurement")
 
 
 class GenerationDataRequest(BaseModel):
@@ -24,6 +25,7 @@ class GenerationDataRequest(BaseModel):
     production_types: List[str] = Field(
         default=["wind", "solar"], description="List of production types to query"
     )
+    store_data: bool = Field(default=True, description="Whether to store data in database")
 
 
 class AreaMetadata(BaseModel):
@@ -37,38 +39,17 @@ class AreaMetadata(BaseModel):
 class GenerationDataMetadata(BaseModel):
     """Metadata for generation data response."""
 
-    fetch_id: int
     areas: Dict[str, AreaMetadata]
     total_records: int
     errors: List[Dict[str, Any]]
+    storage: Optional[Dict[str, Any]] = None
 
 
 class GenerationDataResponse(BaseModel):
     """Schema for generation data response."""
 
     data: List[Dict[str, Any]] = Field(..., description="Generation data points")
-    metadata: GenerationDataMetadata
-
-
-class FetchHistoryResponse(BaseModel):
-    """Schema for fetch history response."""
-
-    id: int
-    request_type: str = Field(..., pattern="^(real_time|historical_batch)$")
-    start_datetime: datetime
-    end_datetime: datetime
-    area_code: str
-    production_type: str
-    status: str = Field(..., pattern="^(pending|success|failed|partial)$")
-    records_fetched: int
-    error_message: Optional[str] = None
-    response_time_ms: Optional[int] = None
-    requested_by_user_id: Optional[int] = None
-    created_at: datetime
-    completed_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
+    metadata: Dict[str, Any]
 
 
 class AreaCodeResponse(BaseModel):

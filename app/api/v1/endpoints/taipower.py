@@ -9,7 +9,6 @@ from sqlalchemy import select, and_, desc
 from app.core.deps import get_current_active_user, get_db
 from app.models.user import User
 from app.models.generation_unit import GenerationUnit
-from app.models.power_generation_data import PowerGenerationData
 from app.schemas.taipower import (
     TaipowerGenerationDataRequest,
     TaipowerGenerationDataResponse,

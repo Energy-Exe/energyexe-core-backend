@@ -1,23 +1,26 @@
 """API endpoints for ENTSOE integration."""
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_active_user, get_db
 from app.models.user import User
 from app.schemas.entsoe import (
     AreaCodeResponse,
-    FetchHistoryResponse,
     GenerationDataRequest,
     GenerationDataResponse,
 )
 from app.services.entsoe_client import ENTSOEClient
-from app.services.entsoe_historical_service import ENTSOEHistoricalService
 from app.services.entsoe_service import ENTSOEService
+from app.services.entsoe_storage_service import ENTSOEStorageService
 
+logger = structlog.get_logger()
 router = APIRouter()
 
 
@@ -44,6 +47,7 @@ async def fetch_generation_data(
             area_codes=request.area_codes,
             production_types=request.production_types,
             current_user=current_user,
+            store_data=request.store_data,
         )
         return GenerationDataResponse(**result)
 
@@ -60,101 +64,10 @@ async def get_available_areas(current_user: User = Depends(get_current_active_us
     return [AreaCodeResponse(code=code, name=name) for code, name in areas.items()]
 
 
-@router.get("/fetch-history", response_model=List[FetchHistoryResponse])
-async def get_fetch_history(
-    limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
-    status: Optional[str] = Query(None, pattern="^(pending|success|failed|partial)$"),
-    current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Get history of ENTSOE data fetch operations."""
-    service = ENTSOEService(db)
-    history = await service.get_fetch_history(limit, offset, status)
-    return history
 
 
-@router.get("/generation/historical")
-async def get_historical_generation_data(
-    start_date: datetime = Query(..., description="Start date (ISO format)"),
-    end_date: datetime = Query(..., description="End date (ISO format)"),
-    area_codes: str = Query(..., description="Comma-separated area codes"),
-    production_types: str = Query("wind,solar", description="Comma-separated production types"),
-    aggregation: str = Query(
-        "hourly", pattern="^(raw|hourly|daily)$", description="Aggregation level"
-    ),
-    current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Get historical generation data from TimescaleDB."""
-    service = ENTSOEHistoricalService(db)
-
-    # Parse comma-separated values
-    area_list = [code.strip() for code in area_codes.split(",")]
-    type_list = [type.strip() for type in production_types.split(",")]
-
-    data = await service.get_stored_generation_data(
-        start_date=start_date,
-        end_date=end_date,
-        area_codes=area_list,
-        production_types=type_list,
-        aggregation=aggregation,
-    )
-
-    return {
-        "data": data,
-        "metadata": {
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "area_codes": area_list,
-            "production_types": type_list,
-            "aggregation": aggregation,
-            "record_count": len(data),
-        },
-    }
 
 
-@router.get("/generation/availability")
-async def get_data_availability(
-    area_codes: Optional[str] = Query(None, description="Comma-separated area codes (optional)"),
-    current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Get information about available historical data."""
-    service = ENTSOEHistoricalService(db)
-
-    # Parse area codes if provided
-    area_list = None
-    if area_codes:
-        area_list = [code.strip() for code in area_codes.split(",")]
-
-    availability = await service.get_data_availability(area_list)
-
-    return {
-        "availability": availability,
-        "summary": {"total_areas": len(availability), "areas": list(availability.keys())},
-    }
-
-
-@router.post("/generation/backfill")
-async def trigger_backfill(
-    days_back: int = Query(30, ge=1, le=365, description="Number of days to backfill"),
-    current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Trigger historical data backfill (admin only)."""
-    # Check if user is admin (you may want to implement proper role checking)
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-    import asyncio
-
-    from app.cron.entsoe_scheduler import backfill_historical_data
-
-    # Run backfill in background
-    asyncio.create_task(backfill_historical_data(days_back))
-
-    return {"message": f"Backfill started for {days_back} days", "status": "running"}
 
 
 @router.get("/generation/windfarm/{windfarm_id}")
@@ -255,3 +168,351 @@ async def get_windfarm_generation_data(
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/generation/windfarm/{windfarm_id}/store")
+async def store_windfarm_generation_data(
+    windfarm_id: int,
+    request: Dict[str, Any],
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Store fetched windfarm generation data to database.
+    
+    This endpoint stores previously fetched ENTSOE data for a specific windfarm.
+    It handles overlapping data intelligently by using upsert operations.
+    """
+    from app.services.windfarm import WindfarmService
+    
+    # Validate windfarm exists
+    windfarm = await WindfarmService.get_windfarm(db, windfarm_id)
+    if not windfarm:
+        raise HTTPException(status_code=404, detail="Windfarm not found")
+    
+    # Extract data from request
+    data = request.get("data", [])
+    
+    if not data:
+        raise HTTPException(status_code=400, detail="No data to store")
+    
+    storage_service = ENTSOEStorageService(db)
+    
+    try:
+        # Store the data
+        storage_result = await storage_service.store_generation_data(
+            data=data,
+            user=current_user,
+        )
+        
+        if not storage_result.get("success"):
+            raise HTTPException(
+                status_code=500,
+                detail=storage_result.get("error") or "Failed to store data"
+            )
+        
+        # Add windfarm info to response
+        storage_result["windfarm_id"] = windfarm_id
+        storage_result["windfarm_name"] = windfarm.name
+        
+        return storage_result
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error storing windfarm generation data: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/generation/history")
+async def get_stored_generation_data(
+    start_date: datetime = Query(..., description="Start date (ISO format)"),
+    end_date: datetime = Query(..., description="End date (ISO format)"),
+    area_codes: Optional[List[str]] = Query(None, description="Filter by area codes"),
+    production_types: Optional[List[str]] = Query(None, description="Filter by production types"),
+    limit: int = Query(10000, description="Maximum number of records", le=50000),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retrieve stored historical generation data from database.
+    
+    - **start_date**: Start date for data query
+    - **end_date**: End date for data query
+    - **area_codes**: Optional filter by area codes
+    - **production_types**: Optional filter by production types
+    - **limit**: Maximum number of records to return (max 50000)
+    """
+    storage_service = ENTSOEStorageService(db)
+    
+    try:
+        data = await storage_service.get_stored_data(
+            start_date=start_date,
+            end_date=end_date,
+            area_codes=area_codes,
+            production_types=production_types,
+            limit=limit,
+        )
+        
+        return {
+            "data": data,
+            "metadata": {
+                "total_records": len(data),
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "area_codes": area_codes,
+                "production_types": production_types,
+            }
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/generation/windfarm/{windfarm_id}/availability")
+async def get_windfarm_data_availability(
+    windfarm_id: int,
+    year: int = Query(..., description="Year to check availability"),
+    month: int = Query(..., description="Month to check availability (1-12)"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get data availability for a specific windfarm and month.
+    Returns a list of dates that have data stored in the database.
+    """
+    from app.services.windfarm import WindfarmService
+    from sqlalchemy import func, cast, Date
+    from calendar import monthrange
+    
+    # Validate windfarm exists
+    windfarm = await WindfarmService.get_windfarm(db, windfarm_id)
+    if not windfarm:
+        raise HTTPException(status_code=404, detail="Windfarm not found")
+    
+    # Get control area for the windfarm
+    if not windfarm.control_area_id:
+        return {
+            "windfarm_id": windfarm_id,
+            "windfarm_name": windfarm.name,
+            "year": year,
+            "month": month,
+            "dates_with_data": [],
+            "message": "Windfarm has no control area assigned"
+        }
+    
+    from app.models.control_area import ControlArea
+    stmt = select(ControlArea).where(ControlArea.id == windfarm.control_area_id)
+    result = await db.execute(stmt)
+    control_area = result.scalar_one_or_none()
+    
+    if not control_area:
+        raise HTTPException(status_code=404, detail="Control area not found")
+    
+    try:
+        # Calculate date range for the month
+        _, last_day = monthrange(year, month)
+        start_date = datetime(year, month, 1)
+        end_date = datetime(year, month, last_day, 23, 59, 59)
+        
+        # Query distinct dates that have data for this area
+        from app.models.entsoe_generation_data import ENTSOEGenerationData
+        
+        stmt = (
+            select(cast(ENTSOEGenerationData.timestamp, Date))
+            .distinct()
+            .where(
+                ENTSOEGenerationData.area_code == control_area.code,
+                ENTSOEGenerationData.timestamp >= start_date,
+                ENTSOEGenerationData.timestamp <= end_date,
+                ENTSOEGenerationData.production_type == "wind"  # Windfarms are wind
+            )
+            .order_by(cast(ENTSOEGenerationData.timestamp, Date))
+        )
+        
+        result = await db.execute(stmt)
+        dates_with_data = [date_val for (date_val,) in result.all()]
+        
+        # Also get summary statistics for the month
+        stmt_stats = (
+            select(
+                func.count(ENTSOEGenerationData.id).label("total_records"),
+                func.min(ENTSOEGenerationData.timestamp).label("earliest"),
+                func.max(ENTSOEGenerationData.timestamp).label("latest")
+            )
+            .where(
+                ENTSOEGenerationData.area_code == control_area.code,
+                ENTSOEGenerationData.timestamp >= start_date,
+                ENTSOEGenerationData.timestamp <= end_date,
+                ENTSOEGenerationData.production_type == "wind"
+            )
+        )
+        
+        result_stats = await db.execute(stmt_stats)
+        stats = result_stats.one()
+        
+        return {
+            "windfarm_id": windfarm_id,
+            "windfarm_name": windfarm.name,
+            "control_area": {
+                "code": control_area.code,
+                "name": control_area.name
+            },
+            "year": year,
+            "month": month,
+            "dates_with_data": [date.isoformat() for date in dates_with_data],
+            "statistics": {
+                "total_records": stats.total_records or 0,
+                "earliest_data": stats.earliest.isoformat() if stats.earliest else None,
+                "latest_data": stats.latest.isoformat() if stats.latest else None,
+                "days_with_data": len(dates_with_data),
+                "days_in_month": last_day
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting data availability: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/generation/windfarm/{windfarm_id}/stored")
+async def get_stored_windfarm_data(
+    windfarm_id: int,
+    start_date: datetime = Query(..., description="Start date (ISO format)"),
+    end_date: datetime = Query(..., description="End date (ISO format)"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get stored generation data for a specific windfarm from the database.
+    Also identifies gaps in the data for the specified date range.
+    """
+    from app.services.windfarm import WindfarmService
+    from app.models.entsoe_generation_data import ENTSOEGenerationData
+    from app.models.control_area import ControlArea
+    from sqlalchemy import func
+    from datetime import timedelta
+    
+    # Validate windfarm exists
+    windfarm = await WindfarmService.get_windfarm(db, windfarm_id)
+    if not windfarm:
+        raise HTTPException(status_code=404, detail="Windfarm not found")
+    
+    # Get control area for the windfarm
+    if not windfarm.control_area_id:
+        raise HTTPException(
+            status_code=400, detail="Windfarm does not have a control area assigned"
+        )
+    
+    stmt = select(ControlArea).where(ControlArea.id == windfarm.control_area_id)
+    result = await db.execute(stmt)
+    control_area = result.scalar_one_or_none()
+    
+    if not control_area:
+        raise HTTPException(status_code=404, detail="Control area not found")
+    
+    try:
+        # Query stored data for the windfarm's control area
+        stmt = (
+            select(ENTSOEGenerationData)
+            .where(
+                ENTSOEGenerationData.area_code == control_area.code,
+                ENTSOEGenerationData.timestamp >= start_date,
+                ENTSOEGenerationData.timestamp <= end_date,
+                ENTSOEGenerationData.production_type == "wind"
+            )
+            .order_by(ENTSOEGenerationData.timestamp)
+        )
+        
+        result = await db.execute(stmt)
+        stored_data = result.scalars().all()
+        
+        # Convert to list of dicts
+        data_list = []
+        timestamps_set = set()
+        
+        for record in stored_data:
+            data_list.append({
+                "timestamp": record.timestamp.isoformat(),
+                "area_code": record.area_code,
+                "production_type": record.production_type,
+                "value": float(record.value) if record.value else 0,
+                "unit": record.unit
+            })
+            # Track hourly timestamps (normalize to hour)
+            hour_timestamp = record.timestamp.replace(minute=0, second=0, microsecond=0)
+            timestamps_set.add(hour_timestamp)
+        
+        # Identify gaps in hourly data
+        gaps = []
+        expected_hours = []
+        current = start_date.replace(minute=0, second=0, microsecond=0)
+        end_normalized = end_date.replace(minute=0, second=0, microsecond=0)
+        current_gap_start = None
+        
+        while current <= end_normalized:
+            expected_hours.append(current)
+            if current not in timestamps_set:
+                # Start a new gap if we're not in one
+                if current_gap_start is None:
+                    current_gap_start = current
+            else:
+                # We have data, so close any open gap
+                if current_gap_start is not None:
+                    gap_end = current - timedelta(hours=1)  # Last hour without data
+                    hours_missing = int((gap_end - current_gap_start).total_seconds() / 3600) + 1
+                    gaps.append({
+                        "start": current_gap_start.isoformat(),
+                        "end": gap_end.isoformat(),
+                        "hours": hours_missing
+                    })
+                    current_gap_start = None
+            current += timedelta(hours=1)
+        
+        # Close any remaining gap at the end
+        if current_gap_start is not None:
+            gap_end = end_normalized
+            hours_missing = int((gap_end - current_gap_start).total_seconds() / 3600) + 1
+            gaps.append({
+                "start": current_gap_start.isoformat(),
+                "end": gap_end.isoformat(),
+                "hours": hours_missing
+            })
+        
+        # Calculate statistics
+        total_expected_hours = len(expected_hours)
+        hours_with_data = len(timestamps_set)
+        coverage_percentage = (hours_with_data / total_expected_hours * 100) if total_expected_hours > 0 else 0
+        
+        return {
+            "windfarm": {
+                "id": windfarm.id,
+                "code": windfarm.code,
+                "name": windfarm.name,
+                "control_area": {
+                    "id": control_area.id,
+                    "code": control_area.code,
+                    "name": control_area.name
+                }
+            },
+            "data": data_list,
+            "gaps": gaps,
+            "statistics": {
+                "total_records": len(data_list),
+                "expected_hours": total_expected_hours,
+                "hours_with_data": hours_with_data,
+                "missing_hours": total_expected_hours - hours_with_data,
+                "coverage_percentage": round(coverage_percentage, 2),
+                "gap_count": len(gaps)
+            },
+            "metadata": {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "area_code": control_area.code,
+                "production_type": "wind"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting stored windfarm data: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

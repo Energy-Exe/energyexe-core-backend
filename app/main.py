@@ -13,7 +13,6 @@ from app.core.config import get_settings
 from app.core.database import init_db
 from app.core.exceptions import add_exception_handlers
 from app.core.middleware import add_middleware
-from app.cron.entsoe_scheduler import start_scheduler as start_entsoe_scheduler, stop_scheduler as stop_entsoe_scheduler
 
 logger = structlog.get_logger()
 
@@ -28,16 +27,7 @@ async def lifespan(app: FastAPI):
         # Initialize database
         await init_db()
 
-        # Start ENTSOE scheduler
-        start_entsoe_scheduler()
-        logger.info("ENTSOE scheduler started")
-
     yield
-
-    # Stop schedulers on shutdown
-    if not os.getenv("TESTING", "false").lower() == "true":
-        stop_entsoe_scheduler()
-        logger.info("ENTSOE scheduler stopped")
 
     logger.info("Shutting down application")
 

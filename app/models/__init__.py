@@ -2,7 +2,7 @@
 
 from .audit_log import AuditLog
 from .country import Country
-from .entsoe_fetch_history import EntsoeFetchHistory
+from .entsoe_generation_data import ENTSOEGenerationData
 from .generation_unit import GenerationUnit
 from .state import State
 from .user import User
@@ -15,5 +15,5 @@ __all__ = [
     "AuditLog",
     "WindfarmOwner",
     "GenerationUnit",
-    "EntsoeFetchHistory",
+    "ENTSOEGenerationData",
 ]
