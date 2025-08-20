@@ -31,6 +31,8 @@ class GenerationUnit(Base):
     # Relationships
     windfarm = relationship("Windfarm", back_populates="generation_units")
     elexon_data = relationship("ElexonGenerationData", back_populates="generation_unit")
+    eia_data = relationship("EIAGenerationData", back_populates="generation_unit")
+    taipower_data = relationship("TaipowerGenerationData", back_populates="generation_unit")
 
     # Audit fields
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

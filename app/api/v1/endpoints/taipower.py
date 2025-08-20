@@ -1,7 +1,7 @@
 """API endpoints for Taipower integration."""
 
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc
@@ -15,6 +15,7 @@ from app.schemas.taipower import (
     TaipowerLiveDataResponse,
 )
 from app.services.taipower_client import TaipowerClient
+from app.services.taipower_storage import TaipowerStorageService
 from app.services.windfarm import WindfarmService
 
 router = APIRouter()
@@ -137,5 +138,136 @@ async def fetch_windfarm_generation_data(
         windfarm_id=request.windfarm_id,
         windfarm_name=windfarm.name if windfarm else None,
     )
+
+
+@router.post("/store-live")
+async def store_live_taipower_data(
+    store_data: bool = Query(True, description="Store fetched data in database"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Fetch and store current Taipower live data.
+    
+    This endpoint fetches the latest snapshot from Taipower and stores it in the database.
+    """
+    service = TaipowerStorageService(db)
+    result = await service.fetch_and_store_live_data(
+        current_user=current_user,
+        store_data=store_data
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=503,
+            detail=result.get("error", "Failed to fetch and store Taipower data")
+        )
+    
+    return result
+
+
+@router.get("/stored")
+async def get_stored_taipower_data(
+    unit_names: Optional[List[str]] = Query(None, description="Filter by unit names"),
+    generation_types: Optional[List[str]] = Query(None, description="Filter by generation types"),
+    start_date: Optional[datetime] = Query(None, description="Start date"),
+    end_date: Optional[datetime] = Query(None, description="End date"),
+    limit: int = Query(1000, le=10000, description="Maximum records to return"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get stored Taipower snapshot data with optional filters."""
+    service = TaipowerStorageService(db)
+    data = await service.get_stored_snapshots(
+        unit_names=unit_names,
+        generation_types=generation_types,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit
+    )
+    
+    return data
+
+
+@router.get("/latest")
+async def get_latest_taipower_snapshot(
+    unit_names: Optional[List[str]] = Query(None, description="Filter by unit names"),
+    generation_types: Optional[List[str]] = Query(None, description="Filter by generation types"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get the most recent Taipower snapshot from the database."""
+    service = TaipowerStorageService(db)
+    data = await service.get_latest_snapshot(
+        unit_names=unit_names,
+        generation_types=generation_types
+    )
+    
+    return data
+
+
+@router.get("/availability")
+async def get_taipower_data_availability(
+    year: int = Query(..., description="Year to check"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="Month to check (optional)"),
+    unit_names: Optional[List[str]] = Query(None, description="Filter by unit names"),
+    generation_types: Optional[List[str]] = Query(None, description="Filter by generation types"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get data availability for a specific period."""
+    service = TaipowerStorageService(db)
+    availability = await service.get_data_availability(
+        year=year,
+        month=month,
+        unit_names=unit_names,
+        generation_types=generation_types
+    )
+    
+    return availability
+
+
+@router.post("/backfill")
+async def backfill_taipower_data(
+    hours: int = Query(24, ge=1, le=168, description="Number of hours to backfill"),
+    interval_minutes: int = Query(15, description="Expected interval between snapshots"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Backfill Taipower data by fetching and storing current snapshot.
+    
+    Note: Taipower only provides current live data, so this endpoint
+    can only store the current snapshot repeatedly.
+    """
+    service = TaipowerStorageService(db)
+    
+    # Since we can only get current data, store it
+    result = await service.fetch_and_store_live_data(
+        current_user=current_user,
+        store_data=True
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=503,
+            detail=result.get("error", "Failed to backfill Taipower data")
+        )
+    
+    # Calculate gaps in the requested period
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(hours=hours)
+    
+    gaps = await service.detect_snapshot_gaps(
+        start_date=start_date,
+        end_date=end_date,
+        expected_interval_minutes=interval_minutes
+    )
+    
+    result["gaps_detected"] = len(gaps)
+    result["gaps"] = gaps[:10]  # Return first 10 gaps for review
+    result["message"] = f"Stored current snapshot. Detected {len(gaps)} gaps in the last {hours} hours."
+    
+    return result
 
 

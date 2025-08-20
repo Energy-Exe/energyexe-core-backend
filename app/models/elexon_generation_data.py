@@ -46,10 +46,10 @@ class ElexonGenerationData(Base):
     created_by = relationship("User", foreign_keys=[created_by_id])
     updated_by = relationship("User", foreign_keys=[updated_by_id])
     
-    # Composite index for efficient time-series queries
+    # Composite index for efficient time-series queries and unique constraint
     __table_args__ = (
         Index('idx_elexon_data_timestamp_bm_unit', 'timestamp', 'bm_unit'),
-        Index('idx_elexon_data_timestamp_bm_unit_period', 'timestamp', 'bm_unit', 'settlement_period'),
+        Index('idx_elexon_data_unique', 'timestamp', 'bm_unit', 'settlement_period', unique=True),
     )
     
     def __repr__(self):
