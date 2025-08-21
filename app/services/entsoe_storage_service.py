@@ -178,3 +178,111 @@ class ENTSOEStorageService:
             }
             for record in records
         ]
+    
+    async def store_generation_data_with_units(
+        self,
+        data: List[Dict[str, Any]],
+        generation_units: List[Any],
+        user: Optional[User] = None,
+    ) -> Dict[str, Any]:
+        """
+        Store generation data with generation unit associations.
+        
+        This stores data in the regular ENTSOE table but tracks which generation
+        units were involved in the fetch.
+        
+        Args:
+            data: List of data points from ENTSOE API with unit info
+            generation_units: List of generation units involved
+            user: User who initiated the storage
+            
+        Returns:
+            Dict with operation results
+        """
+        fetch_id = uuid4()
+        
+        try:
+            if not data:
+                return {
+                    "success": True,
+                    "fetch_id": str(fetch_id),
+                    "records_inserted": 0,
+                    "units_tracked": 0,
+                    "message": "No data to store",
+                }
+            
+            # Prepare data for bulk insert
+            records_to_insert = []
+            units_tracked = set()
+            
+            for item in data:
+                # Convert timestamp if needed
+                timestamp = item.get("timestamp")
+                if isinstance(timestamp, str):
+                    timestamp = pd.to_datetime(timestamp, utc=True)
+                elif pd.api.types.is_datetime64_any_dtype(type(timestamp)):
+                    timestamp = pd.Timestamp(timestamp)
+                    if timestamp.tzinfo is None:
+                        timestamp = timestamp.tz_localize('UTC')
+                
+                if hasattr(timestamp, 'to_pydatetime'):
+                    timestamp = timestamp.to_pydatetime()
+                
+                # Track which unit this data is for
+                if item.get("generation_unit_id"):
+                    units_tracked.add(item["generation_unit_id"])
+                
+                # Store with EIC code as identifier
+                eic_code = item.get("eic_code", "")
+                
+                records_to_insert.append({
+                    "timestamp": timestamp,
+                    "area_code": str(item.get("area_code", ""))[:50],
+                    "production_type": f"unit_{eic_code}"[:50] if eic_code else "unknown",
+                    "value": Decimal(str(item.get("value", 0))),
+                    "unit": item.get("unit", "MW")[:10],
+                    "fetch_id": fetch_id,
+                })
+            
+            # Perform bulk upsert
+            if records_to_insert:
+                stmt = insert(ENTSOEGenerationData).values(records_to_insert)
+                
+                # On conflict, update the value and fetch_id
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["timestamp", "area_code", "production_type"],
+                    set_={
+                        "value": stmt.excluded.value,
+                        "fetch_id": stmt.excluded.fetch_id,
+                        "unit": stmt.excluded.unit,
+                    }
+                )
+                
+                await self.db.execute(stmt)
+                await self.db.commit()
+            
+            logger.info(
+                f"Stored {len(records_to_insert)} ENTSOE per-unit records for {len(units_tracked)} units",
+                fetch_id=str(fetch_id),
+            )
+            
+            return {
+                "success": True,
+                "fetch_id": str(fetch_id),
+                "records_inserted": len(records_to_insert),
+                "units_tracked": len(units_tracked),
+                "message": f"Successfully stored {len(records_to_insert)} records for {len(units_tracked)} units",
+            }
+            
+        except Exception as e:
+            logger.error(f"Error storing ENTSOE per-unit data: {str(e)}", fetch_id=str(fetch_id))
+            await self.db.rollback()
+            
+            return {
+                "success": False,
+                "fetch_id": str(fetch_id),
+                "records_inserted": 0,
+                "units_tracked": 0,
+                "message": f"Error storing data: {str(e)}",
+                "error": str(e),
+            }

@@ -222,6 +222,158 @@ class ENTSOEClient:
             }
             return pd.DataFrame(), metadata
 
+    async def fetch_generation_per_unit(
+        self,
+        start: datetime,
+        end: datetime,
+        area_code: str,
+        eic_codes: Optional[List[str]] = None,
+        production_types: Optional[List[str]] = None,
+    ) -> Tuple[pd.DataFrame, Dict[str, any]]:
+        """
+        Fetch generation data per individual unit from ENTSOE API.
+        
+        Args:
+            start: Start datetime (UTC)
+            end: End datetime (UTC)  
+            area_code: Area/bidding zone code
+            eic_codes: Optional list of EIC codes to filter specific units
+            production_types: Optional list of production types to filter
+            
+        Returns:
+            Tuple of (DataFrame with per-unit generation data, metadata dict)
+        """
+        metadata = {
+            "area_code": area_code,
+            "start": start,
+            "end": end,
+            "eic_codes": eic_codes,
+            "production_types": production_types,
+            "success": True,
+            "errors": [],
+            "units_found": [],
+        }
+        
+        try:
+            logger.info(f"Querying ENTSOE per-unit data for {area_code} from {start} to {end}")
+            if eic_codes:
+                logger.info(f"Filtering for EIC codes: {eic_codes}")
+            
+            # Convert production types to PSR types if provided
+            # Note: We try both onshore and offshore wind types
+            psr_type = None
+            if production_types and len(production_types) == 1:
+                if production_types[0].lower() == "wind":
+                    # We'll try both B18 (offshore) and B19 (onshore)
+                    psr_type = None  # Get all types, then filter
+                elif production_types[0].lower() == "solar":
+                    psr_type = "B16"  # Solar
+            
+            # Query generation per plant with EIC codes included
+            df = self.client.query_generation_per_plant(
+                area_code,
+                start=pd.Timestamp(start, tz="UTC"),
+                end=pd.Timestamp(end, tz="UTC"),
+                psr_type=psr_type,
+                include_eic=True,  # Include EIC codes in the output
+            )
+            
+            if df is None or df.empty:
+                logger.warning(f"No per-unit data available for {area_code}")
+                metadata["success"] = False
+                metadata["errors"].append("No data available for the specified parameters")
+                return pd.DataFrame(), metadata
+            
+            logger.info(f"Received data with shape: {df.shape}")
+            if isinstance(df.columns, pd.MultiIndex):
+                logger.info(f"Column structure sample: {df.columns[0] if len(df.columns) > 0 else 'No columns'}")
+            
+            # Process the dataframe
+            all_data = []
+            
+            # The dataframe has multi-level columns
+            # Structure can be: (unit_name, type, aggregation, eic_code) for B18/B19
+            # or different for other types
+            if isinstance(df.columns, pd.MultiIndex):
+                for col in df.columns:
+                    # Extract unit info from column
+                    unit_name = col[0] if isinstance(col, tuple) else str(col)
+                    
+                    # EIC code position varies:
+                    # For wind offshore/onshore: position 3 in (name, type, aggregation, eic_code)
+                    # For other types: might be at position 1
+                    eic_code = None
+                    if len(col) > 3 and isinstance(col[3], str) and "W" in col[3]:
+                        eic_code = col[3]
+                        # Also check if it's a wind type we want
+                        if production_types and "wind" in production_types:
+                            # Accept both offshore and onshore wind
+                            if "Wind" not in str(col[1]):
+                                continue
+                    elif len(col) > 1 and isinstance(col[1], str) and "W" in col[1]:
+                        eic_code = col[1]
+                    
+                    # If we have specific EIC codes to filter, skip others
+                    if eic_codes and eic_code and eic_code not in eic_codes:
+                        continue
+                    
+                    # Skip if no EIC code found
+                    if not eic_code:
+                        continue
+                    
+                    # Create record for this unit
+                    unit_df = pd.DataFrame(df[col])
+                    unit_df.columns = ["value"]
+                    unit_df["unit_name"] = unit_name
+                    unit_df["eic_code"] = eic_code
+                    unit_df["area_code"] = area_code
+                    unit_df = unit_df.reset_index()
+                    unit_df.rename(columns={"index": "timestamp"}, inplace=True)
+                    
+                    all_data.append(unit_df)
+                    metadata["units_found"].append({
+                        "name": unit_name,
+                        "eic_code": eic_code
+                    })
+            else:
+                # Single unit case or different structure
+                df_reset = df.reset_index()
+                if "index" in df_reset.columns:
+                    df_reset.rename(columns={"index": "timestamp"}, inplace=True)
+                df_reset["area_code"] = area_code
+                all_data.append(df_reset)
+            
+            if all_data:
+                result_df = pd.concat(all_data, ignore_index=True)
+                
+                # Ensure timestamp is in ISO format
+                if "timestamp" in result_df.columns:
+                    result_df["timestamp"] = pd.to_datetime(result_df["timestamp"]).dt.strftime(
+                        "%Y-%m-%dT%H:%M:%S"
+                    )
+                
+                # Add unit column
+                result_df["unit"] = "MW"
+                
+                metadata["records"] = len(result_df)
+                metadata["units_count"] = len(metadata["units_found"])
+                
+                logger.info(f"Processed {len(metadata['units_found'])} units with {metadata['records']} total records")
+                for unit in metadata["units_found"]:
+                    logger.info(f"  Found unit: {unit['name']} (EIC: {unit['eic_code']})")
+                
+                return result_df, metadata
+            else:
+                metadata["success"] = False
+                metadata["errors"].append("No matching units found")
+                return pd.DataFrame(), metadata
+                
+        except Exception as e:
+            logger.error(f"Error fetching per-unit data: {str(e)}")
+            metadata["success"] = False
+            metadata["errors"].append(str(e))
+            return pd.DataFrame(), metadata
+
     def get_available_areas(self) -> Dict[str, str]:
         """Return available area codes and their descriptions."""
         return self.AREA_CODES

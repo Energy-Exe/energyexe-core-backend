@@ -73,20 +73,21 @@ async def get_windfarm_generation_data(
     windfarm_id: int,
     start_date: datetime = Query(..., description="Start date (ISO format)"),
     end_date: datetime = Query(..., description="End date (ISO format)"),
+    store_data: bool = Query(True, description="Store fetched data in database"),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Get REGIONAL generation data for the control area containing this windfarm.
+    Get generation data for a specific windfarm from ENTSOE API.
 
     IMPORTANT: ENTSOE provides aggregated data at the control area level only.
-    This endpoint returns total wind generation for ALL wind farms in the control area,
-    not individual windfarm data.
+    This endpoint returns total generation for ALL units in the control area,
+    not individual generation unit data.
     
     This endpoint:
-    1. Fetches the windfarm and its control area
-    2. Uses the control area code to query ENTSOE API for REGIONAL data
-    3. Returns aggregated regional generation data for the entire control area
+    1. Fetches the windfarm and its generation units
+    2. Uses the windfarm's control area to query ENTSOE API
+    3. Returns aggregated regional generation data with generation unit metadata
     """
     from app.services.windfarm import WindfarmService
 
@@ -112,31 +113,52 @@ async def get_windfarm_generation_data(
     if not control_area:
         raise HTTPException(status_code=404, detail="Control area not found")
 
-    # Fetch generation data from ENTSOE
+    # Get generation units for this windfarm with ENTSOE source
+    from app.models.generation_unit import GenerationUnit
+
+    gen_units_stmt = select(GenerationUnit).where(
+        GenerationUnit.windfarm_id == windfarm_id,
+        GenerationUnit.is_active == True,
+        GenerationUnit.source == "ENTSOE",
+    )
+    gen_units_result = await db.execute(gen_units_stmt)
+    generation_units = gen_units_result.scalars().all()
+    
+    if not generation_units:
+        raise HTTPException(
+            status_code=400,
+            detail="No ENTSOE generation units found for this windfarm. Please ensure generation units are properly configured with source='ENTSOE'.",
+        )
+    
+    # Determine production types based on generation units
+    production_types = set()
+    for unit in generation_units:
+        if unit.fuel_type and unit.fuel_type.lower() in ["wind", "wind power"]:
+            production_types.add("wind")
+        elif unit.fuel_type and unit.fuel_type.lower() in ["solar", "solar power", "photovoltaic"]:
+            production_types.add("solar")
+    
+    # Default to wind if no clear type
+    if not production_types:
+        production_types = {"wind"}
+    
+    # Fetch generation data from ENTSOE - now per unit!
     service = ENTSOEService(db)
 
     try:
-        # Use control area code as the ENTSOE area code
-        result = await service.fetch_real_time_generation(
+        # Use the new per-unit fetching method
+        result = await service.fetch_generation_per_unit(
             start_date=start_date,
             end_date=end_date,
-            area_codes=[control_area.code],
-            production_types=["wind"],  # For windfarms, we're interested in wind data
+            area_code=control_area.code,
+            generation_units=generation_units,
             current_user=current_user,
+            store_data=store_data,
         )
-
-        # Get generation units for this windfarm
-        from app.models.generation_unit import GenerationUnit
-
-        gen_units_stmt = select(GenerationUnit).where(
-            GenerationUnit.windfarm_id == windfarm_id,
-            GenerationUnit.is_active == True,
-            GenerationUnit.source == "ENTSOE",
-        )
-        gen_units_result = await db.execute(gen_units_stmt)
-        generation_units = gen_units_result.scalars().all()
 
         # Prepare response with windfarm and generation unit info
+        storage_info = result.get("metadata", {}).get("storage", {}) if store_data else {}
+        
         response = {
             "windfarm": {
                 "id": windfarm.id,
@@ -153,6 +175,7 @@ async def get_windfarm_generation_data(
                     "id": unit.id,
                     "code": unit.code,
                     "name": unit.name,
+                    "fuel_type": unit.fuel_type,
                     "capacity_mw": float(unit.capacity_mw) if unit.capacity_mw else None,
                 }
                 for unit in generation_units
@@ -162,10 +185,17 @@ async def get_windfarm_generation_data(
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
                 "area_code": control_area.code,
-                "production_type": "wind",
-                "data_level": "CONTROL_AREA",
-                "data_scope": f"Aggregated data for ALL wind farms in {control_area.name} ({control_area.code})",
-                "note": "ENTSOE provides regional aggregated data only, not individual windfarm data"
+                "production_types": list(production_types),
+                "generation_units_count": len(generation_units),
+                "generation_unit_codes": [unit.code for unit in generation_units],
+                "units_found": result.get("metadata", {}).get("units_found", 0),
+                "units_found_list": result.get("metadata", {}).get("units_found_list", []),
+                "data_level": "GENERATION_UNIT",
+                "data_scope": f"Individual generation unit data for {len(generation_units)} units",
+                "note": "Data shown is per individual generation unit using EIC codes.",
+                "stored": storage_info.get("success", False),
+                "records_stored": storage_info.get("records_inserted", 0),
+                "units_tracked": storage_info.get("units_tracked", 0),
             },
         }
 
@@ -281,6 +311,7 @@ async def get_windfarm_data_availability(
     except Exception as e:
         logger.error(f"Error getting data availability: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @router.get("/generation/windfarm/{windfarm_id}/stored")
