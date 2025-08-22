@@ -42,6 +42,24 @@ class WindfarmService:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_windfarm_with_generation_units(db: AsyncSession, windfarm_id: int) -> Optional[Windfarm]:
+        result = await db.execute(
+            select(Windfarm)
+            .where(Windfarm.id == windfarm_id)
+            .options(
+                selectinload(Windfarm.generation_units),
+                selectinload(Windfarm.country),
+                selectinload(Windfarm.state),
+                selectinload(Windfarm.region),
+                selectinload(Windfarm.bidzone),
+                selectinload(Windfarm.market_balance_area),
+                selectinload(Windfarm.control_area),
+                selectinload(Windfarm.project),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def get_windfarm_by_code(db: AsyncSession, code: str) -> Optional[Windfarm]:
         result = await db.execute(select(Windfarm).where(Windfarm.code == code))
         return result.scalar_one_or_none()

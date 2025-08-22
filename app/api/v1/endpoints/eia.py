@@ -53,9 +53,10 @@ async def fetch_windfarm_generation_data(
         GenerationUnit.is_active == True,
         GenerationUnit.source == "EIA",
     )
+    
+
     gen_units_result = await db.execute(gen_units_stmt)
     generation_units = gen_units_result.scalars().all()
-
     if not generation_units:
         # If no EIA-specific units, try to get any generation units
         gen_units_stmt = select(GenerationUnit).where(

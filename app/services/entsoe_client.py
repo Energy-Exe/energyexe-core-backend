@@ -370,6 +370,7 @@ class ENTSOEClient:
                 
         except Exception as e:
             logger.error(f"Error fetching per-unit data: {str(e)}")
+            print(e)
             metadata["success"] = False
             metadata["errors"].append(str(e))
             return pd.DataFrame(), metadata

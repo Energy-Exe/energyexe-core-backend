@@ -167,6 +167,145 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
     return windfarm_dict
 
 
+@router.get("/{windfarm_id}/generation-units")
+async def get_windfarm_generation_units(windfarm_id: int, db: AsyncSession = Depends(get_db)):
+    """Get generation units for a specific windfarm"""
+    from app.models.generation_unit import GenerationUnit
+    from sqlalchemy import select
+    
+    result = await db.execute(
+        select(GenerationUnit).where(GenerationUnit.windfarm_id == windfarm_id)
+    )
+    units = result.scalars().all()
+    
+    return [
+        {
+            "id": unit.id,
+            "code": unit.code,
+            "name": unit.name,
+            "fuel_type": unit.fuel_type,
+            "capacity_mw": float(unit.capacity_mw) if unit.capacity_mw else None,
+            "source": unit.source,
+            "is_active": unit.is_active,
+        }
+        for unit in units
+    ]
+
+
+@router.get("/{windfarm_id}/with-generation-units")
+async def get_windfarm_with_generation_units(windfarm_id: int, db: AsyncSession = Depends(get_db)):
+    """Get a specific windfarm by ID with generation units"""
+    windfarm = await WindfarmService.get_windfarm_with_generation_units(db, windfarm_id)
+    if not windfarm:
+        raise HTTPException(status_code=404, detail="Windfarm not found")
+
+    # Convert ORM objects to dictionaries for JSON serialization
+    windfarm_dict = {
+        "id": windfarm.id,
+        "code": windfarm.code,
+        "name": windfarm.name,
+        "country_id": windfarm.country_id,
+        "state_id": windfarm.state_id,
+        "region_id": windfarm.region_id,
+        "bidzone_id": windfarm.bidzone_id,
+        "market_balance_area_id": windfarm.market_balance_area_id,
+        "control_area_id": windfarm.control_area_id,
+        "nameplate_capacity_mw": windfarm.nameplate_capacity_mw,
+        "project_id": windfarm.project_id,
+        "commercial_operational_date": windfarm.commercial_operational_date.isoformat()
+        if windfarm.commercial_operational_date
+        else None,
+        "first_power_date": windfarm.first_power_date.isoformat()
+        if windfarm.first_power_date
+        else None,
+        "lat": windfarm.lat,
+        "lng": windfarm.lng,
+        "polygon_wkt": windfarm.polygon_wkt,
+        "foundation_type": windfarm.foundation_type,
+        "location_type": windfarm.location_type,
+        "status": windfarm.status,
+        "notes": windfarm.notes,
+        "alternate_name": windfarm.alternate_name,
+        "environmental_assessment_status": windfarm.environmental_assessment_status,
+        "permits_obtained": windfarm.permits_obtained,
+        "grid_connection_status": windfarm.grid_connection_status,
+        "total_investment_amount": str(windfarm.total_investment_amount)
+        if windfarm.total_investment_amount
+        else None,
+        "investment_currency": windfarm.investment_currency,
+        "address": windfarm.address,
+        "postal_code": windfarm.postal_code,
+        "created_at": windfarm.created_at.isoformat(),
+        "updated_at": windfarm.updated_at.isoformat(),
+        "country": {
+            "id": windfarm.country.id,
+            "code": windfarm.country.code,
+            "name": windfarm.country.name,
+        }
+        if windfarm.country
+        else None,
+        "state": {
+            "id": windfarm.state.id,
+            "code": windfarm.state.code,
+            "name": windfarm.state.name,
+        }
+        if windfarm.state
+        else None,
+        "region": {
+            "id": windfarm.region.id,
+            "code": windfarm.region.code,
+            "name": windfarm.region.name,
+        }
+        if windfarm.region
+        else None,
+        "bidzone": {
+            "id": windfarm.bidzone.id,
+            "code": windfarm.bidzone.code,
+            "name": windfarm.bidzone.name,
+        }
+        if windfarm.bidzone
+        else None,
+        "market_balance_area": {
+            "id": windfarm.market_balance_area.id,
+            "code": windfarm.market_balance_area.code,
+            "name": windfarm.market_balance_area.name,
+        }
+        if windfarm.market_balance_area
+        else None,
+        "control_area": {
+            "id": windfarm.control_area.id,
+            "code": windfarm.control_area.code,
+            "name": windfarm.control_area.name,
+        }
+        if windfarm.control_area
+        else None,
+        "project": {
+            "id": windfarm.project.id,
+            "code": windfarm.project.code,
+            "name": windfarm.project.name,
+        }
+        if windfarm.project
+        else None,
+        "generation_units": [
+            {
+                "id": unit.id,
+                "code": unit.code,
+                "name": unit.name,
+                "fuel_type": unit.fuel_type,
+                "capacity_mw": float(unit.capacity_mw) if unit.capacity_mw else None,
+                "source": unit.source,
+                "is_active": unit.is_active,
+                "commissioned_date": unit.commissioned_date.isoformat()
+                if unit.commissioned_date
+                else None,
+            }
+            for unit in windfarm.generation_units
+        ] if hasattr(windfarm, 'generation_units') else [],
+    }
+
+    return windfarm_dict
+
+
 @router.get("/code/{code}", response_model=Windfarm)
 async def get_windfarm_by_code(code: str, db: AsyncSession = Depends(get_db)):
     """Get a windfarm by its code"""
@@ -407,3 +546,38 @@ async def remove_windfarm_owner(
     if not deleted_owner:
         raise HTTPException(status_code=404, detail="Windfarm owner relationship not found")
     return deleted_owner
+
+
+@router.delete("/{windfarm_id}/generation-units/{unit_id}")
+async def unlink_generation_unit(
+    windfarm_id: int, unit_id: int, db: AsyncSession = Depends(get_db)
+):
+    """Unlink a generation unit from a windfarm"""
+    from app.models.generation_unit import GenerationUnit
+    from sqlalchemy import select
+    
+    # Check if windfarm exists
+    windfarm = await WindfarmService.get_windfarm(db, windfarm_id)
+    if not windfarm:
+        raise HTTPException(status_code=404, detail="Windfarm not found")
+    
+    # Get the generation unit
+    result = await db.execute(
+        select(GenerationUnit).where(
+            GenerationUnit.id == unit_id,
+            GenerationUnit.windfarm_id == windfarm_id
+        )
+    )
+    unit = result.scalar_one_or_none()
+    
+    if not unit:
+        raise HTTPException(
+            status_code=404, 
+            detail="Generation unit not found or not associated with this windfarm"
+        )
+    
+    # Unlink the generation unit by setting windfarm_id to null
+    unit.windfarm_id = None
+    await db.commit()
+    
+    return {"message": "Generation unit unlinked successfully", "unit_id": unit_id}

@@ -80,38 +80,33 @@ async def get_windfarm_generation_data(
     """
     Get generation data for a specific windfarm from ENTSOE API.
 
-    IMPORTANT: ENTSOE provides aggregated data at the control area level only.
-    This endpoint returns total generation for ALL units in the control area,
-    not individual generation unit data.
+    This endpoint fetches generation data per individual generation unit using their EIC codes.
     
     This endpoint:
     1. Fetches the windfarm and its generation units
-    2. Uses the windfarm's control area to query ENTSOE API
-    3. Returns aggregated regional generation data with generation unit metadata
+    2. Uses the generation units' EIC codes to query ENTSOE API for per-unit data
+    3. Returns individual generation unit data (not aggregated)
+    4. Automatically determines the area code from control area or EIC code prefixes
     """
     from app.services.windfarm import WindfarmService
 
-    # Get windfarm with control area
+    # Get windfarm
     windfarm = await WindfarmService.get_windfarm(db, windfarm_id)
     if not windfarm:
         raise HTTPException(status_code=404, detail="Windfarm not found")
 
-    # Check if windfarm has a control area
-    if not windfarm.control_area_id:
-        raise HTTPException(
-            status_code=400, detail="Windfarm does not have a control area assigned"
-        )
-
-    # Get control area code
+    # Get control area code if available (for area context, but not required)
     from app.models.control_area import ControlArea
     from sqlalchemy import select
-
-    stmt = select(ControlArea).where(ControlArea.id == windfarm.control_area_id)
-    result = await db.execute(stmt)
-    control_area = result.scalar_one_or_none()
-
-    if not control_area:
-        raise HTTPException(status_code=404, detail="Control area not found")
+    
+    control_area = None
+    area_code = None
+    if windfarm.control_area_id:
+        stmt = select(ControlArea).where(ControlArea.id == windfarm.control_area_id)
+        result = await db.execute(stmt)
+        control_area = result.scalar_one_or_none()
+        if control_area:
+            area_code = control_area.code
 
     # Get generation units for this windfarm with ENTSOE source
     from app.models.generation_unit import GenerationUnit
@@ -146,11 +141,51 @@ async def get_windfarm_generation_data(
     service = ENTSOEService(db)
 
     try:
+        # For per-unit fetching, we need to determine the area code
+        # We can use control area if available, or derive from generation unit codes
+        if not area_code and generation_units:
+            # Try to extract area code from EIC codes (typically country prefix)
+            # EIC codes often start with country/area code
+            for unit in generation_units:
+                if unit.code and len(unit.code) >= 2:
+                    # Common area code mappings from EIC prefixes
+                    eic_prefix = unit.code[:2].upper()
+                    area_mapping = {
+                        "10": "DE_LU",  # Germany/Luxembourg
+                        "11": "FR",     # France
+                        "12": "ES",     # Spain
+                        "13": "GB",     # United Kingdom
+                        "14": "IT",     # Italy
+                        "15": "NL",     # Netherlands
+                        "16": "BE",     # Belgium
+                        "17": "AT",     # Austria
+                        "18": "CH",     # Switzerland
+                        "19": "PL",     # Poland
+                        "45": "DK_1",   # Denmark West
+                        "46": "DK_2",   # Denmark East
+                        "50": "NO_1",   # Norway
+                        "10Y": "DE_LU", # Alternative Germany format
+                    }
+                    # Check longer prefixes first
+                    if unit.code.startswith("10Y"):
+                        area_code = "DE_LU"
+                        break
+                    elif eic_prefix in area_mapping:
+                        area_code = area_mapping[eic_prefix]
+                        break
+        
+        # If still no area code, we need to raise an error
+        if not area_code:
+            raise HTTPException(
+                status_code=400,
+                detail="Unable to determine area code. Please ensure windfarm has a control area assigned or generation units have valid EIC codes."
+            )
+        
         # Use the new per-unit fetching method
         result = await service.fetch_generation_per_unit(
             start_date=start_date,
             end_date=end_date,
-            area_code=control_area.code,
+            area_code=area_code,
             generation_units=generation_units,
             current_user=current_user,
             store_data=store_data,
@@ -159,17 +194,22 @@ async def get_windfarm_generation_data(
         # Prepare response with windfarm and generation unit info
         storage_info = result.get("metadata", {}).get("storage", {}) if store_data else {}
         
+        windfarm_info = {
+            "id": windfarm.id,
+            "code": windfarm.code,
+            "name": windfarm.name,
+        }
+        
+        # Add control area info if available
+        if control_area:
+            windfarm_info["control_area"] = {
+                "id": control_area.id,
+                "code": control_area.code,
+                "name": control_area.name,
+            }
+        
         response = {
-            "windfarm": {
-                "id": windfarm.id,
-                "code": windfarm.code,
-                "name": windfarm.name,
-                "control_area": {
-                    "id": control_area.id,
-                    "code": control_area.code,
-                    "name": control_area.name,
-                },
-            },
+            "windfarm": windfarm_info,
             "generation_units": [
                 {
                     "id": unit.id,
@@ -184,7 +224,7 @@ async def get_windfarm_generation_data(
             "metadata": {
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
-                "area_code": control_area.code,
+                "area_code": area_code,
                 "production_types": list(production_types),
                 "generation_units_count": len(generation_units),
                 "generation_unit_codes": [unit.code for unit in generation_units],
