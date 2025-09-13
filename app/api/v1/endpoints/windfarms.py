@@ -21,7 +21,7 @@ router = APIRouter()
 @router.get("/", response_model=List[Windfarm])
 async def get_windfarms(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(100, ge=1, le=10000),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all windfarms with pagination"""
@@ -32,7 +32,7 @@ async def get_windfarms(
 async def search_windfarms(
     q: str = Query(..., min_length=1),
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(100, ge=1, le=10000),
     db: AsyncSession = Depends(get_db),
 ):
     """Search windfarms by name"""

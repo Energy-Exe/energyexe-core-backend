@@ -254,6 +254,8 @@ class ENTSOEClient:
             "units_found": [],
         }
         
+        print(metadata)
+        
         try:
             logger.info(f"Querying ENTSOE per-unit data for {area_code} from {start} to {end}")
             if eic_codes:

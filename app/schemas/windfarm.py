@@ -26,7 +26,7 @@ class WindfarmBase(BaseModel):
     polygon_wkt: Optional[str] = None
     foundation_type: Optional[str] = Field(None, max_length=100)
     location_type: Optional[str] = Field(None, pattern="^(onshore|offshore)$")
-    status: Optional[str] = Field(None, pattern="^(operational|decommissioned|under_installation)$")
+    status: Optional[str] = Field(None, pattern="^(operational|decommissioned|under_installation|expanded)$")
     notes: Optional[str] = Field(None, max_length=300)
     alternate_name: Optional[str] = Field(None, max_length=255)
     environmental_assessment_status: Optional[str] = Field(None, max_length=100)
@@ -60,7 +60,7 @@ class WindfarmUpdate(BaseModel):
     polygon_wkt: Optional[str] = None
     foundation_type: Optional[str] = Field(None, max_length=100)
     location_type: Optional[str] = Field(None, pattern="^(onshore|offshore)$")
-    status: Optional[str] = Field(None, pattern="^(operational|decommissioned|under_installation)$")
+    status: Optional[str] = Field(None, pattern="^(operational|decommissioned|under_installation|expanded)$")
     notes: Optional[str] = Field(None, max_length=300)
     alternate_name: Optional[str] = Field(None, max_length=255)
     environmental_assessment_status: Optional[str] = Field(None, max_length=100)

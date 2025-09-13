@@ -53,7 +53,7 @@ class Windfarm(Base):
     location_type = Column(String(100), nullable=True)  # "onshore" | "offshore"
     status = Column(
         String(100), nullable=True
-    )  # "operational" | "decommissioned" | "under_installation"
+    )  # "operational" | "decommissioned" | "under_installation" | "expanded"
 
     # Additional info
     notes = Column(String(300), nullable=True)
@@ -90,3 +90,5 @@ class Windfarm(Base):
         "TurbineUnit", back_populates="windfarm", cascade="all, delete-orphan"
     )
     generation_units = relationship("GenerationUnit", back_populates="windfarm")
+    generation_data = relationship("GenerationData", back_populates="windfarm")
+    backfill_jobs = relationship("BackfillJob", back_populates="windfarm")

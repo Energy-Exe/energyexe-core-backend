@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # Local Valkey/Redis for development
+  valkey:
+    image: valkey/valkey:7-alpine
+    container_name: energyexe-valkey
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkey_data:/data
+    command: valkey-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - energyexe-network
+
+  # PostgreSQL for development
+  postgres:
+    image: postgres:15-alpine
+    container_name: energyexe-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: energyexe_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - energyexe-network
+
+  # Flower for monitoring (optional)
+  flower:
+    image: mher/flower:2.0
+    container_name: energyexe-flower
+    command: celery flower --broker=redis://valkey:6379/0 --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - valkey
+    networks:
+      - energyexe-network
+    environment:
+      - CELERY_BROKER_URL=redis://valkey:6379/0
+      - CELERY_RESULT_BACKEND=redis://valkey:6379/1
+
+volumes:
+  valkey_data:
+  postgres_data:
+
+networks:
+  energyexe-network:
+    driver: bridge

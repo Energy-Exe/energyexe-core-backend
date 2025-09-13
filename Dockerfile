@@ -52,15 +52,17 @@ RUN pip install --retries 5 --timeout 30 -r requirements.txt
 # Copy source code
 COPY --chown=app:app . .
 
-# Switch to non-root user
+# Make startup script executable
+USER root
+RUN chmod +x /app/scripts/railway_start.sh
 USER app
 
-# Expose port
+# Expose port (Railway will override this with PORT env var)
 EXPOSE 8001
 
-# Health check
+# Health check (only for API service)
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8001/health || exit 1
+    CMD if [ "$RAILWAY_SERVICE_TYPE" != "worker" ]; then curl -f http://localhost:${PORT:-8001}/health || exit 1; else exit 0; fi
 
-# Run production server
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "4"]
+# Use the startup script that checks RAILWAY_SERVICE_TYPE
+CMD ["/bin/bash", "/app/scripts/railway_start.sh"]

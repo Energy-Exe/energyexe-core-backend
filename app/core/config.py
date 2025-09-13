@@ -95,6 +95,16 @@ class Settings(BaseSettings):
 
     # EIA Integration
     EIA_API_KEY: str = "bLXfqlf12SKY6t6kIz03IKGgoTfTBxr9pOLKiZeZ"
+    
+    # Valkey/Redis settings for Celery
+    VALKEY_PUBLIC_HOST: str = "valkey-production-515f.up.railway.app"
+    VALKEY_PUBLIC_PORT: str = "6379"
+    VALKEY_PASSWORD: str = "roKX3R37u09uQhjf~YjWnScP11nrdU7p"
+    VALKEY_USER: str = "default"
+    
+    # Celery settings
+    CELERY_BROKER_URL: Optional[str] = None
+    CELERY_RESULT_BACKEND: Optional[str] = None
 
     @property
     def database_url_sync(self) -> str:

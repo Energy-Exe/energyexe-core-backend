@@ -1,9 +1,10 @@
 """Generation unit model."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -25,14 +26,18 @@ class GenerationUnit(Base):
     capacity_mw: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=True)
 
     windfarm_id: Mapped[int] = mapped_column(Integer, ForeignKey("windfarms.id"), nullable=True)
+    
+    status: Mapped[str] = mapped_column(String(100), nullable=True)
+    
+    start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     notes: Mapped[str] = mapped_column(Text, nullable=True)
 
     # Relationships
     windfarm = relationship("Windfarm", back_populates="generation_units")
-    elexon_data = relationship("ElexonGenerationData", back_populates="generation_unit")
-    eia_data = relationship("EIAGenerationData", back_populates="generation_unit")
-    taipower_data = relationship("TaipowerGenerationData", back_populates="generation_unit")
+    generation_data = relationship("GenerationData", back_populates="generation_unit")
+    backfill_tasks = relationship("BackfillTask", back_populates="generation_unit")
 
     # Audit fields
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

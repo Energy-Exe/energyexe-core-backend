@@ -196,3 +196,8 @@ docker run -p 8000:8000 energyexe-backend
 ## License
 
 This project is licensed under the MIT License. 
+
+Connect to db
+```bash
+psql "postgresql://postgres:RwaN9FJDCgP2AhuALxZ4Wa7QfvbKXQ647AAickORJ0rq5N6lUG19UneFJJTJ9Jnv@146.235.201.245:5432/energyexe_db"
+```
