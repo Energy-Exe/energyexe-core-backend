@@ -242,7 +242,7 @@ async def get_generation_stats(
     from app.models.generation_data import GenerationDataRaw, GenerationData
     from sqlalchemy import select, func
     
-    sources = ['ENTSOE', 'ELEXON', 'EIA', 'TAIPOWER']
+    sources = ['ENTSOE', 'ELEXON', 'EIA', 'Taipower', 'NVE', 'ENERGISTYRELSEN']
     source_stats = []
     
     for source in sources:
@@ -322,7 +322,7 @@ async def get_availability(
     
     # Default to all sources if none specified
     if not sources:
-        sources = ['ENTSOE', 'ELEXON', 'EIA', 'TAIPOWER']
+        sources = ['ENTSOE', 'ELEXON', 'EIA', 'Taipower', 'NVE', 'ENERGISTYRELSEN']
     
     # Get start and end dates for the month
     days_in_month = monthrange(year, month)[1]
