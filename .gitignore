@@ -188,3 +188,6 @@ logs/
 
 .env
 file::*
+
+*.csv
+*.xlsx
