@@ -242,7 +242,7 @@ async def get_generation_stats(
     from app.models.generation_data import GenerationDataRaw, GenerationData
     from sqlalchemy import select, func
     
-    sources = ['ENTSOE', 'ELEXON', 'EIA', 'Taipower', 'NVE', 'ENERGISTYRELSEN']
+    sources = ['ENTSOE', 'ELEXON', 'EIA', 'TAIPOWER', 'NVE', 'ENERGISTYRELSEN']
     source_stats = []
     
     for source in sources:
@@ -299,98 +299,98 @@ async def get_generation_stats(
 async def get_availability(
     year: Optional[int] = Query(None, description="Year for availability check"),
     month: Optional[int] = Query(None, description="Month for availability check (1-12)"),
-    sources: Optional[List[str]] = Query(None),
+    sources: Optional[str] = Query(None, description="Comma-separated list of sources or single source"),
     windfarm_id: Optional[int] = None,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ) -> Dict[str, Any]:
     """Get data availability for specified month."""
-    
+
     from app.models.generation_data import GenerationDataRaw, GenerationData
     from sqlalchemy import select, func, and_
     from calendar import monthrange
-    
+
     # Default to current month if not provided
     if year is None or month is None:
         now = datetime.utcnow()
         year = year or now.year
         month = month or now.month
-    
+
     # Validate month range
     if month < 1 or month > 12:
         raise HTTPException(status_code=400, detail="Month must be between 1 and 12")
-    
-    # Default to all sources if none specified
-    if not sources:
-        sources = ['ENTSOE', 'ELEXON', 'EIA', 'Taipower', 'NVE', 'ENERGISTYRELSEN']
+
+    # Parse sources - handle both comma-separated string and list
+    if sources:
+        # If it's a comma-separated string, split it
+        if isinstance(sources, str):
+            sources_list = [s.strip() for s in sources.split(',') if s.strip()]
+        else:
+            sources_list = sources
+    else:
+        # Default to all sources if none specified
+        sources_list = ['ENTSOE', 'ELEXON', 'EIA', 'TAIPOWER', 'NVE', 'ENERGISTYRELSEN']
     
     # Get start and end dates for the month
+    from datetime import date
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     days_in_month = monthrange(year, month)[1]
-    start_date = datetime(year, month, 1)
-    end_date = datetime(year, month, days_in_month, 23, 59, 59)
-    
+    start_date = date(year, month, 1)
+    end_date = date(year, month, days_in_month)
+
+    logger.info(f"Availability query: year={year}, month={month}, start={start_date}, end={end_date}, sources={sources_list}")
+
     availability = {}
-    
-    # For each day in the month
-    for day in range(1, days_in_month + 1):
-        date_str = f"{year:04d}-{month:02d}-{day:02d}"
-        day_start = datetime(year, month, day)
-        day_end = datetime(year, month, day, 23, 59, 59)
-        
-        day_sources = []
-        total_records = 0
-        total_quality = 0.0
-        quality_count = 0
-        
-        for source in sources:
-            # Check if raw data exists for this day and source
-            query = select(func.count(GenerationDataRaw.id)).where(
-                and_(
-                    GenerationDataRaw.source == source,
-                    GenerationDataRaw.period_start >= day_start,
-                    GenerationDataRaw.period_start < day_end + timedelta(days=1)
-                )
+
+    # Optimized: Get all data for the month in one query per source
+    for source in sources_list:
+        # Get daily counts for the entire month in one query
+        daily_query = select(
+            func.date(GenerationDataRaw.period_start).label('date'),
+            func.count(GenerationDataRaw.id).label('count')
+        ).where(
+            and_(
+                GenerationDataRaw.source == source,
+                GenerationDataRaw.period_start >= start_date,
+                GenerationDataRaw.period_start <= end_date
             )
-            
-            result = await db.execute(query)
-            count = result.scalar()
-            
-            if count > 0:
-                day_sources.append(source)
-                total_records += count
-                
-                # Get quality scores for processed data
-                quality_query = select(func.avg(GenerationData.quality_score)).where(
-                    and_(
-                        GenerationData.source == source,
-                        GenerationData.hour >= day_start,
-                        GenerationData.hour < day_end + timedelta(days=1)
-                    )
-                )
-                quality_result = await db.execute(quality_query)
-                avg_quality = quality_result.scalar()
-                if avg_quality:
-                    total_quality += float(avg_quality)
-                    quality_count += 1
-        
-        if day_sources:
-            availability[date_str] = {
-                'sources': day_sources,
-                'recordCount': total_records,
-                'quality': (total_quality / quality_count) if quality_count > 0 else None
-            }
+        ).group_by(func.date(GenerationDataRaw.period_start))
+
+        result = await db.execute(daily_query)
+        daily_data = result.all()
+
+        logger.info(f"{source}: Found {len(daily_data)} days of data")
+
+        # Process results
+        for row in daily_data:
+            date_str = row.date.strftime('%Y-%m-%d')
+
+            if date_str not in availability:
+                availability[date_str] = {
+                    'sources': [],
+                    'recordCount': 0,
+                    'quality': None
+                }
+
+            availability[date_str]['sources'].append(source)
+            availability[date_str]['recordCount'] += row.count
     
     # Calculate summary
     days_with_data = len(availability)
     coverage = (days_with_data / days_in_month) * 100 if days_in_month > 0 else 0
-    
+
+    logger.info(f"Final result: {days_with_data} days with data out of {days_in_month} ({coverage:.1f}% coverage)")
+
     return {
         'availability': availability,
         'summary': {
             'totalDays': days_in_month,
             'daysWithData': days_with_data,
             'coverage': coverage,
-            'sources': sources
+            'sources': sources_list
         }
     }
 

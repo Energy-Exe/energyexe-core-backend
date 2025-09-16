@@ -27,7 +27,7 @@ async def check_import_status():
         # Total Taipower records
         result = await db.execute(
             select(func.count(GenerationDataRaw.id))
-            .where(GenerationDataRaw.source == 'Taipower')
+            .where(GenerationDataRaw.source == 'TAIPOWER')
         )
         total_records = result.scalar() or 0
         
@@ -45,7 +45,7 @@ async def check_import_status():
                 func.min(GenerationDataRaw.period_start),
                 func.max(GenerationDataRaw.period_end)
             )
-            .where(GenerationDataRaw.source == 'Taipower')
+            .where(GenerationDataRaw.source == 'TAIPOWER')
         )
         min_date, max_date = result.first()
         
@@ -61,7 +61,7 @@ async def check_import_status():
                 GenerationDataRaw.identifier,
                 func.count(GenerationDataRaw.id).label('count')
             )
-            .where(GenerationDataRaw.source == 'Taipower')
+            .where(GenerationDataRaw.source == 'TAIPOWER')
             .group_by(GenerationDataRaw.identifier)
             .order_by(func.count(GenerationDataRaw.id).desc())
         )
@@ -79,7 +79,7 @@ async def check_import_status():
         
         result = await db.execute(
             select(GenerationDataRaw)
-            .where(GenerationDataRaw.source == 'Taipower')
+            .where(GenerationDataRaw.source == 'TAIPOWER')
             .order_by(GenerationDataRaw.period_start.desc())
             .limit(5)
         )
@@ -112,7 +112,7 @@ async def check_import_status():
         # Check configured vs imported units
         result = await db.execute(
             select(func.count(GenerationUnit.id))
-            .where(GenerationUnit.source == 'Taipower')
+            .where(GenerationUnit.source == 'TAIPOWER')
         )
         total_configured = result.scalar() or 0
         
@@ -121,20 +121,23 @@ async def check_import_status():
         print(f"\n📊 Unit coverage:")
         print(f"   • Configured units: {total_configured}")
         print(f"   • Units with data: {imported_units}")
-        print(f"   • Coverage: {imported_units/total_configured*100:.1f}%")
+        if total_configured > 0:
+            print(f"   • Coverage: {imported_units/total_configured*100:.1f}%")
+        else:
+            print(f"   • Coverage: N/A (no configured units)")
         
         if imported_units < total_configured:
             # Find missing units
             result = await db.execute(
                 select(GenerationDataRaw.identifier)
-                .where(GenerationDataRaw.source == 'Taipower')
+                .where(GenerationDataRaw.source == 'TAIPOWER')
                 .distinct()
             )
             imported_codes = {row[0] for row in result}
             
             result = await db.execute(
                 select(GenerationUnit.code, GenerationUnit.name)
-                .where(GenerationUnit.source == 'Taipower')
+                .where(GenerationUnit.source == 'TAIPOWER')
             )
             
             missing = []

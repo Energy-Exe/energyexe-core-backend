@@ -35,7 +35,7 @@ async def get_configured_units() -> Dict[str, int]:
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(GenerationUnit.code, GenerationUnit.id)
-            .where(GenerationUnit.source == 'Taipower')
+            .where(GenerationUnit.source == 'TAIPOWER')
         )
         # Map both uppercase and lowercase for flexibility
         units = {}
@@ -149,7 +149,7 @@ def process_excel_file(args: Tuple[str, Dict[str, int], int]) -> Tuple[int, int,
                     'period_start': timestamp.isoformat(),
                     'period_end': (timestamp + pd.Timedelta(hours=1)).isoformat(),  # Assume hourly data
                     'period_type': 'hour',
-                    'source': 'Taipower',
+                    'source': 'TAIPOWER',
                     'identifier': unit_code,
                     'value_extracted': float(generation),
                     'unit': 'MW',
@@ -221,7 +221,7 @@ async def clear_existing_taipower_data():
         # Count existing records
         result = await db.execute(
             select(func.count(GenerationDataRaw.id))
-            .where(GenerationDataRaw.source == 'Taipower')
+            .where(GenerationDataRaw.source == 'TAIPOWER')
         )
         existing_count = result.scalar() or 0
         
@@ -300,7 +300,7 @@ async def import_taipower_data(workers: int = 4, skip_duplicates: bool = False, 
             result = await db.execute(
                 select(text("COUNT(*)"))
                 .select_from(GenerationDataRaw)
-                .where(GenerationDataRaw.source == 'Taipower')
+                .where(GenerationDataRaw.source == 'TAIPOWER')
             )
             initial_count = result.scalar()
             
@@ -339,7 +339,7 @@ async def import_taipower_data(workers: int = 4, skip_duplicates: bool = False, 
             result = await db.execute(
                 select(text("COUNT(*)"))
                 .select_from(GenerationDataRaw)
-                .where(GenerationDataRaw.source == 'Taipower')
+                .where(GenerationDataRaw.source == 'TAIPOWER')
             )
             final_count = result.scalar()
             
