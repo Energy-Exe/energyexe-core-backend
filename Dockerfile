@@ -53,9 +53,9 @@ RUN pip install --retries 5 --timeout 30 -r requirements.txt
 COPY --chown=app:app . .
 
 # Make startup script executable
-USER root
-RUN chmod +x /app/scripts/railway_start.sh
-USER app
+# USER root
+# RUN chmod +x /app/scripts/railway_start.sh
+# USER app
 
 # Expose port (Railway will override this with PORT env var)
 EXPOSE 8001
