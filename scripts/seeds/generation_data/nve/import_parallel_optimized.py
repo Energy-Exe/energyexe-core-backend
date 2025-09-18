@@ -55,38 +55,18 @@ async def get_nve_unit_mapping() -> Dict[str, Dict]:
         }
 
 
-def process_nve_chunk(args: Tuple[pd.DataFrame, Dict, int, int]) -> List[Dict]:
+def process_nve_chunk(args: Tuple[pd.DataFrame, Dict, int, int, Dict]) -> List[Dict]:
     """Process a chunk of NVE data."""
-    chunk_df, unit_mapping, chunk_start, chunk_size = args
-    
+    chunk_df, unit_mapping, chunk_start, chunk_size, column_to_unit = args
+
     records = []
-    units_by_code = unit_mapping['by_code']
-    units_by_name = unit_mapping['by_name']
     
-    # Get column mapping from first row (contains unit codes)
-    first_row = chunk_df.iloc[0] if len(chunk_df) > 0 else None
-    if first_row is None:
-        return records
-    
-    column_to_unit = {}
-    
-    # Map each column to a generation unit
-    for col in chunk_df.columns[1:]:  # Skip first column (timestamp/metadata)
-        code_value = first_row[col]
-        if pd.notna(code_value):
-            code_str = str(int(code_value)) if isinstance(code_value, (int, float)) else str(code_value)
-            
-            # Try to find unit by code first
-            if code_str in units_by_code:
-                column_to_unit[col] = units_by_code[code_str]
-            # Then try by name
-            elif col in units_by_name:
-                column_to_unit[col] = units_by_name[col]
-            else:
-                logger.debug(f"No mapping found for column {col} with code {code_str}")
-    
-    # Process data rows (skip first two rows - headers)
-    for idx in range(2, len(chunk_df)):
+    # Process data rows
+    # Note: chunk_start tells us the absolute position in the original DataFrame
+    # If chunk_start is 0, skip first two rows (headers), otherwise process all rows
+    start_idx = 2 if chunk_start == 0 else 0
+
+    for idx in range(start_idx, len(chunk_df)):
         row = chunk_df.iloc[idx]
         
         # Get timestamp from first column
@@ -169,36 +149,65 @@ async def clear_existing_nve_data():
 
 async def import_nve_data(workers: int = 4, clean_first: bool = True, sample_size: Optional[int] = None):
     """Main import function for NVE data."""
-    
+
     print("="*80)
     print(" "*20 + "🌊 NVE DATA IMPORT 🌊")
     print("="*80)
-    
+
     start_time = time.time()
-    
+
     # Clear existing data if requested
     if clean_first:
         await clear_existing_nve_data()
-    
+
     # Get unit mapping
     print("\n📊 Loading NVE unit mapping...")
     unit_mapping = await get_nve_unit_mapping()
-    
+
     # Load Excel file
     data_file = Path(__file__).parent / "data" / "vindprod2002-2024_kraftverk.xlsx"
     print(f"\n📁 Reading NVE data file: {data_file.name}")
     print(f"   File size: {data_file.stat().st_size / 1024 / 1024:.2f} MB")
-    
+
     # Read the Excel file
     print("\n⏳ Loading Excel file (this may take a moment)...")
-    
+
     if sample_size:
         print(f"   📊 Sample mode: Processing first {sample_size:,} rows")
         df = pd.read_excel(data_file, nrows=sample_size)
     else:
         df = pd.read_excel(data_file)
-    
+
     print(f"   ✅ Loaded {len(df):,} rows with {len(df.columns)} columns")
+
+    # Create column-to-unit mapping from the first row (which contains unit codes)
+    print("\n🔗 Creating column-to-unit mapping...")
+    units_by_code = unit_mapping['by_code']
+    units_by_name = unit_mapping['by_name']
+
+    first_row = df.iloc[0] if len(df) > 0 else None
+    if first_row is None:
+        print("   ❌ No data found in Excel file")
+        return
+
+    column_to_unit = {}
+
+    # Map each column to a generation unit using the first row which contains unit codes
+    for col in df.columns[1:]:  # Skip first column (timestamp/metadata)
+        code_value = first_row[col]
+        if pd.notna(code_value):
+            code_str = str(int(code_value)) if isinstance(code_value, (int, float)) else str(code_value)
+
+            # Try to find unit by code first
+            if code_str in units_by_code:
+                column_to_unit[col] = units_by_code[code_str]
+            # Then try by name
+            elif col in units_by_name:
+                column_to_unit[col] = units_by_name[col]
+            else:
+                logger.debug(f"No mapping found for column {col} with code {code_str}")
+
+    print(f"   ✅ Mapped {len(column_to_unit)} columns to generation units")
     
     # Calculate chunk size based on available memory
     available_memory = psutil.virtual_memory().available
@@ -211,7 +220,8 @@ async def import_nve_data(workers: int = 4, clean_first: bool = True, sample_siz
     for i in range(0, len(df), chunk_size):
         chunk_end = min(i + chunk_size, len(df))
         chunk = df.iloc[i:chunk_end].copy()
-        chunks.append((chunk, unit_mapping, i, chunk_size))
+        # Pass the pre-computed column_to_unit mapping to each chunk
+        chunks.append((chunk, unit_mapping, i, chunk_size, column_to_unit))
     
     print(f"   📦 Created {len(chunks)} chunks for processing")
     

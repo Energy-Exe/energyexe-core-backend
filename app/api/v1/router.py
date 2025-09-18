@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     # backfill,  # Temporarily disabled - needs refactoring for new unified schema
     bidzones,
     cables,
+    comparison,
     control_areas,
     countries,
     generation,
@@ -52,6 +53,9 @@ api_router.include_router(cables.router, prefix="/cables", tags=["cables"])
 
 # New unified generation data endpoints
 api_router.include_router(generation.router, prefix="/generation", tags=["generation"])
+
+# Comparison and analytics endpoints
+api_router.include_router(comparison.router, prefix="/comparison", tags=["comparison"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])
