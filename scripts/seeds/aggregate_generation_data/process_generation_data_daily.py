@@ -138,10 +138,58 @@ class DailyGenerationProcessor:
                 'id': unit.id,
                 'windfarm_id': unit.windfarm_id,
                 'capacity_mw': float(unit.capacity_mw) if unit.capacity_mw else None,
-                'name': unit.name
+                'name': unit.name,
+                'start_date': unit.start_date,
+                'end_date': unit.end_date
             }
 
         logger.info(f"Loaded {len(self.generation_units_cache)} generation units")
+
+    def is_unit_operational(self, unit_info: Dict, check_date: datetime) -> bool:
+        """Check if a generation unit is operational on a given date.
+
+        Args:
+            unit_info: Unit information from cache
+            check_date: Date to check
+
+        Returns:
+            True if unit is operational on the date
+        """
+        if not unit_info:
+            return False
+
+        # Remove timezone info from check_date for comparison
+        # We compare dates only, not times or timezones
+        if hasattr(check_date, 'date'):
+            check_date_naive = check_date.replace(tzinfo=None) if check_date.tzinfo else check_date
+        else:
+            check_date_naive = check_date
+
+        # Check start date
+        start_date = unit_info.get('start_date')
+        if start_date:
+            # Convert to datetime if it's a date object
+            if not isinstance(start_date, datetime):
+                start_date = datetime.combine(start_date, datetime.min.time())
+            # Remove timezone info if present
+            if hasattr(start_date, 'tzinfo') and start_date.tzinfo:
+                start_date = start_date.replace(tzinfo=None)
+            if check_date_naive < start_date:
+                return False
+
+        # Check end date
+        end_date = unit_info.get('end_date')
+        if end_date:
+            # Convert to datetime if it's a date object
+            if not isinstance(end_date, datetime):
+                end_date = datetime.combine(end_date, datetime.max.time())
+            # Remove timezone info if present
+            if hasattr(end_date, 'tzinfo') and end_date.tzinfo:
+                end_date = end_date.replace(tzinfo=None)
+            if check_date_naive > end_date:
+                return False
+
+        return True
 
     async def process_source_for_day(
         self,
@@ -277,25 +325,47 @@ class DailyGenerationProcessor:
                 generation_mw = float(records[0].value_extracted)
                 expected_points = 1
 
-            # Get capacity from generation units cache
+            # Get raw capacity from ENTSOE data (store separately)
+            raw_capacity_mw = None
+            if records[0].data and 'installed_capacity_mw' in records[0].data:
+                try:
+                    raw_capacity_mw = float(records[0].data['installed_capacity_mw'])
+                except (TypeError, ValueError):
+                    raw_capacity_mw = None
+
+            # Always use generation units cache for capacity_mw field
             unit_key = f"ENTSOE:{identifier}"
             unit_info = self.generation_units_cache.get(unit_key, {})
+
+            # Check if unit is operational on this date
+            if self.is_unit_operational(unit_info, hour):
+                capacity_mw = unit_info.get('capacity_mw')
+            else:
+                capacity_mw = None  # Unit not operational on this date
 
             hourly_records.append(HourlyRecord(
                 hour=hour,
                 identifier=identifier,
                 generation_mwh=generation_mw,  # MW for 1 hour = MWh
-                capacity_mw=unit_info.get('capacity_mw'),
+                capacity_mw=capacity_mw,  # From generation_units table (only if operational)
                 raw_data_ids=[r.id for r in records],
                 data_points=len(records),
                 expected_points=expected_points,
-                metadata={'resolution_code': resolution}
+                metadata={
+                    'resolution_code': resolution,
+                    'raw_capacity_mw': raw_capacity_mw  # Store raw value separately
+                }
             ))
 
         return hourly_records
 
     def transform_elexon(self, raw_data: List[GenerationDataRaw]) -> List[HourlyRecord]:
-        """Transform ELEXON data (30-min periods)."""
+        """Transform ELEXON data (30-min periods).
+
+        ELEXON provides data in 30-minute settlement periods.
+        Each value represents MWh generated in that 30-min period.
+        To get hourly MWh, we sum the two 30-min periods.
+        """
 
         hourly_groups = defaultdict(list)
 
@@ -307,18 +377,25 @@ class DailyGenerationProcessor:
         hourly_records = []
 
         for (hour, identifier), records in hourly_groups.items():
-            # Average of 2 values per hour (harmonization rule)
-            generation_mw = np.mean([float(r.value_extracted) for r in records])
+            # Sum the MWh values from the 30-min periods to get hourly total
+            # Each record is MWh for 30 minutes, so sum gives MWh for the hour
+            generation_mwh = sum([float(r.value_extracted) for r in records])
 
             # Get capacity from generation units cache
             unit_key = f"ELEXON:{identifier}"
             unit_info = self.generation_units_cache.get(unit_key, {})
 
+            # Check if unit is operational on this date
+            if self.is_unit_operational(unit_info, hour):
+                capacity_mw = unit_info.get('capacity_mw')
+            else:
+                capacity_mw = None  # Unit not operational on this date
+
             hourly_records.append(HourlyRecord(
                 hour=hour,
                 identifier=identifier,
-                generation_mwh=generation_mw,  # MW average = MWh for the hour
-                capacity_mw=unit_info.get('capacity_mw'),
+                generation_mwh=generation_mwh,  # Sum of 30-min MWh values
+                capacity_mw=capacity_mw,
                 raw_data_ids=[r.id for r in records],
                 data_points=len(records),
                 expected_points=2,
@@ -342,30 +419,35 @@ class DailyGenerationProcessor:
             # If data was imported in UTC+8, convert to UTC
             hour = record.period_start.replace(minute=0, second=0, microsecond=0)
 
-            # Use capacity from raw data if available
-            capacity_mw = None
+            # Get raw capacity from TAIPOWER data (store separately)
+            raw_capacity_mw = None
             if record.data and 'installed_capacity_mw' in record.data:
                 try:
-                    capacity_mw = float(record.data['installed_capacity_mw'])
+                    raw_capacity_mw = float(record.data['installed_capacity_mw'])
                 except (TypeError, ValueError):
-                    capacity_mw = None
+                    raw_capacity_mw = None
 
-            if capacity_mw is None:
-                # Fallback to generation units cache
-                unit_key = f"TAIPOWER:{record.identifier}"
-                unit_info = self.generation_units_cache.get(unit_key, {})
+            # Always use generation units cache for capacity_mw field
+            unit_key = f"TAIPOWER:{record.identifier}"
+            unit_info = self.generation_units_cache.get(unit_key, {})
+
+            # Check if unit is operational on this date
+            if self.is_unit_operational(unit_info, hour):
                 capacity_mw = unit_info.get('capacity_mw')
+            else:
+                capacity_mw = None  # Unit not operational on this date
 
             hourly_records.append(HourlyRecord(
                 hour=hour,
                 identifier=record.identifier,
                 generation_mwh=float(record.value_extracted),
-                capacity_mw=capacity_mw,
+                capacity_mw=capacity_mw,  # From generation_units table (only if operational)
                 raw_data_ids=[record.id],
                 data_points=1,
                 expected_points=1,
                 metadata={
-                    'capacity_factor': record.data.get('capacity_factor') if record.data else None
+                    'capacity_factor': record.data.get('capacity_factor') if record.data else None,  # Raw CF
+                    'raw_capacity_mw': raw_capacity_mw  # Raw capacity
                 }
             ))
 
@@ -400,11 +482,17 @@ class DailyGenerationProcessor:
             unit_key = f"NVE:{identifier}"
             unit_info = self.generation_units_cache.get(unit_key, {})
 
+            # Check if unit is operational on this date
+            if self.is_unit_operational(unit_info, hour):
+                capacity_mw = unit_info.get('capacity_mw')
+            else:
+                capacity_mw = None  # Unit not operational on this date
+
             hourly_records.append(HourlyRecord(
                 hour=hour,
                 identifier=identifier,
                 generation_mwh=data['generation_mwh'],
-                capacity_mw=unit_info.get('capacity_mw'),
+                capacity_mw=capacity_mw,
                 raw_data_ids=data['raw_data_ids'],
                 data_points=data['data_points'],
                 expected_points=1,  # NVE should have 1 aggregated value per hour
@@ -465,19 +553,28 @@ class DailyGenerationProcessor:
                 record.expected_points
             )
 
-            # Calculate capacity factor if we have capacity
+            # Store raw capacity from source data
+            raw_capacity_mw = record.metadata.get('raw_capacity_mw') if record.metadata else None
+            raw_capacity_factor = None
+
+            # Check for raw capacity factor from source (e.g., TAIPOWER)
+            if record.metadata and record.metadata.get('capacity_factor'):
+                raw_cf_value = float(record.metadata['capacity_factor'])
+                raw_capacity_factor = min(raw_cf_value, 9.9999)
+            # Calculate raw capacity factor for ENTSOE if we have raw capacity
+            elif raw_capacity_mw and raw_capacity_mw > 0:
+                # Calculate raw CF using raw capacity from ENTSOE data
+                raw_cf_value = record.generation_mwh / raw_capacity_mw
+                raw_capacity_factor = min(raw_cf_value, 9.9999)
+
+            # Calculate capacity factor from generation_units capacity
             capacity_factor = None
             if record.capacity_mw and record.capacity_mw > 0:
-                # Calculate raw capacity factor
-                raw_cf = record.generation_mwh / record.capacity_mw
+                # Calculate capacity factor using generation_units capacity
+                calculated_cf = record.generation_mwh / record.capacity_mw
                 # Cap at 9.9999 to fit in NUMERIC(5,4) - values > 1.0 can occur
                 # when actual generation exceeds nameplate capacity
-                capacity_factor = min(raw_cf, 9.9999)
-
-            # Override with source-specific capacity factor if available
-            if source == 'TAIPOWER' and record.metadata.get('capacity_factor'):
-                cf_value = float(record.metadata['capacity_factor'])
-                capacity_factor = min(cf_value, 9.9999)
+                capacity_factor = min(calculated_cf, 9.9999)
 
             # Get unit info
             unit_key = f"{source}:{record.identifier}"
@@ -489,16 +586,18 @@ class DailyGenerationProcessor:
                 hour=record.hour,
                 generation_unit_id=unit_info['id'] if unit_info else None,
                 windfarm_id=unit_info['windfarm_id'] if unit_info else None,
+                turbine_unit_id=None,  # Will be set when we have turbine-level data
                 generation_mwh=Decimal(str(record.generation_mwh)),
                 capacity_mw=Decimal(str(record.capacity_mw)) if record.capacity_mw else None,
                 capacity_factor=Decimal(str(capacity_factor)) if capacity_factor else None,
+                raw_capacity_mw=Decimal(str(raw_capacity_mw)) if raw_capacity_mw else None,
+                raw_capacity_factor=Decimal(str(raw_capacity_factor)) if raw_capacity_factor else None,
                 source=source,
                 source_resolution=self.get_source_resolution(source),
                 raw_data_ids=record.raw_data_ids,
                 quality_flag=self.get_quality_flag(quality_score),
                 quality_score=Decimal(str(quality_score)),
                 completeness=Decimal(str(completeness)),
-                is_manual_override=False,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )

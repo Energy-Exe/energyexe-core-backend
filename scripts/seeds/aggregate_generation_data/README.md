@@ -41,11 +41,12 @@ poetry run python scripts/seeds/aggregate_generation_data/process_generation_dat
 - **Expected Records**: ~109 units × 24 hours = ~2,616 records/day
 
 ### 2. ELEXON (UK)
-- **Resolution**: 30-minute intervals
-- **Transformation**: Average 2 half-hour MW values to get hourly average, not sum
+- **Resolution**: 30-minute intervals (settlement periods)
+- **Transformation**: Sum 2 half-hour MWh values to get hourly total
 - **Special Handling**:
-  - IMPORTANT: Use averaging (not summing) per harmonization rules
-  - Formula: `(MW_00:00 + MW_00:30) / 2 = hourly_MW = hourly_MWh`
+  - IMPORTANT: Each 30-min value represents MWh generated in that period
+  - Formula: `MWh_00:00 + MWh_00:30 = hourly_MWh`
+  - Example: 10 MWh (00:00-00:30) + 12 MWh (00:30-01:00) = 22 MWh for the hour
 - **Expected Records**: ~147 units × 48 half-hours = ~7,056 raw → ~3,528 hourly records/day
 
 ### 3. TAIPOWER (Taiwan)

@@ -10,7 +10,21 @@ from typing import Dict, List, Tuple
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db_session
+import os
+import sys
+from pathlib import Path
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+
+# Get database URL from environment or use default
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+asyncpg://postgres:RwaN9FJDCgP2AhuALxZ4Wa7QfvbKXQ647AAickORJ0rq5N6lUG19UneFJJTJ9Jnv@146.235.201.245:5432/energyexe_db"
+)
 
 # Configure logging
 logging.basicConfig(
@@ -239,7 +253,11 @@ async def main():
     logger.info("=== ENTSOE Windfarm Mapping Migration ===")
     logger.info(f"Mode: {'DRY RUN' if args.dry_run else 'LIVE'}")
 
-    async with get_db_session() as session:
+    # Create database engine
+    engine = create_async_engine(DATABASE_URL, echo=False)
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with async_session() as session:
         # Step 1: Analyze current state
         if not args.skip_analysis:
             logger.info("\nStep 1: Analyzing current state...")
@@ -268,6 +286,8 @@ async def main():
             else:
                 logger.warning(f"⚠️ {results['orphaned_records']:,} records still orphaned")
 
+    # Dispose of the engine
+    await engine.dispose()
     logger.info("\n=== Migration Complete ===")
 
 

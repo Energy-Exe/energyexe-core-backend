@@ -83,11 +83,18 @@ class GenerationData(Base):
     windfarm_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("windfarms.id")
     )
-    
+    turbine_unit_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("turbine_units.id")
+    )
+
     # Values
     generation_mwh: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
     capacity_mw: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     capacity_factor: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 4))
+
+    # Raw values from source
+    raw_capacity_mw: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
+    raw_capacity_factor: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 4))
     
     # Source tracking
     source: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -98,14 +105,7 @@ class GenerationData(Base):
     quality_flag: Mapped[Optional[str]] = mapped_column(String(20))
     quality_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(3, 2))
     completeness: Mapped[Optional[Decimal]] = mapped_column(Numeric(3, 2))
-    
-    # Manual override fields
-    is_manual_override: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    original_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
-    override_reason: Mapped[Optional[str]] = mapped_column(Text)
-    override_by_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"))
-    override_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    
+
     # Metadata
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, nullable=False
@@ -117,7 +117,7 @@ class GenerationData(Base):
     # Relationships
     generation_unit = relationship("GenerationUnit", back_populates="generation_data")
     windfarm = relationship("Windfarm", back_populates="generation_data")
-    override_by = relationship("User", foreign_keys=[override_by_id])
+    turbine_unit = relationship("TurbineUnit", back_populates="generation_data")
     
     __table_args__ = (
         UniqueConstraint('hour', 'generation_unit_id', 'source', name='uq_generation_hour_unit_source'),

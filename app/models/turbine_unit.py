@@ -31,3 +31,4 @@ class TurbineUnit(Base):
     # Relationships
     windfarm = relationship("Windfarm", back_populates="turbine_units")
     turbine_model = relationship("TurbineModel", back_populates="turbine_units")
+    generation_data = relationship("GenerationData", back_populates="turbine_unit")

@@ -51,6 +51,9 @@ class ComparisonService:
             func.max(GenerationData.generation_mwh).label('max_generation'),
             func.min(GenerationData.generation_mwh).label('min_generation'),
             func.avg(GenerationData.capacity_factor).label('avg_capacity_factor'),
+            func.avg(GenerationData.raw_capacity_factor).label('avg_raw_capacity_factor'),
+            func.avg(GenerationData.raw_capacity_mw).label('avg_raw_capacity'),
+            func.avg(GenerationData.capacity_mw).label('avg_capacity'),
             func.count(GenerationData.id).label('data_points')
         ).join(
             Windfarm, GenerationData.windfarm_id == Windfarm.id
@@ -94,6 +97,9 @@ class ComparisonService:
                 'max_generation': float(row.max_generation) if row.max_generation else 0,
                 'min_generation': float(row.min_generation) if row.min_generation else 0,
                 'avg_capacity_factor': float(row.avg_capacity_factor) if row.avg_capacity_factor else 0,
+                'avg_raw_capacity_factor': float(row.avg_raw_capacity_factor) if row.avg_raw_capacity_factor else 0,
+                'avg_raw_capacity': float(row.avg_raw_capacity) if row.avg_raw_capacity else 0,
+                'avg_capacity': float(row.avg_capacity) if row.avg_capacity else 0,
                 'data_points': row.data_points
             })
 
@@ -111,8 +117,9 @@ class ComparisonService:
         }
 
     async def get_available_windfarms(self) -> List[Dict[str, Any]]:
-        """Get list of windfarms with generation data."""
+        """Get list of all windfarms with data availability information."""
 
+        # Use LEFT JOIN to get all windfarms, even those without generation data
         query = select(
             Windfarm.id,
             Windfarm.name,
@@ -120,7 +127,7 @@ class ComparisonService:
             func.min(GenerationData.hour).label('data_start'),
             func.max(GenerationData.hour).label('data_end'),
             func.count(GenerationData.id).label('record_count')
-        ).join(
+        ).outerjoin(
             GenerationData, GenerationData.windfarm_id == Windfarm.id
         ).group_by(
             Windfarm.id,
@@ -133,15 +140,17 @@ class ComparisonService:
 
         windfarms = []
         for row in rows:
+            has_data = row.record_count > 0 if row.record_count else False
             windfarms.append({
                 'id': row.id,
                 'name': row.name,
                 'capacity_mw': float(row.nameplate_capacity_mw) if row.nameplate_capacity_mw else None,
+                'has_data': has_data,
                 'data_range': {
                     'start': row.data_start.isoformat() if row.data_start else None,
                     'end': row.data_end.isoformat() if row.data_end else None
                 },
-                'record_count': row.record_count
+                'record_count': row.record_count if row.record_count else 0
             })
 
         return windfarms
@@ -166,6 +175,10 @@ class ComparisonService:
             func.avg(GenerationData.capacity_factor).label('avg_capacity_factor'),
             func.max(GenerationData.capacity_factor).label('max_capacity_factor'),
             func.min(GenerationData.capacity_factor).label('min_capacity_factor'),
+            func.avg(GenerationData.raw_capacity_factor).label('avg_raw_capacity_factor'),
+            func.max(GenerationData.raw_capacity_factor).label('max_raw_capacity_factor'),
+            func.min(GenerationData.raw_capacity_factor).label('min_raw_capacity_factor'),
+            func.avg(GenerationData.raw_capacity_mw).label('avg_raw_capacity'),
             func.count(GenerationData.id).label('data_points'),
             func.count(case((GenerationData.generation_mwh > 0, 1))).label('active_hours')
         ).join(
@@ -199,6 +212,10 @@ class ComparisonService:
                 'avg_capacity_factor': float(row.avg_capacity_factor) if row.avg_capacity_factor else 0,
                 'max_capacity_factor': float(row.max_capacity_factor) if row.max_capacity_factor else 0,
                 'min_capacity_factor': float(row.min_capacity_factor) if row.min_capacity_factor else 0,
+                'avg_raw_capacity_factor': float(row.avg_raw_capacity_factor) if row.avg_raw_capacity_factor else 0,
+                'max_raw_capacity_factor': float(row.max_raw_capacity_factor) if row.max_raw_capacity_factor else 0,
+                'min_raw_capacity_factor': float(row.min_raw_capacity_factor) if row.min_raw_capacity_factor else 0,
+                'avg_raw_capacity': float(row.avg_raw_capacity) if row.avg_raw_capacity else 0,
                 'availability_percent': availability,
                 'data_completeness': row.data_points / (period_days * 24) * 100 if period_days > 0 else 0
             })
