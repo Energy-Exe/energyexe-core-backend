@@ -7,7 +7,6 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
@@ -48,15 +47,9 @@ def create_application() -> FastAPI:
         docs_url="/docs" if settings.DEBUG else None,
         redoc_url="/redoc" if settings.DEBUG else None,
         lifespan=lifespan_context,
-        root_path=os.getenv("ROOT_PATH", ""),
     )
 
-    # Add ProxyHeaders middleware first (to handle HTTPS behind reverse proxy)
-    # This must be added before other middleware
-    if os.getenv("ENVIRONMENT", "local") == "production":
-        app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
-
-    # Add CORS middleware (must be before other middleware but after ProxyHeaders)
+    # Add CORS middleware first (must be before other middleware)
     if settings.BACKEND_CORS_ORIGINS:
         app.add_middleware(
             CORSMiddleware,
