@@ -1,11 +1,13 @@
 # Generation Data Aggregation Pipeline
 
-Transforms raw generation data from multiple sources into standardized hourly records.
+Transforms raw generation data from multiple sources into standardized hourly or monthly records.
 
 ## Quick Commands
 
+### Daily/Hourly Data Processing
+
 ```bash
-# Process all sources for a date range (adjust start date based on source)
+# Process all hourly sources for a date range (ENTSOE, ELEXON, TAIPOWER, NVE)
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2002-01-01 --end 2024-12-31
 
 # Process a specific source
@@ -24,11 +26,29 @@ poetry run python scripts/seeds/aggregate_generation_data/process_generation_dat
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2020-08-01 --end 2024-12-31 --source TAIPOWER
 ```
 
-To run elexon in different sources
-```
+To run elexon in different ranges:
+```bash
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2013-06-08 --end 2015-12-31 --source ELEXON
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2016-01-01 --end 2019-12-31 --source ELEXON
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2020-01-01 --end 2024-02-14 --source ELEXON
+```
+
+### Monthly Data Processing
+
+```bash
+# Process all monthly sources (EIA, ENERGISTYRELSEN)
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_monthly.py --start 2001-01 --end 2025-07
+
+# Process specific monthly source
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_monthly.py --start 2001-01 --end 2025-07 --source EIA
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_monthly.py --start 2002-01 --end 2025-12 --source ENERGISTYRELSEN
+
+# Dry run (preview without changes)
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_monthly.py --start 2020-01 --end 2024-12 --dry-run
+
+# Run monthly sources in parallel (open 2 terminals)
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_monthly.py --start 2001-01 --end 2025-07 --source EIA
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_monthly.py --start 2002-01 --end 2025-12 --source ENERGISTYRELSEN
 ```
 ## Source-Specific Handling
 
@@ -67,15 +87,32 @@ poetry run python scripts/seeds/aggregate_generation_data/process_generation_dat
   - Example: Unit "2" might have 3 records (16.08, 0.2, 37.248 MWh) = 53.528 MWh total
 - **Expected Records**: ~30 units × 24 hours × 3 sub-records = ~720 raw → ~552 hourly records/day
 
-### 5. ENERGISTYRELSEN (Denmark)
+### 5. ENERGISTYRELSEN (Denmark) - Monthly Data
 - **Resolution**: Monthly totals
-- **Transformation**: Currently skipped in daily processing (needs separate monthly handler)
+- **Transformation**: Processed by `process_generation_data_monthly.py` (skipped in daily processing)
 - **Special Handling**:
   - Monthly data doesn't fit daily processing model
-  - Would need to distribute monthly total across days if daily granularity needed
-- **Expected Records**: Variable, depends on number of units reporting
+  - Stored with `source_resolution='monthly'`
+  - `hour` field = first day of month (e.g., 2024-01-01 00:00:00)
+  - Capacity factor = generation_mwh / (capacity_mw × 730 hours)
+- **Expected Records**: ~312 units × 276 months = ~86,112 monthly records
+- **Data Source**: GSRN-based Danish wind turbines
+
+### 6. EIA (United States) - Monthly Data
+- **Resolution**: Monthly totals (wind plants only)
+- **Transformation**: Processed by `process_generation_data_monthly.py`
+- **Special Handling**:
+  - Filters for wind data only (fuel_type='WND')
+  - Plant ID maps directly to generation_unit.code
+  - Stored with `source_resolution='monthly'`
+  - `hour` field = first day of month
+  - Capacity factor = generation_mwh / (capacity_mw × 730 hours)
+- **Expected Records**: ~1,498 wind plants × 12 months × 25 years = ~450K monthly records
+- **Data Source**: EIA-923 Monthly Generation and Fuel Consumption Reports (2001-2025)
 
 ## Data Flow
+
+### Hourly Data Flow (ENTSOE, ELEXON, TAIPOWER, NVE)
 
 ```
 generation_data_raw (source-specific format)
@@ -88,7 +125,23 @@ clear_existing_data() (idempotent)
     ↓
 save_hourly_records()
     ↓
-generation_data (final table)
+generation_data (final table, source_resolution='hourly')
+```
+
+### Monthly Data Flow (EIA, ENERGISTYRELSEN)
+
+```
+generation_data_raw (source-specific format, period_type='month')
+    ↓
+transform_[source]() function (monthly processor)
+    ↓
+MonthlyRecord (standardized format)
+    ↓
+clear_existing_data() (idempotent, by month)
+    ↓
+save_monthly_records()
+    ↓
+generation_data (final table, source_resolution='monthly', hour=first of month)
 ```
 
 ## Key Features
@@ -98,8 +151,18 @@ generation_data (final table)
 - Safe to re-run without creating duplicates
 
 ### Capacity Factor Calculation
+
+**Hourly Data:**
 - Formula: `generation_mwh / capacity_mw`
+- Represents utilization for that specific hour
 - Capped at 9.9999 to fit database column (NUMERIC(5,4))
+- NULL if capacity is 0 or missing
+
+**Monthly Data:**
+- Formula: `generation_mwh / (capacity_mw × 730 hours)`
+- 730 hours = average month length (30.4 days × 24 hours)
+- Represents average utilization over the month
+- Capped at 9.9999 to fit database column
 - NULL if capacity is 0 or missing
 
 ### Quality Metrics
@@ -114,27 +177,49 @@ generation_data (final table)
 
 ## Scripts
 
-### `process_generation_data_robust.py`
-Main processing script:
+### Hourly/Daily Processing Scripts
+
+#### `process_generation_data_robust.py`
+Main processing script for hourly data (ENTSOE, ELEXON, TAIPOWER, NVE):
 - Processes any date range day-by-day
 - Continues on errors (logs failures)
 - Creates JSON logs in `generation_processing_logs/`
 - Supports resume from checkpoint
 - Shows progress with ETA
+- Sources: ENTSOE, ELEXON, TAIPOWER, NVE
 
-### `process_generation_data_daily.py`
-Core transformation logic:
+#### `process_generation_data_daily.py`
+Core transformation logic for hourly data:
 - Contains source-specific transform functions
 - Handles database operations
 - Implements harmonization rules
+- Called by `process_generation_data_robust.py`
+
+### Monthly Processing Scripts
+
+#### `process_generation_data_monthly.py`
+Main processing script for monthly data (EIA, ENERGISTYRELSEN):
+- Processes any month range month-by-month
+- Creates one record per unit per month
+- Stores with `source_resolution='monthly'`
+- Calculates monthly capacity factor
+- Idempotent processing (safe to re-run)
+- Sources: EIA, ENERGISTYRELSEN
+- Arguments:
+  - `--start YYYY-MM`: Start month (e.g., 2020-01)
+  - `--end YYYY-MM`: End month (e.g., 2024-12)
+  - `--source [EIA|ENERGISTYRELSEN]`: Process specific source only
+  - `--dry-run`: Preview without database changes
 
 ## Monitoring Progress
 
+### Check Daily/Hourly Processing Status
+
 ```bash
-# Check processing status
+# Check processing logs
 tail -f generation_processing_logs/*.json
 
-# Monitor database progress
+# Monitor hourly database progress
 poetry run python -c "
 import asyncio
 from sqlalchemy import text
@@ -150,11 +235,43 @@ async def check():
                    MAX(hour)::date as last_date,
                    COUNT(*) as records
             FROM generation_data
+            WHERE source_resolution = 'hourly'
             GROUP BY source
         '''))
 
         for row in result:
             print(f'{row.source}: {row.days} days, {row.first_date} to {row.last_date}, {row.records:,} records')
+
+asyncio.run(check())
+"
+```
+
+### Check Monthly Processing Status
+
+```bash
+# Monitor monthly database progress
+poetry run python -c "
+import asyncio
+from sqlalchemy import text
+from app.core.database import get_session_factory
+
+async def check():
+    AsyncSessionLocal = get_session_factory()
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(text('''
+            SELECT source,
+                   COUNT(DISTINCT TO_CHAR(hour, 'YYYY-MM')) as months,
+                   MIN(hour) as first_month,
+                   MAX(hour) as last_month,
+                   COUNT(*) as records,
+                   COUNT(DISTINCT generation_unit_id) as units
+            FROM generation_data
+            WHERE source_resolution = 'monthly'
+            GROUP BY source
+        '''))
+
+        for row in result:
+            print(f'{row.source}: {row.units} units, {row.months} months, {row.first_month.strftime(\"%Y-%m\")} to {row.last_month.strftime(\"%Y-%m\")}, {row.records:,} records')
 
 asyncio.run(check())
 "
@@ -172,5 +289,12 @@ asyncio.run(check())
 
 ## Performance
 
+### Hourly Data Processing
 - **Processing speed**: ~3-5 seconds per day per source
-- **Full run (2000-2024)**: ~5-6 hours with 5 parallel sources
+- **Full run (2000-2024)**: ~5-6 hours with 4 parallel sources (ENTSOE, ELEXON, TAIPOWER, NVE)
+
+### Monthly Data Processing
+- **Processing speed**: ~1-2 seconds per month per source
+- **EIA full run (2001-2025)**: ~5-10 minutes for 1,498 plants × 12 months × 25 years
+- **ENERGISTYRELSEN full run (2002-2025)**: ~5-10 minutes for 312 turbines × 276 months
+- **Both sources in parallel**: ~10-15 minutes total

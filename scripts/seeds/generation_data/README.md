@@ -1,6 +1,6 @@
 # Generation Data Import
 
-This directory contains scripts for importing raw generation data from ELEXON, ENTSOE, Taipower, and NVE sources.
+This directory contains scripts for importing raw generation data from ELEXON, ENTSOE, Taipower, NVE, Energistyrelsen, and EIA sources.
 
 ## Quick Start
 
@@ -114,6 +114,27 @@ poetry run python scripts/seeds/generation_data/energistyrelsen/check_import_sta
 poetry run python scripts/seeds/generation_data/energistyrelsen/check_energistyrelsen_units.py
 ```
 
+### 7. Import EIA Data
+
+Import raw EIA (U.S. Energy Information Administration) monthly wind generation data:
+
+```bash
+# Standard import with cleanup (removes existing data first)
+poetry run python scripts/seeds/generation_data/eia/import_parallel_optimized.py
+
+# Import without cleanup (append mode)
+poetry run python scripts/seeds/generation_data/eia/import_parallel_optimized.py --no-clean
+
+# Test with first 3 files
+poetry run python scripts/seeds/generation_data/eia/import_parallel_optimized.py --sample 3
+
+# Faster import with 8 workers
+poetry run python scripts/seeds/generation_data/eia/import_parallel_optimized.py --workers 8
+
+# Check import status
+poetry run python scripts/seeds/generation_data/eia/check_import_status.py
+```
+
 ## Prerequisites
 
 Install required dependencies:
@@ -185,6 +206,16 @@ poetry run python scripts/seeds/generation_data/taipower/clear_taipower_data.py
 - **Period**: 2002-2025 (monthly aggregation)
 - **Special**: Data is monthly (not hourly), in kWh (converted to MWh), pivoted format
 
+### EIA Data
+- **Source**: Excel files in `eia/data/` (one file per year, 2001-2025)
+- **Format**: Monthly wind generation data (pivoted format with months as columns)
+- **Fields**: Plant ID, Plant Name, Fuel Type, monthly generation columns (Jan-Dec)
+- **Coverage**: Configured U.S. wind plants (Plant ID = generation_unit.code)
+- **Size**: ~25 files, 500-1,500 wind rows per file (~12K-37K total wind rows)
+- **Units**: Uses Plant ID codes (direct mapping to generation_unit.code)
+- **Period**: 2001-2025 (monthly aggregation, 25 years)
+- **Special**: Filters for fuel_type='WND' (wind only), monthly in MWh, pivoted format
+
 ## Performance Optimizations
 
 All import scripts include:
@@ -201,6 +232,7 @@ Expected performance:
 - Taipower: ~3-5 minutes for 500K+ records
 - NVE: ~10-15 minutes for 14M+ data points (full file)
 - Energistyrelsen: ~5-10 minutes for 2.7M+ data points (monthly data)
+- EIA: ~5-10 minutes for 300K records (25 files, monthly data)
 
 ## Monitoring Import Progress
 
@@ -220,6 +252,7 @@ If import fails:
    - Taipower: `source='Taipower'` (note: capital T, lowercase rest)
    - NVE: `source='NVE'`
    - Energistyrelsen: `source='ENERGISTYRELSEN'`
+   - EIA: `source='EIA'` (Plant ID must match generation_unit.code)
 3. Ensure sufficient disk space and memory
 4. Check logs for specific error messages
 
@@ -233,9 +266,11 @@ poetry run python scripts/seeds/generation_data/taipower/import_parallel_optimiz
 
 ## Notes
 
-- **Taipower, NVE & Energistyrelsen**: Automatically clear existing data before import (use `--no-clean` to append)
+- **Taipower, NVE, Energistyrelsen & EIA**: Automatically clear existing data before import (use `--no-clean` to append)
 - **ELEXON & ENTSOE**: Append by default (manually clear if needed)
-- **NVE & Energistyrelsen**: Data is pivoted - columns are units/months, rows are timestamps/turbines
+- **NVE, Energistyrelsen & EIA**: Data is pivoted - columns are units/months, rows are timestamps/turbines/plants
 - **All sources**: Data stored in `generation_data_raw` table with JSONB structure
 - **NVE & Energistyrelsen**: Use `--sample N` to test with first N rows before full import
-- **Energistyrelsen**: Monthly data (not hourly), stored with `period_type='month'`
+- **EIA**: Use `--sample N` to test with first N files before full import
+- **Energistyrelsen & EIA**: Monthly data (not hourly), stored with `period_type='month'`
+- **EIA**: Filters for wind data only (fuel_type='WND'), Plant ID maps to generation_unit.code
