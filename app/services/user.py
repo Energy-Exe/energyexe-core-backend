@@ -146,4 +146,13 @@ class UserService:
         if not verify_password(password, user.hashed_password):
             return None
 
+        # Rehash password if it's longer than 72 bytes (bcrypt limit)
+        # This automatically migrates old passwords hashed with passlib
+        if len(password.encode('utf-8')) > 72:
+            new_hash = get_password_hash(password)
+            user.hashed_password = new_hash
+            await self.db.commit()
+            await self.db.refresh(user)
+            logger.info("Password rehashed for user", user_id=user.id, username=user.username)
+
         return user

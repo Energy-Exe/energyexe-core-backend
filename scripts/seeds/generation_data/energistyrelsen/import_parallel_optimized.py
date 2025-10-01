@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 from app.core.database import get_session_factory
 from app.models.generation_unit import GenerationUnit
+from app.models.turbine_unit import TurbineUnit
 from app.models.generation_data import GenerationDataRaw
 from sqlalchemy import select, text, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,39 +30,36 @@ logger = logging.getLogger(__name__)
 
 
 async def get_energistyrelsen_unit_mapping() -> Dict[str, Dict]:
-    """Get mapping of configured Energistyrelsen units."""
+    """Get mapping of configured Energistyrelsen turbine units."""
     AsyncSessionLocal = get_session_factory()
-    
+
     mapping = {}
-    
+
     async with AsyncSessionLocal() as db:
-        # Get all Energistyrelsen units from database
+        # Get all turbine units (ENERGISTYRELSEN data is turbine-level, not windfarm-level)
+        # Turbine codes are GSRN numbers
         result = await db.execute(
-            select(GenerationUnit)
-            .where(GenerationUnit.source == 'ENERGISTYRELSEN')
+            select(TurbineUnit)
         )
-        units = result.scalars().all()
-        
-        # Create mapping by code and name
-        units_by_code = {unit.code: unit for unit in units}
-        units_by_name = {unit.name: unit for unit in units}
-        
-        logger.info(f"Found {len(units)} ENERGISTYRELSEN units in database")
-        
+        turbines = result.scalars().all()
+
+        # Create mapping by GSRN code
+        turbines_by_gsrn = {str(turbine.code): turbine for turbine in turbines}
+
+        logger.info(f"Found {len(turbines)} turbine units in database")
+
         return {
-            'by_code': units_by_code,
-            'by_name': units_by_name,
-            'units': {unit.id: unit for unit in units}
+            'by_code': turbines_by_gsrn,
+            'turbines': {turbine.id: turbine for turbine in turbines}
         }
 
 
 def process_energistyrelsen_chunk(args: Tuple[pd.DataFrame, Dict, int, int]) -> List[Dict]:
     """Process a chunk of Energistyrelsen monthly data."""
-    chunk_df, unit_mapping, chunk_start, chunk_size = args
-    
+    chunk_df, turbine_mapping, chunk_start, chunk_size = args
+
     records = []
-    units_by_code = unit_mapping['by_code']
-    units_by_name = unit_mapping['by_name']
+    turbines_by_gsrn = turbine_mapping['by_code']
     
     # Skip header rows (rows 0-6 contain metadata)
     data_start_row = 7
@@ -84,14 +82,12 @@ def process_energistyrelsen_chunk(args: Tuple[pd.DataFrame, Dict, int, int]) -> 
             continue
         
         gsrn_str = str(int(gsrn)) if isinstance(gsrn, (int, float)) else str(gsrn)
-        
-        # Try to find unit by code (GSRN)
-        unit = None
-        if gsrn_str in units_by_code:
-            unit = units_by_code[gsrn_str]
-        
-        # Skip if unit not configured
-        if not unit:
+
+        # Try to find turbine by GSRN code
+        turbine = turbines_by_gsrn.get(gsrn_str)
+
+        # Skip if turbine not found
+        if not turbine:
             continue
         
         # Process each month column
@@ -138,22 +134,20 @@ def process_energistyrelsen_chunk(args: Tuple[pd.DataFrame, Dict, int, int]) -> 
                 else:
                     period_end = datetime(month_date.year, month_date.month + 1, 1) - timedelta(seconds=1)
                 
-                # Create record for monthly data
+                # Create record for monthly data (turbine-level)
                 record = {
                     'period_start': month_date.isoformat(),
                     'period_end': period_end.isoformat(),
                     'period_type': 'month',
                     'source': 'ENERGISTYRELSEN',
                     'source_type': 'manual',
-                    'identifier': unit.code,
+                    'identifier': turbine.code,  # GSRN
                     'value_extracted': generation_mwh,
                     'unit': 'MWh',
                     'data': json.dumps({
                         'generation_mwh': generation_mwh,
                         'generation_kwh': generation_kwh,
-                        'unit_code': unit.code,
-                        'unit_name': unit.name,
-                        'generation_unit_id': unit.id,
+                        'turbine_unit_id': turbine.id,
                         'gsrn': gsrn_str,
                         'month': month_date.strftime('%Y-%m'),
                         'period_type': 'monthly_total'
@@ -211,13 +205,13 @@ async def import_energistyrelsen_data(workers: int = 4, clean_first: bool = True
     if clean_first:
         await clear_existing_energistyrelsen_data()
     
-    # Get unit mapping
-    print("\n📊 Loading ENERGISTYRELSEN unit mapping...")
-    unit_mapping = await get_energistyrelsen_unit_mapping()
-    
-    if not unit_mapping['by_code']:
-        print("\n❌ No ENERGISTYRELSEN units found in database!")
-        print("   Please configure units first.")
+    # Get turbine mapping
+    print("\n📊 Loading turbine unit mapping...")
+    turbine_mapping = await get_energistyrelsen_unit_mapping()
+
+    if not turbine_mapping['by_code']:
+        print("\n❌ No turbine units found in database!")
+        print("   Please import turbine units first.")
         return
     
     # Load Excel file
@@ -258,7 +252,7 @@ async def import_energistyrelsen_data(workers: int = 4, clean_first: bool = True
         chunk_end = min(i + chunk_size, len(df))
         # Include header rows in each chunk for column mapping
         chunk = pd.concat([df.iloc[:data_start], df.iloc[i:chunk_end]]).copy()
-        chunks.append((chunk, unit_mapping, i, chunk_size))
+        chunks.append((chunk, turbine_mapping, i, chunk_size))
     
     print(f"   📦 Created {len(chunks)} chunks for processing")
     

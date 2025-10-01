@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -33,6 +33,8 @@ class TurbineUnitBase(BaseModel):
     lng: float
     status: Optional[str] = Field(None, pattern="^(operational|installing|decommissioned)$")
     hub_height_m: Optional[Decimal] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
 
 
 class TurbineUnitCreate(TurbineUnitBase):
@@ -47,6 +49,8 @@ class TurbineUnitUpdate(BaseModel):
     lng: Optional[float] = None
     status: Optional[str] = Field(None, pattern="^(operational|installing|decommissioned)$")
     hub_height_m: Optional[Decimal] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
 
 
 class TurbineUnit(TurbineUnitBase):

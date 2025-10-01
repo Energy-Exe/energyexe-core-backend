@@ -1,4 +1,6 @@
-from sqlalchemy import DECIMAL, Column, DateTime, Float, ForeignKey, Integer, String
+from datetime import date, datetime
+
+from sqlalchemy import DECIMAL, Column, Date, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -24,6 +26,10 @@ class TurbineUnit(Base):
     # Status and technical info
     status = Column(String(100), nullable=True)  # "operational" | "installing" | "decommissioned"
     hub_height_m = Column(DECIMAL(6, 2), nullable=True)
+
+    # Operational dates
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
