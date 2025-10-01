@@ -47,6 +47,7 @@ def create_application() -> FastAPI:
         docs_url="/docs" if settings.DEBUG else None,
         redoc_url="/redoc" if settings.DEBUG else None,
         lifespan=lifespan_context,
+        redirect_slashes=False,
     )
 
     # Add CORS middleware first (must be before other middleware)

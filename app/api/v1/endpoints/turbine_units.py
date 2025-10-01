@@ -3,6 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import DEFAULT_PAGINATION_LIMIT, MAX_PAGINATION_LIMIT, MIN_PAGINATION_LIMIT
 from app.core.database import get_db
 from app.schemas.turbine_unit import TurbineUnit, TurbineUnitCreate, TurbineUnitUpdate
 from app.services.turbine_unit import TurbineUnitService
@@ -13,7 +14,7 @@ router = APIRouter()
 @router.get("/", response_model=List[TurbineUnit])
 async def get_turbine_units(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(DEFAULT_PAGINATION_LIMIT, ge=MIN_PAGINATION_LIMIT, le=MAX_PAGINATION_LIMIT),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all turbine_units with pagination"""
@@ -24,7 +25,7 @@ async def get_turbine_units(
 async def search_turbine_units(
     q: str = Query(..., min_length=1),
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(DEFAULT_PAGINATION_LIMIT, ge=MIN_PAGINATION_LIMIT, le=MAX_PAGINATION_LIMIT),
     db: AsyncSession = Depends(get_db),
 ):
     """Search turbine_units by name"""

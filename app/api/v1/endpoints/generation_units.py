@@ -5,6 +5,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import DEFAULT_PAGINATION_LIMIT, MAX_PAGINATION_LIMIT, MIN_PAGINATION_LIMIT
 from app.core.deps import get_current_active_user, get_db
 from app.core.exceptions import NotFoundException, ValidationException
 from app.models.user import User
@@ -27,7 +28,7 @@ async def get_generation_units(
     fuel_type: str = Query(None, description="Filter by fuel type"),
     technology_type: str = Query(None, description="Filter by technology type"),
     is_active: bool = Query(True, description="Filter by active status"),
-    limit: int = Query(500, ge=1, le=10000, description="Maximum number of results"),
+    limit: int = Query(DEFAULT_PAGINATION_LIMIT, ge=MIN_PAGINATION_LIMIT, le=MAX_PAGINATION_LIMIT, description="Maximum number of results"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     db: AsyncSession = Depends(get_db),
 ):
