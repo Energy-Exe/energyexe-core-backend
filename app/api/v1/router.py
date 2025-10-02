@@ -23,6 +23,7 @@ from app.api.v1.endpoints import (
     turbine_units,
     users,
     windfarms,
+    windfarm_timeline,
 )
 
 api_router = APIRouter()
@@ -56,6 +57,9 @@ api_router.include_router(generation.router, prefix="/generation", tags=["genera
 
 # Comparison and analytics endpoints
 api_router.include_router(comparison.router, prefix="/comparison", tags=["comparison"])
+
+# Windfarm timeline and evolution endpoints
+api_router.include_router(windfarm_timeline.router, prefix="/windfarms", tags=["windfarm-timeline"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])

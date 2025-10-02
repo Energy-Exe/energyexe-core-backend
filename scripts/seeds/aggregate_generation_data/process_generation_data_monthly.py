@@ -76,7 +76,8 @@ class MonthlyGenerationProcessor:
         self,
         year: int,
         month: int,
-        sources: Optional[List[str]] = None
+        sources: Optional[List[str]] = None,
+        skip_unit_load: bool = False
     ) -> Dict[str, Any]:
         """Process all data for a specific month."""
 
@@ -94,8 +95,9 @@ class MonthlyGenerationProcessor:
         logger.info(f"Processing data for {year}-{month:02d}")
         logger.info(f"Sources: {', '.join(sources)}")
 
-        # Load generation units
-        await self.load_generation_units()
+        # Load generation units only if not already cached
+        if not skip_unit_load and not self.generation_units_cache:
+            await self.load_generation_units()
 
         results = {}
 
@@ -113,13 +115,8 @@ class MonthlyGenerationProcessor:
                 # Rollback the failed transaction
                 await self.db.rollback()
 
-        # Commit if not dry run
-        if not self.dry_run:
-            await self.db.commit()
-            logger.info("Changes committed to database")
-        else:
-            await self.db.rollback()
-            logger.info("Dry run - changes rolled back")
+        # Note: Commit happens at the session level in process_month_range
+        # Don't commit here since we're processing multiple months in one session
 
         return {
             'year': year,
@@ -253,6 +250,7 @@ class MonthlyGenerationProcessor:
         """Transform ENERGISTYRELSEN monthly data."""
 
         monthly_records = []
+        skipped_units = set()
 
         for record in raw_data:
             # Get unit info
@@ -260,7 +258,7 @@ class MonthlyGenerationProcessor:
             unit_info = self.generation_units_cache.get(unit_key)
 
             if not unit_info:
-                logger.debug(f"Unit not found: ENERGISTYRELSEN:{record.identifier}")
+                skipped_units.add(record.identifier)
                 continue
 
             # Parse data JSON (already a dict from JSONB field)
@@ -284,6 +282,16 @@ class MonthlyGenerationProcessor:
             )
 
             monthly_records.append(monthly_record)
+
+        # Log summary of skipped units
+        if skipped_units:
+            logger.warning(f"Skipped {len(skipped_units)} units not found in generation_units table")
+            logger.warning(f"First 10 skipped identifiers: {list(skipped_units)[:10]}")
+            # Also log what keys we have in cache
+            energi_keys = [k for k in self.generation_units_cache.keys() if k.startswith('ENERGISTYRELSEN:')]
+            logger.info(f"Available ENERGISTYRELSEN units in cache: {len(energi_keys)}")
+            if energi_keys:
+                logger.info(f"Sample cache keys: {energi_keys[:10]}")
 
         return monthly_records
 
@@ -398,12 +406,26 @@ async def process_month_range(
 
     results = []
 
-    for year, month in months_to_process:
-        async with session_factory() as db:
-            processor = MonthlyGenerationProcessor(db, dry_run=dry_run)
+    # OPTIMIZATION: Use one database session and processor for all months
+    # This way we only load generation units once
+    async with session_factory() as db:
+        processor = MonthlyGenerationProcessor(db, dry_run=dry_run)
 
+        # Load generation units once at the start
+        logger.info("Loading generation units (one-time operation)...")
+        await processor.load_generation_units()
+        logger.info(f"✓ Loaded {len(processor.generation_units_cache)} generation units")
+
+        for year, month in months_to_process:
             try:
-                result = await processor.process_month(year, month, sources)
+                # Reset stats for each month
+                processor.stats = {
+                    'raw_records_processed': 0,
+                    'monthly_records_created': 0,
+                    'errors': 0
+                }
+
+                result = await processor.process_month(year, month, sources, skip_unit_load=True)
                 results.append(result)
 
                 logger.info(
@@ -419,6 +441,15 @@ async def process_month_range(
                     'month': month,
                     'error': str(e)
                 })
+                # Don't break - continue with next month
+
+        # Commit all changes at once (or rollback if dry run)
+        if not dry_run:
+            await db.commit()
+            logger.info("✓ All changes committed to database")
+        else:
+            await db.rollback()
+            logger.info("✓ Dry run - all changes rolled back")
 
     # Print summary
     print("\n" + "="*60)

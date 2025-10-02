@@ -41,6 +41,91 @@ async def get_turbine_model(turbine_model_id: int, db: AsyncSession = Depends(ge
     return turbine_model
 
 
+@router.get("/{turbine_model_id}/with-turbine-units")
+async def get_turbine_model_with_units(turbine_model_id: int, db: AsyncSession = Depends(get_db)):
+    """Get a turbine model with all its turbine units"""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from app.models.turbine_model import TurbineModel as TurbineModelModel
+    from app.models.turbine_unit import TurbineUnit
+
+    # Get turbine model with all turbine units and their windfarms
+    from app.models.windfarm import Windfarm
+    result = await db.execute(
+        select(TurbineModelModel)
+        .options(
+            selectinload(TurbineModelModel.turbine_units)
+            .selectinload(TurbineUnit.windfarm)
+        )
+        .where(TurbineModelModel.id == turbine_model_id)
+    )
+    turbine_model = result.scalar_one_or_none()
+
+    if not turbine_model:
+        raise HTTPException(status_code=404, detail="Turbine model not found")
+
+    # For each turbine unit, fetch windfarm and generation units
+    turbine_units_with_relations = []
+    for unit in turbine_model.turbine_units:
+        # Fetch windfarm
+        windfarm_data = None
+        if unit.windfarm:
+            windfarm_data = {
+                "id": unit.windfarm.id,
+                "code": unit.windfarm.code,
+                "name": unit.windfarm.name,
+                "status": unit.windfarm.status,
+            }
+
+        # Fetch generation units for this windfarm
+        generation_units = []
+        if unit.windfarm_id:
+            from app.models.generation_unit import GenerationUnit
+            result = await db.execute(
+                select(GenerationUnit)
+                .where(GenerationUnit.windfarm_id == unit.windfarm_id)
+            )
+            gen_units = result.scalars().all()
+            generation_units = [
+                {
+                    "id": gu.id,
+                    "code": gu.code,
+                    "name": gu.name,
+                    "source": gu.source,
+                }
+                for gu in gen_units
+            ]
+
+        turbine_units_with_relations.append({
+            "id": unit.id,
+            "code": unit.code,
+            "status": unit.status,
+            "hub_height_m": float(unit.hub_height_m) if unit.hub_height_m else None,
+            "start_date": unit.start_date.isoformat() if unit.start_date else None,
+            "end_date": unit.end_date.isoformat() if unit.end_date else None,
+            "windfarm": windfarm_data,
+            "generation_units": generation_units,
+        })
+
+    return {
+        "id": turbine_model.id,
+        "model": turbine_model.model,
+        "supplier": turbine_model.supplier,
+        "original_supplier": turbine_model.original_supplier,
+        "rated_power_kw": turbine_model.rated_power_kw,
+        "rotor_diameter_m": float(turbine_model.rotor_diameter_m) if turbine_model.rotor_diameter_m else None,
+        "cut_in_wind_speed_ms": float(turbine_model.cut_in_wind_speed_ms) if turbine_model.cut_in_wind_speed_ms else None,
+        "cut_out_wind_speed_ms": float(turbine_model.cut_out_wind_speed_ms) if turbine_model.cut_out_wind_speed_ms else None,
+        "rated_wind_speed_ms": float(turbine_model.rated_wind_speed_ms) if turbine_model.rated_wind_speed_ms else None,
+        "blade_length_m": float(turbine_model.blade_length_m) if turbine_model.blade_length_m else None,
+        "generator_type": turbine_model.generator_type,
+        "created_at": turbine_model.created_at.isoformat(),
+        "updated_at": turbine_model.updated_at.isoformat(),
+        "turbine_units": turbine_units_with_relations,
+        "turbine_units_count": len(turbine_units_with_relations),
+    }
+
+
 @router.get("/model/{model}", response_model=TurbineModel)
 async def get_turbine_model_by_model(model: str, db: AsyncSession = Depends(get_db)):
     """Get a turbine model by its model name"""

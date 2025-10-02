@@ -581,5 +581,78 @@ async def unlink_generation_unit(
     # Unlink the generation unit by setting windfarm_id to null
     unit.windfarm_id = None
     await db.commit()
-    
+
     return {"message": "Generation unit unlinked successfully", "unit_id": unit_id}
+
+
+@router.get("/{windfarm_id}/turbine-units")
+async def get_windfarm_turbine_units(windfarm_id: int, db: AsyncSession = Depends(get_db)):
+    """Get turbine units for a specific windfarm"""
+    from app.models.turbine_unit import TurbineUnit
+    from app.models.turbine_model import TurbineModel
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    result = await db.execute(
+        select(TurbineUnit)
+        .options(selectinload(TurbineUnit.turbine_model))
+        .where(TurbineUnit.windfarm_id == windfarm_id)
+    )
+    units = result.scalars().all()
+
+    return [
+        {
+            "id": unit.id,
+            "code": unit.code,
+            "status": unit.status,
+            "hub_height_m": float(unit.hub_height_m) if unit.hub_height_m else None,
+            "lat": unit.lat,
+            "lng": unit.lng,
+            "start_date": unit.start_date.isoformat() if unit.start_date else None,
+            "end_date": unit.end_date.isoformat() if unit.end_date else None,
+            "turbine_model": {
+                "id": unit.turbine_model.id,
+                "model": unit.turbine_model.model,
+                "supplier": unit.turbine_model.supplier,
+                "rated_power_kw": unit.turbine_model.rated_power_kw,
+            }
+            if unit.turbine_model
+            else None,
+        }
+        for unit in units
+    ]
+
+
+@router.delete("/{windfarm_id}/turbine-units/{unit_id}")
+async def unlink_turbine_unit(
+    windfarm_id: int, unit_id: int, db: AsyncSession = Depends(get_db)
+):
+    """Unlink a turbine unit from a windfarm"""
+    from app.models.turbine_unit import TurbineUnit
+    from sqlalchemy import select
+
+    # Check if windfarm exists
+    windfarm = await WindfarmService.get_windfarm(db, windfarm_id)
+    if not windfarm:
+        raise HTTPException(status_code=404, detail="Windfarm not found")
+
+    # Get the turbine unit
+    result = await db.execute(
+        select(TurbineUnit).where(
+            TurbineUnit.id == unit_id,
+            TurbineUnit.windfarm_id == windfarm_id
+        )
+    )
+    unit = result.scalar_one_or_none()
+
+    if not unit:
+        raise HTTPException(
+            status_code=404,
+            detail="Turbine unit not found or not associated with this windfarm"
+        )
+
+    # Unlink the turbine unit by setting windfarm_id to null
+    unit.windfarm_id = None
+    await db.commit()
+
+    return {"message": "Turbine unit unlinked successfully", "unit_id": unit_id}
