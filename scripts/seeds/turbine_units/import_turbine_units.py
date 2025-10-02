@@ -68,6 +68,17 @@ def normalize_string(s):
     return normalized
 
 
+def normalize_model_name(s):
+    """Normalize turbine model name for case-insensitive matching."""
+    if pd.isna(s) or not s:
+        return ''
+    # Convert to lowercase and remove spaces for flexible matching
+    # But keep slashes and hyphens as they're part of model numbers
+    normalized = str(s).strip().lower()
+    normalized = normalized.replace(' ', '')
+    return normalized
+
+
 def generate_windfarm_code(windfarm_name):
     """Generate windfarm code from name."""
     if pd.isna(windfarm_name) or not windfarm_name:
@@ -118,10 +129,10 @@ class TurbineUnitImporter:
             self.windfarm_by_code[wf.code] = wf
         print(f"  Loaded {len(windfarms)} windfarms")
 
-        # Load all turbine models
+        # Load all turbine models with case-insensitive normalization
         turbine_models = self.db.query(TurbineModel).all()
         for tm in turbine_models:
-            normalized_model = normalize_string(tm.model)
+            normalized_model = normalize_model_name(tm.model)
             self.turbine_model_by_name[normalized_model] = tm
         print(f"  Loaded {len(turbine_models)} turbine models")
 
@@ -161,9 +172,39 @@ class TurbineUnitImporter:
         return None
 
     def get_turbine_model(self, model_name):
-        """Get turbine model by name."""
-        normalized_model = normalize_string(model_name)
-        return self.turbine_model_by_name.get(normalized_model)
+        """
+        Get turbine model by name with fuzzy matching.
+
+        Tries exact match first, then fuzzy matches for common variations.
+        """
+        normalized_model = normalize_model_name(model_name)
+
+        # Try exact match first
+        if normalized_model in self.turbine_model_by_name:
+            return self.turbine_model_by_name[normalized_model]
+
+        # Try fuzzy matching for common variations
+        # Handle cases like "NTK 150" -> "NTK150/25", "72c/1500" -> "72C/1500"
+        for db_model_key, db_model in self.turbine_model_by_name.items():
+            # Check if the CSV model is a substring of the DB model (case-insensitive)
+            if normalized_model in db_model_key or db_model_key.startswith(normalized_model):
+                return db_model
+
+        # Try partial match - check if any stored model contains the input
+        # This handles "V1172" -> "V117" typo
+        input_digits = ''.join(c for c in normalized_model if c.isdigit())
+        if input_digits:
+            for db_model_key, db_model in self.turbine_model_by_name.items():
+                db_digits = ''.join(c for c in db_model_key if c.isdigit())
+                # Check if first significant digits match
+                if input_digits[:3] == db_digits[:3]:
+                    # Also check that non-digit parts are similar
+                    input_letters = ''.join(c for c in normalized_model if c.isalpha())
+                    db_letters = ''.join(c for c in db_model_key if c.isalpha())
+                    if input_letters and db_letters and input_letters[:2] == db_letters[:2]:
+                        return db_model
+
+        return None
 
     def generate_turbine_code(self, windfarm_code, turbine_id):
         """
@@ -259,6 +300,14 @@ class TurbineUnitImporter:
             # Parse status
             status = normalize_string(row.get('turbine_status', 'operational'))
 
+            # Parse hub height
+            hub_height = None
+            if 'hub_height' in row and not pd.isna(row['hub_height']):
+                try:
+                    hub_height = Decimal(str(row['hub_height']))
+                except (ValueError, TypeError):
+                    pass
+
             # Default lat/lng to windfarm location (will be updated later with actual turbine positions)
             # For now, we use windfarm location as placeholder
             lat = 0.0  # Placeholder - should be updated with actual turbine location
@@ -272,7 +321,7 @@ class TurbineUnitImporter:
                 'lat': lat,
                 'lng': lng,
                 'status': status,
-                'hub_height_m': None,  # Not in CSV
+                'hub_height_m': hub_height,
                 'start_date': start_date,
                 'end_date': end_date,
                 'created_at': datetime.utcnow(),
@@ -283,20 +332,30 @@ class TurbineUnitImporter:
 
         print(f"\n  Prepared {len(turbine_units_to_insert)} turbine units for insertion")
 
-        # Bulk insert turbine units
+        # Bulk insert/update turbine units
         if turbine_units_to_insert:
-            print(f"\nBulk inserting {len(turbine_units_to_insert)} turbine units...")
+            print(f"\nBulk inserting/updating {len(turbine_units_to_insert)} turbine units...")
 
             try:
-                # Use PostgreSQL INSERT ... ON CONFLICT DO NOTHING for idempotency
-                stmt = insert(TurbineUnit).values(turbine_units_to_insert).on_conflict_do_nothing(index_elements=['code'])
+                # Use PostgreSQL INSERT ... ON CONFLICT DO UPDATE to update existing records
+                stmt = insert(TurbineUnit).values(turbine_units_to_insert)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['code'],
+                    set_={
+                        'hub_height_m': stmt.excluded.hub_height_m,
+                        'status': stmt.excluded.status,
+                        'start_date': stmt.excluded.start_date,
+                        'end_date': stmt.excluded.end_date,
+                        'updated_at': stmt.excluded.updated_at
+                    }
+                )
                 result = self.db.execute(stmt.returning(TurbineUnit.id))
-                created_count = len(result.all())
+                affected_count = len(result.all())
 
-                self.stats['turbine_units_created'] = created_count
-                print(f"  ✓ Created {created_count} turbine units")
+                self.stats['turbine_units_created'] = affected_count
+                print(f"  ✓ Inserted/Updated {affected_count} turbine units")
             except Exception as e:
-                print(f"  ❌ Error during bulk insert: {e}")
+                print(f"  ❌ Error during bulk insert/update: {e}")
                 import traceback
                 traceback.print_exc()
                 raise

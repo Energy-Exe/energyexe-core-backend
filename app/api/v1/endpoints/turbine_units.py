@@ -11,7 +11,7 @@ from app.services.turbine_unit import TurbineUnitService
 router = APIRouter()
 
 
-@router.get("/", response_model=List[TurbineUnit])
+@router.get("", response_model=List[TurbineUnit])
 async def get_turbine_units(
     skip: int = Query(0, ge=0),
     limit: int = Query(DEFAULT_PAGINATION_LIMIT, ge=MIN_PAGINATION_LIMIT, le=MAX_PAGINATION_LIMIT),
