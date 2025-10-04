@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from app.core.database import get_session_factory
 from app.models.generation_data import GenerationDataRaw, GenerationData
 from app.models.generation_unit import GenerationUnit
+from app.models.turbine_unit import TurbineUnit
 
 # Configure logging
 logging.basicConfig(
@@ -66,6 +67,7 @@ class MonthlyGenerationProcessor:
         self.db = db_session
         self.dry_run = dry_run
         self.generation_units_cache = {}
+        self.turbine_units_cache = {}  # For ENERGISTYRELSEN GSRN codes
         self.stats = {
             'raw_records_processed': 0,
             'monthly_records_created': 0,
@@ -95,9 +97,12 @@ class MonthlyGenerationProcessor:
         logger.info(f"Processing data for {year}-{month:02d}")
         logger.info(f"Sources: {', '.join(sources)}")
 
-        # Load generation units only if not already cached
-        if not skip_unit_load and not self.generation_units_cache:
-            await self.load_generation_units()
+        # Load generation units and turbine units only if not already cached
+        if not skip_unit_load:
+            if not self.generation_units_cache:
+                await self.load_generation_units()
+            if not self.turbine_units_cache:
+                await self.load_turbine_units()
 
         results = {}
 
@@ -143,6 +148,34 @@ class MonthlyGenerationProcessor:
             }
 
         logger.info(f"Loaded {len(self.generation_units_cache)} generation units")
+
+    async def load_turbine_units(self):
+        """Load turbine units with turbine model capacity for ENERGISTYRELSEN GSRN code lookups."""
+
+        from app.models.turbine_model import TurbineModel
+
+        # Join with turbine_model to get capacity information
+        result = await self.db.execute(
+            select(TurbineUnit, TurbineModel)
+            .join(TurbineModel, TurbineUnit.turbine_model_id == TurbineModel.id)
+        )
+        units_with_models = result.all()
+
+        for turbine_unit, turbine_model in units_with_models:
+            # Calculate capacity in MW from turbine model's rated_power_kw
+            capacity_mw = float(turbine_model.rated_power_kw / 1000.0) if turbine_model.rated_power_kw else None
+
+            # Key is just the GSRN code (no source prefix needed as it's unique)
+            self.turbine_units_cache[turbine_unit.code] = {
+                'id': turbine_unit.id,
+                'windfarm_id': turbine_unit.windfarm_id,
+                'turbine_model_id': turbine_unit.turbine_model_id,
+                'capacity_mw': capacity_mw,
+                'start_date': turbine_unit.start_date,
+                'end_date': turbine_unit.end_date
+            }
+
+        logger.info(f"Loaded {len(self.turbine_units_cache)} turbine units with capacity data")
 
     async def process_source_for_month(
         self,
@@ -247,29 +280,38 @@ class MonthlyGenerationProcessor:
         self,
         raw_data: List[GenerationDataRaw]
     ) -> List[MonthlyRecord]:
-        """Transform ENERGISTYRELSEN monthly data."""
+        """Transform ENERGISTYRELSEN monthly data.
+
+        ENERGISTYRELSEN data uses GSRN codes which are stored in turbine_units.code,
+        not generation_units.code (which has placeholder 'nan' values).
+        """
 
         monthly_records = []
         skipped_units = set()
+        matched_units = 0
 
         for record in raw_data:
-            # Get unit info
-            unit_key = f"ENERGISTYRELSEN:{record.identifier}"
-            unit_info = self.generation_units_cache.get(unit_key)
+            # ENERGISTYRELSEN identifiers are GSRN codes - look them up in turbine_units
+            turbine_unit = self.turbine_units_cache.get(record.identifier)
 
-            if not unit_info:
+            if not turbine_unit:
                 skipped_units.add(record.identifier)
                 continue
+
+            matched_units += 1
 
             # Parse data JSON (already a dict from JSONB field)
             data_json = record.data if isinstance(record.data, dict) else {}
 
-            # Create monthly record
+            # Get capacity from turbine unit (from turbine model's rated_power_kw)
+            capacity_mw = turbine_unit.get('capacity_mw')
+
+            # Create monthly record with turbine_unit info
             monthly_record = MonthlyRecord(
                 month=record.period_start,
                 identifier=record.identifier,
                 generation_mwh=float(record.value_extracted),
-                capacity_mw=unit_info['capacity_mw'],
+                capacity_mw=capacity_mw,
                 raw_data_ids=[record.id],
                 metadata={
                     'unit_code': data_json.get('unit_code'),
@@ -277,21 +319,20 @@ class MonthlyGenerationProcessor:
                     'gsrn': data_json.get('gsrn'),
                     'generation_kwh': data_json.get('generation_kwh'),
                     'month': data_json.get('month'),
-                    'source': 'ENERGISTYRELSEN'
+                    'source': 'ENERGISTYRELSEN',
+                    'turbine_unit_id': turbine_unit['id'],
+                    'windfarm_id': turbine_unit['windfarm_id']
                 }
             )
 
             monthly_records.append(monthly_record)
 
-        # Log summary of skipped units
+        # Log summary
+        logger.info(f"Matched {matched_units} turbine units")
         if skipped_units:
-            logger.warning(f"Skipped {len(skipped_units)} units not found in generation_units table")
-            logger.warning(f"First 10 skipped identifiers: {list(skipped_units)[:10]}")
-            # Also log what keys we have in cache
-            energi_keys = [k for k in self.generation_units_cache.keys() if k.startswith('ENERGISTYRELSEN:')]
-            logger.info(f"Available ENERGISTYRELSEN units in cache: {len(energi_keys)}")
-            if energi_keys:
-                logger.info(f"Sample cache keys: {energi_keys[:10]}")
+            logger.warning(f"Skipped {len(skipped_units)} GSRN codes not found in turbine_units")
+            logger.warning(f"First 10 skipped GSRN codes: {list(skipped_units)[:10]}")
+            logger.info(f"Total turbine units in cache: {len(self.turbine_units_cache)}")
 
         return monthly_records
 
@@ -335,25 +376,38 @@ class MonthlyGenerationProcessor:
             if record.capacity_mw and record.capacity_mw > 0:
                 # For monthly data, capacity factor is:
                 # monthly_generation_mwh / (capacity_mw * hours_in_month)
-                # Simplified: generation_mwh / (capacity_mw * 730) for ~30 day month
-                # But we'll use a simpler approach: generation / capacity
-                # This gives monthly capacity utilization
-                hours_in_month = 730  # Average hours in a month (30.4 days * 24)
+                # Calculate actual hours in the specific month
+                import calendar
+                year = record.month.year
+                month = record.month.month
+                days_in_month = calendar.monthrange(year, month)[1]
+                hours_in_month = days_in_month * 24
+
                 monthly_capacity = record.capacity_mw * hours_in_month
                 calculated_cf = record.generation_mwh / monthly_capacity
                 capacity_factor = min(calculated_cf, 9.9999)
 
-            # Get unit info
-            unit_key = f"{source}:{record.identifier}"
-            unit_info = self.generation_units_cache.get(unit_key)
+            # Get unit info - for ENERGISTYRELSEN, this comes from metadata (turbine_units)
+            # For other sources, it comes from generation_units_cache
+            turbine_unit_id = record.metadata.get('turbine_unit_id') if record.metadata else None
+            windfarm_id = record.metadata.get('windfarm_id') if record.metadata else None
+            generation_unit_id = None
+
+            # If not in metadata (e.g., EIA), try generation_units_cache
+            if not turbine_unit_id and not windfarm_id:
+                unit_key = f"{source}:{record.identifier}"
+                unit_info = self.generation_units_cache.get(unit_key)
+                if unit_info:
+                    generation_unit_id = unit_info['id']
+                    windfarm_id = unit_info['windfarm_id']
 
             # Create GenerationData object
             obj = GenerationData(
                 id=str(uuid4()),
                 hour=record.month,  # Store as first of month
-                generation_unit_id=unit_info['id'] if unit_info else None,
-                windfarm_id=unit_info['windfarm_id'] if unit_info else None,
-                turbine_unit_id=None,
+                generation_unit_id=generation_unit_id,
+                windfarm_id=windfarm_id,
+                turbine_unit_id=turbine_unit_id,
                 generation_mwh=Decimal(str(record.generation_mwh)),
                 capacity_mw=Decimal(str(record.capacity_mw)) if record.capacity_mw else None,
                 capacity_factor=Decimal(str(capacity_factor)) if capacity_factor else None,
@@ -407,14 +461,18 @@ async def process_month_range(
     results = []
 
     # OPTIMIZATION: Use one database session and processor for all months
-    # This way we only load generation units once
+    # This way we only load generation units and turbine units once
     async with session_factory() as db:
         processor = MonthlyGenerationProcessor(db, dry_run=dry_run)
 
-        # Load generation units once at the start
+        # Load generation units and turbine units once at the start
         logger.info("Loading generation units (one-time operation)...")
         await processor.load_generation_units()
         logger.info(f"✓ Loaded {len(processor.generation_units_cache)} generation units")
+
+        logger.info("Loading turbine units for ENERGISTYRELSEN (one-time operation)...")
+        await processor.load_turbine_units()
+        logger.info(f"✓ Loaded {len(processor.turbine_units_cache)} turbine units")
 
         for year, month in months_to_process:
             try:

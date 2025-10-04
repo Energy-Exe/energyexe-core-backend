@@ -105,12 +105,15 @@ async def get_windfarm_timeline(
     events.sort(key=lambda x: x['date'])
 
     # Calculate capacity snapshots over time
-    capacity_timeline = []
+    # Group events by date and only store final capacity for each unique date
+    capacity_by_date = {}
     current_capacity = 0
     gen_unit_capacity = 0
     turbine_capacity = 0
 
     for event in events:
+        event_date = event['date']
+
         if event['type'] == 'addition':
             current_capacity += event['capacity_mw']
             if event['unit_type'] == 'generation_unit':
@@ -124,12 +127,16 @@ async def get_windfarm_timeline(
             else:
                 turbine_capacity -= event['capacity_mw']
 
-        capacity_timeline.append({
-            'date': event['date'],
+        # Store the final capacity for this date (will overwrite if multiple events on same day)
+        capacity_by_date[event_date] = {
+            'date': event_date,
             'total_capacity_mw': round(current_capacity, 2),
             'generation_unit_capacity_mw': round(gen_unit_capacity, 2),
             'turbine_capacity_mw': round(turbine_capacity, 2),
-        })
+        }
+
+    # Convert to list and sort by date
+    capacity_timeline = sorted(capacity_by_date.values(), key=lambda x: x['date'])
 
     # Calculate current capacity breakdown
     current_gen_capacity = sum(
@@ -182,31 +189,42 @@ async def get_windfarm_generation_timeline(
     if not end_date:
         end_date = datetime.now()
 
-    # First, get all generation units for this windfarm
+    # Get all generation units for this windfarm
     gen_units_query = await db.execute(
         select(GenerationUnit.id)
         .where(GenerationUnit.windfarm_id == windfarm_id)
     )
     gen_unit_ids = [row[0] for row in gen_units_query.all()]
 
-    # If no generation units, return empty data
-    if not gen_unit_ids:
-        return {
-            'windfarm_id': windfarm_id,
-            'start_date': start_date.isoformat(),
-            'end_date': end_date.isoformat(),
-            'aggregation': aggregation,
-            'data': [],
-            'total_records': 0,
-            'message': 'No generation units found for this windfarm'
-        }
+    # Get all turbine units for this windfarm
+    turbine_units_query = await db.execute(
+        select(TurbineUnit.id)
+        .where(TurbineUnit.windfarm_id == windfarm_id)
+    )
+    turbine_unit_ids = [row[0] for row in turbine_units_query.all()]
 
-    # Get generation data for all generation units of this windfarm
+    # Build query conditions
+    # Query for data linked via generation_unit_id OR turbine_unit_id OR windfarm_id directly
+    # We include windfarm_id to catch data that's linked directly to the windfarm
+    unit_conditions = []
+
+    # Add condition for generation_unit_id if we have any
+    if gen_unit_ids:
+        unit_conditions.append(GenerationData.generation_unit_id.in_(gen_unit_ids))
+
+    # Add condition for turbine_unit_id if we have any
+    if turbine_unit_ids:
+        unit_conditions.append(GenerationData.turbine_unit_id.in_(turbine_unit_ids))
+
+    # Also include data linked directly to windfarm (this is important!)
+    unit_conditions.append(GenerationData.windfarm_id == windfarm_id)
+
+    # Get generation data - match by generation_unit_id OR turbine_unit_id OR windfarm_id
     query = select(GenerationData).where(
         and_(
-            GenerationData.generation_unit_id.in_(gen_unit_ids),
             GenerationData.hour >= start_date,
-            GenerationData.hour <= end_date
+            GenerationData.hour <= end_date,
+            or_(*unit_conditions) if unit_conditions else GenerationData.windfarm_id == windfarm_id
         )
     ).order_by(GenerationData.hour).limit(50000)  # Limit to prevent huge queries
 

@@ -133,7 +133,8 @@ class DailyGenerationProcessor:
         units = result.scalars().all()
 
         for unit in units:
-            key = f"{unit.source}:{unit.code}"
+            # Use uppercase for case-insensitive matching (TAIPOWER vs Taipower)
+            key = f"{unit.source.upper()}:{unit.code}"
             self.generation_units_cache[key] = {
                 'id': unit.id,
                 'windfarm_id': unit.windfarm_id,
