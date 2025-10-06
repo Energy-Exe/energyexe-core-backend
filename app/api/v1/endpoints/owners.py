@@ -18,7 +18,7 @@ router = APIRouter()
 @audit_action(AuditAction.ACCESS, "owner", description="Listed owners")
 async def get_owners(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     request: Request = None,
     current_user: User = Depends(get_current_user),
@@ -32,7 +32,7 @@ async def get_owners(
 async def search_owners(
     q: str = Query(..., min_length=1),
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     request: Request = None,
     current_user: User = Depends(get_current_user),

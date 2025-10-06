@@ -16,7 +16,7 @@ router = APIRouter()
 async def read_states(
     db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     current_user: User = Depends(get_current_active_user),
 ) -> List[StateWithCountry]:
     """
@@ -31,7 +31,7 @@ async def search_states(
     q: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     current_user: User = Depends(get_current_active_user),
 ) -> List[StateWithCountry]:
     """
@@ -47,7 +47,7 @@ async def read_states_by_country(
     db: AsyncSession = Depends(get_db),
     country_id: int,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     current_user: User = Depends(get_current_active_user),
 ) -> List[StateWithCountry]:
     """

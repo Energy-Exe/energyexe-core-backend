@@ -45,7 +45,7 @@ async def update_current_user_profile(
 @router.get("/", response_model=List[UserResponse])
 async def get_users(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
+    limit: int = Query(1000, ge=1, le=1000, description="Number of records to return"),
     search: str = Query(
         None, description="Search term to filter users by username, email, first_name, or last_name"
     ),

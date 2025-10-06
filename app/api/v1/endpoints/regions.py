@@ -13,7 +13,7 @@ router = APIRouter()
 @router.get("/", response_model=List[Region])
 async def get_regions(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all regions with pagination"""
@@ -24,7 +24,7 @@ async def get_regions(
 async def search_regions(
     q: str = Query(..., min_length=1),
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
 ):
     """Search regions by name"""

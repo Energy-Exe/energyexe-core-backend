@@ -19,7 +19,7 @@ router = APIRouter()
 @audit_action(AuditAction.ACCESS, "audit_log", description="Listed audit logs")
 async def get_audit_logs(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     user_id: Optional[int] = Query(None),
     user_email: Optional[str] = Query(None),
     action: Optional[AuditAction] = Query(None),
@@ -119,7 +119,7 @@ async def get_resource_audit_history(
     resource_type: str,
     resource_id: str,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     request: Request = None,
     current_user: User = Depends(get_current_superuser),
@@ -135,7 +135,7 @@ async def get_resource_audit_history(
 async def get_user_audit_history(
     user_id: int,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     request: Request = None,
     current_user: User = Depends(get_current_user),
@@ -152,7 +152,7 @@ async def get_user_audit_history(
 @audit_action(AuditAction.ACCESS, "audit_log", description="Viewed own audit history")
 async def get_my_audit_history(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     request: Request = None,
     current_user: User = Depends(get_current_user),
