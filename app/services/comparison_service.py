@@ -85,7 +85,9 @@ class ComparisonService:
             }
         }
 
-        capacity_factors = []
+        # Use weighted averaging for capacity factor
+        total_capacity_factor_weighted = 0
+        total_data_points_for_cf = 0
 
         for row in rows:
             data.append({
@@ -105,11 +107,14 @@ class ComparisonService:
 
             summary['total_generation'] += float(row.total_generation) if row.total_generation else 0
             summary['total_records'] += row.data_points
-            if row.avg_capacity_factor:
-                capacity_factors.append(float(row.avg_capacity_factor))
 
-        if capacity_factors:
-            summary['avg_capacity_factor'] = sum(capacity_factors) / len(capacity_factors)
+            # Weight capacity factor by number of data points in each period
+            if row.avg_capacity_factor and row.data_points:
+                total_capacity_factor_weighted += float(row.avg_capacity_factor) * row.data_points
+                total_data_points_for_cf += row.data_points
+
+        if total_data_points_for_cf > 0:
+            summary['avg_capacity_factor'] = total_capacity_factor_weighted / total_data_points_for_cf
 
         return {
             'data': data,
