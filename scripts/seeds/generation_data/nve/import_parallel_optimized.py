@@ -28,94 +28,142 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-async def get_nve_unit_mapping() -> Dict[str, Dict]:
-    """Get mapping between NVE data columns and database units."""
+def find_operational_unit(units_list: List, timestamp: datetime):
+    """Find which phase/unit was operational at the given timestamp.
+
+    Args:
+        units_list: List of generation units with the same code (different phases)
+        timestamp: Timestamp of the data point
+
+    Returns:
+        The generation unit that was operational at that time, or None
+    """
+    # Convert timestamp to date for comparison
+    check_date = timestamp.date() if isinstance(timestamp, datetime) else timestamp
+
+    for unit in units_list:
+        # Check if this unit was operational at the timestamp
+        if unit.start_date and check_date < unit.start_date:
+            continue
+
+        if unit.end_date and check_date > unit.end_date:
+            continue
+
+        # This unit is operational at this timestamp
+        return unit
+
+    # No matching unit found
+    return None
+
+
+async def get_nve_unit_mapping() -> Dict[str, List]:
+    """Get mapping between NVE codes and database units.
+
+    Returns:
+        Dictionary mapping codes to lists of units (sorted by start_date)
+    """
     AsyncSessionLocal = get_session_factory()
-    
-    mapping = {}
-    
+
     async with AsyncSessionLocal() as db:
         # Get all NVE units from database
         result = await db.execute(
             select(GenerationUnit)
             .where(GenerationUnit.source == 'NVE')
+            .order_by(GenerationUnit.code, GenerationUnit.start_date)
         )
         units = result.scalars().all()
-        
-        # Create mapping by both code and name
-        units_by_code = {unit.code: unit for unit in units}
-        units_by_name = {unit.name: unit for unit in units}
-        
-        logger.info(f"Found {len(units)} NVE units in database")
-        
-        return {
-            'by_code': units_by_code,
-            'by_name': units_by_name,
-            'units': {unit.id: unit for unit in units}
-        }
+
+        # Group units by code (multiple phases can have same code)
+        units_by_code = {}
+        for unit in units:
+            if unit.code not in units_by_code:
+                units_by_code[unit.code] = []
+            units_by_code[unit.code].append(unit)
+
+        logger.info(f"Found {len(units)} NVE units across {len(units_by_code)} unique codes")
+
+        # Log multi-phase windfarms
+        multi_phase = {code: len(units) for code, units in units_by_code.items() if len(units) > 1}
+        if multi_phase:
+            logger.info(f"Multi-phase windfarms: {len(multi_phase)} codes with multiple phases")
+
+        return units_by_code
 
 
 def process_nve_chunk(args: Tuple[pd.DataFrame, Dict, int, int, Dict]) -> List[Dict]:
-    """Process a chunk of NVE data."""
-    chunk_df, unit_mapping, chunk_start, chunk_size, column_to_unit = args
+    """Process a chunk of NVE data with phase-aware unit selection."""
+    chunk_df, unit_mapping_by_code, chunk_start, chunk_size, column_to_code = args
 
     records = []
-    
+
     # Process data rows
-    # Note: chunk_start tells us the absolute position in the original DataFrame
     # If chunk_start is 0, skip first two rows (headers), otherwise process all rows
     start_idx = 2 if chunk_start == 0 else 0
 
     for idx in range(start_idx, len(chunk_df)):
         row = chunk_df.iloc[idx]
-        
+
         # Get timestamp from first column
         timestamp_value = row.iloc[0]
-        
+
         # Skip if not a valid timestamp
         if pd.isna(timestamp_value):
             continue
-        
+
         try:
             # Parse timestamp
             if isinstance(timestamp_value, str):
                 timestamp = pd.to_datetime(timestamp_value)
             else:
                 timestamp = pd.to_datetime(timestamp_value)
-            
+
             # Process each wind farm column
-            for col, unit in column_to_unit.items():
+            for col, code in column_to_code.items():
                 value = row[col]
-                
+
                 # Skip NaN values
                 if pd.isna(value):
                     continue
-                
-                # Create record
+
+                # Get list of units for this code
+                units_list = unit_mapping_by_code.get(code, [])
+                if not units_list:
+                    logger.debug(f"No units found for code {code}")
+                    continue
+
+                # Find which phase was operational at this timestamp
+                operational_unit = find_operational_unit(units_list, timestamp)
+
+                if not operational_unit:
+                    logger.debug(f"No operational unit found for code {code} at {timestamp}")
+                    continue
+
+                # Create record with the correct phase
                 record = {
                     'period_start': timestamp.isoformat(),
                     'period_end': (timestamp + pd.Timedelta(hours=1)).isoformat(),
                     'period_type': 'hour',
                     'source': 'NVE',
                     'source_type': 'manual',
-                    'identifier': unit.code,
+                    'identifier': code,  # Store code as identifier
                     'value_extracted': float(value),
                     'unit': 'MWh',
                     'data': json.dumps({
                         'generation_mwh': float(value),
-                        'unit_code': unit.code,
-                        'unit_name': unit.name,
-                        'generation_unit_id': unit.id,
+                        'unit_code': code,
+                        'unit_name': operational_unit.name,
+                        'generation_unit_id': operational_unit.id,
+                        'windfarm_id': operational_unit.windfarm_id,
                         'timestamp': timestamp.isoformat()
                     })
                 }
-                
+
                 records.append(record)
-                
+
         except Exception as e:
             logger.debug(f"Error processing row {chunk_start + idx}: {e}")
             continue
-    
+
     logger.info(f"Processed chunk starting at row {chunk_start}: {len(records)} records")
     return records
 
@@ -153,6 +201,7 @@ async def import_nve_data(workers: int = 4, clean_first: bool = True, sample_siz
     print("="*80)
     print(" "*20 + "🌊 NVE DATA IMPORT 🌊")
     print("="*80)
+    print("Phase-aware import: Matches data to correct generation unit phase")
 
     start_time = time.time()
 
@@ -180,34 +229,29 @@ async def import_nve_data(workers: int = 4, clean_first: bool = True, sample_siz
 
     print(f"   ✅ Loaded {len(df):,} rows with {len(df.columns)} columns")
 
-    # Create column-to-unit mapping from the first row (which contains unit codes)
-    print("\n🔗 Creating column-to-unit mapping...")
-    units_by_code = unit_mapping['by_code']
-    units_by_name = unit_mapping['by_name']
+    # Create column-to-code mapping from the first row (which contains unit codes)
+    print("\n🔗 Creating column-to-code mapping...")
 
     first_row = df.iloc[0] if len(df) > 0 else None
     if first_row is None:
         print("   ❌ No data found in Excel file")
         return
 
-    column_to_unit = {}
+    column_to_code = {}
 
-    # Map each column to a generation unit using the first row which contains unit codes
+    # Map each column to a code using the first row which contains unit codes
     for col in df.columns[1:]:  # Skip first column (timestamp/metadata)
         code_value = first_row[col]
         if pd.notna(code_value):
             code_str = str(int(code_value)) if isinstance(code_value, (int, float)) else str(code_value)
 
-            # Try to find unit by code first
-            if code_str in units_by_code:
-                column_to_unit[col] = units_by_code[code_str]
-            # Then try by name
-            elif col in units_by_name:
-                column_to_unit[col] = units_by_name[col]
+            # Check if this code exists in our mapping
+            if code_str in unit_mapping:
+                column_to_code[col] = code_str
             else:
                 logger.debug(f"No mapping found for column {col} with code {code_str}")
 
-    print(f"   ✅ Mapped {len(column_to_unit)} columns to generation units")
+    print(f"   ✅ Mapped {len(column_to_code)} columns to codes")
     
     # Calculate chunk size based on available memory
     available_memory = psutil.virtual_memory().available
@@ -220,8 +264,8 @@ async def import_nve_data(workers: int = 4, clean_first: bool = True, sample_siz
     for i in range(0, len(df), chunk_size):
         chunk_end = min(i + chunk_size, len(df))
         chunk = df.iloc[i:chunk_end].copy()
-        # Pass the pre-computed column_to_unit mapping to each chunk
-        chunks.append((chunk, unit_mapping, i, chunk_size, column_to_unit))
+        # Pass the pre-computed column_to_code mapping to each chunk
+        chunks.append((chunk, unit_mapping, i, chunk_size, column_to_code))
     
     print(f"   📦 Created {len(chunks)} chunks for processing")
     
@@ -305,19 +349,19 @@ async def import_nve_data(workers: int = 4, clean_first: bool = True, sample_siz
     if len(all_records) > 0:
         print(f"   • Processing rate: {len(all_records)/elapsed_time:.0f} records/second")
     
-    # Summary by unit
+    # Summary by code
     if all_records:
-        units_summary = {}
+        codes_summary = {}
         for record in all_records:
-            unit_id = record['identifier']
-            if unit_id not in units_summary:
-                units_summary[unit_id] = 0
-            units_summary[unit_id] += 1
-        
-        print(f"\n📊 Records by unit (top 10):")
-        sorted_units = sorted(units_summary.items(), key=lambda x: x[1], reverse=True)[:10]
-        for unit_id, count in sorted_units:
-            print(f"   • Unit {unit_id}: {count:,} records")
+            code = record['identifier']
+            if code not in codes_summary:
+                codes_summary[code] = 0
+            codes_summary[code] += 1
+
+        print(f"\n📊 Records by code (top 10):")
+        sorted_codes = sorted(codes_summary.items(), key=lambda x: x[1], reverse=True)[:10]
+        for code, count in sorted_codes:
+            print(f"   • Code {code}: {count:,} records")
     
     print("\n" + "="*80)
     print(" "*20 + "✨ NVE IMPORT COMPLETED ✨")

@@ -11,11 +11,13 @@ from app.api.v1.endpoints import (
     comparison,
     control_areas,
     countries,
+    external_data_sources,
     generation,
     generation_units,
     market_balance_areas,
     owners,
     projects,
+    raw_data_fetch,
     regions,
     states,
     substations,
@@ -60,6 +62,12 @@ api_router.include_router(comparison.router, prefix="/comparison", tags=["compar
 
 # Windfarm timeline and evolution endpoints
 api_router.include_router(windfarm_timeline.router, prefix="/windfarms", tags=["windfarm-timeline"])
+
+# External data sources endpoints
+api_router.include_router(external_data_sources.router, prefix="/external-sources", tags=["external-sources"])
+
+# Raw data fetching endpoints (fetch from APIs and store in generation_data_raw)
+api_router.include_router(raw_data_fetch.router, prefix="/raw-data", tags=["raw-data"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])

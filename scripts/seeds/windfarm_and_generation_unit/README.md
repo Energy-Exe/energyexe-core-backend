@@ -146,6 +146,49 @@ The Excel file has missing or invalid country names. Check the validation output
 - Ensure the database is running
 - Try restarting the backend server
 
+## 🌊 NVE-Specific Considerations
+
+### Phase-Based Generation Units
+
+NVE windfarms have a **phase-based structure** where a single windfarm has multiple phases (expansion stages) over time. Each phase:
+- Has its own `start_date` and `end_date`
+- Represents the operational capacity during that time period
+- **Shares the same code** with other phases of the same windfarm
+
+**Example: Bessakerfjellet**
+- Code: `20`
+- Phase 1: 2007-09-10 to 2008-08-29 (capacity: 100 MW)
+- Phase 2: 2008-08-30 to present (capacity: 150 MW)
+
+### Important: Code Uniqueness
+
+As of migration `7daf40c2a86e`, the **unique constraint on `generation_units.code` has been removed**. This allows multiple phases to share the same code, which is required for NVE data.
+
+### Importing NVE Generation Units
+
+When importing NVE generation units from Excel:
+
+1. **All phases must have the same code** (e.g., all Bessakerfjellet phases use code `20`)
+2. **Start and end dates are critical** - they determine which phase is active at any given time
+3. **Generation data is matched by code + timestamp** - the import script finds the correct phase based on the data timestamp
+
+### NVE Data Import Process
+
+```bash
+# 1. Import generation units (use this folder's scripts)
+poetry run python scripts/seeds/windfarm_and_generation_unit/step1_preload_lookups.py
+poetry run python scripts/seeds/windfarm_and_generation_unit/step2_bulk_import.py
+
+# 2. Import NVE generation data (uses phase-aware matching)
+poetry run python scripts/seeds/generation_data/nve/import_parallel_optimized.py
+
+# 3. Aggregate NVE data (handles phase selection)
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py \
+    --start 2002-01-01 --end 2024-12-31 --source NVE
+```
+
+See `scripts/seeds/generation_data/nve/README.md` for detailed NVE import documentation.
+
 ## 📈 Example Output
 
 ```

@@ -80,9 +80,18 @@ class DailyGenerationProcessor:
     async def process_day(
         self,
         date: datetime,
-        sources: Optional[List[str]] = None
+        sources: Optional[List[str]] = None,
+        skip_load_units: bool = False,
+        skip_commit: bool = False
     ) -> Dict[str, Any]:
-        """Process all data for a specific day."""
+        """Process all data for a specific day.
+
+        Args:
+            date: Date to process
+            sources: List of sources to process
+            skip_load_units: Skip loading generation units (for batch processing)
+            skip_commit: Skip committing (for batch processing - commit will be done externally)
+        """
 
         # Ensure date is at start of day in UTC
         day_start = date.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
@@ -90,11 +99,14 @@ class DailyGenerationProcessor:
 
         sources = sources or self.SOURCES
 
-        logger.info(f"Processing data for {day_start.date()}")
-        logger.info(f"Sources: {', '.join(sources)}")
+        # Reduce logging in batch mode
+        if not skip_commit:
+            logger.info(f"Processing data for {day_start.date()}")
+            logger.info(f"Sources: {', '.join(sources)}")
 
-        # Load generation units
-        await self.load_generation_units()
+        # Load generation units (skip if already loaded for batch processing)
+        if not skip_load_units:
+            await self.load_generation_units()
 
         results = {}
 
@@ -112,13 +124,14 @@ class DailyGenerationProcessor:
                 # Rollback the failed transaction to reset session state
                 await self.db.rollback()
 
-        # Commit if not dry run
-        if not self.dry_run:
-            await self.db.commit()
-            logger.info("Changes committed to database")
-        else:
-            await self.db.rollback()
-            logger.info("Dry run - changes rolled back")
+        # Commit if not dry run and not in batch mode
+        if not skip_commit:
+            if not self.dry_run:
+                await self.db.commit()
+                logger.info("Changes committed to database")
+            else:
+                await self.db.rollback()
+                logger.info("Dry run - changes rolled back")
 
         return {
             'date': day_start.isoformat(),
@@ -127,15 +140,20 @@ class DailyGenerationProcessor:
         }
 
     async def load_generation_units(self):
-        """Load generation units into memory for faster lookups."""
+        """Load generation units into memory for faster lookups.
 
-        result = await self.db.execute(select(GenerationUnit))
+        For sources like NVE with multiple phases per code, stores lists of units.
+        """
+
+        result = await self.db.execute(select(GenerationUnit).order_by(GenerationUnit.code, GenerationUnit.start_date))
         units = result.scalars().all()
 
+        # Group by source:code (multiple phases can have same code)
         for unit in units:
             # Use uppercase for case-insensitive matching (TAIPOWER vs Taipower)
             key = f"{unit.source.upper()}:{unit.code}"
-            self.generation_units_cache[key] = {
+
+            unit_info = {
                 'id': unit.id,
                 'windfarm_id': unit.windfarm_id,
                 'capacity_mw': float(unit.capacity_mw) if unit.capacity_mw else None,
@@ -144,7 +162,20 @@ class DailyGenerationProcessor:
                 'end_date': unit.end_date
             }
 
-        logger.info(f"Loaded {len(self.generation_units_cache)} generation units")
+            # If key exists, convert to list or append
+            if key in self.generation_units_cache:
+                existing = self.generation_units_cache[key]
+                if isinstance(existing, dict):
+                    # Convert single unit to list
+                    self.generation_units_cache[key] = [existing, unit_info]
+                else:
+                    # Append to existing list
+                    self.generation_units_cache[key].append(unit_info)
+            else:
+                # First unit for this code
+                self.generation_units_cache[key] = unit_info
+
+        logger.info(f"Loaded generation units from {len(self.generation_units_cache)} unique codes")
 
     def is_unit_operational(self, unit_info: Dict, check_date: datetime) -> bool:
         """Check if a generation unit is operational on a given date.
@@ -191,6 +222,38 @@ class DailyGenerationProcessor:
                 return False
 
         return True
+
+    def get_operational_unit(self, cache_entry, check_date: datetime):
+        """Get the operational unit from cache entry.
+
+        Cache entry can be:
+        - A single unit dict (for codes with only one unit)
+        - A list of unit dicts (for codes with multiple phases)
+
+        Args:
+            cache_entry: Entry from generation_units_cache
+            check_date: Date to check
+
+        Returns:
+            The operational unit info dict, or None
+        """
+        if not cache_entry:
+            return None
+
+        # Handle single unit
+        if isinstance(cache_entry, dict):
+            if self.is_unit_operational(cache_entry, check_date):
+                return cache_entry
+            return None
+
+        # Handle list of units (multiple phases)
+        if isinstance(cache_entry, list):
+            for unit_info in cache_entry:
+                if self.is_unit_operational(unit_info, check_date):
+                    return unit_info
+            return None
+
+        return None
 
     async def process_source_for_day(
         self,
@@ -336,13 +399,11 @@ class DailyGenerationProcessor:
 
             # Always use generation units cache for capacity_mw field
             unit_key = f"ENTSOE:{identifier}"
-            unit_info = self.generation_units_cache.get(unit_key, {})
+            cache_entry = self.generation_units_cache.get(unit_key)
+            unit_info = self.get_operational_unit(cache_entry, hour)
 
-            # Check if unit is operational on this date
-            if self.is_unit_operational(unit_info, hour):
-                capacity_mw = unit_info.get('capacity_mw')
-            else:
-                capacity_mw = None  # Unit not operational on this date
+            # Get capacity if unit is operational
+            capacity_mw = unit_info.get('capacity_mw') if unit_info else None
 
             hourly_records.append(HourlyRecord(
                 hour=hour,
@@ -384,13 +445,11 @@ class DailyGenerationProcessor:
 
             # Get capacity from generation units cache
             unit_key = f"ELEXON:{identifier}"
-            unit_info = self.generation_units_cache.get(unit_key, {})
+            cache_entry = self.generation_units_cache.get(unit_key)
+            unit_info = self.get_operational_unit(cache_entry, hour)
 
-            # Check if unit is operational on this date
-            if self.is_unit_operational(unit_info, hour):
-                capacity_mw = unit_info.get('capacity_mw')
-            else:
-                capacity_mw = None  # Unit not operational on this date
+            # Get capacity if unit is operational
+            capacity_mw = unit_info.get('capacity_mw') if unit_info else None
 
             hourly_records.append(HourlyRecord(
                 hour=hour,
@@ -430,13 +489,11 @@ class DailyGenerationProcessor:
 
             # Always use generation units cache for capacity_mw field
             unit_key = f"TAIPOWER:{record.identifier}"
-            unit_info = self.generation_units_cache.get(unit_key, {})
+            cache_entry = self.generation_units_cache.get(unit_key)
+            unit_info = self.get_operational_unit(cache_entry, hour)
 
-            # Check if unit is operational on this date
-            if self.is_unit_operational(unit_info, hour):
-                capacity_mw = unit_info.get('capacity_mw')
-            else:
-                capacity_mw = None  # Unit not operational on this date
+            # Get capacity if unit is operational
+            capacity_mw = unit_info.get('capacity_mw') if unit_info else None
 
             hourly_records.append(HourlyRecord(
                 hour=hour,
@@ -480,14 +537,17 @@ class DailyGenerationProcessor:
         hourly_records = []
         for (identifier, hour), data in hourly_data.items():
             # Get capacity from generation units cache
+            # identifier is the code (e.g., "20" for Bessakerfjellet)
             unit_key = f"NVE:{identifier}"
-            unit_info = self.generation_units_cache.get(unit_key, {})
+            cache_entry = self.generation_units_cache.get(unit_key)
 
-            # Check if unit is operational on this date
-            if self.is_unit_operational(unit_info, hour):
+            # Get the operational unit (handles both single units and multiple phases)
+            unit_info = self.get_operational_unit(cache_entry, hour)
+
+            if unit_info:
                 capacity_mw = unit_info.get('capacity_mw')
             else:
-                capacity_mw = None  # Unit not operational on this date
+                capacity_mw = None  # No operational unit found for this timestamp
 
             hourly_records.append(HourlyRecord(
                 hour=hour,
@@ -577,9 +637,10 @@ class DailyGenerationProcessor:
                 # when actual generation exceeds nameplate capacity
                 capacity_factor = min(calculated_cf, 9.9999)
 
-            # Get unit info
+            # Get unit info (handles both single units and multiple phases)
             unit_key = f"{source}:{record.identifier}"
-            unit_info = self.generation_units_cache.get(unit_key)
+            cache_entry = self.generation_units_cache.get(unit_key)
+            unit_info = self.get_operational_unit(cache_entry, record.hour)
 
             # Create GenerationData object
             obj = GenerationData(

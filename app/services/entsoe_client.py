@@ -96,10 +96,14 @@ class ENTSOEClient:
 
                 logger.info(f"ENTSOE API Key: {self.api_key[:10]}... (first 10 chars)")
                 try:
+                    # Ensure start and end are timezone-naive before creating pd.Timestamp
+                    start_dt = start.replace(tzinfo=None) if hasattr(start, 'tzinfo') and start.tzinfo else start
+                    end_dt = end.replace(tzinfo=None) if hasattr(end, 'tzinfo') and end.tzinfo else end
+
                     df = self.client.query_generation(
                         area_code,
-                        start=pd.Timestamp(start, tz="UTC"),
-                        end=pd.Timestamp(end, tz="UTC"),
+                        start=pd.Timestamp(start_dt, tz="UTC"),
+                        end=pd.Timestamp(end_dt, tz="UTC"),
                         psr_type=None,  # Get all types
                     )
                 except Exception as api_error:
@@ -271,11 +275,15 @@ class ENTSOEClient:
                 elif production_types[0].lower() == "solar":
                     psr_type = "B16"  # Solar
             
+            # Ensure start and end are timezone-naive before creating pd.Timestamp
+            start_dt = start.replace(tzinfo=None) if hasattr(start, 'tzinfo') and start.tzinfo else start
+            end_dt = end.replace(tzinfo=None) if hasattr(end, 'tzinfo') and end.tzinfo else end
+
             # Query generation per plant with EIC codes included
             df = self.client.query_generation_per_plant(
                 area_code,
-                start=pd.Timestamp(start, tz="UTC"),
-                end=pd.Timestamp(end, tz="UTC"),
+                start=pd.Timestamp(start_dt, tz="UTC"),
+                end=pd.Timestamp(end_dt, tz="UTC"),
                 psr_type=psr_type,
                 include_eic=True,  # Include EIC codes in the output
             )

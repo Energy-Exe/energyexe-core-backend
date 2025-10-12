@@ -10,8 +10,12 @@ Transforms raw generation data from multiple sources into standardized hourly or
 # Process all hourly sources for a date range (ENTSOE, ELEXON, TAIPOWER, NVE)
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2002-01-01 --end 2024-12-31
 
-# Process a specific source
+# Process a specific source (daily mode - default)
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2020-01-01 --end 2024-12-31 --source ENTSOE
+
+# Process month-by-month (MUCH FASTER for large datasets like NVE - ~30x faster)
+# Recommended for NVE: processes all days in a month in one transaction
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2002-01-01 --end 2024-12-31 --source NVE --monthly
 
 # Dry run (preview without changes)
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2020-01-01 --end 2024-12-31 --dry-run
@@ -20,7 +24,8 @@ poetry run python scripts/seeds/aggregate_generation_data/process_generation_dat
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_daily.py --date 2024-01-15
 
 # Run sources in parallel (open 4 terminals - based on actual data availability)
-poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2002-01-01 --end 2024-12-31 --source NVE
+# Use --monthly for NVE (much faster: ~5 minutes vs ~3 hours for full date range)
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2002-01-01 --end 2024-12-31 --source NVE --monthly
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2013-04-01 --end 2024-12-31 --source ELEXON
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2015-01-01 --end 2024-12-31 --source ENTSOE
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py --start 2020-08-01 --end 2024-12-31 --source TAIPOWER
