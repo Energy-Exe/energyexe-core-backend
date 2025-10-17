@@ -28,9 +28,10 @@ class GenerationUnit(Base):
     windfarm_id: Mapped[int] = mapped_column(Integer, ForeignKey("windfarms.id"), nullable=True)
     
     status: Mapped[str] = mapped_column(String(100), nullable=True)
-    
+
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    first_power_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     notes: Mapped[str] = mapped_column(Text, nullable=True)
 
