@@ -117,6 +117,15 @@ def process_nve_chunk(args: Tuple[pd.DataFrame, Dict, int, int, Dict]) -> List[D
             else:
                 timestamp = pd.to_datetime(timestamp_value)
 
+            # NVE data is in Norwegian local time (Europe/Oslo timezone)
+            # Convert to UTC for storage in the database
+            if timestamp.tzinfo is None:
+                # If naive, localize to Europe/Oslo then convert to UTC
+                timestamp = timestamp.tz_localize('Europe/Oslo').tz_convert('UTC')
+            elif timestamp.tzinfo != pd.Timestamp.now(tz='UTC').tzinfo:
+                # If already timezone-aware but not UTC, convert to UTC
+                timestamp = timestamp.tz_convert('UTC')
+
             # Process each wind farm column
             for col, code in column_to_code.items():
                 value = row[col]
@@ -139,6 +148,7 @@ def process_nve_chunk(args: Tuple[pd.DataFrame, Dict, int, int, Dict]) -> List[D
                     continue
 
                 # Create record with the correct phase
+                # Timestamps are now in UTC after conversion above
                 record = {
                     'period_start': timestamp.isoformat(),
                     'period_end': (timestamp + pd.Timedelta(hours=1)).isoformat(),
