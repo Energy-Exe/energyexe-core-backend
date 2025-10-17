@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     comparison,
     control_areas,
     countries,
+    data_anomalies,
     external_data_sources,
     generation,
     generation_units,
@@ -68,6 +69,9 @@ api_router.include_router(external_data_sources.router, prefix="/external-source
 
 # Raw data fetching endpoints (fetch from APIs and store in generation_data_raw)
 api_router.include_router(raw_data_fetch.router, prefix="/raw-data", tags=["raw-data"])
+
+# Data quality and anomaly detection endpoints
+api_router.include_router(data_anomalies.router, prefix="/data-anomalies", tags=["data-anomalies"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])

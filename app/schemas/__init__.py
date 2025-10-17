@@ -2,6 +2,20 @@
 
 from .control_area import ControlArea, ControlAreaCreate, ControlAreaUpdate
 from .country import Country, CountryCreate, CountryInDB, CountryUpdate
+from .data_anomaly import (
+    DataAnomalyBase,
+    DataAnomalyCreate,
+    DataAnomalyUpdate,
+    DataAnomalyStatusUpdate,
+    DataAnomalyResponse,
+    DataAnomalyDetectionResult,
+    AnomalyDetectionRequest,
+    AnomalyDetectionResponse,
+    ReaggregationRequest,
+    ReaggregationResponse,
+    AnomalyListFilters,
+    AnomalyListResponse,
+)
 from .generation_unit import (
     GenerationUnitCreate,
     GenerationUnitResponse,
@@ -38,6 +52,18 @@ __all__ = [
     "GenerationUnitUpdate",
     "GenerationUnitResponse",
     "GenerationUnitSearchParams",
+    "DataAnomalyBase",
+    "DataAnomalyCreate",
+    "DataAnomalyUpdate",
+    "DataAnomalyStatusUpdate",
+    "DataAnomalyResponse",
+    "DataAnomalyDetectionResult",
+    "AnomalyDetectionRequest",
+    "AnomalyDetectionResponse",
+    "ReaggregationRequest",
+    "ReaggregationResponse",
+    "AnomalyListFilters",
+    "AnomalyListResponse",
 ]
 
 # Resolve forward references

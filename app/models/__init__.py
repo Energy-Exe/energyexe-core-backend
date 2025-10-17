@@ -6,6 +6,7 @@ from .bidzone import Bidzone
 from .cable import Cable
 from .control_area import ControlArea
 from .country import Country
+from .data_anomaly import DataAnomaly, AnomalyType, AnomalyStatus, AnomalySeverity
 from .generation_data import GenerationDataRaw, GenerationData, GenerationUnitMapping
 from .generation_unit import GenerationUnit
 from .market_balance_area import MarketBalanceArea
@@ -28,6 +29,10 @@ __all__ = [
     "Cable",
     "ControlArea",
     "Country",
+    "DataAnomaly",
+    "AnomalyType",
+    "AnomalyStatus",
+    "AnomalySeverity",
     "GenerationDataRaw",
     "GenerationData",
     "GenerationUnitMapping",
