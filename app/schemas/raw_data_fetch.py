@@ -16,9 +16,25 @@ class RawDataFetchRequest(BaseModel):
 class UnifiedRawDataFetchRequest(BaseModel):
     """Request to fetch raw data for windfarms (auto-detects sources)."""
 
-    windfarm_ids: List[int] = Field(..., description="List of windfarm IDs to fetch data for")
+    windfarm_ids: Optional[List[int]] = Field(
+        None,
+        description="List of windfarm IDs to fetch data for. If not provided, must specify source."
+    )
+    source: Optional[str] = Field(
+        None,
+        description="Source to fetch all windfarms for (ENTSOE, ELEXON, EIA, TAIPOWER). If provided without windfarm_ids, fetches all windfarms for this source."
+    )
     start_date: datetime = Field(..., description="Start date for data fetch")
     end_date: datetime = Field(..., description="End date for data fetch")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "source": "ENTSOE",
+                "start_date": "2025-10-18T00:00:00Z",
+                "end_date": "2025-10-19T23:59:59Z"
+            }
+        }
 
 
 class GenerationUnitSummary(BaseModel):

@@ -62,6 +62,8 @@ class EIAClient:
                 ("frequency", "monthly"),
                 ("data[0]", "generation"),
                 ("facets[fuel2002][]", "WND"),  # Wind fuel type
+                ("start", f"{start_year}-{start_month:02d}"),  # Date range start
+                ("end", f"{end_year}-{end_month:02d}"),  # Date range end
                 ("sort[0][column]", "period"),
                 ("sort[0][direction]", "desc"),
                 ("offset", "0"),
@@ -136,20 +138,6 @@ class EIAClient:
 
                 # Process and standardize the data
                 if not df.empty:
-                    # Filter data by date range
-                    if "period" in df.columns:
-                        # Convert period to datetime for filtering
-                        df["period_date"] = pd.to_datetime(df["period"], format="%Y-%m")
-
-                        start_date = pd.Timestamp(year=start_year, month=start_month, day=1)
-                        end_date = pd.Timestamp(year=end_year, month=end_month, day=1)
-
-                        # Filter by date range
-                        df = df[(df["period_date"] >= start_date) & (df["period_date"] <= end_date)]
-
-                        # Drop the temporary column
-                        df = df.drop("period_date", axis=1)
-
                     # Track which plant codes were found
                     if "plantCode" in df.columns:
                         # Convert plantCode to string to ensure consistency

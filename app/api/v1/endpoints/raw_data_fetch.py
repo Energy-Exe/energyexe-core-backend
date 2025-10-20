@@ -27,16 +27,28 @@ async def fetch_raw_data_unified(
     """
     Fetch data from external APIs for all available sources.
 
-    This endpoint auto-detects which sources have generation units configured
-    for the selected windfarms and fetches from each source automatically.
+    This endpoint supports two modes:
+    1. Fetch by windfarms: Provide windfarm_ids, auto-detects sources
+    2. Fetch by source: Provide source name, fetches all windfarms for that source
+
+    Examples:
+    - Fetch specific windfarms: {"windfarm_ids": [1,2,3], "start_date": "...", "end_date": "..."}
+    - Fetch all ENTSOE data: {"source": "ENTSOE", "start_date": "...", "end_date": "..."}
 
     This will:
-    1. Analyze which sources are configured for the windfarms
+    1. Determine windfarms (from IDs or by source)
     2. Fetch data from each source's external API
     3. Transform the data to match generation_data_raw format
     4. Store or update records in the database (source_type='api')
     5. Return summary of what was stored/updated per source
     """
+    # Validate input
+    if not request.windfarm_ids and not request.source:
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide either 'windfarm_ids' or 'source' parameter"
+        )
+
     service = RawDataStorageService(db)
 
     try:
@@ -45,6 +57,7 @@ async def fetch_raw_data_unified(
             start_date=request.start_date,
             end_date=request.end_date,
             user_id=current_user.id,
+            source_filter=request.source,
         )
         return result
     except Exception as e:

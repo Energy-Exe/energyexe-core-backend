@@ -146,23 +146,33 @@ The Excel file has missing or invalid country names. Check the validation output
 - Ensure the database is running
 - Try restarting the backend server
 
-## 🌊 NVE-Specific Considerations
+## 🌊 Phase-Based Generation Units (NVE & EIA)
 
-### Phase-Based Generation Units
+### Phase-Based Structure
 
-NVE windfarms have a **phase-based structure** where a single windfarm has multiple phases (expansion stages) over time. Each phase:
+Multiple data sources use a **phase-based structure** where a single plant has multiple phases (expansion stages, repowering) over time. Each phase:
 - Has its own `start_date` and `end_date`
 - Represents the operational capacity during that time period
-- **Shares the same code** with other phases of the same windfarm
+- **Shares the same code** with other phases of the same plant
 
-**Example: Bessakerfjellet**
+**NVE Example: Bessakerfjellet**
 - Code: `20`
 - Phase 1: 2007-09-10 to 2008-08-29 (capacity: 100 MW)
 - Phase 2: 2008-08-30 to present (capacity: 150 MW)
 
+**EIA Example: Horse Hollow**
+- Code: `56291`
+- Phase 1-3: 2005-12-01 to 2017-12-30 (original installation)
+- Phase 1-3 RP: 2017-12-31 to present (repowered)
+
 ### Important: Code Uniqueness
 
-As of migration `7daf40c2a86e`, the **unique constraint on `generation_units.code` has been removed**. This allows multiple phases to share the same code, which is required for NVE data.
+As of migration `7daf40c2a86e`, the **unique constraint on `generation_units.code` has been removed**. This allows multiple phases to share the same code, which is required for both NVE and EIA data.
+
+**The import script now:**
+- Uses codes exactly as they appear in Excel (no automatic suffix generation)
+- Allows duplicate codes for different phases
+- Relies on `start_date`/`end_date` to differentiate phases
 
 ### Importing NVE Generation Units
 

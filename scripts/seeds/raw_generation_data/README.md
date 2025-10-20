@@ -24,28 +24,33 @@ Import raw ELEXON generation data from CSV files:
 
 ```bash
 # Standard import with 4 workers
-poetry run python scripts/seeds/generation_data/elexon/import_parallel_optimized.py
+poetry run python scripts/seeds/raw_generation_data/elexon/import_parallel_optimized.py
 
 # Faster import with 8 workers
-poetry run python scripts/seeds/generation_data/elexon/import_parallel_optimized.py --workers 8
+poetry run python scripts/seeds/raw_generation_data/elexon/import_parallel_optimized.py --workers 8
 
 # Check import status
-poetry run python scripts/seeds/generation_data/elexon/check_import_status.py
+poetry run python scripts/seeds/raw_generation_data/elexon/check_import_status.py
 ```
 
 ### 3. Import ENTSOE Data
 
 Import raw ENTSOE generation data from Excel files:
 
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py \
+    --source ELEXON \
+    --start 2024-02-15 \
+    --end 2025-10-20
+
 ```bash
 # Standard import with 4 workers
-poetry run python scripts/seeds/generation_data/entsoe/import_parallel_optimized.py
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_parallel_optimized.py
 
 # Faster import with 8 workers
-poetry run python scripts/seeds/generation_data/entsoe/import_parallel_optimized.py --workers 8
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_parallel_optimized.py --workers 8
 
 # Check import status
-poetry run python scripts/seeds/generation_data/entsoe/check_import_status.py
+poetry run python scripts/seeds/raw_generation_data/entsoe/check_import_status.py
 ```
 
 ### 4. Import Taipower Data
@@ -54,19 +59,19 @@ Import raw Taipower generation data from Excel files:
 
 ```bash
 # Standard import with cleanup (removes existing data first)
-poetry run python scripts/seeds/generation_data/taipower/import_parallel_optimized.py
+poetry run python scripts/seeds/raw_generation_data/taipower/import_parallel_optimized.py
 
 # Import without cleanup (append mode)
-poetry run python scripts/seeds/generation_data/taipower/import_parallel_optimized.py --no-clean
+poetry run python scripts/seeds/raw_generation_data/taipower/import_parallel_optimized.py --no-clean
 
 # Faster import with 8 workers
-poetry run python scripts/seeds/generation_data/taipower/import_parallel_optimized.py --workers 8
+poetry run python scripts/seeds/raw_generation_data/taipower/import_parallel_optimized.py --workers 8
 
 # Check import status
-poetry run python scripts/seeds/generation_data/taipower/check_import_status.py
+poetry run python scripts/seeds/raw_generation_data/taipower/check_import_status.py
 
 # Clear Taipower data only
-poetry run python scripts/seeds/generation_data/taipower/clear_taipower_data.py
+poetry run python scripts/seeds/raw_generation_data/taipower/clear_taipower_data.py
 ```
 
 ### 5. Import NVE Data
@@ -75,19 +80,19 @@ Import raw NVE (Norwegian Water Resources and Energy Directorate) generation dat
 
 ```bash
 # Standard import with cleanup (removes existing data first)
-poetry run python scripts/seeds/generation_data/nve/import_parallel_optimized.py
+poetry run python scripts/seeds/raw_generation_data/nve/import_parallel_optimized.py
 
 # Import without cleanup (append mode)
-poetry run python scripts/seeds/generation_data/nve/import_parallel_optimized.py --no-clean
+poetry run python scripts/seeds/raw_generation_data/nve/import_parallel_optimized.py --no-clean
 
 # Test with sample data (first 1000 rows)
-poetry run python scripts/seeds/generation_data/nve/import_parallel_optimized.py --sample 1000
+poetry run python scripts/seeds/raw_generation_data/nve/import_parallel_optimized.py --sample 1000
 
 # Faster import with 8 workers
-poetry run python scripts/seeds/generation_data/nve/import_parallel_optimized.py --workers 8
+poetry run python scripts/seeds/raw_generation_data/nve/import_parallel_optimized.py --workers 8
 
 # Check import status
-poetry run python scripts/seeds/generation_data/nve/check_import_status.py
+poetry run python scripts/seeds/raw_generation_data/nve/check_import_status.py
 ```
 
 ### 6. Import Energistyrelsen Data
@@ -96,22 +101,22 @@ Import raw Energistyrelsen (Danish Energy Agency) monthly generation data:
 
 ```bash
 # Standard import with cleanup (removes existing data first)
-poetry run python scripts/seeds/generation_data/energistyrelsen/import_parallel_optimized.py
+poetry run python scripts/seeds/raw_generation_data/energistyrelsen/import_parallel_optimized.py
 
 # Import without cleanup (append mode)
-poetry run python scripts/seeds/generation_data/energistyrelsen/import_parallel_optimized.py --no-clean
+poetry run python scripts/seeds/raw_generation_data/energistyrelsen/import_parallel_optimized.py --no-clean
 
 # Test with sample data (first 1000 rows)
-poetry run python scripts/seeds/generation_data/energistyrelsen/import_parallel_optimized.py --sample 1000
+poetry run python scripts/seeds/raw_generation_data/energistyrelsen/import_parallel_optimized.py --sample 1000
 
 # Faster import with 8 workers
-poetry run python scripts/seeds/generation_data/energistyrelsen/import_parallel_optimized.py --workers 8
+poetry run python scripts/seeds/raw_generation_data/energistyrelsen/import_parallel_optimized.py --workers 8
 
 # Check import status
-poetry run python scripts/seeds/generation_data/energistyrelsen/check_import_status.py
+poetry run python scripts/seeds/raw_generation_data/energistyrelsen/check_import_status.py
 
 # Check configured units
-poetry run python scripts/seeds/generation_data/energistyrelsen/check_energistyrelsen_units.py
+poetry run python scripts/seeds/raw_generation_data/energistyrelsen/check_energistyrelsen_units.py
 ```
 
 ### 7. Import EIA Data
@@ -120,19 +125,19 @@ Import raw EIA (U.S. Energy Information Administration) monthly wind generation 
 
 ```bash
 # Standard import with cleanup (removes existing data first)
-poetry run python scripts/seeds/generation_data/eia/import_parallel_optimized.py
+poetry run python scripts/seeds/raw_generation_data/eia/import_parallel_optimized.py
 
 # Import without cleanup (append mode)
-poetry run python scripts/seeds/generation_data/eia/import_parallel_optimized.py --no-clean
+poetry run python scripts/seeds/raw_generation_data/eia/import_parallel_optimized.py --no-clean
 
 # Test with first 3 files
-poetry run python scripts/seeds/generation_data/eia/import_parallel_optimized.py --sample 3
+poetry run python scripts/seeds/raw_generation_data/eia/import_parallel_optimized.py --sample 3
 
 # Faster import with 8 workers
-poetry run python scripts/seeds/generation_data/eia/import_parallel_optimized.py --workers 8
+poetry run python scripts/seeds/raw_generation_data/eia/import_parallel_optimized.py --workers 8
 
 # Check import status
-poetry run python scripts/seeds/generation_data/eia/check_import_status.py
+poetry run python scripts/seeds/raw_generation_data/eia/check_import_status.py
 ```
 
 ## Prerequisites
@@ -147,18 +152,18 @@ poetry add polars pyarrow psutil asyncpg openpyxl
 To clear existing data before re-import:
 
 ```bash
-# Clear all generation_data_raw
-poetry run python scripts/seeds/generation_data/elexon/clear_generation_data_raw.py
+# Clear all raw_generation_data_raw
+poetry run python scripts/seeds/raw_generation_data/elexon/clear_raw_generation_data_raw.py
 
 # Or clear only specific source
-poetry run python scripts/seeds/generation_data/clear_by_source.py --source ELEXON
-poetry run python scripts/seeds/generation_data/clear_by_source.py --source ENTSOE
-poetry run python scripts/seeds/generation_data/clear_by_source.py --source Taipower
-poetry run python scripts/seeds/generation_data/clear_by_source.py --source NVE
-poetry run python scripts/seeds/generation_data/clear_by_source.py --source ENERGISTYRELSEN
+poetry run python scripts/seeds/raw_generation_data/clear_by_source.py --source ELEXON
+poetry run python scripts/seeds/raw_generation_data/clear_by_source.py --source ENTSOE
+poetry run python scripts/seeds/raw_generation_data/clear_by_source.py --source Taipower
+poetry run python scripts/seeds/raw_generation_data/clear_by_source.py --source NVE
+poetry run python scripts/seeds/raw_generation_data/clear_by_source.py --source ENERGISTYRELSEN
 
 # Clear Taipower data specifically
-poetry run python scripts/seeds/generation_data/taipower/clear_taipower_data.py
+poetry run python scripts/seeds/raw_generation_data/taipower/clear_taipower_data.py
 ```
 
 ## Data Details
@@ -259,17 +264,102 @@ If import fails:
 For debugging:
 ```bash
 # Enable profiling
-poetry run python scripts/seeds/generation_data/elexon/import_parallel_optimized.py --profile
-poetry run python scripts/seeds/generation_data/entsoe/import_parallel_optimized.py --profile
-poetry run python scripts/seeds/generation_data/taipower/import_parallel_optimized.py --profile
+poetry run python scripts/seeds/raw_generation_data/elexon/import_parallel_optimized.py --profile
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_parallel_optimized.py --profile
+poetry run python scripts/seeds/raw_generation_data/taipower/import_parallel_optimized.py --profile
 ```
+
+## Important: Phase-Based Generation Units
+
+### Multi-Phase Plants
+
+Many wind farms have **multiple phases** representing expansions, repowering, or different stages of development. These should use the **same generation unit code** with different `start_date`/`end_date` periods, NOT different codes with suffixes.
+
+**Correct Approach (Phase-Based):**
+```
+Code: 56291
+- Phase 1: "Horse Hollow 1" | 2005-12-01 to 2017-12-30
+- Phase 2: "Horse Hollow 1 RP" | 2017-12-31 to present
+```
+
+**Incorrect Approach (Auto-Generated Suffixes):**
+```
+Code: 56291    → "Horse Hollow 1"
+Code: 56291_1  → "Horse Hollow 1 RP"  ❌ BREAKS API IMPORTS
+```
+
+### Why This Matters
+
+**APIs report at the plant/facility level:**
+- EIA API: Returns data for plant `56291` (all phases combined)
+- API does NOT recognize `56291_1` → Returns 500 errors
+- Taipower API: Same behavior for Chinese codes
+- ELEXON API: Has its own format with underscores (e.g., `T_ACHRW-1`) - these are legitimate
+
+**Database handles phases with dates:**
+- Multiple generation units can share the same code
+- `start_date` and `end_date` differentiate which phase was active when
+- Aggregation scripts use these dates to select the correct phase for each time period
+
+### Generation Unit Code Guidelines
+
+**DO:**
+- ✅ Use codes exactly as they appear in source data
+- ✅ Allow duplicate codes for different phases (differentiated by dates)
+- ✅ Set proper `start_date`/`end_date` for each phase
+- ✅ Verify codes work with the data source's API (if applicable)
+
+**DON'T:**
+- ❌ Auto-generate suffixes (`_1`, `_2`, `_3`) for duplicate codes
+- ❌ Modify codes from their original source format
+- ❌ Use placeholder codes like `nan_1`, `nan_2`
+
+**Exception: ELEXON**
+- ELEXON BM unit codes naturally contain underscores and hyphens (e.g., `T_ACHRW-1`)
+- This is the official format - keep these as-is
+- Have verified data (100K+ records per unit)
+
+### Fixed Issues (Oct 2025)
+
+**EIA:** Fixed 182 auto-generated suffix codes
+- `57874_1` → `57874` (now phase-based)
+- Removed suffix generation from import script
+- All EIA codes now compatible with EIA API
+
+**Taipower:** Fixed 10 auto-generated suffix codes
+- `彰工_1` → `彰工` (now phase-based)
+- All Taipower codes now compatible with Taipower API
+
+**ENERGISTYRELSEN:** All codes are `nan_X` placeholders
+- No valid plant codes in source data
+- Uses turbine-level data instead (acceptable)
+
+## EIA API Import
+
+In addition to Excel file imports, EIA data can be fetched via API for recent months:
+
+```bash
+# Fetch recent months via API (recommended for keeping data up-to-date)
+poetry run python scripts/seeds/raw_generation_data/eia/import_from_api.py \
+    --start-year 2025 --start-month 2 --end-year 2025 --end-month 7
+
+# See full documentation
+cat scripts/seeds/raw_generation_data/eia/README.md
+```
+
+**Key Features:**
+- Fetches data for 1,537 units (1,355 unique plant codes after deduplication)
+- Smart retry logic handles API errors automatically
+- Bulk upsert prevents duplicates
+- Takes ~10-15 minutes for full run
+- Requires `EIA_API_KEY` in `.env` file
 
 ## Notes
 
 - **Taipower, NVE, Energistyrelsen & EIA**: Automatically clear existing data before import (use `--no-clean` to append)
 - **ELEXON & ENTSOE**: Append by default (manually clear if needed)
 - **NVE, Energistyrelsen & EIA**: Data is pivoted - columns are units/months, rows are timestamps/turbines/plants
-- **All sources**: Data stored in `generation_data_raw` table with JSONB structure
+- **All sources**: Data stored in `raw_generation_data_raw` table with JSONB structure
 - **NVE & Energistyrelsen**: Use `--sample N` to test with first N rows before full import
 - **EIA**: Use `--sample N` to test with first N files before full import
 - **Energistyrelsen & EIA**: Monthly data (not hourly), stored with `period_type='month'`

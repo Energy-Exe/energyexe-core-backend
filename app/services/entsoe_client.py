@@ -379,10 +379,12 @@ class ENTSOEClient:
                 return pd.DataFrame(), metadata
                 
         except Exception as e:
-            logger.error(f"Error fetching per-unit data: {str(e)}")
-            print(e)
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
+            logger.error(f"Error fetching per-unit data: {error_msg}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             metadata["success"] = False
-            metadata["errors"].append(str(e))
+            metadata["errors"].append(error_msg)
             return pd.DataFrame(), metadata
 
     def get_available_areas(self) -> Dict[str, str]:

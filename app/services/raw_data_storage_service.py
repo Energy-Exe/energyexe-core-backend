@@ -34,20 +34,69 @@ class RawDataStorageService:
 
     async def fetch_and_store_all_sources(
         self,
-        windfarm_ids: List[int],
+        windfarm_ids: Optional[List[int]],
         start_date: datetime,
         end_date: datetime,
         user_id: int,
+        source_filter: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Fetch data from all available sources for the given windfarms.
 
         Auto-detects which sources have generation units configured for the windfarms
         and fetches from each source automatically.
+
+        Args:
+            windfarm_ids: Optional list of windfarm IDs. If None and source_filter is provided,
+                         fetches all windfarms for that source.
+            start_date: Start date for fetch
+            end_date: End date for fetch
+            user_id: User triggering the fetch
+            source_filter: Optional source name (e.g., 'ENTSOE'). If provided without windfarm_ids,
+                          fetches all windfarms for this source.
         """
         from sqlalchemy.orm import selectinload
 
+        # If source_filter is provided and no specific windfarm_ids, get all windfarms for that source
+        if source_filter and not windfarm_ids:
+            logger.info(f"Fetching all windfarms for source: {source_filter}")
+
+            # Get all windfarms that have generation units for this source
+            stmt = (
+                select(Windfarm)
+                .options(selectinload(Windfarm.generation_units))
+                .join(GenerationUnit, GenerationUnit.windfarm_id == Windfarm.id)
+                .where(GenerationUnit.source == source_filter)
+                .distinct()
+            )
+            result = await self.db.execute(stmt)
+            windfarms = result.scalars().all()
+
+            if windfarms:
+                windfarm_ids = [w.id for w in windfarms]
+                logger.info(f"Found {len(windfarm_ids)} windfarms for {source_filter}")
+            else:
+                logger.warning(f"No windfarms found for source {source_filter}")
+
         # Get all windfarms with their generation units
+        if not windfarm_ids:
+            from app.schemas.raw_data_fetch import UnifiedRawDataFetchResponse
+            return UnifiedRawDataFetchResponse(
+                success=False,
+                windfarm_ids=[],
+                windfarm_names=[],
+                date_range={
+                    "start": start_date.isoformat(),
+                    "end": end_date.isoformat(),
+                },
+                total_records_stored=0,
+                total_records_updated=0,
+                sources_processed=[],
+                by_source={},
+                overall_summary={},
+                errors=["No windfarms found for the specified criteria"],
+            )
+
         stmt = (
             select(Windfarm)
             .options(selectinload(Windfarm.generation_units))
@@ -79,9 +128,17 @@ class RawDataStorageService:
         for windfarm in windfarms:
             for unit in windfarm.generation_units:
                 source = unit.source
+                # If source_filter is specified, only include that source
+                if source_filter and source != source_filter:
+                    continue
                 if source not in sources_map:
                     sources_map[source] = set()
                 sources_map[source].add(windfarm.id)
+
+        # Log what sources were detected
+        logger.info(f"Detected sources: {list(sources_map.keys())}")
+        if source_filter:
+            logger.info(f"Filtered to source: {source_filter}")
 
         # Build request for each source
         request_base = RawDataFetchRequest(
@@ -188,7 +245,12 @@ class RawDataStorageService:
         total_records_updated = 0
         total_api_calls = 0
 
-        # Process each windfarm
+        # OPTIMIZATION: Group windfarms by bidding zone
+        # This allows us to make ONE API call per zone instead of one per windfarm
+        from app.models.bidzone import Bidzone
+
+        bidzone_groups = {}  # {bidzone_code: {windfarms: [...], units: [...], eic_codes: [...]}}
+
         for windfarm in windfarms:
             # Get ENTSOE units for this windfarm
             entsoe_units = [u for u in windfarm.generation_units if u.source == "ENTSOE"]
@@ -196,56 +258,78 @@ class RawDataStorageService:
             if not entsoe_units:
                 continue
 
-            # Get bidzone for this windfarm (for area_code)
-            bidzone_code = None
-            if windfarm.bidzone_id:
-                from app.models.bidzone import Bidzone
-                stmt = select(Bidzone).where(Bidzone.id == windfarm.bidzone_id)
-                result = await self.db.execute(stmt)
-                bidzone = result.scalar_one_or_none()
-                if bidzone:
-                    bidzone_code = bidzone.name  # e.g., 'DK_1', 'DK_2'
-
-            if not bidzone_code:
+            # Get bidzone
+            if not windfarm.bidzone_id:
                 all_errors.append(f"Windfarm {windfarm.name} has no bidzone configured")
                 continue
 
-            # Extract EIC codes from units
-            eic_codes = [u.code for u in entsoe_units if u.code and u.code != 'nan']
+            stmt = select(Bidzone).where(Bidzone.id == windfarm.bidzone_id)
+            result = await self.db.execute(stmt)
+            bidzone = result.scalar_one_or_none()
 
-            if not eic_codes:
-                all_errors.append(f"No EIC codes found for windfarm {windfarm.name}")
+            if not bidzone or not bidzone.code:
+                all_errors.append(f"Windfarm {windfarm.name} has no bidzone configured")
                 continue
 
+            bidzone_code = bidzone.code
+
+            # Initialize bidzone group if needed
+            if bidzone_code not in bidzone_groups:
+                bidzone_groups[bidzone_code] = {
+                    'bidzone_name': bidzone.name,
+                    'windfarms': [],
+                    'units': [],
+                    'eic_codes': []
+                }
+
+            # Add windfarm and its units to the bidzone group
+            bidzone_groups[bidzone_code]['windfarms'].append(windfarm)
+            bidzone_groups[bidzone_code]['units'].extend(entsoe_units)
+            bidzone_groups[bidzone_code]['eic_codes'].extend([
+                u.code for u in entsoe_units if u.code and u.code != 'nan'
+            ])
+
+        logger.info(f"Grouped {len(windfarms)} windfarms into {len(bidzone_groups)} bidding zones")
+        for zone_code, zone_data in bidzone_groups.items():
+            logger.info(f"  {zone_data['bidzone_name']} ({zone_code}): {len(zone_data['windfarms'])} windfarms, {len(zone_data['units'])} units")
+
+        # Convert dates to naive UTC for ENTSOE client
+        start_naive = request.start_date.replace(tzinfo=None) if request.start_date.tzinfo else request.start_date
+        end_naive = request.end_date.replace(tzinfo=None) if request.end_date.tzinfo else request.end_date
+
+        # Process each bidding zone (ONE API call per zone!)
+        for bidzone_code, zone_data in bidzone_groups.items():
             try:
-                # Fetch per-unit data from ENTSOE
-                logger.info(f"Fetching ENTSOE data for {windfarm.name} ({len(eic_codes)} units)")
+                logger.info(
+                    f"Fetching ENTSOE data for {zone_data['bidzone_name']} "
+                    f"({len(zone_data['windfarms'])} windfarms, {len(zone_data['units'])} units)"
+                )
 
-                # Convert dates to naive UTC for ENTSOE client
-                start_naive = request.start_date.replace(tzinfo=None) if request.start_date.tzinfo else request.start_date
-                end_naive = request.end_date.replace(tzinfo=None) if request.end_date.tzinfo else request.end_date
-
+                # Make ONE API call for the entire bidding zone
+                # The API returns ALL wind units in the zone, we filter locally
                 df, metadata = await client.fetch_generation_per_unit(
                     start=start_naive,
                     end=end_naive,
                     area_code=bidzone_code,
-                    eic_codes=eic_codes,
+                    eic_codes=zone_data['eic_codes'],  # Filter for our EIC codes
                     production_types=["wind"],
                 )
 
                 total_api_calls += 1
 
                 if df.empty:
-                    logger.warning(f"No data returned for windfarm {windfarm.name}")
+                    logger.warning(f"No data returned for bidzone {zone_data['bidzone_name']}")
                     continue
 
-                # Transform and store data for each unit
-                for unit in entsoe_units:
+                logger.info(f"Received {len(df)} records for {zone_data['bidzone_name']}")
+
+                # Process each unit in this zone
+                for unit in zone_data['units']:
                     # Filter dataframe for this unit's EIC code
                     unit_df = df[df.get('eic_code', df.get('unit_code', '')) == unit.code]
 
                     if unit_df.empty:
-                        logger.warning(f"No data for unit {unit.code}")
+                        logger.debug(f"No data for unit {unit.code} in bidzone response")
                         continue
 
                     # Transform to generation_data_raw format
@@ -271,7 +355,7 @@ class RawDataStorageService:
                     )
 
             except Exception as e:
-                error_msg = f"Error fetching ENTSOE data for {windfarm.name}: {str(e)}"
+                error_msg = f"Error fetching ENTSOE data for bidzone {zone_data['bidzone_name']}: {str(e)}"
                 logger.error(error_msg)
                 all_errors.append(error_msg)
 
@@ -306,12 +390,18 @@ class RawDataStorageService:
         user_id: int,
         api_metadata: Dict,
     ) -> Tuple[int, int]:
-        """Store ENTSOE records in generation_data_raw."""
-        records_stored = 0
-        records_updated = 0
+        """Store ENTSOE records in generation_data_raw using bulk upsert."""
+        from sqlalchemy.dialects.postgresql import insert
+        from decimal import Decimal
+
+        if df.empty:
+            return 0, 0
 
         # Convert api_metadata to JSON-serializable format
         serializable_metadata = self._make_json_serializable(api_metadata)
+
+        # Prepare all records for bulk insert
+        records_to_insert = []
 
         for idx, row in df.iterrows():
             # Extract timestamp
@@ -354,41 +444,55 @@ class RawDataStorageService:
                 },
             }
 
-            # Check if record exists
-            stmt = select(GenerationDataRaw).where(
-                and_(
-                    GenerationDataRaw.source == "ENTSOE",
-                    GenerationDataRaw.identifier == unit.code,
-                    GenerationDataRaw.period_start == timestamp,
-                )
+            # Add to bulk insert list
+            records_to_insert.append({
+                "source": "ENTSOE",
+                "source_type": "api",
+                "identifier": unit.code,
+                "period_start": timestamp,
+                "period_end": period_end,
+                "period_type": period_type,
+                "value_extracted": Decimal(str(value)),
+                "unit": "MW",
+                "data": data,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            })
+
+        if not records_to_insert:
+            return 0, 0
+
+        # Use PostgreSQL bulk upsert with unique constraint
+        try:
+            stmt = insert(GenerationDataRaw).values(records_to_insert)
+
+            # Use upsert to handle existing records
+            stmt = stmt.on_conflict_do_update(
+                index_elements=['source', 'identifier', 'period_start'],
+                set_={
+                    'value_extracted': stmt.excluded.value_extracted,
+                    'data': stmt.excluded.data,
+                    'updated_at': datetime.now(timezone.utc),
+                    'period_end': stmt.excluded.period_end,
+                    'period_type': stmt.excluded.period_type,
+                    'unit': stmt.excluded.unit,
+                }
             )
+
             result = await self.db.execute(stmt)
-            existing_record = result.scalar_one_or_none()
+            await self.db.commit()
 
-            if existing_record:
-                # Update existing record
-                existing_record.value_extracted = Decimal(str(value))
-                existing_record.data = data
-                existing_record.updated_at = datetime.now(timezone.utc)
-                records_updated += 1
-            else:
-                # Create new record
-                new_record = GenerationDataRaw(
-                    source="ENTSOE",
-                    source_type="api",
-                    identifier=unit.code,
-                    period_start=timestamp,
-                    period_end=period_end,
-                    period_type=period_type,
-                    value_extracted=Decimal(str(value)),
-                    unit="MW",
-                    data=data,
-                )
-                self.db.add(new_record)
-                records_stored += 1
+            records_stored = len(records_to_insert)
+            records_updated = 0
 
-        await self.db.commit()
-        return records_stored, records_updated
+            logger.info(f"Bulk upserted {len(records_to_insert)} records for unit {unit.code}")
+
+            return records_stored, records_updated
+
+        except Exception as e:
+            logger.error(f"Error storing records for unit {unit.code}: {str(e)}")
+            await self.db.rollback()
+            return 0, 0
 
     async def fetch_and_store_elexon(
         self,
@@ -521,12 +625,18 @@ class RawDataStorageService:
         user_id: int,
         api_metadata: Dict,
     ) -> Tuple[int, int]:
-        """Store ELEXON records in generation_data_raw."""
-        records_stored = 0
-        records_updated = 0
+        """Store ELEXON records in generation_data_raw using bulk upsert."""
+        from sqlalchemy.dialects.postgresql import insert
+        from decimal import Decimal
+
+        if df.empty:
+            return 0, 0
 
         # Convert api_metadata to JSON-serializable format
         serializable_metadata = self._make_json_serializable(api_metadata)
+
+        # Prepare all records for bulk insert
+        records_to_insert = []
 
         for idx, row in df.iterrows():
             # Extract timestamp
@@ -564,41 +674,55 @@ class RawDataStorageService:
                 },
             }
 
-            # Check if record exists
-            stmt = select(GenerationDataRaw).where(
-                and_(
-                    GenerationDataRaw.source == "ELEXON",
-                    GenerationDataRaw.identifier == unit.code,
-                    GenerationDataRaw.period_start == timestamp,
-                )
+            # Add to bulk insert list
+            records_to_insert.append({
+                "source": "ELEXON",
+                "source_type": "api",
+                "identifier": unit.code,
+                "period_start": timestamp,
+                "period_end": period_end,
+                "period_type": period_type,
+                "value_extracted": Decimal(str(value)),
+                "unit": "MWh",
+                "data": data,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            })
+
+        if not records_to_insert:
+            return 0, 0
+
+        # Use PostgreSQL bulk upsert (now that unique constraint exists)
+        try:
+            stmt = insert(GenerationDataRaw).values(records_to_insert)
+
+            # Use upsert to handle existing records
+            stmt = stmt.on_conflict_do_update(
+                index_elements=['source', 'identifier', 'period_start'],
+                set_={
+                    'value_extracted': stmt.excluded.value_extracted,
+                    'data': stmt.excluded.data,
+                    'updated_at': datetime.now(timezone.utc),
+                    'period_end': stmt.excluded.period_end,
+                    'period_type': stmt.excluded.period_type,
+                    'unit': stmt.excluded.unit,
+                }
             )
+
             result = await self.db.execute(stmt)
-            existing_record = result.scalar_one_or_none()
+            await self.db.commit()
 
-            if existing_record:
-                # Update existing record
-                existing_record.value_extracted = Decimal(str(value))
-                existing_record.data = data
-                existing_record.updated_at = datetime.now(timezone.utc)
-                records_updated += 1
-            else:
-                # Create new record
-                new_record = GenerationDataRaw(
-                    source="ELEXON",
-                    source_type="api",
-                    identifier=unit.code,
-                    period_start=timestamp,
-                    period_end=period_end,
-                    period_type=period_type,
-                    value_extracted=Decimal(str(value)),
-                    unit="MWh",
-                    data=data,
-                )
-                self.db.add(new_record)
-                records_stored += 1
+            logger.info(f"Bulk upserted {len(records_to_insert)} records for unit {unit.code}")
 
-        await self.db.commit()
-        return records_stored, records_updated
+            records_stored = len(records_to_insert)
+            records_updated = 0
+
+            return records_stored, records_updated
+
+        except Exception as e:
+            logger.error(f"Error storing records for unit {unit.code}: {str(e)}")
+            await self.db.rollback()
+            return 0, 0
 
     async def fetch_and_store_eia(
         self,

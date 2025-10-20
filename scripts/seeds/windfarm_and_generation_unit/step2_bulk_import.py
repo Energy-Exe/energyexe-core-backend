@@ -350,17 +350,13 @@ class BulkImporter:
                 self.stats['errors'].append(f"Row {idx+1}: Windfarm '{windfarm_name}' not found for unit '{gen_unit_name}'")
                 continue
             
-            # Generate unique code
-            base_code = str(row.get('data_source_code', gen_unit_name))[:40]
-            code = base_code
-            counter = 1
-            while code in self.created_gen_unit_codes:
-                code = f"{base_code}_{counter}"[:50]
-                counter += 1
-                if counter > 1000:  # Safety limit
-                    code = f"{base_code}_{datetime.now().strftime('%H%M%S%f')}"[:50]
-                    break
-            self.created_gen_unit_codes.add(code)
+            # Use the code from Excel directly (no suffix generation)
+            # Multiple units can share the same code (like NVE phases)
+            # They are differentiated by start_date and end_date
+            code = str(row.get('data_source_code', gen_unit_name))[:50]
+
+            # Note: We no longer add suffixes for duplicate codes
+            # This matches NVE behavior where phases share the same code
             
             # Determine technology type
             foundation = str(row.get('foundation_type', '')).strip().lower() if pd.notna(row.get('foundation_type')) else ''
