@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple
 from pathlib import Path
 
 import structlog
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, desc, func, select, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.import_job_execution import (

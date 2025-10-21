@@ -262,8 +262,8 @@ async def trigger_scheduled_job(
 
         if "delay_days" in config:
             import_date = today - timedelta(days=config["delay_days"])
-            import_start = import_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            import_end = import_date.replace(hour=23, minute=59, second=59, microsecond=0)
+            import_start = import_date.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+            import_end = import_date.replace(hour=23, minute=59, second=59, microsecond=0, tzinfo=None)
         elif "delay_months" in config:
             # For monthly jobs
             months_ago = config["delay_months"]
@@ -274,19 +274,15 @@ async def trigger_scheduled_job(
                 month += 12
                 year -= 1
 
-            import_start = datetime(year, month, 1, 0, 0, 0, tzinfo=timezone.utc)
+            import_start = datetime(year, month, 1, 0, 0, 0)
 
             if month == 12:
-                import_end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=timezone.utc) - timedelta(
-                    seconds=1
-                )
+                import_end = datetime(year + 1, 1, 1, 0, 0, 0) - timedelta(seconds=1)
             else:
-                import_end = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=timezone.utc) - timedelta(
-                    seconds=1
-                )
+                import_end = datetime(year, month + 1, 1, 0, 0, 0) - timedelta(seconds=1)
         else:
-            import_start = today
-            import_end = today
+            import_start = today.replace(tzinfo=None)
+            import_end = today.replace(tzinfo=None)
 
         # Create job
         job_request = ImportJobCreate(
