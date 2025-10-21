@@ -15,6 +15,7 @@ from app.api.v1.endpoints import (
     external_data_sources,
     generation,
     generation_units,
+    import_jobs,
     market_balance_areas,
     owners,
     projects,
@@ -72,6 +73,9 @@ api_router.include_router(raw_data_fetch.router, prefix="/raw-data", tags=["raw-
 
 # Data quality and anomaly detection endpoints
 api_router.include_router(data_anomalies.router, prefix="/data-anomalies", tags=["data-anomalies"])
+
+# Scheduled import jobs management
+api_router.include_router(import_jobs.router, prefix="/import-jobs", tags=["import-jobs"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])

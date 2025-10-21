@@ -101,3 +101,45 @@ class UnifiedRawDataFetchResponse(BaseModel):
         description="Overall summary across all sources"
     )
     errors: List[str] = Field(default_factory=list)
+
+
+class FileUploadRequest(BaseModel):
+    """Request parameters for file upload (passed as form data)."""
+
+    start_date: datetime = Field(..., description="Start date for filtering data from file")
+    end_date: datetime = Field(..., description="End date for filtering data from file")
+    clean_first: bool = Field(default=True, description="Whether to clear existing data before import")
+    workers: int = Field(default=4, ge=1, le=8, description="Number of parallel workers for processing")
+
+
+class FileUploadProgressUpdate(BaseModel):
+    """Progress update for file upload processing."""
+
+    status: str  # 'validating', 'processing', 'inserting', 'completed', 'error'
+    message: str
+    progress_percent: Optional[float] = None
+    current_step: Optional[str] = None
+    records_processed: Optional[int] = None
+    total_records: Optional[int] = None
+
+
+class FileUploadResponse(BaseModel):
+    """Response from file upload operation."""
+
+    success: bool
+    source: str
+    file_info: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Information about uploaded file"
+    )
+    date_range_requested: Dict[str, str]
+    date_range_processed: Dict[str, str]  # Actual date range from data
+    records_stored: int
+    records_updated: int
+    generation_units_processed: List[GenerationUnitSummary]
+    summary: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Processing summary (duration, rate, etc.)"
+    )
+    errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)

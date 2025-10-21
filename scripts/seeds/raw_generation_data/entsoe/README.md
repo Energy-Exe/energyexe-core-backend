@@ -1,17 +1,28 @@
 # ENTSOE Data Import
 
-This directory contains scripts for importing ENTSOE (European electricity generation) data into the `generation_data_raw` table.
+This directory contains scripts for importing ENTSOE (European Network of Transmission System Operators for Electricity) generation data into the `generation_data_raw` table.
+
+## Current Data Coverage
+
+**Excel Files**: December 2014 → August 31, 2025 (4.4M records)
+**API Imports**: September 1, 2025 → October 19, 2025 (16K records)
+
+**Coverage is continuous with no gaps.**
 
 ## Import Methods
 
-### Method 1: Excel File Import (For Historical Data)
+### Method 1: Excel File Import (Historical Data)
 
-**Use for:** Bulk historical data (2014-2025), large date ranges
+**Use for:**
+- Bulk historical data (2014-2025)
+- Large date ranges (months/years)
+- Initial data load
+- Control areas not supported by API (DE, NL, GB)
 
 **Source Files:**
 - **Location**: `data/*.xlsx` (Excel files from ENTSOE Transparency Platform)
 - **Format**: European electricity generation data (15-min/hourly)
-- **Coverage**: All European bidding zones
+- **Coverage**: All European bidding zones and control areas
 
 **Script:** `import_parallel_optimized.py`
 
@@ -24,6 +35,10 @@ poetry run python scripts/seeds/raw_generation_data/entsoe/import_parallel_optim
 # Import all files in directory
 poetry run python scripts/seeds/raw_generation_data/entsoe/import_parallel_optimized.py \
   --directory data/
+
+# Faster import with 8 workers
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_parallel_optimized.py \
+  --directory data/ --workers 8
 ```
 
 **Features:**
@@ -33,59 +48,139 @@ poetry run python scripts/seeds/raw_generation_data/entsoe/import_parallel_optim
 - Handles both 15-min and hourly data
 - Stores as `source_type='excel'`
 
-### Method 2: API Import (For Recent Data)
+---
 
-**Use for:** Recent data updates (last few days/weeks), small date ranges
+### Method 2: API Import (Recent Data Updates)
+
+**Use for:**
+- Recent data updates (last few days/weeks)
+- Daily/weekly automated imports
+- Incremental updates after Excel baseline
 
 **Source:** ENTSOE Transparency Platform API
+**API Key Required**: Set `ENTSOE_API_KEY` in `.env`
 
-**Script:** `import_from_api.py` (NEW!)
+**Script:** `import_from_api.py`
 
-**Usage:**
+**Basic Usage:**
 ```bash
-# Fetch single day
+# Fetch single day (safest)
 poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
-  --start 2025-10-11 --end 2025-10-11
+  --start 2025-10-17 --end 2025-10-17
 
 # Fetch one week
 poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
-  --start 2025-10-01 --end 2025-10-07
+  --start 2025-10-11 --end 2025-10-17
 
 # Fetch multiple months (auto-chunks into 7-day batches)
 poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
-  --start 2025-09-02 --end 2025-10-17 --zones BE FR
+  --start 2025-09-01 --end 2025-10-17
+```
 
-# Fetch specific bidding zones only
+**Advanced Options:**
+```bash
+# Fetch specific control areas only
 poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
-  --start 2025-10-11 --end 2025-10-11 --zones BE FR
+  --start 2025-10-17 --end 2025-10-17 --zones DK FR BE
 
 # Dry run (see what would be fetched)
 poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
-  --start 2025-10-11 --end 2025-10-11 --dry-run
+  --start 2025-10-17 --end 2025-10-17 --dry-run
+
+# Custom chunk size for large imports
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
+  --start 2025-09-01 --end 2025-10-17 --chunk-days 14
 ```
 
-**Automatic Chunking:** The script automatically breaks large date ranges into 7-day chunks to avoid API/database limits. You can safely request months of data in one command!
-
 **Features:**
-- Bidding zone grouping (7 API calls instead of 40+)
-- Bulk upsert (updates existing records)
-- Automatic rate limiting
-- Only fetches configured units
-- Stores as `source_type='api'`
+- ✅ **Control area grouping** (6 API calls for all units)
+- ✅ **Bulk upsert** (updates existing records, no duplicates)
+- ✅ **Automatic chunking** for large date ranges (7-day chunks by default)
+- ✅ **Smart retry logic** with automatic backoff
+- ✅ **Filters for configured units** only
+- ✅ Stores as `source_type='api'`
 
 **Important Notes:**
-- ENTSOE has 1-2 day publication delay (don't request yesterday's data)
-- Not all zones provide per-unit data via API
-- Zones with working API: BE, FR (up to current), DK1, DK2 (up to Sept 2025)
-- For UK data, use ELEXON API instead
+- ⚠️ **ENTSOE has 2-3 day publication delay** - don't request yesterday's data
+- ⚠️ Use dates at least 3 days in the past for reliable results
+- ⚠️ The script groups by **control area**, not bidding zone
 
-## Data Mapping (Both Methods)
+---
+
+## Supported Control Areas
+
+The API groups windfarms by **control area** (not bidding zone). One API call fetches all units in a control area.
+
+### ✅ Working Control Areas (API Supported)
+
+**BE (Belgium)** - Control Area: `10YBE----------2`
+- 10 offshore wind farms
+- Coverage: Continuous, up to current -2 days
+- Example: Belwind, Northwind, Nobelwind, C-Power
+
+**DK (Denmark)** - Control Area: `10Y1001A1001A796`
+- 11 offshore wind farms (Anholt, Horns Rev, Kriegers Flak, Rødsand, Vesterhav)
+- Coverage: Continuous, up to current -2 days
+- Note: 181 onshore farms use Energistyrelsen data source (file uploads)
+
+**FR (France)** - Control Area: `10YFR-RTE------C`
+- 32 offshore wind farms
+- Coverage: Continuous, up to current -2 days
+- Example: Saint-Brieuc, Fécamp, Banc de Guérande
+
+### ❌ Not Supported via API
+
+**National Grid (UK)** - Control Area: `10YGB----------A`
+- Use **ELEXON API** instead (see `scripts/seeds/raw_generation_data/elexon/`)
+- ENTSOE doesn't provide per-unit generation data for UK
+
+**DE(TenneT GER) (Germany)**, **NL (Netherlands)**
+- Per-unit generation data not available via ENTSOE API
+- Use **Excel file imports** for these control areas
+
+---
+
+## Recommended Import Strategy
+
+### Initial Setup (One-time)
+
+1. **Import historical Excel files** (2014 through August 2025)
+   ```bash
+   poetry run python scripts/seeds/raw_generation_data/entsoe/import_parallel_optimized.py \
+     --directory data/
+   ```
+
+2. **Backfill September-October 2025** via API (to bridge gap)
+   ```bash
+   poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
+     --start 2025-09-01 --end 2025-10-17
+   ```
+
+### Daily Maintenance
+
+Run daily to import yesterday's data (with 3-day safety buffer):
+
+```bash
+# Import data from 3 days ago
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
+  --start 2025-10-18 --end 2025-10-18
+```
+
+Or automate with cron:
+```bash
+# Run daily at 6 AM to import data from 3 days ago
+0 6 * * * cd /path/to/project && poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py --start $(date -d "3 days ago" +\%Y-\%m-\%d) --end $(date -d "3 days ago" +\%Y-\%m-\%d)
+```
+
+---
+
+## Data Mapping
 
 ### Database Fields
 ```
 source           = 'ENTSOE'
 source_type      = 'excel' or 'api'
-identifier       = GenerationUnitCode (e.g., '48W0000000000047')
+identifier       = EIC code (e.g., '45W000000000046I' for Anholt)
 period_start     = DateTime (UTC)
 period_end       = Calculated based on resolution
 period_type      = 'PT15M' or 'PT60M'
@@ -94,16 +189,16 @@ unit             = 'MW'
 data             = JSONB with full details
 ```
 
-### Data JSONB Structure
+### JSONB Data Structure
 
 **From Excel:**
 ```json
 {
-  "area_code": "10YBE----------2",
-  "generation_unit_code": "22WBELWIN1500271",
-  "generation_unit_name": "Belwind Phase 1",
+  "area_code": "10Y1001A1001A796",
+  "generation_unit_code": "45W000000000046I",
+  "generation_unit_name": "Anholt",
   "actual_generation_output_mw": 119.67,
-  "installed_capacity_mw": 171,
+  "installed_capacity_mw": 400,
   "resolution_code": "PT60M"
 }
 ```
@@ -111,11 +206,11 @@ data             = JSONB with full details
 **From API:**
 ```json
 {
-  "eic_code": "22WBELWIN1500271",
-  "area_code": "10YBE----------2",
+  "eic_code": "45W000000000046I",
+  "area_code": "10Y1001A1001A796",
   "production_type": "wind",
   "resolution_code": "PT60M",
-  "installed_capacity_mw": 171,
+  "installed_capacity_mw": 400,
   "import_metadata": {
     "import_timestamp": "2025-10-19T10:00:00Z",
     "import_method": "api_script",
@@ -123,6 +218,8 @@ data             = JSONB with full details
   }
 }
 ```
+
+---
 
 ## After Import: Run Aggregation
 
@@ -132,42 +229,114 @@ Both import methods store data in `generation_data_raw`. After importing, proces
 # Aggregate the imported data
 poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py \
   --source ENTSOE \
-  --start 2025-10-11 \
-  --end 2025-10-11
+  --start 2025-10-17 \
+  --end 2025-10-17
 ```
 
-## Performance Comparison
+---
 
-| Method | Use Case | Speed | API Calls | Best For |
-|--------|----------|-------|-----------|----------|
-| Excel Import | Historical (2014-2025) | Very Fast | 0 | Bulk data, all zones |
-| API Import | Recent (last week) | Fast | 7-10 | Live updates, BE/FR zones |
+## Performance
+
+### Excel Import
+- **Speed**: Very fast (parallel processing, CSV conversion)
+- **API Calls**: 0
+- **Best for**: Bulk historical data (months/years)
+- **Time**: ~5-10 minutes for 1 year of data (all zones)
+
+### API Import
+- **Speed**: Fast (1-2 minutes per week)
+- **API Calls**: 6 calls per day (one per control area)
+- **Best for**: Recent incremental updates (days/weeks)
+- **Time**: ~30 seconds per day (all working control areas)
+
+---
 
 ## Troubleshooting
 
 ### API Import Errors
 
-**InvalidBusinessParameterError:**
-- Date too recent (ENTSOE has 1-2 day delay)
-- Zone doesn't provide per-unit data
-- Solution: Use older date or Excel files
+**"Delivered time interval is not valid for this Data item"**
+- Date is too recent (ENTSOE has 2-3 day publication delay)
+- **Solution**: Use dates at least 3 days in the past
 
-**NoMatchingDataError:**
-- No data available for those units/dates
-- Solution: Check if zone publishes per-unit data
+**"InvalidBusinessParameterError"**
+- Control area doesn't provide per-unit generation data via API
+- **Solution**: Use Excel file imports instead
+
+**"No matching units found"**
+- EIC codes in database don't match API response
+- **Solution**: Verify EIC codes are correct in database
 
 **For UK windfarms:**
-- Use ELEXON API instead (see `scripts/seeds/raw_generation_data/elexon/`)
+- ENTSOE doesn't provide UK per-unit data
+- **Solution**: Use ELEXON API (see `scripts/seeds/raw_generation_data/elexon/`)
 
-### Which Zones Work via API?
+### Control Area vs Bidding Zone
 
-**Working (Recent Data):**
-- ✅ BE (Belgium): Up to current -2 days
-- ✅ FR (France): Up to current -2 days
+**IMPORTANT**: The API uses **control area codes** in the `in_Domain` parameter, NOT bidding zone codes.
 
-**Partially Working:**
-- ⚠️ DK1, DK2 (Denmark): Up to Sept 2025 only
+- ❌ Wrong: `in_Domain=10YDK-1--------W` (DK1 bidding zone)
+- ✅ Correct: `in_Domain=10Y1001A1001A796` (DK control area)
 
-**Not Available via API:**
-- ❌ GB (UK): Use ELEXON instead
-- ❌ DE-LU, NL: Use Excel files only
+Each windfarm has both:
+- `windfarm.bidzone_id` → Bidding zone (for market/pricing)
+- `windfarm.control_area_id` → Control area (for ENTSOE API)
+
+---
+
+## Example Workflows
+
+### Scenario 1: New Project Setup
+```bash
+# 1. Import all historical data
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_parallel_optimized.py --directory data/
+
+# 2. Bridge gap to current with API
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
+  --start 2025-09-01 --end 2025-10-17
+
+# 3. Aggregate all data
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py \
+  --source ENTSOE --start 2025-01-01 --end 2025-10-17
+```
+
+### Scenario 2: Weekly Update
+```bash
+# Import last week (with 3-day buffer)
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
+  --start 2025-10-11 --end 2025-10-17
+
+# Aggregate new data
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py \
+  --source ENTSOE --start 2025-10-11 --end 2025-10-17
+```
+
+### Scenario 3: Specific Control Area Update
+```bash
+# Update only Danish offshore wind farms
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
+  --start 2025-10-11 --end 2025-10-17 --zones DK
+
+# Or Belgium and France only
+poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
+  --start 2025-10-11 --end 2025-10-17 --zones BE FR
+```
+
+---
+
+## Key Learnings
+
+1. **Control Areas vs Bidding Zones**: ENTSOE API requires control area codes
+2. **Publication Lag**: Always use dates 3+ days in the past
+3. **API Limitations**: Not all European zones provide per-unit data
+4. **Danish Data**: Now works via API! (Fixed October 2025)
+5. **UK Data**: Use ELEXON API, not ENTSOE
+
+## Files in This Directory
+
+- `import_from_api.py` - API import script (recent data)
+- `import_parallel_optimized.py` - Excel import script (historical data)
+- `check_import_status.py` - View current data coverage
+- `clear_entsoe_data.py` - Clear all ENTSOE data (use with caution)
+- `data/` - Directory for Excel files
+- `README.md` - This file

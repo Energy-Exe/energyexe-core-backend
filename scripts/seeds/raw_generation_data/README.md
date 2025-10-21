@@ -57,6 +57,7 @@ poetry run python scripts/seeds/raw_generation_data/entsoe/check_import_status.p
 
 Import raw Taipower generation data from Excel files:
 
+**Option 1: CLI Import (for bulk import)**
 ```bash
 # Standard import with cleanup (removes existing data first)
 poetry run python scripts/seeds/raw_generation_data/taipower/import_parallel_optimized.py
@@ -74,10 +75,24 @@ poetry run python scripts/seeds/raw_generation_data/taipower/check_import_status
 poetry run python scripts/seeds/raw_generation_data/taipower/clear_taipower_data.py
 ```
 
+**Option 2: Web UI File Upload (for single wind farm updates)**
+1. Navigate to `/raw-data-fetch` page in admin UI
+2. Go to "File Upload" tab
+3. Select "Taipower (Taiwan)"
+4. Select the generation unit this file is for
+5. Upload Excel file (.xlsx format)
+6. Specify date range to import (e.g., recent month)
+7. Click "Upload & Process"
+8. Monitor real-time progress updates
+9. Review import summary
+
+Note: Each Taipower file contains data for one wind farm
+
 ### 5. Import NVE Data
 
 Import raw NVE (Norwegian Water Resources and Energy Directorate) generation data:
 
+**Option 1: CLI Import (for initial bulk load)**
 ```bash
 # Standard import with cleanup (removes existing data first)
 poetry run python scripts/seeds/raw_generation_data/nve/import_parallel_optimized.py
@@ -95,10 +110,21 @@ poetry run python scripts/seeds/raw_generation_data/nve/import_parallel_optimize
 poetry run python scripts/seeds/raw_generation_data/nve/check_import_status.py
 ```
 
+**Option 2: Web UI File Upload (for monthly updates)**
+1. Navigate to `/raw-data-fetch` page in admin UI
+2. Go to "File Upload" tab
+3. Select "NVE (Norway)"
+4. Upload updated Excel file (.xlsx format)
+5. Specify date range to import (e.g., last month)
+6. Click "Upload & Process"
+7. Monitor real-time progress updates
+8. Review import summary and units processed
+
 ### 6. Import Energistyrelsen Data
 
 Import raw Energistyrelsen (Danish Energy Agency) monthly generation data:
 
+**Option 1: CLI Import (for initial bulk load)**
 ```bash
 # Standard import with cleanup (removes existing data first)
 poetry run python scripts/seeds/raw_generation_data/energistyrelsen/import_parallel_optimized.py
@@ -118,6 +144,16 @@ poetry run python scripts/seeds/raw_generation_data/energistyrelsen/check_import
 # Check configured units
 poetry run python scripts/seeds/raw_generation_data/energistyrelsen/check_energistyrelsen_units.py
 ```
+
+**Option 2: Web UI File Upload (for monthly updates)**
+1. Navigate to `/raw-data-fetch` page in admin UI
+2. Go to "File Upload" tab
+3. Select "Energistyrelsen (Denmark)"
+4. Upload updated Excel file (.xlsx format with 'kWh' sheet)
+5. Specify date range to import (e.g., last month)
+6. Click "Upload & Process"
+7. Monitor real-time progress updates
+8. Review import summary and turbines processed
 
 ### 7. Import EIA Data
 
@@ -354,13 +390,69 @@ cat scripts/seeds/raw_generation_data/eia/README.md
 - Takes ~10-15 minutes for full run
 - Requires `EIA_API_KEY` in `.env` file
 
+## Web UI File Upload (New Feature)
+
+The `/raw-data-fetch` page now includes a "File Upload" tab for importing NVE, Energistyrelsen, and Taipower data through the web interface.
+
+### Features
+
+- **Real-time progress updates** via Server-Sent Events (SSE)
+- **Date range filtering** - only import specific months from large files
+- **File structure validation** - validates Excel format before processing
+- **Phase-aware processing** - matches data to correct generation unit phases
+- **No file retention** - files are processed and deleted immediately
+- **Same format as CLI** - reuses existing import logic for consistency
+
+### Usage Workflow
+
+1. **Navigate**: Go to `/raw-data-fetch` in admin UI
+2. **Select Tab**: Click "File Upload" tab
+3. **Choose Source**: Select "NVE (Norway)", "Energistyrelsen (Denmark)", or "Taipower (Taiwan)"
+4. **For Taipower**: Select which generation unit the file is for (each file = one wind farm)
+5. **Upload File**: Select Excel file matching source format
+6. **Set Date Range**: Specify which months/years to import from file
+7. **Configure Options**:
+   - Clear existing data first (default: true for NVE/Energistyrelsen, clears only that unit for Taipower)
+   - Number of workers (1-8, default: 4)
+8. **Upload & Process**: Click button and monitor progress
+9. **Review Results**: See records imported, units processed, processing rate
+
+### API Endpoints
+
+```
+POST /api/v1/raw-data/nve/upload
+POST /api/v1/raw-data/energistyrelsen/upload
+POST /api/v1/raw-data/taipower/upload
+```
+
+**Request**: Multipart form data with:
+- `file`: Excel file (.xlsx)
+- `start_date`: ISO datetime (e.g., "2025-09-01T00:00:00Z")
+- `end_date`: ISO datetime (e.g., "2025-09-30T23:59:59Z")
+- `clean_first`: boolean (default: true)
+- `workers`: integer (1-8, default: 4)
+- `unit_code`: string (required for Taipower only, e.g., "彰工")
+
+**Response**: Server-Sent Events stream with:
+1. Progress updates (status, message, progress_percent)
+2. Final result (records stored, units processed, summary)
+
+### Use Cases
+
+- **Monthly Operations Updates**: Upload latest month's data without CLI access
+- **Partial Re-imports**: Re-import specific date ranges after data corrections
+- **Single Wind Farm Updates**: For Taipower, upload data for individual wind farms
+- **Testing**: Upload sample files with date filtering to test before full import
+
 ## Notes
 
 - **Taipower, NVE, Energistyrelsen & EIA**: Automatically clear existing data before import (use `--no-clean` to append)
 - **ELEXON & ENTSOE**: Append by default (manually clear if needed)
 - **NVE, Energistyrelsen & EIA**: Data is pivoted - columns are units/months, rows are timestamps/turbines/plants
 - **All sources**: Data stored in `raw_generation_data_raw` table with JSONB structure
-- **NVE & Energistyrelsen**: Use `--sample N` to test with first N rows before full import
+- **NVE & Energistyrelsen**: Use `--sample N` to test with first N rows before full import (CLI) or date range filtering (Web UI)
 - **EIA**: Use `--sample N` to test with first N files before full import
 - **Energistyrelsen & EIA**: Monthly data (not hourly), stored with `period_type='month'`
 - **EIA**: Filters for wind data only (fuel_type='WND'), Plant ID maps to generation_unit.code
+- **File Upload**: NVE, Energistyrelsen, and Taipower support web-based file upload with date range filtering
+- **Taipower Files**: Each file contains data for ONE wind farm (select unit in UI before upload)

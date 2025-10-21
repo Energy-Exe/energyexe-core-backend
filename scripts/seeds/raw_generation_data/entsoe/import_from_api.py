@@ -14,7 +14,7 @@ Usage:
     poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
         --start 2025-10-01 --end 2025-10-07
 
-    # Fetch specific bidding zones only
+    # Fetch specific control areas only
     poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
         --start 2025-10-11 --end 2025-10-11 --zones BE FR
 
@@ -50,16 +50,19 @@ from sqlalchemy.dialects.postgresql import insert
 logger = structlog.get_logger()
 
 
-async def get_entsoe_units_by_bidzone() -> Dict[str, Dict]:
+async def get_entsoe_units_by_control_area() -> Dict[str, Dict]:
     """
-    Get all ENTSOE generation units grouped by bidding zone.
+    Get all ENTSOE generation units grouped by control area.
 
     Returns:
-        Dict mapping bidzone_code to {bidzone_name, windfarms, units, eic_codes}
+        Dict mapping control_area_code to {control_area_name, windfarms, units, eic_codes}
     """
     AsyncSessionLocal = get_session_factory()
 
     async with AsyncSessionLocal() as db:
+        # Import ControlArea model
+        from app.models.control_area import ControlArea
+
         # Get all windfarms with ENTSOE units
         stmt = (
             select(Windfarm)
@@ -71,8 +74,8 @@ async def get_entsoe_units_by_bidzone() -> Dict[str, Dict]:
         result = await db.execute(stmt)
         windfarms = result.scalars().all()
 
-        # Group by bidding zone
-        bidzone_groups = {}
+        # Group by control area
+        control_area_groups = {}
 
         for windfarm in windfarms:
             # Get ENTSOE units
@@ -80,51 +83,51 @@ async def get_entsoe_units_by_bidzone() -> Dict[str, Dict]:
             if not entsoe_units:
                 continue
 
-            # Get bidzone
-            if not windfarm.bidzone_id:
-                logger.warning(f"Windfarm {windfarm.name} has no bidzone - skipping")
+            # Get control area
+            if not windfarm.control_area_id:
+                logger.warning(f"Windfarm {windfarm.name} has no control area - skipping")
                 continue
 
-            bidzone_stmt = select(Bidzone).where(Bidzone.id == windfarm.bidzone_id)
-            bidzone_result = await db.execute(bidzone_stmt)
-            bidzone = bidzone_result.scalar_one_or_none()
+            ca_stmt = select(ControlArea).where(ControlArea.id == windfarm.control_area_id)
+            ca_result = await db.execute(ca_stmt)
+            control_area = ca_result.scalar_one_or_none()
 
-            if not bidzone or not bidzone.code:
-                logger.warning(f"Windfarm {windfarm.name} has invalid bidzone - skipping")
+            if not control_area or not control_area.code:
+                logger.warning(f"Windfarm {windfarm.name} has invalid control area - skipping")
                 continue
 
-            # Initialize bidzone group
-            if bidzone.code not in bidzone_groups:
-                bidzone_groups[bidzone.code] = {
-                    'bidzone_name': bidzone.name,
+            # Initialize control area group
+            if control_area.code not in control_area_groups:
+                control_area_groups[control_area.code] = {
+                    'control_area_name': control_area.name,
                     'windfarms': [],
                     'units': [],
                     'eic_codes': []
                 }
 
             # Add to group
-            bidzone_groups[bidzone.code]['windfarms'].append(windfarm)
-            bidzone_groups[bidzone.code]['units'].extend(entsoe_units)
-            bidzone_groups[bidzone.code]['eic_codes'].extend([
+            control_area_groups[control_area.code]['windfarms'].append(windfarm)
+            control_area_groups[control_area.code]['units'].extend(entsoe_units)
+            control_area_groups[control_area.code]['eic_codes'].extend([
                 u.code for u in entsoe_units if u.code and u.code != 'nan'
             ])
 
-    return bidzone_groups
+    return control_area_groups
 
 
-async def fetch_and_store_zone_data(
-    bidzone_code: str,
-    zone_data: Dict,
+async def fetch_and_store_control_area_data(
+    control_area_code: str,
+    area_data: Dict,
     start_date: datetime,
     end_date: datetime,
     dry_run: bool = False
 ) -> Dict:
     """
-    Fetch data for a single bidding zone and store in database.
+    Fetch data for a single control area and store in database.
 
     Args:
-        bidzone_code: EIC code of bidding zone
-        zone_data: Dict with windfarms, units, eic_codes
+        control_area_code: EIC code of control area (e.g., '10Y1001A1001A796' for DK)
+        area_data: Dict with windfarms, units, eic_codes
         start_date: Start date
         end_date: End date
         dry_run: If True, don't actually store data
@@ -133,10 +136,10 @@ async def fetch_and_store_zone_data(
         Dict with results
     """
     result = {
-        'bidzone': zone_data['bidzone_name'],
-        'bidzone_code': bidzone_code,
-        'windfarms': len(zone_data['windfarms']),
-        'units': len(zone_data['units']),
+        'control_area': area_data['control_area_name'],
+        'control_area_code': control_area_code,
+        'windfarms': len(area_data['windfarms']),
+        'units': len(area_data['units']),
         'api_calls': 0,
         'records_stored': 0,
         'records_updated': 0,
@@ -145,8 +148,8 @@ async def fetch_and_store_zone_data(
 
     try:
         logger.info(
-            f"Processing {zone_data['bidzone_name']} "
-            f"({len(zone_data['windfarms'])} windfarms, {len(zone_data['units'])} units)"
+            f"Processing {area_data['control_area_name']} "
+            f"({len(area_data['windfarms'])} windfarms, {len(area_data['units'])} units)"
         )
 
         # Create ENTSOE client
@@ -156,23 +159,23 @@ async def fetch_and_store_zone_data(
         start_naive = start_date.replace(tzinfo=None) if start_date.tzinfo else start_date
         end_naive = end_date.replace(tzinfo=None) if end_date.tzinfo else end_date
 
-        # Fetch data for entire zone (ONE API call)
+        # Fetch data for entire control area (ONE API call)
         df, metadata = await client.fetch_generation_per_unit(
             start=start_naive,
             end=end_naive,
-            area_code=bidzone_code,
-            eic_codes=zone_data['eic_codes'],
+            area_code=control_area_code,
+            eic_codes=area_data['eic_codes'],
             production_types=["wind"],
         )
 
         result['api_calls'] = 1
 
         if df.empty:
-            logger.warning(f"No data returned for {zone_data['bidzone_name']}")
+            logger.warning(f"No data returned for {area_data['control_area_name']}")
             result['errors'].append("No data available from API")
             return result
 
-        logger.info(f"Received {len(df)} records for {zone_data['bidzone_name']}")
+        logger.info(f"Received {len(df)} records for {area_data['control_area_name']}")
 
         if dry_run:
             result['records_stored'] = len(df)
@@ -182,7 +185,7 @@ async def fetch_and_store_zone_data(
         # Store data for each unit
         AsyncSessionLocal = get_session_factory()
         async with AsyncSessionLocal() as db:
-            for unit in zone_data['units']:
+            for unit in area_data['units']:
                 # Filter for this unit's EIC code
                 unit_df = df[df.get('eic_code', df.get('unit_code', '')) == unit.code]
 
@@ -221,7 +224,7 @@ async def fetch_and_store_zone_data(
                     # Build data JSONB
                     data = {
                         "eic_code": unit.code,
-                        "area_code": bidzone_code,
+                        "area_code": control_area_code,
                         "production_type": row.get("production_type", "wind"),
                         "resolution_code": resolution,
                         "installed_capacity_mw": float(row["installed_capacity_mw"])
@@ -270,12 +273,12 @@ async def fetch_and_store_zone_data(
                     logger.info(f"Stored {len(records_to_insert)} records for unit {unit.code}")
 
         logger.info(
-            f"Completed {zone_data['bidzone_name']}: "
+            f"Completed {area_data['control_area_name']}: "
             f"{result['records_stored']} records stored"
         )
 
     except Exception as e:
-        error_msg = f"Error processing {zone_data['bidzone_name']}: {str(e)}"
+        error_msg = f"Error processing {area_data['control_area_name']}: {str(e)}"
         logger.error(error_msg)
         result['errors'].append(error_msg)
 
@@ -289,7 +292,7 @@ async def main(start_date: str, end_date: str, zones: Optional[List[str]] = None
     Args:
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
-        zones: Optional list of bidzone names to process (e.g., ['BE', 'FR'])
+        zones: Optional list of control area names to process (e.g., ['BE', 'FR', 'DK'])
         dry_run: If True, don't actually store data
         chunk_days: Number of days per chunk (default: 7)
     """
@@ -312,20 +315,20 @@ async def main(start_date: str, end_date: str, zones: Optional[List[str]] = None
     # Calculate total days
     total_days = (end - start).days + 1
 
-    # Get units grouped by bidzone once
+    # Get units grouped by control area once
     print("Fetching ENTSOE units from database...")
-    bidzone_groups = await get_entsoe_units_by_bidzone()
+    control_area_groups = await get_entsoe_units_by_control_area()
 
     # Filter by specified zones if provided
     if zones:
-        bidzone_groups = {
-            code: data for code, data in bidzone_groups.items()
-            if data['bidzone_name'] in zones
+        control_area_groups = {
+            code: data for code, data in control_area_groups.items()
+            if data['control_area_name'] in zones
         }
 
-    print(f"\nFound {len(bidzone_groups)} bidding zones to process:")
-    for code, data in bidzone_groups.items():
-        print(f"  {data['bidzone_name']:15} ({code}): {len(data['windfarms'])} windfarms, {len(data['units'])} units")
+    print(f"\nFound {len(control_area_groups)} control areas to process:")
+    for code, data in control_area_groups.items():
+        print(f"  {data['control_area_name']:15} ({code}): {len(data['windfarms'])} windfarms, {len(data['units'])} units")
 
     # Determine if chunking is needed
     if total_days > chunk_days:
@@ -360,7 +363,7 @@ async def main(start_date: str, end_date: str, zones: Optional[List[str]] = None
         # Process each bidding zone for this chunk
         chunk_results = []
 
-        for bidzone_code, zone_data in bidzone_groups.items():
+        for control_area_code, zone_data in control_area_groups.items():
             # Retry logic for each zone
             max_retries = 3
             retry_count = 0
@@ -368,8 +371,8 @@ async def main(start_date: str, end_date: str, zones: Optional[List[str]] = None
 
             while retry_count < max_retries:
                 try:
-                    result = await fetch_and_store_zone_data(
-                        bidzone_code,
+                    result = await fetch_and_store_control_area_data(
+                        control_area_code,
                         zone_data,
                         current_start,
                         chunk_end,
@@ -378,18 +381,40 @@ async def main(start_date: str, end_date: str, zones: Optional[List[str]] = None
                     break  # Success
 
                 except Exception as e:
+                    error_str = str(e)
+
+                    # Check if it's InvalidBusinessParameterError (control area doesn't support per-unit data)
+                    if "InvalidBusinessParameterError" in error_str or "units_found: []" in error_str:
+                        logger.warning(
+                            f"⚠️  Control Area {area_data['control_area_name']} ({control_area_code}) does not support per-unit generation data API. "
+                            f"This control area may not provide detailed per-unit data through ENTSOE API."
+                        )
+                        # Create skipped result (don't retry)
+                        result = {
+                            'control_area': area_data['control_area_name'],
+                            'control_area_code': control_area_code,
+                            'windfarms': len(area_data['windfarms']),
+                            'units': len(area_data['units']),
+                            'api_calls': 0,
+                            'records_stored': 0,
+                            'records_updated': 0,
+                            'errors': [f"Control area does not support per-unit data API (InvalidBusinessParameterError)"]
+                        }
+                        break  # Don't retry for this type of error
+
+                    # For other errors, retry
                     retry_count += 1
                     if retry_count < max_retries:
-                        logger.warning(f"Zone {zone_data['bidzone_name']} failed (attempt {retry_count}), retrying...")
+                        logger.warning(f"Control Area {area_data['control_area_name']} failed (attempt {retry_count}), retrying...")
                         await asyncio.sleep(5)
                     else:
-                        logger.error(f"Zone {zone_data['bidzone_name']} failed after {max_retries} attempts")
+                        logger.error(f"Control Area {area_data['control_area_name']} failed after {max_retries} attempts")
                         # Create error result
                         result = {
-                            'bidzone': zone_data['bidzone_name'],
-                            'bidzone_code': bidzone_code,
-                            'windfarms': len(zone_data['windfarms']),
-                            'units': len(zone_data['units']),
+                            'control_area': area_data['control_area_name'],
+                            'control_area_code': control_area_code,
+                            'windfarms': len(area_data['windfarms']),
+                            'units': len(area_data['units']),
                             'api_calls': 0,
                             'records_stored': 0,
                             'records_updated': 0,
@@ -430,26 +455,26 @@ async def main(start_date: str, end_date: str, zones: Optional[List[str]] = None
     print(f"Total Records Stored: {total_records:,}")
     print(f"Total Errors: {total_errors}")
 
-    # Group results by zone across all chunks
-    zone_totals = {}
+    # Group results by control area across all chunks
+    area_totals = {}
     for r in all_chunk_results:
-        zone_key = r['bidzone']
-        if zone_key not in zone_totals:
-            zone_totals[zone_key] = {
+        area_key = r['control_area']
+        if area_key not in area_totals:
+            area_totals[area_key] = {
                 'records': 0,
                 'api_calls': 0,
                 'errors': []
             }
-        zone_totals[zone_key]['records'] += r['records_stored']
-        zone_totals[zone_key]['api_calls'] += r['api_calls']
-        zone_totals[zone_key]['errors'].extend(r['errors'])
+        area_totals[area_key]['records'] += r['records_stored']
+        area_totals[area_key]['api_calls'] += r['api_calls']
+        area_totals[area_key]['errors'].extend(r['errors'])
 
-    print("\n\nResults by Zone:")
+    print("\n\nResults by Control Area:")
     print("-"*80)
 
-    for zone_name, totals in sorted(zone_totals.items()):
+    for area_name, totals in sorted(area_totals.items()):
         status = "✅" if totals['records'] > 0 else "❌"
-        print(f"\n{status} {zone_name}")
+        print(f"\n{status} {area_name}")
         print(f"   API Calls: {totals['api_calls']}")
         print(f"   Records: {totals['records']:,}")
 
@@ -473,7 +498,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Import ENTSOE data from API')
     parser.add_argument('--start', required=True, help='Start date (YYYY-MM-DD)')
     parser.add_argument('--end', required=True, help='End date (YYYY-MM-DD)')
-    parser.add_argument('--zones', nargs='+', help='Specific bidding zones to fetch (e.g., BE FR DK1)')
+    parser.add_argument('--zones', nargs='+', help='Specific control areas to fetch (e.g., BE FR DK1)')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be fetched without storing')
 
     args = parser.parse_args()
