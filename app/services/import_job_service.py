@@ -19,6 +19,7 @@ from app.schemas.import_job import (
     ImportJobFilter,
     ImportJobHealth,
     ImportJobSummary,
+    ImportJobResponse,
 )
 
 logger = structlog.get_logger()
@@ -374,11 +375,13 @@ class ImportJobService:
         start_date = job.import_start_date.strftime("%Y-%m-%d")
         end_date = job.import_end_date.strftime("%Y-%m-%d")
 
+        # Use python directly (works in Docker without poetry)
+        # The app is already in PYTHONPATH when FastAPI starts
         commands = {
-            "ENTSOE": f"poetry run python {base_path}/entsoe/import_from_api.py --start {start_date} --end {end_date}",
-            "Taipower": f"poetry run python {base_path}/taipower/import_from_api.py",
-            "ELEXON": f"poetry run python {base_path}/elexon/import_from_api.py --start {start_date} --end {end_date}",
-            "EIA": f"poetry run python {base_path}/eia/import_from_api.py --start-year {job.import_start_date.year} --start-month {job.import_start_date.month} --end-year {job.import_end_date.year} --end-month {job.import_end_date.month}",
+            "ENTSOE": f"python {base_path}/entsoe/import_from_api.py --start {start_date} --end {end_date}",
+            "Taipower": f"python {base_path}/taipower/import_from_api.py",
+            "ELEXON": f"python {base_path}/elexon/import_from_api.py --start {start_date} --end {end_date}",
+            "EIA": f"python {base_path}/eia/import_from_api.py --start-year {job.import_start_date.year} --start-month {job.import_start_date.month} --end-year {job.import_end_date.year} --end-month {job.import_end_date.month}",
         }
 
         command = commands.get(job.source)
