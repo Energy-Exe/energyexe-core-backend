@@ -28,7 +28,7 @@ on:
           - eia-monthly
 
 env:
-  API_URL: https://dev-api.energyexe.com
+  API_URL: https://energyexe-core-backend-production.up.railway.app
 
 jobs:
   # ENTSOE Daily Import (runs at 6 AM)
