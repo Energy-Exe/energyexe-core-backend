@@ -1,0 +1,124 @@
+name: Scheduled Data Imports
+
+on:
+  schedule:
+    # ENTSOE - Daily at 6:00 AM UTC
+    - cron: '0 6 * * *'
+
+    # Taipower - Every hour at :05
+    - cron: '5 * * * *'
+
+    # ELEXON - Daily at 7:00 AM UTC
+    - cron: '0 7 * * *'
+
+    # EIA - Monthly on 1st at 2:00 AM UTC
+    - cron: '0 2 1 * *'
+
+  # Allow manual triggering from GitHub UI
+  workflow_dispatch:
+    inputs:
+      job_name:
+        description: 'Job to trigger'
+        required: true
+        type: choice
+        options:
+          - entsoe-daily
+          - taipower-hourly
+          - elexon-daily
+          - eia-monthly
+
+env:
+  API_URL: https://dev-api.energyexe.com
+
+jobs:
+  # ENTSOE Daily Import (runs at 6 AM)
+  entsoe-import:
+    if: github.event.schedule == '0 6 * * *' || github.event.inputs.job_name == 'entsoe-daily'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ENTSOE Daily Import
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.API_URL }}/api/v1/import-jobs/trigger/entsoe-daily")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+
+          if [ "$http_code" -ne 200 ]; then
+            echo "❌ Import failed with status $http_code"
+            exit 1
+          fi
+
+          echo "✅ ENTSOE import completed successfully"
+
+  # Taipower Hourly Snapshot (runs every hour)
+  taipower-import:
+    if: github.event.schedule == '5 * * * *' || github.event.inputs.job_name == 'taipower-hourly'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Taipower Hourly Snapshot
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.API_URL }}/api/v1/import-jobs/trigger/taipower-hourly")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+
+          if [ "$http_code" -ne 200 ]; then
+            echo "❌ Import failed with status $http_code"
+            exit 1
+          fi
+
+          echo "✅ Taipower snapshot completed successfully"
+
+  # ELEXON Daily Import (runs at 7 AM)
+  elexon-import:
+    if: github.event.schedule == '0 7 * * *' || github.event.inputs.job_name == 'elexon-daily'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ELEXON Daily Import
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.API_URL }}/api/v1/import-jobs/trigger/elexon-daily")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+
+          if [ "$http_code" -ne 200 ]; then
+            echo "❌ Import failed with status $http_code"
+            exit 1
+          fi
+
+          echo "✅ ELEXON import completed successfully"
+
+  # EIA Monthly Import (runs on 1st of month)
+  eia-import:
+    if: github.event.schedule == '0 2 1 * *' || github.event.inputs.job_name == 'eia-monthly'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger EIA Monthly Import
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.API_URL }}/api/v1/import-jobs/trigger/eia-monthly")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+
+          if [ "$http_code" -ne 200 ]; then
+            echo "❌ Import failed with status $http_code"
+            exit 1
+          fi
+
+          echo "✅ EIA import completed successfully"
