@@ -52,12 +52,16 @@ class ImportJobService:
         # Generate job name
         job_name = f"{request.source.lower()}-{job_type.value}"
 
+        # Remove timezone info from dates (database expects naive datetime)
+        import_start = request.import_start_date.replace(tzinfo=None) if request.import_start_date.tzinfo else request.import_start_date
+        import_end = request.import_end_date.replace(tzinfo=None) if request.import_end_date.tzinfo else request.import_end_date
+
         job = ImportJobExecution(
             job_name=job_name,
             source=request.source,
             job_type=job_type,
-            import_start_date=request.import_start_date,
-            import_end_date=request.import_end_date,
+            import_start_date=import_start,
+            import_end_date=import_end,
             status=ImportJobStatus.PENDING,
             job_metadata=request.job_metadata or {},
             created_by_id=user_id,
