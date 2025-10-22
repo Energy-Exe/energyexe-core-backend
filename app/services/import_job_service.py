@@ -85,7 +85,7 @@ class ImportJobService:
         Returns:
             Updated job with execution results
         """
-        # Get job
+        # Get job and mark as running
         result = await self.db.execute(select(ImportJobExecution).where(ImportJobExecution.id == job_id))
         job = result.scalar_one_or_none()
 
@@ -95,9 +95,12 @@ class ImportJobService:
         if job.status == ImportJobStatus.RUNNING:
             raise ValueError("Job is already running")
 
-        # Mark as running
+        # Mark as running and commit
         job.mark_running()
         await self.db.commit()
+
+        # Close this session - subprocess will take a long time
+        await self.db.close()
 
         try:
             # Build and execute command
@@ -109,7 +112,7 @@ class ImportJobService:
                 command=command,
             )
 
-            # Run command
+            # Run command (this can take minutes)
             process_result = subprocess.run(
                 command,
                 shell=True,
@@ -123,32 +126,69 @@ class ImportJobService:
                 process_result.stdout
             )
 
-            if process_result.returncode == 0:
-                job.mark_success(records_imported, records_updated, api_calls)
-                logger.info(
-                    "Job completed successfully",
-                    job_id=job.id,
-                    records=records_imported,
+            # Create NEW session to update job (old session is closed)
+            AsyncSessionLocal = get_session_factory()
+            async with AsyncSessionLocal() as new_db:
+                # Re-fetch job in new session
+                result = await new_db.execute(
+                    select(ImportJobExecution).where(ImportJobExecution.id == job_id)
                 )
-            else:
-                job.mark_failed(process_result.stderr[:1000])
-                logger.error(
-                    "Job failed",
-                    job_id=job.id,
-                    error=process_result.stderr[:500],
-                )
+                job = result.scalar_one_or_none()
+
+                if not job:
+                    raise ValueError(f"Job {job_id} not found after execution")
+
+                if process_result.returncode == 0:
+                    job.mark_success(records_imported, records_updated, api_calls)
+                    logger.info(
+                        "Job completed successfully",
+                        job_id=job.id,
+                        records=records_imported,
+                    )
+                else:
+                    job.mark_failed(process_result.stderr[:1000])
+                    logger.error(
+                        "Job failed",
+                        job_id=job.id,
+                        error=process_result.stderr[:500],
+                    )
+
+                await new_db.commit()
+                await new_db.refresh(job)
+
+                return job
 
         except subprocess.TimeoutExpired:
-            job.mark_failed("Job timeout after 1 hour")
-            logger.error("Job timeout", job_id=job.id)
+            # Create new session for timeout update
+            AsyncSessionLocal = get_session_factory()
+            async with AsyncSessionLocal() as new_db:
+                result = await new_db.execute(
+                    select(ImportJobExecution).where(ImportJobExecution.id == job_id)
+                )
+                job = result.scalar_one_or_none()
+                if job:
+                    job.mark_failed("Job timeout after 1 hour")
+                    await new_db.commit()
+                    await new_db.refresh(job)
+
+            logger.error("Job timeout", job_id=job_id)
+            return job
+
         except Exception as e:
-            job.mark_failed(str(e))
-            logger.error("Job execution error", job_id=job.id, error=str(e))
+            # Create new session for error update
+            AsyncSessionLocal = get_session_factory()
+            async with AsyncSessionLocal() as new_db:
+                result = await new_db.execute(
+                    select(ImportJobExecution).where(ImportJobExecution.id == job_id)
+                )
+                job = result.scalar_one_or_none()
+                if job:
+                    job.mark_failed(str(e))
+                    await new_db.commit()
+                    await new_db.refresh(job)
 
-        await self.db.commit()
-        await self.db.refresh(job)
-
-        return job
+            logger.error("Job execution error", job_id=job_id, error=str(e))
+            return job
 
     async def retry_job(self, job_id: int, reset_retry_count: bool = False) -> ImportJobExecution:
         """
