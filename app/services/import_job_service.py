@@ -202,6 +202,7 @@ class ImportJobService:
         Returns:
             Updated job
         """
+        # Get job in current session
         result = await self.db.execute(select(ImportJobExecution).where(ImportJobExecution.id == job_id))
         job = result.scalar_one_or_none()
 
@@ -219,6 +220,9 @@ class ImportJobService:
         job.retry_count += 1
         job.status = ImportJobStatus.PENDING
         job.error_message = None
+        job.started_at = None
+        job.completed_at = None
+        job.duration_seconds = None
 
         await self.db.commit()
 
