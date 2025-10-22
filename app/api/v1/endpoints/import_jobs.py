@@ -235,7 +235,7 @@ async def trigger_scheduled_job(
         },
         "elexon-daily": {
             "source": "ELEXON",
-            "delay_days": 3,
+            "delay_days": 10,  # ELEXON has 10-day publication lag
         },
         "taipower-hourly": {
             "source": "Taipower",

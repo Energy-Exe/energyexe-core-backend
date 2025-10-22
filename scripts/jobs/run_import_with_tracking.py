@@ -35,8 +35,8 @@ JOB_CONFIGS = {
     },
     "elexon-daily": {
         "source": "ELEXON",
-        "delay_days": 3,  # Import data from 3 days ago
-        "description": "ELEXON daily import (3-day lag)",
+        "delay_days": 10,  # Import data from 10 days ago (ELEXON publication lag)
+        "description": "ELEXON daily import (10-day lag)",
     },
     "taipower-hourly": {
         "source": "Taipower",
