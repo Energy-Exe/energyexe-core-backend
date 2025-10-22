@@ -9,6 +9,7 @@ import structlog
 from sqlalchemy import and_, desc, func, select, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_session_factory
 from app.models.import_job_execution import (
     ImportJobExecution,
     ImportJobStatus,
