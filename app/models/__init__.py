@@ -1,7 +1,6 @@
 """Database models package."""
 
 from .audit_log import AuditLog
-from .backfill_job import BackfillJob, BackfillTask
 from .bidzone import Bidzone
 from .cable import Cable
 from .control_area import ControlArea
@@ -23,8 +22,6 @@ from .windfarm_owner import WindfarmOwner
 
 __all__ = [
     "AuditLog",
-    "BackfillJob",
-    "BackfillTask",
     "Bidzone",
     "Cable",
     "ControlArea",

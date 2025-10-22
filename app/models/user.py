@@ -28,7 +28,6 @@ class User(Base):
 
     # Relationships
     audit_logs = relationship("AuditLog", back_populates="user")
-    backfill_jobs = relationship("BackfillJob", back_populates="created_by")
 
     def __repr__(self) -> str:
         """String representation of User."""

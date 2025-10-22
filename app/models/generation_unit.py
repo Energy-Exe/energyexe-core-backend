@@ -38,7 +38,6 @@ class GenerationUnit(Base):
     # Relationships
     windfarm = relationship("Windfarm", back_populates="generation_units")
     generation_data = relationship("GenerationData", back_populates="generation_unit")
-    backfill_tasks = relationship("BackfillTask", back_populates="generation_unit")
 
     # Audit fields
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
