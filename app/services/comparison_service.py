@@ -78,7 +78,71 @@ class ComparisonService:
         result = await self.db.execute(query)
         rows = result.all()
 
-        # Process data for response
+        # Get windfarm names for all requested IDs
+        windfarms_query = select(Windfarm.id, Windfarm.name).where(Windfarm.id.in_(windfarm_ids))
+        windfarms_result = await self.db.execute(windfarms_query)
+        windfarm_map = {row.id: row.name for row in windfarms_result.all()}
+
+        # Generate complete date range based on granularity
+        def generate_date_range(start, end, granularity_type):
+            """Generate complete date series for the given range and granularity"""
+            periods = []
+            current = datetime.combine(start, datetime.min.time())
+            end_dt = datetime.combine(end, datetime.min.time())
+
+            if granularity_type == "hourly":
+                while current <= end_dt:
+                    periods.append(current)
+                    current += timedelta(hours=1)
+            elif granularity_type == "daily":
+                while current <= end_dt:
+                    periods.append(current)
+                    current += timedelta(days=1)
+            elif granularity_type == "weekly":
+                # Start from the beginning of the week
+                current = current - timedelta(days=current.weekday())
+                while current <= end_dt:
+                    periods.append(current)
+                    current += timedelta(weeks=1)
+            elif granularity_type == "monthly":
+                while current <= end_dt:
+                    periods.append(current)
+                    # Move to first day of next month
+                    if current.month == 12:
+                        current = current.replace(year=current.year + 1, month=1)
+                    else:
+                        current = current.replace(month=current.month + 1)
+            elif granularity_type == "quarterly":
+                # Start from beginning of quarter
+                quarter_month = ((current.month - 1) // 3) * 3 + 1
+                current = current.replace(month=quarter_month, day=1)
+                while current <= end_dt:
+                    periods.append(current)
+                    # Move to first day of next quarter
+                    next_quarter_month = quarter_month + 3
+                    if next_quarter_month > 12:
+                        current = current.replace(year=current.year + 1, month=next_quarter_month - 12)
+                        quarter_month = next_quarter_month - 12
+                    else:
+                        current = current.replace(month=next_quarter_month)
+                        quarter_month = next_quarter_month
+            elif granularity_type == "yearly":
+                while current <= end_dt:
+                    periods.append(current)
+                    current = current.replace(year=current.year + 1)
+
+            return periods
+
+        # Generate all periods
+        all_periods = generate_date_range(start_date, end_date, granularity)
+
+        # Create a map of existing data
+        data_map = {}
+        for row in rows:
+            key = (row.period.astimezone(timezone.utc) if row.period.tzinfo else row.period, row.windfarm_id)
+            data_map[key] = row
+
+        # Build complete dataset with all periods for all windfarms
         data = []
         summary = {
             'total_generation': 0,
@@ -95,48 +159,68 @@ class ComparisonService:
         total_capacity_factor_weighted = 0
         total_data_points_for_cf = 0
 
-        for row in rows:
-            # Format period in UTC to prevent timezone offset issues in CSV exports
-            # Ensure the datetime is converted to UTC before formatting
-            period_utc = row.period.astimezone(timezone.utc) if row.period.tzinfo else row.period
+        # For each period and windfarm combination
+        for period_dt in all_periods:
+            for windfarm_id in windfarm_ids:
+                key = (period_dt, windfarm_id)
+                row = data_map.get(key)
 
-            if granularity == 'hourly':
-                # Convert to UTC and format for hourly granularity
-                period_str = period_utc.strftime('%Y-%m-%d %H:%M:%S')
-            elif granularity == 'monthly':
-                period_str = period_utc.strftime('%Y-%m')
-            elif granularity == 'quarterly':
-                # Format as YYYY-Q# (e.g., 2025-Q1)
-                quarter = (period_utc.month - 1) // 3 + 1
-                period_str = f"{period_utc.year}-Q{quarter}"
-            elif granularity == 'yearly':
-                period_str = period_utc.strftime('%Y')
-            else:
-                # For daily/weekly, use ISO format date
-                period_str = period_utc.strftime('%Y-%m-%d')
+                # Format period in UTC to prevent timezone offset issues in CSV exports
+                period_utc = period_dt.astimezone(timezone.utc) if period_dt.tzinfo else period_dt
 
-            data.append({
-                'period': period_str,
-                'windfarm_id': row.windfarm_id,
-                'windfarm_name': row.windfarm_name,
-                'total_generation': float(row.total_generation) if row.total_generation else 0,
-                'avg_generation': float(row.avg_generation) if row.avg_generation else 0,
-                'max_generation': float(row.max_generation) if row.max_generation else 0,
-                'min_generation': float(row.min_generation) if row.min_generation else 0,
-                'avg_capacity_factor': float(row.avg_capacity_factor) if row.avg_capacity_factor else 0,
-                'avg_raw_capacity_factor': float(row.avg_raw_capacity_factor) if row.avg_raw_capacity_factor else 0,
-                'avg_raw_capacity': float(row.avg_raw_capacity) if row.avg_raw_capacity else 0,
-                'avg_capacity': float(row.avg_capacity) if row.avg_capacity else 0,
-                'data_points': row.data_points
-            })
+                if granularity == 'hourly':
+                    period_str = period_utc.strftime('%Y-%m-%d %H:%M:%S')
+                elif granularity == 'monthly':
+                    period_str = period_utc.strftime('%Y-%m')
+                elif granularity == 'quarterly':
+                    quarter = (period_utc.month - 1) // 3 + 1
+                    period_str = f"{period_utc.year}-Q{quarter}"
+                elif granularity == 'yearly':
+                    period_str = period_utc.strftime('%Y')
+                else:
+                    period_str = period_utc.strftime('%Y-%m-%d')
 
-            summary['total_generation'] += float(row.total_generation) if row.total_generation else 0
-            summary['total_records'] += row.data_points
+                # If row exists (data available for this period), use actual values
+                # If row doesn't exist (no data), use 0 for generation but null for capacity factor
+                if row:
+                    data.append({
+                        'period': period_str,
+                        'windfarm_id': row.windfarm_id,
+                        'windfarm_name': row.windfarm_name,
+                        'total_generation': float(row.total_generation) if row.total_generation else 0,
+                        'avg_generation': float(row.avg_generation) if row.avg_generation else 0,
+                        'max_generation': float(row.max_generation) if row.max_generation else 0,
+                        'min_generation': float(row.min_generation) if row.min_generation else 0,
+                        'avg_capacity_factor': float(row.avg_capacity_factor) if row.avg_capacity_factor else 0,
+                        'avg_raw_capacity_factor': float(row.avg_raw_capacity_factor) if row.avg_raw_capacity_factor else 0,
+                        'avg_raw_capacity': float(row.avg_raw_capacity) if row.avg_raw_capacity else 0,
+                        'avg_capacity': float(row.avg_capacity) if row.avg_capacity else 0,
+                        'data_points': row.data_points
+                    })
 
-            # Weight capacity factor by number of data points in each period
-            if row.avg_capacity_factor and row.data_points:
-                total_capacity_factor_weighted += float(row.avg_capacity_factor) * row.data_points
-                total_data_points_for_cf += row.data_points
+                    summary['total_generation'] += float(row.total_generation) if row.total_generation else 0
+                    summary['total_records'] += row.data_points
+
+                    # Weight capacity factor by number of data points in each period
+                    if row.avg_capacity_factor and row.data_points:
+                        total_capacity_factor_weighted += float(row.avg_capacity_factor) * row.data_points
+                        total_data_points_for_cf += row.data_points
+                else:
+                    # No data for this period - fill with 0 for generation, null for capacity factor
+                    data.append({
+                        'period': period_str,
+                        'windfarm_id': windfarm_id,
+                        'windfarm_name': windfarm_map[windfarm_id],
+                        'total_generation': 0,
+                        'avg_generation': 0,
+                        'max_generation': 0,
+                        'min_generation': 0,
+                        'avg_capacity_factor': None,  # null means no data
+                        'avg_raw_capacity_factor': None,  # null means no data
+                        'avg_raw_capacity': None,  # null means no data
+                        'avg_capacity': None,  # null means no data
+                        'data_points': 0
+                    })
 
         if total_data_points_for_cf > 0:
             summary['avg_capacity_factor'] = total_capacity_factor_weighted / total_data_points_for_cf
