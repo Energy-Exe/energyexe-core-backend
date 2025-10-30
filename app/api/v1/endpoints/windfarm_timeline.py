@@ -151,6 +151,34 @@ async def get_windfarm_timeline(
     # Convert to list and sort by date
     capacity_timeline = sorted(capacity_by_date.values(), key=lambda x: x['date'])
 
+    # Add "carry forward" points to create flat lines between events
+    # This makes step charts display properly with plateaus instead of spikes
+    enhanced_timeline = []
+    for i, snapshot in enumerate(capacity_timeline):
+        # Add the actual event point
+        enhanced_timeline.append(snapshot)
+
+        # If there's a next event, add a point right before it with current capacity
+        # This creates the "flat line" effect
+        if i < len(capacity_timeline) - 1:
+            next_date = capacity_timeline[i + 1]['date']
+            # Parse the date and subtract one day to create the carry-forward point
+            from datetime import datetime, timedelta
+            current_date = datetime.fromisoformat(snapshot['date'])
+            next_date_obj = datetime.fromisoformat(next_date)
+
+            # Only add carry-forward if there's a gap of more than 1 day
+            if (next_date_obj - current_date).days > 1:
+                carry_forward_date = (next_date_obj - timedelta(days=1)).date().isoformat()
+                enhanced_timeline.append({
+                    'date': carry_forward_date,
+                    'total_capacity_mw': snapshot['total_capacity_mw'],
+                    'generation_unit_capacity_mw': snapshot['generation_unit_capacity_mw'],
+                    'turbine_capacity_mw': snapshot['turbine_capacity_mw'],
+                })
+
+    capacity_timeline = enhanced_timeline
+
     # Calculate current capacity breakdown
     current_gen_capacity = sum(
         float(u.capacity_mw) if u.capacity_mw else 0
