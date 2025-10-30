@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from .owner import Owner
+
 
 # Base schema with common fields
 class SubstationOwnerBase(BaseModel):
@@ -33,13 +35,7 @@ class SubstationOwner(SubstationOwnerBase):
 
 
 # Schema for substation owner with owner details
-class SubstationOwnerWithDetails(BaseModel):
-    id: int
-    substation_id: int
-    owner_id: int
-    ownership_percentage: Decimal
-    created_at: datetime
-    updated_at: datetime
-    owner: Optional[dict] = None
+class SubstationOwnerWithDetails(SubstationOwner):
+    owner: Optional[Owner] = None
 
     model_config = {"from_attributes": True}
