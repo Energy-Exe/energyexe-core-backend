@@ -151,32 +151,49 @@ async def get_windfarm_timeline(
     # Convert to list and sort by date
     capacity_timeline = sorted(capacity_by_date.values(), key=lambda x: x['date'])
 
-    # Add "carry forward" points to create flat lines between events
-    # This makes step charts display properly with plateaus instead of spikes
+    # Fill in gaps with monthly intervals to create continuous step chart
+    # This prevents gaps in the visualization while keeping data manageable
+    from datetime import datetime, timedelta
+
+    def add_months(source_date, months):
+        """Add months to a date, handling month/year rollovers"""
+        month = source_date.month + months
+        year = source_date.year + month // 12
+        month = month % 12
+        if month == 0:
+            month = 12
+            year -= 1
+        day = min(source_date.day, [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
+        return source_date.replace(year=year, month=month, day=day)
+
     enhanced_timeline = []
     for i, snapshot in enumerate(capacity_timeline):
         # Add the actual event point
         enhanced_timeline.append(snapshot)
 
-        # If there's a next event, add a point right before it with current capacity
-        # This creates the "flat line" effect
+        # If there's a next event, fill the gap with monthly points
         if i < len(capacity_timeline) - 1:
-            next_date = capacity_timeline[i + 1]['date']
-            # Parse the date and subtract one day to create the carry-forward point
-            from datetime import datetime, timedelta
-            current_date = datetime.fromisoformat(snapshot['date'])
-            next_date_obj = datetime.fromisoformat(next_date)
+            current_date = datetime.fromisoformat(snapshot['date']).date()
+            next_date = datetime.fromisoformat(capacity_timeline[i + 1]['date']).date()
 
-            # Only add carry-forward if there's a gap of more than 1 day
-            if (next_date_obj - current_date).days > 1:
-                carry_forward_date = (next_date_obj - timedelta(days=1)).date().isoformat()
-                enhanced_timeline.append({
-                    'date': carry_forward_date,
-                    'total_capacity_mw': snapshot['total_capacity_mw'],
-                    'generation_unit_capacity_mw': snapshot['generation_unit_capacity_mw'],
-                    'turbine_capacity_mw': snapshot['turbine_capacity_mw'],
-                })
+            # Fill with monthly points if gap is larger than 1 month
+            if (next_date - current_date).days > 32:
+                fill_date = add_months(current_date, 1)
+                # Use first day of each month for consistency
+                fill_date = fill_date.replace(day=1)
 
+                while fill_date < next_date:
+                    enhanced_timeline.append({
+                        'date': fill_date.isoformat(),
+                        'total_capacity_mw': snapshot['total_capacity_mw'],
+                        'generation_unit_capacity_mw': snapshot['generation_unit_capacity_mw'],
+                        'turbine_capacity_mw': snapshot['turbine_capacity_mw'],
+                    })
+                    fill_date = add_months(fill_date, 1)
+                    fill_date = fill_date.replace(day=1)
+
+    # Sort by date to ensure proper ordering
+    enhanced_timeline.sort(key=lambda x: x['date'])
     capacity_timeline = enhanced_timeline
 
     # Calculate current capacity breakdown
