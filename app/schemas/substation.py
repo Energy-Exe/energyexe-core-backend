@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 class SubstationBase(BaseModel):
     code: str = Field(..., min_length=1, max_length=50)
     name: str = Field(..., min_length=1, max_length=255)
-    owner_id: Optional[int] = None
     substation_type: Optional[str] = Field(None, pattern="^(substation|converter)$")
     lat: float
     lng: float
@@ -29,7 +28,6 @@ class SubstationCreate(SubstationBase):
 class SubstationUpdate(BaseModel):
     code: Optional[str] = Field(None, min_length=1, max_length=50)
     name: Optional[str] = Field(None, min_length=1, max_length=255)
-    owner_id: Optional[int] = None
     substation_type: Optional[str] = Field(None, pattern="^(substation|converter)$")
     lat: Optional[float] = None
     lng: Optional[float] = None
@@ -51,3 +49,15 @@ class Substation(SubstationBase):
 
     class Config:
         from_attributes = True
+
+
+class SubstationWithOwners(Substation):
+    substation_owners: List[dict] = []
+
+    class Config:
+        from_attributes = True
+
+
+class SubstationCreateWithOwners(BaseModel):
+    substation: SubstationCreate
+    owners: List[dict] = []

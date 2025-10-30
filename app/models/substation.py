@@ -12,9 +12,6 @@ class Substation(Base):
     code = Column(String(50), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
 
-    # Owner relationship
-    owner_id = Column(Integer, ForeignKey("owners.id"), nullable=True)
-
     # Type
     substation_type = Column(String(100), nullable=True)  # "substation" | "converter"
 
@@ -43,4 +40,6 @@ class Substation(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
-    owner = relationship("Owner", back_populates="substations")
+    substation_owners = relationship(
+        "SubstationOwner", back_populates="substation", cascade="all, delete-orphan"
+    )

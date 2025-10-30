@@ -3,6 +3,7 @@ from typing import List, Optional
 from sqlalchemy import and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.models.substation import Substation
 from app.schemas.substation import SubstationCreate, SubstationUpdate
@@ -21,6 +22,19 @@ class SubstationService:
     @staticmethod
     async def get_substation(db: AsyncSession, substation_id: int) -> Optional[Substation]:
         result = await db.execute(select(Substation).where(Substation.id == substation_id))
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_substation_with_owners(
+        db: AsyncSession, substation_id: int
+    ) -> Optional[Substation]:
+        from app.models.substation_owner import SubstationOwner
+
+        result = await db.execute(
+            select(Substation)
+            .where(Substation.id == substation_id)
+            .options(selectinload(Substation.substation_owners).selectinload(SubstationOwner.owner))
+        )
         return result.scalar_one_or_none()
 
     @staticmethod

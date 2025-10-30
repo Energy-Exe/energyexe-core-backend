@@ -14,6 +14,7 @@ from .project import Project
 from .region import Region
 from .state import State
 from .substation import Substation
+from .substation_owner import SubstationOwner
 from .turbine_model import TurbineModel
 from .turbine_unit import TurbineUnit
 from .user import User
@@ -40,6 +41,7 @@ __all__ = [
     "Region",
     "State",
     "Substation",
+    "SubstationOwner",
     "TurbineModel",
     "TurbineUnit",
     "User",

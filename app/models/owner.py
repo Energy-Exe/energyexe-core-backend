@@ -20,5 +20,5 @@ class Owner(Base):
 
     # Relationships
     windfarm_owners = relationship("WindfarmOwner", back_populates="owner")
-    substations = relationship("Substation", back_populates="owner")
+    substation_owners = relationship("SubstationOwner", back_populates="owner")
     cables = relationship("Cable", back_populates="owner")
