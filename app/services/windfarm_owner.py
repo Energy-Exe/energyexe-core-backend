@@ -58,7 +58,9 @@ class WindfarmOwnerService:
         db: AsyncSession, windfarm_owner_id: int, windfarm_owner_update: WindfarmOwnerUpdate
     ) -> Optional[WindfarmOwner]:
         result = await db.execute(
-            select(WindfarmOwner).where(WindfarmOwner.id == windfarm_owner_id)
+            select(WindfarmOwner)
+            .where(WindfarmOwner.id == windfarm_owner_id)
+            .options(selectinload(WindfarmOwner.owner))
         )
         db_windfarm_owner = result.scalar_one_or_none()
 

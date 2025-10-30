@@ -376,27 +376,24 @@ def import_single_file_worker_optimized(
                     pl.col('bmu_id').str.strip_chars()
                 ).filter(
                     pl.col('bmu_id').is_in(list(relevant_bmu_ids))
-                ).to_pandas()
-                
+                )
+
+                # Keep only the latest settlement run per settlement period
+                print(f"[{worker_name}] 🔍 Filtering for latest settlement runs (max cdca_run_number)...")
+                filtered_df = filtered_df.sort('cdca_run_number', descending=True)
+                filtered_df = filtered_df.unique(
+                    subset=['bmu_id', 'settlement_date', 'settlement_period'],
+                    keep='first'  # Keep highest run number
+                )
+
+                filtered_df = filtered_df.to_pandas()
+
                 total_filtered = len(df) - len(filtered_df)
-                print(f"[{worker_name}] ✅ Kept {len(filtered_df):,} rows, filtered {total_filtered:,} rows")
-                
+                print(f"[{worker_name}] ✅ Kept {len(filtered_df):,} rows (latest runs only), filtered {total_filtered:,} rows")
+
                 if not filtered_df.empty:
-                    # Process filtered data
-                    if skip_duplicates:
-                        # Create unique key
-                        filtered_df['unique_key'] = (
-                            filtered_df['bmu_id'].astype(str) + '_' +
-                            filtered_df['settlement_date'].astype(str) + '_' +
-                            filtered_df['settlement_period'].astype(str)
-                        )
-                        
-                        # Filter duplicates in memory
-                        mask = ~filtered_df['unique_key'].isin(imported_keys)
-                        new_df = filtered_df[mask]
-                        imported_keys.update(new_df['unique_key'].values)
-                    else:
-                        new_df = filtered_df
+                    # No need for duplicate checking - we already filtered for latest runs
+                    new_df = filtered_df
                     
                     # Import using COPY
                     if use_copy:
@@ -462,21 +459,14 @@ def import_single_file_worker_optimized(
                     if len(accumulated_dfs) >= batch_size:
                         # Combine batches
                         combined_df = pd.concat(accumulated_dfs, ignore_index=True)
-                        
-                        if skip_duplicates:
-                            # Remove duplicates in memory
-                            combined_df['unique_key'] = (
-                                combined_df['bmu_id'].astype(str) + '_' +
-                                combined_df['settlement_date'].astype(str) + '_' +
-                                combined_df['settlement_period'].astype(str)
-                            )
-                            
-                            mask = ~combined_df['unique_key'].isin(imported_keys)
-                            new_df = combined_df[mask]
-                            imported_keys.update(new_df['unique_key'].values)
-                        else:
-                            new_df = combined_df
-                        
+
+                        # Keep only the latest settlement run per settlement period
+                        combined_df = combined_df.sort_values('cdca_run_number', ascending=False)
+                        new_df = combined_df.drop_duplicates(
+                            subset=['bmu_id', 'settlement_date', 'settlement_period'],
+                            keep='first'  # Keep highest run number
+                        )
+
                         # Import batch
                         if use_copy and not new_df.empty:
                             records = asyncio.run(import_with_copy(db_url, new_df))
@@ -493,19 +483,14 @@ def import_single_file_worker_optimized(
                 # Process remaining accumulated data
                 if accumulated_dfs:
                     combined_df = pd.concat(accumulated_dfs, ignore_index=True)
-                    
-                    if skip_duplicates:
-                        combined_df['unique_key'] = (
-                            combined_df['bmu_id'].astype(str) + '_' +
-                            combined_df['settlement_date'].astype(str) + '_' +
-                            combined_df['settlement_period'].astype(str)
-                        )
-                        
-                        mask = ~combined_df['unique_key'].isin(imported_keys)
-                        new_df = combined_df[mask]
-                    else:
-                        new_df = combined_df
-                    
+
+                    # Keep only the latest settlement run per settlement period
+                    combined_df = combined_df.sort_values('cdca_run_number', ascending=False)
+                    new_df = combined_df.drop_duplicates(
+                        subset=['bmu_id', 'settlement_date', 'settlement_period'],
+                        keep='first'  # Keep highest run number
+                    )
+
                     if use_copy and not new_df.empty:
                         records = asyncio.run(import_with_copy(db_url, new_df))
                         total_imported += records

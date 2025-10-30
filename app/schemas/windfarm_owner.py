@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .owner import Owner
+
 
 class WindfarmOwnerBase(BaseModel):
     windfarm_id: int
@@ -30,6 +32,6 @@ class WindfarmOwner(WindfarmOwnerBase):
 
 
 class WindfarmOwnerWithDetails(WindfarmOwner):
-    owner: dict
+    owner: Optional[Owner] = None
 
     model_config = ConfigDict(from_attributes=True)

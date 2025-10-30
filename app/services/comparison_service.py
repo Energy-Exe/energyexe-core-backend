@@ -2,7 +2,7 @@
 Service for windfarm generation data comparisons.
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, case
@@ -38,6 +38,12 @@ class ComparisonService:
         elif granularity == "monthly":
             period_column = func.date_trunc('month', GenerationData.hour)
             period_format = 'YYYY-MM'
+        elif granularity == "quarterly":
+            period_column = func.date_trunc('quarter', GenerationData.hour)
+            period_format = 'YYYY-Q'
+        elif granularity == "yearly":
+            period_column = func.date_trunc('year', GenerationData.hour)
+            period_format = 'YYYY'
         else:
             period_column = func.date_trunc('day', GenerationData.hour)
             period_format = 'YYYY-MM-DD'
@@ -90,8 +96,27 @@ class ComparisonService:
         total_data_points_for_cf = 0
 
         for row in rows:
+            # Format period in UTC to prevent timezone offset issues in CSV exports
+            # Ensure the datetime is converted to UTC before formatting
+            period_utc = row.period.astimezone(timezone.utc) if row.period.tzinfo else row.period
+
+            if granularity == 'hourly':
+                # Convert to UTC and format for hourly granularity
+                period_str = period_utc.strftime('%Y-%m-%d %H:%M:%S')
+            elif granularity == 'monthly':
+                period_str = period_utc.strftime('%Y-%m')
+            elif granularity == 'quarterly':
+                # Format as YYYY-Q# (e.g., 2025-Q1)
+                quarter = (period_utc.month - 1) // 3 + 1
+                period_str = f"{period_utc.year}-Q{quarter}"
+            elif granularity == 'yearly':
+                period_str = period_utc.strftime('%Y')
+            else:
+                # For daily/weekly, use ISO format date
+                period_str = period_utc.strftime('%Y-%m-%d')
+
             data.append({
-                'period': row.period.strftime('%Y-%m-%d %H:%M:%S') if granularity == 'hourly' else str(row.period),
+                'period': period_str,
                 'windfarm_id': row.windfarm_id,
                 'windfarm_name': row.windfarm_name,
                 'total_generation': float(row.total_generation) if row.total_generation else 0,

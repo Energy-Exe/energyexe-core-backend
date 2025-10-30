@@ -12,7 +12,12 @@ from app.schemas.windfarm import (
     WindfarmUpdate,
     WindfarmWithOwners,
 )
-from app.schemas.windfarm_owner import WindfarmOwner, WindfarmOwnerCreate, WindfarmOwnerUpdate
+from app.schemas.windfarm_owner import (
+    WindfarmOwner,
+    WindfarmOwnerCreate,
+    WindfarmOwnerUpdate,
+    WindfarmOwnerWithDetails,
+)
 from app.services.windfarm import WindfarmService
 from app.services.windfarm_owner import WindfarmOwnerService
 
@@ -495,7 +500,7 @@ async def delete_windfarm(windfarm_id: int, db: AsyncSession = Depends(get_db)):
 
 
 # Windfarm Owner endpoints
-@router.get("/{windfarm_id}/owners", response_model=List[WindfarmOwner])
+@router.get("/{windfarm_id}/owners", response_model=List[WindfarmOwnerWithDetails])
 async def get_windfarm_owners(windfarm_id: int, db: AsyncSession = Depends(get_db)):
     """Get all owners of a windfarm"""
     # Check if windfarm exists
@@ -506,7 +511,7 @@ async def get_windfarm_owners(windfarm_id: int, db: AsyncSession = Depends(get_d
     return await WindfarmOwnerService.get_windfarm_owners(db, windfarm_id)
 
 
-@router.post("/{windfarm_id}/owners", response_model=List[WindfarmOwner], status_code=201)
+@router.post("/{windfarm_id}/owners", response_model=List[WindfarmOwnerWithDetails], status_code=201)
 async def add_windfarm_owners(
     windfarm_id: int, owners_data: List[dict], db: AsyncSession = Depends(get_db)
 ):
@@ -522,10 +527,13 @@ async def add_windfarm_owners(
     await WindfarmOwnerService.delete_all_windfarm_owners(db, windfarm_id)
 
     # Create new owners
-    return await WindfarmOwnerService.create_windfarm_owners(db, windfarm_id, owners_data)
+    await WindfarmOwnerService.create_windfarm_owners(db, windfarm_id, owners_data)
+
+    # Return owners with details
+    return await WindfarmOwnerService.get_windfarm_owners(db, windfarm_id)
 
 
-@router.put("/{windfarm_id}/owners/{owner_id}", response_model=WindfarmOwner)
+@router.put("/{windfarm_id}/owners/{owner_id}", response_model=WindfarmOwnerWithDetails)
 async def update_windfarm_owner(
     windfarm_id: int,
     owner_id: int,
