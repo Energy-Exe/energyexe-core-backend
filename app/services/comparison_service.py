@@ -66,8 +66,8 @@ class ComparisonService:
         ).where(
             and_(
                 GenerationData.windfarm_id.in_(windfarm_ids),
-                GenerationData.hour >= datetime.combine(start_date, datetime.min.time()),
-                GenerationData.hour <= datetime.combine(end_date, datetime.max.time())
+                GenerationData.hour >= datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc),
+                GenerationData.hour <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
             )
         ).group_by(
             period_column,
@@ -87,8 +87,8 @@ class ComparisonService:
         def generate_date_range(start, end, granularity_type):
             """Generate complete date series for the given range and granularity"""
             periods = []
-            current = datetime.combine(start, datetime.min.time())
-            end_dt = datetime.combine(end, datetime.min.time())
+            current = datetime.combine(start, datetime.min.time()).replace(tzinfo=timezone.utc)
+            end_dt = datetime.combine(end, datetime.min.time()).replace(tzinfo=timezone.utc)
 
             if granularity_type == "hourly":
                 while current <= end_dt:
@@ -109,9 +109,9 @@ class ComparisonService:
                     periods.append(current)
                     # Move to first day of next month
                     if current.month == 12:
-                        current = current.replace(year=current.year + 1, month=1)
+                        current = current.replace(year=current.year + 1, month=1, day=1)
                     else:
-                        current = current.replace(month=current.month + 1)
+                        current = current.replace(month=current.month + 1, day=1)
             elif granularity_type == "quarterly":
                 # Start from beginning of quarter
                 quarter_month = ((current.month - 1) // 3) * 3 + 1
@@ -121,15 +121,17 @@ class ComparisonService:
                     # Move to first day of next quarter
                     next_quarter_month = quarter_month + 3
                     if next_quarter_month > 12:
-                        current = current.replace(year=current.year + 1, month=next_quarter_month - 12)
+                        current = current.replace(year=current.year + 1, month=next_quarter_month - 12, day=1)
                         quarter_month = next_quarter_month - 12
                     else:
-                        current = current.replace(month=next_quarter_month)
+                        current = current.replace(month=next_quarter_month, day=1)
                         quarter_month = next_quarter_month
             elif granularity_type == "yearly":
+                # Start from beginning of year
+                current = current.replace(month=1, day=1)
                 while current <= end_dt:
                     periods.append(current)
-                    current = current.replace(year=current.year + 1)
+                    current = current.replace(year=current.year + 1, month=1, day=1)
 
             return periods
 
@@ -302,8 +304,8 @@ class ComparisonService:
         ).where(
             and_(
                 Windfarm.id.in_(windfarm_ids),
-                GenerationData.hour >= datetime.combine(start_date, datetime.min.time()),
-                GenerationData.hour <= datetime.combine(end_date, datetime.max.time())
+                GenerationData.hour >= datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc),
+                GenerationData.hour <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
             )
         ).group_by(
             Windfarm.id,

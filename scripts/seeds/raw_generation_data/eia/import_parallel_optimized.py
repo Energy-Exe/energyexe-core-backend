@@ -217,11 +217,12 @@ def process_eia_file(
 
         logger.info(f"[{worker_name}] 📊 Records after melting: {len(melted):,}")
 
-        # Create period_start (first day of month)
+        # Create period_start (first day of month) in UTC
         melted['period_start'] = pd.to_datetime(
             melted[year_col].astype(str) + '-' + melted['month_name'],
             format='%Y-%B',
-            errors='coerce'
+            errors='coerce',
+            utc=True
         )
 
         # Remove rows with invalid dates
