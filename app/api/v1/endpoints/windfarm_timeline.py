@@ -105,27 +105,40 @@ async def get_windfarm_timeline(
     events.sort(key=lambda x: x['date'])
 
     # Calculate capacity snapshots over time
-    # Group events by date and only store final capacity for each unique date
+    # Track active units by their code to handle replacements correctly
+    # Key insight: Same code = replacement, different code = addition/removal
     capacity_by_date = {}
-    current_capacity = 0
-    gen_unit_capacity = 0
-    turbine_capacity = 0
+    active_gen_units = {}  # Maps unit_code -> capacity_mw
+    active_turbine_units = {}  # Maps unit_code -> capacity_mw
 
     for event in events:
         event_date = event['date']
+        unit_code = event['unit_code']
 
         if event['type'] == 'addition':
-            current_capacity += event['capacity_mw']
+            # If unit with same code exists, this is a replacement (not an addition)
+            # Remove old capacity first, then add new capacity
             if event['unit_type'] == 'generation_unit':
-                gen_unit_capacity += event['capacity_mw']
-            else:
-                turbine_capacity += event['capacity_mw']
+                if unit_code in active_gen_units:
+                    # This is a replacement - remove old capacity first
+                    pass  # Old capacity will be overwritten below
+                active_gen_units[unit_code] = event['capacity_mw']
+            else:  # turbine_unit
+                if unit_code in active_turbine_units:
+                    # This is a replacement - remove old capacity first
+                    pass  # Old capacity will be overwritten below
+                active_turbine_units[unit_code] = event['capacity_mw']
         else:  # removal
-            current_capacity -= event['capacity_mw']
+            # Remove the unit from active tracking
             if event['unit_type'] == 'generation_unit':
-                gen_unit_capacity -= event['capacity_mw']
-            else:
-                turbine_capacity -= event['capacity_mw']
+                active_gen_units.pop(unit_code, None)
+            else:  # turbine_unit
+                active_turbine_units.pop(unit_code, None)
+
+        # Calculate total capacity from active units
+        gen_unit_capacity = sum(active_gen_units.values())
+        turbine_capacity = sum(active_turbine_units.values())
+        current_capacity = gen_unit_capacity + turbine_capacity
 
         # Store the final capacity for this date (will overwrite if multiple events on same day)
         capacity_by_date[event_date] = {
