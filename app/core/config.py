@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 10
     DB_ECHO: bool = False
 
+    # Database connection health settings (for cloud PostgreSQL)
+    DB_POOL_PRE_PING: bool = True  # Test connections before use
+    DB_POOL_RECYCLE: int = 300  # Recycle connections after 5 minutes
+    DB_POOL_TIMEOUT: int = 30  # Wait max 30s for connection from pool
+    DB_COMMAND_TIMEOUT: int = 60  # Query timeout: 60 seconds
+
     # Redis (optional)
     REDIS_URL: Optional[str] = None
 

@@ -84,8 +84,28 @@ def create_application() -> FastAPI:
 
     @app.get("/health")
     async def health_check():
-        """Health check endpoint."""
-        return {"status": "healthy"}
+        """Health check endpoint with database connectivity test."""
+        from sqlalchemy import text
+
+        from app.core.database import get_session_factory
+
+        try:
+            # Test database connection
+            AsyncSessionLocal = get_session_factory()
+            async with AsyncSessionLocal() as db:
+                await db.execute(text("SELECT 1"))
+
+            return {
+                "status": "healthy",
+                "database": "connected",
+            }
+        except Exception as e:
+            logger.error("Health check failed", error=str(e))
+            return {
+                "status": "unhealthy",
+                "database": "error",
+                "error": str(e),
+            }
 
     return app
 

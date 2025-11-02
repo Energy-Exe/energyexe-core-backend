@@ -33,6 +33,23 @@ def get_engine():
             engine_kwargs["pool_size"] = settings.DB_POOL_SIZE
             engine_kwargs["max_overflow"] = settings.DB_MAX_OVERFLOW
 
+            # Connection health settings for cloud PostgreSQL (Railway)
+            # pool_pre_ping tests connections before use to catch closed connections
+            engine_kwargs["pool_pre_ping"] = settings.DB_POOL_PRE_PING
+
+            # pool_recycle ensures connections are recycled before PostgreSQL closes them
+            # This prevents stale connections when cloud PostgreSQL closes idle ones
+            engine_kwargs["pool_recycle"] = settings.DB_POOL_RECYCLE
+
+            # Connection timeout settings
+            engine_kwargs["pool_timeout"] = settings.DB_POOL_TIMEOUT
+            engine_kwargs["connect_args"] = {
+                "server_settings": {
+                    "application_name": "energyexe-backend",
+                },
+                "command_timeout": settings.DB_COMMAND_TIMEOUT,
+            }
+
         _engine = create_async_engine(settings.database_url_async, **engine_kwargs)
     return _engine
 
