@@ -9,6 +9,7 @@ from app.schemas.windfarm import (
     Windfarm,
     WindfarmCreate,
     WindfarmCreateWithOwners,
+    WindfarmListItem,
     WindfarmUpdate,
     WindfarmWithOwners,
 )
@@ -24,26 +25,78 @@ from app.services.windfarm_owner import WindfarmOwnerService
 router = APIRouter()
 
 
-@router.get("", response_model=List[Windfarm])
-@router.get("/", response_model=List[Windfarm])
+@router.get("", response_model=List[WindfarmListItem])
+@router.get("/", response_model=List[WindfarmListItem])
 async def get_windfarms(
     skip: int = Query(0, ge=0),
     limit: int = Query(DEFAULT_PAGINATION_LIMIT, ge=MIN_PAGINATION_LIMIT, le=MAX_PAGINATION_LIMIT),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get all windfarms with pagination"""
-    return await WindfarmService.get_windfarms(db, skip=skip, limit=limit)
+    """Get all windfarms with pagination and owner information"""
+    windfarms = await WindfarmService.get_windfarms(db, skip=skip, limit=limit)
+
+    # Transform the data to include owner summaries and country
+    result = []
+    for wf in windfarms:
+        # Get base dict and remove relationship keys
+        wf_dict = {k: v for k, v in wf.__dict__.items() if not k.startswith('_')}
+
+        # Add country and owners
+        wf_dict["country"] = {
+            "id": wf.country.id,
+            "code": wf.country.code,
+            "name": wf.country.name
+        } if wf.country else None
+
+        wf_dict["owners"] = [
+            {
+                "id": wo.owner.id,
+                "name": wo.owner.name,
+                "ownership_percentage": float(wo.ownership_percentage) if wo.ownership_percentage else None
+            }
+            for wo in wf.windfarm_owners
+        ]
+
+        result.append(wf_dict)
+
+    return result
 
 
-@router.get("/search", response_model=List[Windfarm])
+@router.get("/search", response_model=List[WindfarmListItem])
 async def search_windfarms(
     q: str = Query(..., min_length=1),
     skip: int = Query(0, ge=0),
     limit: int = Query(DEFAULT_PAGINATION_LIMIT, ge=MIN_PAGINATION_LIMIT, le=MAX_PAGINATION_LIMIT),
     db: AsyncSession = Depends(get_db),
 ):
-    """Search windfarms by name"""
-    return await WindfarmService.search_windfarms(db, query=q, skip=skip, limit=limit)
+    """Search windfarms by name with owner information"""
+    windfarms = await WindfarmService.search_windfarms(db, query=q, skip=skip, limit=limit)
+
+    # Transform the data to include owner summaries and country
+    result = []
+    for wf in windfarms:
+        # Get base dict and remove relationship keys
+        wf_dict = {k: v for k, v in wf.__dict__.items() if not k.startswith('_')}
+
+        # Add country and owners
+        wf_dict["country"] = {
+            "id": wf.country.id,
+            "code": wf.country.code,
+            "name": wf.country.name
+        } if wf.country else None
+
+        wf_dict["owners"] = [
+            {
+                "id": wo.owner.id,
+                "name": wo.owner.name,
+                "ownership_percentage": float(wo.ownership_percentage) if wo.ownership_percentage else None
+            }
+            for wo in wf.windfarm_owners
+        ]
+
+        result.append(wf_dict)
+
+    return result
 
 
 @router.get("/{windfarm_id}", response_model=Windfarm)

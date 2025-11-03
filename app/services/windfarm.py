@@ -14,7 +14,14 @@ class WindfarmService:
     @staticmethod
     async def get_windfarms(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[Windfarm]:
         result = await db.execute(
-            select(Windfarm).offset(skip).limit(limit).order_by(Windfarm.created_at.desc())
+            select(Windfarm)
+            .options(
+                selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
+                selectinload(Windfarm.country),
+            )
+            .offset(skip)
+            .limit(limit)
+            .order_by(Windfarm.created_at.desc())
         )
         return result.scalars().all()
 
@@ -71,6 +78,10 @@ class WindfarmService:
         search_pattern = f"%{query}%"
         result = await db.execute(
             select(Windfarm)
+            .options(
+                selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
+                selectinload(Windfarm.country),
+            )
             .where(and_(Windfarm.name.ilike(search_pattern)))
             .offset(skip)
             .limit(limit)

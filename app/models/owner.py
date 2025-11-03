@@ -13,7 +13,7 @@ class Owner(Base):
     name = Column(String(255), nullable=False)
     type = Column(
         String(100), nullable=True
-    )  # private_equity | utility | oil_and_gas | investment_fund
+    )  # energy | institutional_investor | community_investors | municipality | private_individual | supply_chain_oem | other | unknown
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

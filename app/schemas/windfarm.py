@@ -80,6 +80,29 @@ class Windfarm(WindfarmBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OwnerSummary(BaseModel):
+    id: int
+    name: str
+    ownership_percentage: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CountrySummary(BaseModel):
+    id: int
+    code: str
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WindfarmListItem(Windfarm):
+    country: Optional[CountrySummary] = None
+    owners: List[OwnerSummary] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class WindfarmWithOwners(Windfarm):
     windfarm_owners: List[dict] = []
 

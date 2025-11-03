@@ -11,7 +11,7 @@ class OwnerBase(BaseModel):
     code: str = Field(..., min_length=1, max_length=50)
     name: str = Field(..., min_length=1, max_length=255)
     type: Optional[str] = Field(
-        None, pattern="^(private_equity|utility|oil_and_gas|investment_fund)$"
+        None, pattern="^(energy|institutional_investor|community_investors|municipality|private_individual|supply_chain_oem|other|unknown)$"
     )
     notes: Optional[str] = None
 
@@ -24,7 +24,7 @@ class OwnerUpdate(BaseModel):
     code: Optional[str] = Field(None, min_length=1, max_length=50)
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     type: Optional[str] = Field(
-        None, pattern="^(private_equity|utility|oil_and_gas|investment_fund)$"
+        None, pattern="^(energy|institutional_investor|community_investors|municipality|private_individual|supply_chain_oem|other|unknown)$"
     )
     notes: Optional[str] = None
 
