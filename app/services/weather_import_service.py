@@ -1,10 +1,8 @@
 """Service layer for weather data import job execution."""
 
 import asyncio
-import subprocess
 from datetime import datetime, date, timezone, timedelta
-from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -96,8 +94,7 @@ class WeatherImportService:
         """
         Execute weather import job (blocking).
 
-        This runs the import script as a subprocess, parses the output,
-        and updates the job status in the database.
+        This runs the import using the core weather import module.
 
         Args:
             job_id: Job ID to execute
@@ -105,6 +102,8 @@ class WeatherImportService:
         Returns:
             Updated WeatherImportJob
         """
+        from app.core.weather_import import WeatherImportCore
+
         # Get job and mark as running
         job = await self.db.get(WeatherImportJob, job_id)
         if not job:
@@ -113,26 +112,23 @@ class WeatherImportService:
         job.mark_running()
         await self.db.commit()
 
-        # Close session before long-running subprocess
+        # Close session before long-running process
         await self.db.close()
-
-        # Build command
-        command = self._build_command(job)
 
         logger.info(
             f"Executing weather import job",
             job_id=job_id,
-            command=command
+            start_date=job.import_start_date.date(),
+            end_date=job.import_end_date.date()
         )
 
         try:
-            # Run subprocess with 2-hour timeout
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=7200,  # 2 hours for weather jobs
+            # Run weather import using core module
+            weather_import = WeatherImportCore()
+            stats = await weather_import.fetch_and_process_date_range(
+                start_date=job.import_start_date.date(),
+                end_date=job.import_end_date.date(),
+                job_id=job_id
             )
 
             # Create new session to update results
@@ -141,9 +137,21 @@ class WeatherImportService:
                 # Re-fetch job in new session
                 job = await new_db.get(WeatherImportJob, job_id)
 
-                if result.returncode == 0:
-                    # Parse output
-                    stats = self._parse_output(result.stdout)
+                if stats.get('errors'):
+                    # Partial failure - some dates failed
+                    error_msg = "; ".join(stats['errors'][:5])  # First 5 errors
+                    if len(stats['errors']) > 5:
+                        error_msg += f" ... and {len(stats['errors']) - 5} more"
+
+                    job.mark_failed(error_msg)
+                    logger.error(
+                        f"Job completed with errors",
+                        job_id=job_id,
+                        errors=len(stats['errors']),
+                        **{k: v for k, v in stats.items() if k != 'errors'}
+                    )
+                else:
+                    # Full success
                     job.mark_success(
                         records_imported=stats['records'],
                         files_downloaded=stats['files_downloaded'],
@@ -151,96 +159,21 @@ class WeatherImportService:
                         api_calls=stats['api_calls'],
                     )
                     logger.info(f"Job completed successfully", job_id=job_id, **stats)
-                else:
-                    error_msg = result.stderr[:1000] if result.stderr else "Unknown error"
-                    job.mark_failed(error_msg)
-                    logger.error(f"Job failed", job_id=job_id, error=error_msg)
 
                 await new_db.commit()
                 return job
 
-        except subprocess.TimeoutExpired:
+        except Exception as e:
+            # Unexpected error
             AsyncSessionLocal = get_session_factory()
             async with AsyncSessionLocal() as new_db:
                 job = await new_db.get(WeatherImportJob, job_id)
-                job.mark_failed("Job timeout after 2 hours")
+                error_msg = str(e)[:1000]
+                job.mark_failed(error_msg)
                 await new_db.commit()
-                logger.error(f"Job timeout", job_id=job_id)
+                logger.error(f"Job failed with exception", job_id=job_id, error=str(e))
                 return job
 
-    def _build_command(self, job: WeatherImportJob) -> str:
-        """
-        Build command to execute import script.
-
-        Args:
-            job: WeatherImportJob to execute
-
-        Returns:
-            Shell command string
-        """
-        script_path = Path(__file__).parent.parent.parent / "scripts" / "seeds" / "weather_data" / "fetch_daily_all_windfarms.py"
-
-        start_date = job.import_start_date.strftime('%Y-%m-%d')
-        end_date = job.import_end_date.strftime('%Y-%m-%d')
-
-        command = (
-            f"python {script_path} "
-            f"--start {start_date} "
-            f"--end {end_date} "
-            f"--job-id {job.id}"
-        )
-
-        return command
-
-    def _parse_output(self, output: str) -> dict:
-        """
-        Parse script output to extract statistics.
-
-        Looks for structured output lines like:
-        - RECORDS: 38184
-        - FILES_DOWNLOADED: 1
-        - FILES_DELETED: 1
-        - API_CALLS: 1
-
-        Args:
-            output: Script stdout
-
-        Returns:
-            Dict with records, files_downloaded, files_deleted, api_calls
-        """
-        records = 0
-        files_downloaded = 0
-        files_deleted = 0
-        api_calls = 0
-
-        for line in output.split("\n"):
-            if "RECORDS:" in line:
-                try:
-                    records += int(line.split(":")[-1].strip())
-                except ValueError:
-                    pass
-            elif "FILES_DOWNLOADED:" in line:
-                try:
-                    files_downloaded += int(line.split(":")[-1].strip())
-                except ValueError:
-                    pass
-            elif "FILES_DELETED:" in line:
-                try:
-                    files_deleted += int(line.split(":")[-1].strip())
-                except ValueError:
-                    pass
-            elif "API_CALLS:" in line:
-                try:
-                    api_calls += int(line.split(":")[-1].strip())
-                except ValueError:
-                    pass
-
-        return {
-            'records': records,
-            'files_downloaded': files_downloaded,
-            'files_deleted': files_deleted,
-            'api_calls': api_calls,
-        }
 
     async def get_job_by_id(self, job_id: int) -> Optional[WeatherImportJob]:
         """
