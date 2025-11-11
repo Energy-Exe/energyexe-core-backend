@@ -25,6 +25,8 @@ from app.api.v1.endpoints import (
     turbine_models,
     turbine_units,
     users,
+    weather_data,
+    weather_imports,
     windfarms,
     windfarm_timeline,
 )
@@ -74,6 +76,12 @@ api_router.include_router(data_anomalies.router, prefix="/data-anomalies", tags=
 
 # Scheduled import jobs management
 api_router.include_router(import_jobs.router, prefix="/import-jobs", tags=["import-jobs"])
+
+# Weather data endpoints
+api_router.include_router(weather_data.router)
+
+# Weather import jobs management
+api_router.include_router(weather_imports.router, prefix="/weather-imports", tags=["weather-imports"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])

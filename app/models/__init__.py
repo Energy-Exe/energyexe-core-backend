@@ -8,6 +8,7 @@ from .country import Country
 from .data_anomaly import DataAnomaly, AnomalyType, AnomalyStatus, AnomalySeverity
 from .generation_data import GenerationDataRaw, GenerationData, GenerationUnitMapping
 from .generation_unit import GenerationUnit
+from .weather_data import WeatherDataRaw, WeatherData
 from .market_balance_area import MarketBalanceArea
 from .owner import Owner
 from .project import Project
@@ -45,6 +46,8 @@ __all__ = [
     "TurbineModel",
     "TurbineUnit",
     "User",
+    "WeatherDataRaw",
+    "WeatherData",
     "Windfarm",
     "WindfarmOwner",
 ]

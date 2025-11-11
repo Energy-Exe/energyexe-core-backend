@@ -91,3 +91,4 @@ class Windfarm(Base):
     )
     generation_units = relationship("GenerationUnit", back_populates="windfarm")
     generation_data = relationship("GenerationData", back_populates="windfarm")
+    weather_data = relationship("WeatherData", back_populates="windfarm")
