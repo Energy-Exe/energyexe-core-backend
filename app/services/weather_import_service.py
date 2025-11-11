@@ -95,6 +95,7 @@ class WeatherImportService:
         Execute weather import job (blocking).
 
         This runs the import using the core weather import module.
+        Creates its own database sessions as needed.
 
         Args:
             job_id: Job ID to execute
@@ -104,30 +105,33 @@ class WeatherImportService:
         """
         from app.core.weather_import import WeatherImportCore
 
-        # Get job and mark as running
-        job = await self.db.get(WeatherImportJob, job_id)
-        if not job:
-            raise ValueError(f"Job {job_id} not found")
+        # Create a new session for this job execution
+        AsyncSessionLocal = get_session_factory()
+        async with AsyncSessionLocal() as db:
+            # Get job and mark as running
+            job = await db.get(WeatherImportJob, job_id)
+            if not job:
+                raise ValueError(f"Job {job_id} not found")
 
-        job.mark_running()
-        await self.db.commit()
-        await self.db.refresh(job)
+            job.mark_running()
+            await db.commit()
 
-        # Don't close session here - it will be closed automatically
+            start_date = job.import_start_date.date()
+            end_date = job.import_end_date.date()
 
         logger.info(
             f"Executing weather import job",
             job_id=job_id,
-            start_date=job.import_start_date.date(),
-            end_date=job.import_end_date.date()
+            start_date=start_date,
+            end_date=end_date
         )
 
         try:
             # Run weather import using core module
             weather_import = WeatherImportCore()
             stats = await weather_import.fetch_and_process_date_range(
-                start_date=job.import_start_date.date(),
-                end_date=job.import_end_date.date(),
+                start_date=start_date,
+                end_date=end_date,
                 job_id=job_id
             )
 
