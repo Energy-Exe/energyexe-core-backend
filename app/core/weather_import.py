@@ -177,7 +177,14 @@ class WeatherImportCore:
 
         # Parse GRIB and extract data
         logger.info("Parsing GRIB file and interpolating data")
-        ds = xr.open_dataset(str(grib_file), engine='cfgrib')
+
+        # Open GRIB with backend_kwargs to handle time conflicts
+        # Precipitation has accumulated values at different time steps
+        ds = xr.open_dataset(
+            str(grib_file),
+            engine='cfgrib',
+            backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'instant'}}
+        )
 
         # Extract weather data for each windfarm using bilinear interpolation
         records = self._extract_windfarm_data(ds, windfarms, target_date)
@@ -208,6 +215,7 @@ class WeatherImportCore:
 
         # ERA5 request parameters
         # Using 100m wind components and 2m temperature (standard single-levels)
+        # Note: Excluding total_precipitation as it's accumulated and causes time dimension conflicts
         request_params = {
             'product_type': 'reanalysis',
             'format': 'grib',
@@ -218,7 +226,6 @@ class WeatherImportCore:
                 '10m_v_component_of_wind',
                 '2m_temperature',
                 'surface_pressure',
-                'total_precipitation',
             ],
             'year': target_date.year,
             'month': f'{target_date.month:02d}',
@@ -269,7 +276,9 @@ class WeatherImportCore:
 
         # Process each time point
         for time_idx, time_val in enumerate(times):
-            hour_dt = np.datetime64(time_val, 'ns').astype(datetime)
+            # Convert numpy datetime64 to Python datetime
+            import pandas as pd
+            hour_dt = pd.Timestamp(time_val).to_pydatetime()
 
             # Create interpolators for each variable
             # Map to actual GRIB parameter names
@@ -281,7 +290,6 @@ class WeatherImportCore:
                 'v10': 'v10',    # 10m_v_component_of_wind
                 't2m': 't2m',    # 2m_temperature
                 'sp': 'sp',      # surface_pressure
-                'tp': 'tp',      # total_precipitation
             }
 
             for key, var_name in variables.items():
