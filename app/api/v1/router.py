@@ -29,6 +29,7 @@ from app.api.v1.endpoints import (
     weather_imports,
     windfarms,
     windfarm_timeline,
+    windfarm_reports,
 )
 
 api_router = APIRouter()
@@ -82,6 +83,9 @@ api_router.include_router(weather_data.router)
 
 # Weather import jobs management
 api_router.include_router(weather_imports.router, prefix="/weather-imports", tags=["weather-imports"])
+
+# Windfarm performance reports endpoints
+api_router.include_router(windfarm_reports.router, tags=["windfarm-reports"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])
