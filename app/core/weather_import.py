@@ -142,7 +142,10 @@ class WeatherImportCore:
         AsyncSessionLocal = get_session_factory()
         async with AsyncSessionLocal() as db:
             result = await db.execute(
-                select(Windfarm).where(Windfarm.is_active == True)
+                select(Windfarm).where(
+                    Windfarm.lat.isnot(None),
+                    Windfarm.lng.isnot(None)
+                )
             )
             windfarms = list(result.scalars().all())
 
@@ -305,7 +308,7 @@ class WeatherImportCore:
 
             # Interpolate for each windfarm
             for wf in windfarms:
-                point = (wf.latitude, wf.longitude)
+                point = (wf.lat, wf.lng)
 
                 # Extract interpolated values
                 data_dict = {}

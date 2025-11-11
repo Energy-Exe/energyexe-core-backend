@@ -111,9 +111,9 @@ class WeatherImportService:
 
         job.mark_running()
         await self.db.commit()
+        await self.db.refresh(job)
 
-        # Close session before long-running process
-        await self.db.close()
+        # Don't close session here - it will be closed automatically
 
         logger.info(
             f"Executing weather import job",
