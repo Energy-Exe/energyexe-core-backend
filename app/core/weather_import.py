@@ -207,16 +207,16 @@ class WeatherImportCore:
         c = cdsapi.Client(url=self.cdsapi_url, key=self.cdsapi_key)
 
         # ERA5 request parameters
+        # Using 100m wind components and 2m temperature (standard single-levels)
         request_params = {
             'product_type': 'reanalysis',
             'format': 'grib',
             'variable': [
-                'temperature_at_100m',
-                'temperature_at_10m',
-                'u_component_of_wind_at_100m',
-                'u_component_of_wind_at_10m',
-                'v_component_of_wind_at_100m',
-                'v_component_of_wind_at_10m',
+                '100m_u_component_of_wind',
+                '100m_v_component_of_wind',
+                '10m_u_component_of_wind',
+                '10m_v_component_of_wind',
+                '2m_temperature',
                 'surface_pressure',
                 'total_precipitation',
             ],
@@ -272,16 +272,16 @@ class WeatherImportCore:
             hour_dt = np.datetime64(time_val, 'ns').astype(datetime)
 
             # Create interpolators for each variable
+            # Map to actual GRIB parameter names
             interpolators = {}
             variables = {
-                'u100': 'u_component_of_wind_at_100m',
-                'v100': 'v_component_of_wind_at_100m',
-                'u10': 'u_component_of_wind_at_10m',
-                'v10': 'v_component_of_wind_at_10m',
-                't2m': 'temperature_at_10m',
-                't100': 'temperature_at_100m',
-                'sp': 'surface_pressure',
-                'tp': 'total_precipitation',
+                'u100': 'u100',  # 100m_u_component_of_wind
+                'v100': 'v100',  # 100m_v_component_of_wind
+                'u10': 'u10',    # 10m_u_component_of_wind
+                'v10': 'v10',    # 10m_v_component_of_wind
+                't2m': 't2m',    # 2m_temperature
+                'sp': 'sp',      # surface_pressure
+                'tp': 'tp',      # total_precipitation
             }
 
             for key, var_name in variables.items():
