@@ -328,22 +328,25 @@ class WeatherImportCore:
                 if 'u100' in data_dict and 'v100' in data_dict:
                     u100 = data_dict['u100']
                     v100 = data_dict['v100']
-                    wind_speed_100 = np.sqrt(u100**2 + v100**2)
-                    wind_direction_100 = (np.degrees(np.arctan2(-u100, -v100)) + 180) % 360
+                    wind_speed_100m = float(np.sqrt(u100**2 + v100**2))
+                    wind_direction_deg = float((np.degrees(np.arctan2(-u100, -v100)) + 180) % 360)
                 else:
-                    wind_speed_100 = None
-                    wind_direction_100 = None
+                    wind_speed_100m = 0.0
+                    wind_direction_deg = 0.0
 
-                # Create record
+                # Temperature conversion (ERA5 provides in Kelvin)
+                temperature_2m_k = float(data_dict.get('t2m', 273.15))
+                temperature_2m_c = temperature_2m_k - 273.15
+
+                # Create record matching WeatherData model
                 record = {
                     'windfarm_id': wf.id,
-                    'hour': hour_dt.replace(tzinfo=None),  # Store as naive UTC
+                    'hour': hour_dt,  # pandas.Timestamp is already timezone-aware
                     'source': 'ERA5',
-                    'wind_speed_100m': wind_speed_100,
-                    'wind_direction_100m': wind_direction_100,
-                    'temperature_2m': data_dict.get('t2m'),
-                    'surface_pressure': data_dict.get('sp'),
-                    'data': data_dict,  # Store all raw data in JSONB
+                    'wind_speed_100m': wind_speed_100m,
+                    'wind_direction_deg': wind_direction_deg,
+                    'temperature_2m_k': temperature_2m_k,
+                    'temperature_2m_c': temperature_2m_c,
                 }
 
                 records.append(record)
@@ -367,10 +370,10 @@ class WeatherImportCore:
                 index_elements=['windfarm_id', 'hour', 'source'],
                 set_={
                     'wind_speed_100m': stmt.excluded.wind_speed_100m,
-                    'wind_direction_100m': stmt.excluded.wind_direction_100m,
-                    'temperature_2m': stmt.excluded.temperature_2m,
-                    'surface_pressure': stmt.excluded.surface_pressure,
-                    'data': stmt.excluded.data,
+                    'wind_direction_deg': stmt.excluded.wind_direction_deg,
+                    'temperature_2m_k': stmt.excluded.temperature_2m_k,
+                    'temperature_2m_c': stmt.excluded.temperature_2m_c,
+                    'updated_at': stmt.excluded.updated_at,
                 }
             )
 
