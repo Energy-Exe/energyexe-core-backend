@@ -101,7 +101,11 @@ class Settings(BaseSettings):
 
     # EIA Integration
     EIA_API_KEY: str = "bLXfqlf12SKY6t6kIz03IKGgoTfTBxr9pOLKiZeZ"
-    
+
+    # CDS API (Copernicus Climate Data Store) for ERA5 weather data
+    CDSAPI_URL: str = "https://cds.climate.copernicus.eu/api"
+    CDSAPI_KEY: str = "fea40a33-7b81-4f9a-a145-a1556b25c940"
+
     # Valkey/Redis settings for Celery
     VALKEY_PUBLIC_HOST: str = "valkey-production-515f.up.railway.app"
     VALKEY_PUBLIC_PORT: str = "6379"

@@ -13,8 +13,11 @@ class WeatherImportCore:
 
     def __init__(self):
         """Initialize weather import core."""
-        self.cdsapi_url = os.getenv("CDSAPI_URL")
-        self.cdsapi_key = os.getenv("CDSAPI_KEY")
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        self.cdsapi_url = settings.CDSAPI_URL
+        self.cdsapi_key = settings.CDSAPI_KEY
 
         if not self.cdsapi_url or not self.cdsapi_key:
             logger.warning(
