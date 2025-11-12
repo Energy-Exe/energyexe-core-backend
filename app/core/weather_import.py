@@ -368,9 +368,10 @@ class WeatherImportCore:
         AsyncSessionLocal = get_session_factory()
         async with AsyncSessionLocal() as db:
             # Use PostgreSQL upsert to handle duplicates
+            # Match the unique constraint order: (hour, windfarm_id, source)
             stmt = insert(WeatherData).values(records)
             stmt = stmt.on_conflict_do_update(
-                index_elements=['windfarm_id', 'hour', 'source'],
+                index_elements=['hour', 'windfarm_id', 'source'],
                 set_={
                     'wind_speed_100m': stmt.excluded.wind_speed_100m,
                     'wind_direction_deg': stmt.excluded.wind_direction_deg,
