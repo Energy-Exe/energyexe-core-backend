@@ -18,14 +18,18 @@ class PeerAnalysisService:
         self.db = db
 
     async def get_windfarm_with_relations(self, windfarm_id: int) -> Optional[Windfarm]:
-        """Get windfarm with all necessary relationships loaded."""
+        """
+        Get windfarm with necessary relationships loaded.
+
+        OPTIMIZED: Only loads essential relationships, not all turbine units.
+        """
         stmt = (
             select(Windfarm)
             .options(
                 selectinload(Windfarm.bidzone),
                 selectinload(Windfarm.country),
-                selectinload(Windfarm.windfarm_owners),
-                selectinload(Windfarm.turbine_units).selectinload(TurbineUnit.turbine_model)
+                selectinload(Windfarm.windfarm_owners)
+                # NOTE: turbine_units NOT loaded here - fetched separately if needed
             )
             .where(Windfarm.id == windfarm_id)
         )
@@ -84,15 +88,13 @@ class PeerAnalysisService:
                 # Skip owner peers if there's an issue
                 pass
 
-        # Turbine model peers (if windfarm has turbine units)
-        if windfarm.turbine_units:
-            # Get most common turbine model
-            turbine_model = await self._get_primary_turbine_model(windfarm_id)
-            if turbine_model:
-                peer_groups['turbine'] = await self._get_turbine_peer_info(
-                    turbine_model['id'],
-                    turbine_model['name']
-                )
+        # Turbine model peers (check if windfarm has turbine units)
+        turbine_model = await self._get_primary_turbine_model(windfarm_id)
+        if turbine_model:
+            peer_groups['turbine'] = await self._get_turbine_peer_info(
+                turbine_model['id'],
+                turbine_model['name']
+            )
 
         return peer_groups
 

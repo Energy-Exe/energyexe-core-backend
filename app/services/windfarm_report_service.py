@@ -30,6 +30,7 @@ class WindfarmReportService:
         self.db = db
         self.peer_service = PeerAnalysisService(db)
         self.stats = StatisticalAnalysis()
+        self._peer_data_cache = {}  # Cache for peer group monthly data
 
     async def generate_report_data(
         self,
@@ -296,6 +297,8 @@ class WindfarmReportService:
         """
         Generate ranking table for a peer group.
 
+        OPTIMIZED: Uses single bulk query instead of N queries.
+
         Returns (table_rows, target_rank)
         """
         # Get all windfarms in peer group
@@ -304,16 +307,63 @@ class WindfarmReportService:
             group_id
         )
 
-        # Calculate avg CF for each windfarm
+        if not windfarm_summaries:
+            return [], 0
+
+        windfarm_ids = [wf['id'] for wf in windfarm_summaries]
+
+        # OPTIMIZATION: Single bulk query for ALL windfarms at once
+        # Instead of N separate queries, fetch everything in one go
+        stmt = (
+            select(
+                GenerationUnit.windfarm_id,
+                extract('year', GenerationData.hour).label('year'),
+                extract('month', GenerationData.hour).label('month'),
+                func.avg(GenerationData.capacity_factor).label('avg_cf'),
+                func.sum(GenerationData.generation_mwh).label('total_gen_mwh')
+            )
+            .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
+            .where(
+                and_(
+                    GenerationUnit.windfarm_id.in_(windfarm_ids),
+                    GenerationData.hour >= start_date,
+                    GenerationData.hour < end_date,
+                    GenerationData.capacity_factor.isnot(None)
+                )
+            )
+            .group_by(GenerationUnit.windfarm_id, 'year', 'month')
+        )
+
+        result = await self.db.execute(stmt)
+
+        # Organize data by windfarm
+        windfarm_data = {}
+        for row in result.all():
+            wf_id = row.windfarm_id
+            month_key = f"{int(row.year)}-{int(row.month):02d}"
+
+            if wf_id not in windfarm_data:
+                windfarm_data[wf_id] = {
+                    'monthly_cfs': [],
+                    'monthly_gen_gwh': [],
+                    'monthly_dict': {}
+                }
+
+            windfarm_data[wf_id]['monthly_dict'][month_key] = float(row.avg_cf)
+            windfarm_data[wf_id]['monthly_cfs'].append(float(row.avg_cf))
+            windfarm_data[wf_id]['monthly_gen_gwh'].append(float(row.total_gen_mwh) / 1000.0 if row.total_gen_mwh else 0.0)
+
+        # Calculate averages and prepare for ranking
         windfarm_cfs = []
         for wf_summary in windfarm_summaries:
             wf_id = wf_summary['id']
-            monthly_cfs = await self._get_monthly_capacity_factors(wf_id, start_date, end_date)
-            monthly_gen = await self._get_monthly_generation(wf_id, start_date, end_date)
 
-            if monthly_cfs:
-                avg_cf = sum(monthly_cfs) / len(monthly_cfs)
-                total_gen = sum(monthly_gen) if monthly_gen else 0.0
+            if wf_id in windfarm_data and windfarm_data[wf_id]['monthly_cfs']:
+                data = windfarm_data[wf_id]
+                avg_cf = sum(data['monthly_cfs']) / len(data['monthly_cfs'])
+                total_gen = sum(data['monthly_gen_gwh'])
+                monthly_cfs = data['monthly_cfs']
+
                 windfarm_cfs.append((wf_id, avg_cf, monthly_cfs, total_gen, wf_summary))
 
         # Sort by avg CF descending
@@ -433,9 +483,21 @@ class WindfarmReportService:
         start_date: datetime,
         end_date: datetime
     ) -> Dict:
-        """Build heatmap matrix data for peer group."""
+        """
+        Build heatmap matrix data for peer group.
+
+        OPTIMIZED: Uses single bulk query instead of N queries.
+        """
         # Get all windfarms in peer group
         windfarm_summaries = await self.peer_service.get_peer_windfarms_summary(peer_type, group_id)
+
+        if not windfarm_summaries:
+            return {
+                'matrix': [],
+                'windfarm_names': [],
+                'month_labels': [],
+                'target_index': 0
+            }
 
         # Sort by name for consistent ordering
         windfarm_summaries.sort(key=lambda x: x['name'])
@@ -453,11 +515,41 @@ class WindfarmReportService:
             months.append(current.strftime('%Y-%m'))
             current += relativedelta(months=1)
 
+        windfarm_ids = [wf['id'] for wf in windfarm_summaries]
+
+        # OPTIMIZATION: Single bulk query for ALL windfarms
+        stmt = (
+            select(
+                GenerationUnit.windfarm_id,
+                extract('year', GenerationData.hour).label('year'),
+                extract('month', GenerationData.hour).label('month'),
+                func.avg(GenerationData.capacity_factor).label('avg_cf')
+            )
+            .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
+            .where(
+                and_(
+                    GenerationUnit.windfarm_id.in_(windfarm_ids),
+                    GenerationData.hour >= start_date,
+                    GenerationData.hour < end_date,
+                    GenerationData.capacity_factor.isnot(None)
+                )
+            )
+            .group_by(GenerationUnit.windfarm_id, 'year', 'month')
+        )
+
+        result = await self.db.execute(stmt)
+
+        # Organize by windfarm
+        windfarm_monthly_data = {wf['id']: {} for wf in windfarm_summaries}
+        for row in result.all():
+            month_key = f"{int(row.year)}-{int(row.month):02d}"
+            windfarm_monthly_data[row.windfarm_id][month_key] = float(row.avg_cf)
+
         # Build matrix: rows = windfarms, cols = months
         matrix = []
         for wf_summary in windfarm_summaries:
             wf_id = wf_summary['id']
-            monthly_dict = await self._get_monthly_capacity_factors_dict(wf_id, start_date, end_date)
+            monthly_dict = windfarm_monthly_data.get(wf_id, {})
             row = [monthly_dict.get(month, 0.0) for month in months]
             matrix.append(row)
 
@@ -573,6 +665,8 @@ class WindfarmReportService:
         """
         Get monthly capacity factors for all windfarms in peer group.
 
+        OPTIMIZED: Caches results to avoid duplicate queries.
+
         Returns: {
             'YYYY-MM': {
                 windfarm_id: capacity_factor,
@@ -581,6 +675,11 @@ class WindfarmReportService:
             ...
         }
         """
+        # Check cache first
+        cache_key = f"{peer_type}_{group_id}_{start_date.date()}_{end_date.date()}"
+        if cache_key in self._peer_data_cache:
+            return self._peer_data_cache[cache_key]
+
         # Get peer windfarm IDs
         if peer_type == 'bidzone':
             peer_ids = await self.peer_service.get_bidzone_peers(group_id)
@@ -625,5 +724,8 @@ class WindfarmReportService:
             if month_key not in monthly_data:
                 monthly_data[month_key] = {}
             monthly_data[month_key][row.windfarm_id] = float(row.avg_cf)
+
+        # Cache the result
+        self._peer_data_cache[cache_key] = monthly_data
 
         return monthly_data

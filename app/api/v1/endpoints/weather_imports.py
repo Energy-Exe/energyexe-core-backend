@@ -23,6 +23,36 @@ class WeatherImportRequest(BaseModel):
     end_date: date = Field(..., description="End date for import (YYYY-MM-DD)")
 
 
+class WeatherImportJobSummary(BaseModel):
+    """Lightweight summary response for listing jobs."""
+    id: int
+    job_name: str
+    status: str
+    import_start_date: str
+    import_end_date: str
+    progress_percentage: float = 0.0
+    records_imported: int
+    created_at: str
+    completed_at: Optional[str] = None
+    error_message: Optional[str] = None
+
+    @classmethod
+    def from_model(cls, job: WeatherImportJob) -> "WeatherImportJobSummary":
+        """Create lightweight summary from database model."""
+        return cls(
+            id=job.id,
+            job_name=job.job_name,
+            status=job.status,
+            import_start_date=job.import_start_date.isoformat(),
+            import_end_date=job.import_end_date.isoformat(),
+            progress_percentage=job.get_progress_percentage(),
+            records_imported=job.records_imported,
+            created_at=job.created_at.isoformat(),
+            completed_at=job.completed_at.isoformat() if job.completed_at else None,
+            error_message=job.error_message,
+        )
+
+
 class WeatherImportJobResponse(BaseModel):
     """Response schema for weather import job."""
     id: int
@@ -138,7 +168,7 @@ async def get_import_status(
     return WeatherImportJobResponse.from_model(job)
 
 
-@router.get("/", response_model=List[WeatherImportJobResponse])
+@router.get("/", response_model=List[WeatherImportJobSummary])
 async def list_import_jobs(
     status: Optional[str] = None,
     limit: int = 50,
@@ -149,18 +179,21 @@ async def list_import_jobs(
     """
     List all weather import jobs with optional filtering.
 
+    Returns lightweight summaries with only essential fields.
+    Use GET /{job_id} for full details of a specific job.
+
     Args:
         status: Filter by status (pending/running/success/failed/cancelled)
         limit: Maximum results to return (default 50)
         offset: Number of results to skip (for pagination)
 
     Returns:
-        List of weather import jobs, ordered by created_at desc
+        List of weather import job summaries, ordered by created_at desc
     """
     service = WeatherImportService(db)
     jobs = await service.list_jobs(status=status, limit=limit, offset=offset)
 
-    return [WeatherImportJobResponse.from_model(job) for job in jobs]
+    return [WeatherImportJobSummary.from_model(job) for job in jobs]
 
 
 @router.delete("/{job_id}", response_model=WeatherImportJobResponse)
