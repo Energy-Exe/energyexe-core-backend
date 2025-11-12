@@ -181,13 +181,8 @@ class WeatherImportCore:
         # Parse GRIB and extract data
         logger.info("Parsing GRIB file and interpolating data")
 
-        # Open GRIB with backend_kwargs to handle time conflicts
-        # Precipitation has accumulated values at different time steps
-        ds = xr.open_dataset(
-            str(grib_file),
-            engine='cfgrib',
-            backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'instant'}}
-        )
+        # Open GRIB file
+        ds = xr.open_dataset(str(grib_file), engine='cfgrib')
 
         # Extract weather data for each windfarm using bilinear interpolation
         records = self._extract_windfarm_data(ds, windfarms, target_date)
@@ -213,8 +208,8 @@ class WeatherImportCore:
         """Download ERA5 GRIB file from CDS API."""
         import cdsapi
 
-        # Configure client
-        c = cdsapi.Client(url=self.cdsapi_url, key=self.cdsapi_key)
+        # Configure client (will use ~/.cdsapirc or env vars)
+        c = cdsapi.Client()
 
         # ERA5 request parameters
         # Using 100m wind components and 2m temperature (standard single-levels)
@@ -253,6 +248,8 @@ class WeatherImportCore:
         """
         Extract weather data for all windfarms using bilinear interpolation.
 
+        Uses xarray's built-in interpolation which is faster than scipy.
+
         Args:
             ds: xarray Dataset with ERA5 data
             windfarms: List of Windfarm models
@@ -261,103 +258,69 @@ class WeatherImportCore:
         Returns:
             List of weather data records ready for database insertion
         """
-        import numpy as np
-        from scipy.interpolate import RegularGridInterpolator
+        import math
+        import pandas as pd
 
         records = []
 
-        # Get grid coordinates
-        lats = ds.latitude.values
-        lons = ds.longitude.values
-        times = ds.time.values
-
         logger.info(
             "GRIB grid info",
-            grid_size=f"{len(lats)} x {len(lons)}",
-            time_points=len(times)
+            grid_size=f"{len(ds.latitude)} x {len(ds.longitude)}",
+            time_points=len(ds.time)
         )
 
-        # Process each time point
-        for time_idx, time_val in enumerate(times):
-            # Convert numpy datetime64 to Python datetime
-            import pandas as pd
-            hour_dt = pd.Timestamp(time_val).to_pydatetime()
+        # Process each windfarm
+        for i, wf in enumerate(windfarms):
+            if i % 100 == 0:
+                logger.info(f"Processing windfarm {i+1}/{len(windfarms)}")
 
-            # Create interpolators for each variable
-            # Map to actual GRIB parameter names
-            interpolators = {}
-            variables = {
-                'u100': 'u100',  # 100m_u_component_of_wind
-                'v100': 'v100',  # 100m_v_component_of_wind
-                'u10': 'u10',    # 10m_u_component_of_wind
-                'v10': 'v10',    # 10m_v_component_of_wind
-                't2m': 't2m',    # 2m_temperature
-                'sp': 'sp',      # surface_pressure
-            }
+            wf_lat = float(wf.lat)
+            wf_lng = float(wf.lng)
 
-            for key, var_name in variables.items():
-                if var_name in ds:
-                    data = ds[var_name].isel(time=time_idx).values
-                    # Create interpolator (lats must be increasing for scipy)
-                    if lats[0] > lats[-1]:
-                        # Reverse if decreasing
-                        interpolators[key] = RegularGridInterpolator(
-                            (lats[::-1], lons),
-                            data[::-1, :],
-                            method='linear',
-                            bounds_error=False,
-                            fill_value=None
-                        )
-                    else:
-                        interpolators[key] = RegularGridInterpolator(
-                            (lats, lons),
-                            data,
-                            method='linear',
-                            bounds_error=False,
-                            fill_value=None
-                        )
+            try:
+                # Interpolate ALL time points at once for this windfarm (MUCH faster!)
+                u100_all = ds['u100'].interp(latitude=wf_lat, longitude=wf_lng, method='linear').values
+                v100_all = ds['v100'].interp(latitude=wf_lat, longitude=wf_lng, method='linear').values
+                t2m_all = ds['t2m'].interp(latitude=wf_lat, longitude=wf_lng, method='linear').values
 
-            # Interpolate for each windfarm
-            for wf in windfarms:
-                point = (wf.lat, wf.lng)
+                # Process each time point
+                for time_idx in range(len(ds.time)):
+                    # ERA5 timestamps are in UTC - explicitly specify timezone
+                    timestamp = pd.Timestamp(ds.time.values[time_idx], tz='UTC').to_pydatetime()
 
-                # Extract interpolated values
-                data_dict = {}
-                for key, interpolator in interpolators.items():
-                    value = float(interpolator(point))
-                    data_dict[key] = value
+                    u100 = float(u100_all[time_idx])
+                    v100 = float(v100_all[time_idx])
+                    t2m = float(t2m_all[time_idx])
 
-                # Calculate wind speed and direction at 100m
-                if 'u100' in data_dict and 'v100' in data_dict:
-                    u100 = data_dict['u100']
-                    v100 = data_dict['v100']
-                    wind_speed_100m = float(np.sqrt(u100**2 + v100**2))
-                    wind_direction_deg = float((np.degrees(np.arctan2(-u100, -v100)) + 180) % 360)
-                else:
-                    wind_speed_100m = 0.0
-                    wind_direction_deg = 0.0
+                    # Calculate wind speed and direction
+                    wind_speed = math.sqrt(u100**2 + v100**2)
+                    math_angle = math.atan2(v100, u100)
+                    wind_direction = (270 - math.degrees(math_angle)) % 360
 
-                # Temperature conversion (ERA5 provides in Kelvin)
-                temperature_2m_k = float(data_dict.get('t2m', 273.15))
-                temperature_2m_c = temperature_2m_k - 273.15
+                    # Create record
+                    record = {
+                        'hour': timestamp,
+                        'windfarm_id': wf.id,
+                        'wind_speed_100m': round(wind_speed, 3),
+                        'wind_direction_deg': round(wind_direction, 2),
+                        'temperature_2m_k': round(t2m, 2),
+                        'temperature_2m_c': round(t2m - 273.15, 2),
+                        'source': 'ERA5',
+                        'raw_data_id': None,
+                    }
 
-                # Create record matching WeatherData model
-                record = {
-                    'windfarm_id': wf.id,
-                    'hour': hour_dt,  # pandas.Timestamp is already timezone-aware
-                    'source': 'ERA5',
-                    'wind_speed_100m': wind_speed_100m,
-                    'wind_direction_deg': wind_direction_deg,
-                    'temperature_2m_k': temperature_2m_k,
-                    'temperature_2m_c': temperature_2m_c,
-                }
+                    records.append(record)
 
-                records.append(record)
+            except Exception as e:
+                logger.warning(f"Failed to interpolate for windfarm {wf.id}: {e}")
+                continue
 
+        logger.info(f"Extracted {len(records)} records")
         return records
 
     async def _bulk_insert_weather_data(self, records: List[Dict]):
-        """Bulk insert weather data records to database."""
+        """Bulk insert weather data records to database in batches."""
+        from datetime import datetime
         from sqlalchemy.dialects.postgresql import insert
         from app.core.database import get_session_factory
         from app.models.weather_data import WeatherData
@@ -366,25 +329,34 @@ class WeatherImportCore:
             return
 
         AsyncSessionLocal = get_session_factory()
-        async with AsyncSessionLocal() as db:
-            # Use PostgreSQL upsert to handle duplicates
-            # Match the unique constraint order: (hour, windfarm_id, source)
-            stmt = insert(WeatherData).values(records)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=['hour', 'windfarm_id', 'source'],
-                set_={
-                    'wind_speed_100m': stmt.excluded.wind_speed_100m,
-                    'wind_direction_deg': stmt.excluded.wind_direction_deg,
-                    'temperature_2m_k': stmt.excluded.temperature_2m_k,
-                    'temperature_2m_c': stmt.excluded.temperature_2m_c,
-                    'updated_at': stmt.excluded.updated_at,
-                }
-            )
+        BATCH_SIZE = 2900  # Match working script
 
-            await db.execute(stmt)
+        async with AsyncSessionLocal() as db:
+            total_batches = (len(records) + BATCH_SIZE - 1) // BATCH_SIZE
+
+            for i in range(0, len(records), BATCH_SIZE):
+                batch = records[i:i + BATCH_SIZE]
+                batch_num = (i // BATCH_SIZE) + 1
+
+                logger.info(f"Inserting batch {batch_num}/{total_batches}: {len(batch)} records")
+
+                stmt = insert(WeatherData).values(batch)
+                stmt = stmt.on_conflict_do_update(
+                    constraint='uq_weather_hour_windfarm_source',
+                    set_={
+                        'wind_speed_100m': stmt.excluded.wind_speed_100m,
+                        'wind_direction_deg': stmt.excluded.wind_direction_deg,
+                        'temperature_2m_k': stmt.excluded.temperature_2m_k,
+                        'temperature_2m_c': stmt.excluded.temperature_2m_c,
+                        'updated_at': datetime.utcnow(),
+                    }
+                )
+
+                await db.execute(stmt)
+
             await db.commit()
 
-        logger.info(f"Inserted {len(records)} weather records")
+        logger.info(f"Bulk insert complete: {len(records)} records in {total_batches} batches")
 
     async def _is_date_complete(self, target_date: date, expected_windfarms: int) -> bool:
         """Check if date already has complete data."""
