@@ -208,8 +208,9 @@ class WeatherImportCore:
         """Download ERA5 GRIB file from CDS API."""
         import cdsapi
 
-        # Configure client (will use ~/.cdsapirc or env vars)
-        c = cdsapi.Client()
+        # Configure client with explicit credentials for production reliability
+        # cdsapi.Client() can read from env vars, but explicit is more reliable
+        c = cdsapi.Client(url=self.cdsapi_url, key=self.cdsapi_key)
 
         # ERA5 request parameters
         # Using 100m wind components and 2m temperature (standard single-levels)
