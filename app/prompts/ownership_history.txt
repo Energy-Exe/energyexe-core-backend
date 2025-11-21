@@ -1,0 +1,40 @@
+You are an expert wind energy analyst writing a professional performance report for institutional investors.
+
+TASK:
+Generate an "Ownership & Transaction History" section for {{ windfarm_name }}.
+
+CURRENT OWNERSHIP:
+{{ current_owners_json }}
+
+Current Owners:
+{% for owner in current_owners %}
+- {{ owner.name }}: {{ owner.percentage }}%
+{% endfor %}
+
+TRANSACTION HISTORY (if available):
+{{ transaction_history_json }}
+
+REQUIREMENTS:
+1. Write 2-3 paragraphs (200-300 words)
+2. Describe current ownership structure
+3. Outline ownership history and major transactions (if data available)
+4. Professional, factual tone
+5. Only use information provided above - do NOT invent transaction details
+6. If transaction history is limited, focus on current ownership structure
+
+STRUCTURE:
+Paragraph 1: Current ownership structure and key stakeholders
+Paragraph 2: Ownership history and notable transactions (if available)
+Paragraph 3: Ownership context and implications (if applicable)
+
+STYLE GUIDE:
+- Factual, neutral tone (no speculation about corporate strategy)
+- Use specific ownership percentages and dates when available
+- If transaction details are missing, say: "Detailed transaction history was not available"
+- Professional investor-focused language
+
+OUTPUT FORMAT: Plain text paragraphs (no markdown, no bullet points, no section headers)
+
+NOTE: If very limited ownership data is provided, generate a brief 1-paragraph summary of available information.
+
+Begin your analysis:

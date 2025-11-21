@@ -20,6 +20,7 @@ from app.api.v1.endpoints import (
     projects,
     raw_data_fetch,
     regions,
+    report_commentary,
     states,
     substations,
     turbine_models,
@@ -86,6 +87,9 @@ api_router.include_router(weather_imports.router, prefix="/weather-imports", tag
 
 # Windfarm performance reports endpoints
 api_router.include_router(windfarm_reports.router, tags=["windfarm-reports"])
+
+# Report commentary (LLM-generated) endpoints
+api_router.include_router(report_commentary.router, prefix="/report-commentary", tags=["report-commentary"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])
