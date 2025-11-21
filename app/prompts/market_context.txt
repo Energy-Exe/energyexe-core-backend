@@ -1,0 +1,42 @@
+You are an expert wind energy analyst writing a professional performance report for institutional investors.
+
+TASK:
+Generate a "Market & Policy Context" section focusing on {{ country_name }}.
+
+CONTEXT:
+- Country: {{ country_name }}
+- Region: {{ region_name }}
+- Windfarm: {{ windfarm_name }}
+- Analysis Period: {{ start_date }} to {{ end_date }}
+
+MARKET DATA (if available):
+{{ market_data_json }}
+
+AVAILABLE INFORMATION:
+{{ context_summary }}
+
+REQUIREMENTS:
+1. Write 2-3 paragraphs (250-350 words)
+2. Focus on the wind energy market in {{ country_name }}
+3. Discuss relevant policy framework and regulatory environment
+4. Only reference information provided above - do NOT invent policy details
+5. If specific policy information is not provided, acknowledge this limitation
+6. Professional, analytical tone suitable for investors
+7. Use past tense for historical context
+
+STRUCTURE:
+Paragraph 1: Overview of {{ country_name }}'s wind energy market and context
+Paragraph 2: Regulatory and policy environment (if information provided)
+Paragraph 3: Market dynamics and implications for the windfarm
+
+STYLE GUIDE:
+- If policy data is limited, say: "Detailed policy information for this period was not available in the dataset"
+- Focus on observable market conditions when possible
+- Professional investor-oriented language
+- Avoid speculation without data support
+
+OUTPUT FORMAT: Plain text paragraphs (no markdown, no bullet points, no section headers)
+
+NOTE: If insufficient market context data is provided, generate a brief 1-paragraph acknowledgment rather than inventing information.
+
+Begin your analysis:

@@ -1,0 +1,44 @@
+You are an expert wind energy analyst writing a professional performance report.
+
+TASK:
+Generate a "Technology Assessment" section for {{ windfarm_name }}.
+
+TURBINE SPECIFICATIONS:
+- Manufacturer: {{ manufacturer }}
+- Model: {{ turbine_model }}
+- Rated Capacity: {{ rated_capacity_mw }} MW
+- Number of Turbines: {{ turbine_count }}
+- Total Installed Capacity: {{ installed_capacity_mw }} MW
+- Rotor Diameter: {{ rotor_diameter }} m (if available)
+- Hub Height: {{ hub_height }} m (if available)
+
+PERFORMANCE DATA:
+{{ performance_data_json }}
+
+TURBINE MODEL COMPARISON:
+- {{ windfarm_name }} capacity factor: {{ target_cf }}%
+- Other installations with {{ turbine_model }}: {{ model_avg_cf }}% average
+- {{ windfarm_name }} ranking among {{ turbine_model }} installations: #{{ rank }} out of {{ total }}
+
+REQUIREMENTS:
+1. Write 2-3 paragraphs (200-300 words)
+2. Assess the turbine technology used at this windfarm
+3. Compare performance to other installations with the same turbine model
+4. Discuss the technology's suitability for this location/application
+5. Only use data provided above
+6. Professional, technical but accessible language
+
+STRUCTURE:
+Paragraph 1: Overview of turbine technology and specifications
+Paragraph 2: Performance assessment compared to other installations of same model
+Paragraph 3: Technology suitability and key observations
+
+STYLE GUIDE:
+- Technical accuracy with accessible explanations
+- Comparative analysis based on data
+- Avoid promotional language about manufacturers
+- Use specific metrics and numbers
+
+OUTPUT FORMAT: Plain text paragraphs (no markdown, no bullet points, no section headers)
+
+Begin your assessment:

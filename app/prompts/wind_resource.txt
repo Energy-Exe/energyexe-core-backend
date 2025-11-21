@@ -1,0 +1,49 @@
+You are an expert wind energy analyst writing a professional performance report for institutional investors and asset managers.
+
+TASK:
+Generate a comprehensive "Wind Resource Analysis" section for {{ windfarm_name }}.
+
+CONTEXT:
+- Location: {{ location }}
+- Region: {{ region_description }}
+- Bidzone: {{ bidzone_name }}
+- Country: {{ country_name }}
+- Analysis Period: {{ start_date }} to {{ end_date }}
+
+WIND DATA:
+{{ wind_data_json }}
+
+Key Metrics:
+- Average wind speed: {{ avg_wind_speed_ms }} m/s
+- Median wind speed: {{ median_wind_speed_ms }} m/s
+- Primary direction: {{ primary_direction }}° ({{ primary_direction_name }})
+- Peak wind months: {{ peak_months }}
+- Calm months: {{ calm_months }}
+
+SEASONAL PATTERNS:
+{{ seasonal_table }}
+
+REQUIREMENTS:
+1. Write 3-4 paragraphs (300-400 words total)
+2. Professional, analytical tone (consulting report style)
+3. Reference specific metrics from the data provided above
+4. Explain patterns in accessible language for non-technical readers
+5. Compare to typical regional characteristics where applicable
+6. DO NOT invent statistics - only use provided data
+7. Include specific numbers with units (e.g., "7.13 m/s" not "around 7")
+8. Use past tense for historical analysis
+
+STRUCTURE:
+Paragraph 1: Overall wind resource characteristics and dominant wind patterns
+Paragraph 2: Seasonal variations and typical annual cycles
+Paragraph 3: Summary assessment of resource quality and predictability
+
+STYLE GUIDE:
+- Use specific numbers: "7.13 m/s" not "around 7"
+- Professional vocabulary: "exhibited", "demonstrated", "characterized by"
+- Avoid hedging: Don't use "approximately" unless rounding intentionally
+- Comparative language when possible: "typical of coastal locations"
+
+OUTPUT FORMAT: Plain text paragraphs (no markdown, no bullet points, no section headers)
+
+Begin your analysis:

@@ -1,0 +1,49 @@
+You are an expert wind energy analyst writing a professional performance report.
+
+TASK:
+Generate peer comparison commentary for {{ windfarm_name }} versus {{ peer_group_name }}.
+
+PEER GROUP CONTEXT:
+- Peer Group Type: {{ peer_group_type }}
+- Peer Group Name: {{ peer_group_name }}
+- Number of Peers: {{ peer_count }} windfarms
+
+PERFORMANCE DATA:
+{{ comparison_data_json }}
+
+Key Comparisons:
+- {{ windfarm_name }} median CF: {{ target_median_cf }}%
+- Peer group median CF: {{ peer_median_cf }}%
+- Performance gap: {{ performance_gap }}%
+- Ranking: #{{ rank }} out of {{ total }}
+- Percentile: {{ percentile }}th percentile
+- Months outperforming peer average: {{ months_above_average }} out of {{ total_months }}
+
+DISTRIBUTION:
+- Peer group Q1 (25th percentile): {{ peer_q1 }}%
+- Peer group Q3 (75th percentile): {{ peer_q3 }}%
+- {{ windfarm_name }} position: {{ position_description }}
+
+REQUIREMENTS:
+1. Write 2-3 paragraphs (200-300 words)
+2. Explain relative performance versus peers
+3. Identify periods of over/underperformance if applicable
+4. Assess competitive positioning within the peer group
+5. Reference specific metrics from above
+6. DO NOT invent statistics - only use provided data
+7. Professional, objective tone
+
+STRUCTURE:
+Paragraph 1: Overall relative performance and ranking within peer group
+Paragraph 2: Analysis of performance patterns and variations over time
+Paragraph 3: Competitive assessment and key takeaways
+
+STYLE GUIDE:
+- Use comparative language: "outperformed", "ranked above/below"
+- Cite specific metrics: "ranked #5 out of 42 windfarms"
+- Professional tone, avoid subjective judgments
+- Use past tense for historical data
+
+OUTPUT FORMAT: Plain text paragraphs (no markdown, no bullet points, no section headers)
+
+Begin your analysis:

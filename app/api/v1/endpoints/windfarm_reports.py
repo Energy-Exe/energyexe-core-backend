@@ -1,11 +1,14 @@
 """API endpoints for windfarm performance reports."""
 
+import hashlib
+import json
 from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_active_user, get_db
+from app.core.redis import get_cached_report, cache_report, invalidate_report_cache
 from app.models.user import User
 from app.services.windfarm_report_service import WindfarmReportService
 from app.schemas.windfarm_report import (
@@ -20,6 +23,37 @@ from app.schemas.windfarm_report import (
 router = APIRouter()
 
 
+def _generate_cache_key(
+    windfarm_id: int,
+    start_date: datetime,
+    end_date: datetime,
+    include_peer_groups: Optional[str],
+    generate_commentary: bool
+) -> str:
+    """
+    Generate cache key for report data.
+
+    Normalizes dates to day-level precision to ensure cache hits across refreshes.
+    Frontend sends slightly different timestamps each time (milliseconds vary),
+    but we want the same cache entry for reports covering the same date range.
+    """
+    # Normalize dates to just YYYY-MM-DD (ignore time component)
+    start_date_str = start_date.strftime("%Y-%m-%d")
+    end_date_str = end_date.strftime("%Y-%m-%d")
+
+    key_parts = [
+        f"report:v1:{windfarm_id}",
+        start_date_str,
+        end_date_str,
+        include_peer_groups or "all",
+        str(generate_commentary)
+    ]
+    # Create hash to keep key length reasonable
+    key_string = ":".join(key_parts)
+    key_hash = hashlib.sha256(key_string.encode()).hexdigest()[:16]
+    return f"windfarm_report:{windfarm_id}:{key_hash}"
+
+
 @router.get("/windfarms/{windfarm_id}/report-data", response_model=WindfarmReportData)
 async def get_windfarm_report_data(
     windfarm_id: int,
@@ -28,6 +62,14 @@ async def get_windfarm_report_data(
     include_peer_groups: Optional[str] = Query(
         None,
         description="Comma-separated list of peer groups: bidzone,country,owner,turbine. If not provided, includes all available"
+    ),
+    generate_commentary: bool = Query(
+        default=False,
+        description="Generate AI commentary (costs money, requires API key)"
+    ),
+    force_regenerate: bool = Query(
+        default=False,
+        description="Force regeneration, bypassing cache"
     ),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
@@ -43,7 +85,28 @@ async def get_windfarm_report_data(
     - Performance highlights
 
     This is the main endpoint called when the Report tab is opened.
+
+    **Caching**: Results are cached in Redis for 1 hour. Use force_regenerate=true to bypass cache.
     """
+    import structlog
+    logger = structlog.get_logger(__name__)
+
+    # Generate cache key
+    cache_key = _generate_cache_key(
+        windfarm_id,
+        start_date,
+        end_date,
+        include_peer_groups,
+        generate_commentary
+    )
+
+    # Check cache unless force regenerate
+    if not force_regenerate:
+        cached_data = await get_cached_report(cache_key)
+        if cached_data:
+            logger.info("report_served_from_cache", windfarm_id=windfarm_id, cache_key=cache_key)
+            return WindfarmReportData(**cached_data)
+
     try:
         service = WindfarmReportService(db)
 
@@ -52,18 +115,28 @@ async def get_windfarm_report_data(
         if include_peer_groups:
             peer_groups = [g.strip() for g in include_peer_groups.split(',')]
 
+        logger.info("generating_report", windfarm_id=windfarm_id, from_cache=False, force_regenerate=force_regenerate)
+
         report_data = await service.generate_report_data(
             windfarm_id=windfarm_id,
             start_date=start_date,
             end_date=end_date,
-            include_peer_groups=peer_groups
+            include_peer_groups=peer_groups,
+            generate_commentary=generate_commentary
         )
+
+        # Cache the result (1 hour TTL)
+        report_dict = report_data.model_dump()
+        await cache_report(cache_key, report_dict, ttl_seconds=3600)
+        logger.info("report_cached", windfarm_id=windfarm_id, cache_key=cache_key)
 
         return report_data
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        import traceback
+        logger.error("report_generation_failed", error=str(e), traceback=traceback.format_exc())
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate report: {str(e)}"

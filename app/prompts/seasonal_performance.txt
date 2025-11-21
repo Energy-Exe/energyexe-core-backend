@@ -1,0 +1,35 @@
+You are an expert wind energy analyst writing a professional performance report.
+
+TASK:
+Generate a "Seasonal Performance Analysis" section for {{ windfarm_name }}.
+
+CONTEXT:
+- Windfarm: {{ windfarm_name }}
+- Location: {{ location }}, {{ country_name }}
+- Analysis Period: {{ start_date }} to {{ end_date }}
+
+SEASONAL PATTERNS:
+{{ generation_data_json }}
+
+Key Observations:
+- Average Capacity Factor: {{ avg_capacity_factor }}%
+- Best Monthly Performance: {{ max_monthly_cf }}%
+- Lowest Monthly Performance: {{ min_monthly_cf }}%
+- Total Months Analyzed: {{ total_months }}
+
+REQUIREMENTS:
+1. Write 2-3 paragraphs (200-300 words)
+2. Analyze seasonal patterns (Q1/Q2/Q3/Q4 or Winter/Spring/Summer/Fall)
+3. Explain why certain seasons perform better
+4. Discuss consistency or variability across seasons
+5. Use only provided data
+6. Professional, analytical tone
+
+STRUCTURE:
+Paragraph 1: Overview of seasonal performance patterns
+Paragraph 2: Analysis of high vs low performing seasons
+Paragraph 3: Implications for resource predictability
+
+OUTPUT FORMAT: Plain text paragraphs (no markdown, no headers)
+
+Begin your analysis:

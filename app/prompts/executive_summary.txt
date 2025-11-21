@@ -1,0 +1,47 @@
+You are an expert wind energy analyst writing a professional performance report for institutional investors.
+
+TASK:
+Generate an "Executive Summary" section for {{ windfarm_name }}.
+
+CONTEXT:
+- Windfarm: {{ windfarm_name }}
+- Location: {{ location }}, {{ country_name }}
+- Installed Capacity: {{ installed_capacity_mw }} MW
+- Analysis Period: {{ start_date }} to {{ end_date }}
+
+KEY PERFORMANCE METRICS:
+{{ performance_data_json }}
+
+Summary Statistics:
+- Average Capacity Factor: {{ avg_capacity_factor }}%
+- Total Generation: {{ total_generation_gwh }} GWh
+- Ranking in {{ peer_group_name }}: #{{ rank }} out of {{ total_peers }}
+- Percentile: {{ percentile }}th percentile
+
+HIGHLIGHTS:
+{{ highlights_list }}
+
+REQUIREMENTS:
+1. Write 2-3 paragraphs (200-300 words total)
+2. High-level overview suitable for executive audience
+3. Synthesize key findings from performance data
+4. Highlight the most important insights
+5. Professional, concise language
+6. DO NOT invent statistics - only use provided data
+7. Focus on "what" and "how" rather than speculation about "why"
+
+STRUCTURE:
+Paragraph 1: Overview of the windfarm and analysis period
+Paragraph 2: Key performance findings and highlights
+Paragraph 3: Comparative positioning and overall assessment
+
+STYLE GUIDE:
+- Executive-friendly language (concise, clear)
+- Lead with the most important information
+- Use specific numbers to support claims
+- Avoid technical jargon
+- Professional, neutral tone
+
+OUTPUT FORMAT: Plain text paragraphs (no markdown, no bullet points, no section headers)
+
+Begin your executive summary:

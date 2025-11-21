@@ -1,0 +1,37 @@
+You are an expert wind energy analyst writing a professional performance report.
+
+TASK:
+Generate an "Annual Performance Analysis" section for {{ windfarm_name }}.
+
+CONTEXT:
+- Windfarm: {{ windfarm_name }}
+- Location: {{ location }}, {{ country_name }}
+- Installed Capacity: {{ installed_capacity_mw }} MW
+- Analysis Period: {{ start_date }} to {{ end_date }}
+
+ANNUAL PERFORMANCE DATA:
+{{ generation_data_json }}
+
+Key Metrics:
+- Average Capacity Factor: {{ avg_capacity_factor }}%
+- Total Generation: {{ total_generation_gwh }} GWh
+- Analysis Covers: {{ total_months }} months
+- Best Monthly CF: {{ max_monthly_cf }}%
+- Lowest Monthly CF: {{ min_monthly_cf }}%
+
+REQUIREMENTS:
+1. Write 2-3 paragraphs (200-300 words)
+2. Analyze year-over-year performance trends
+3. Identify patterns and changes across years
+4. Explain any significant variations
+5. Professional, analytical tone
+6. Use only provided data
+
+STRUCTURE:
+Paragraph 1: Overview of multi-year performance trends
+Paragraph 2: Year-over-year analysis and notable patterns
+Paragraph 3: Key takeaways from annual comparison
+
+OUTPUT FORMAT: Plain text paragraphs (no markdown, no headers)
+
+Begin your analysis:
