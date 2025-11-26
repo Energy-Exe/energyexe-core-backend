@@ -1,8 +1,11 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# Valid roughness values
+ROUGHNESS_VALUES = Literal["0", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0"]
 
 if TYPE_CHECKING:
     from .windfarm_owner import WindfarmOwnerWithDetails
@@ -36,6 +39,10 @@ class WindfarmBase(BaseModel):
     investment_currency: Optional[str] = Field(None, max_length=3)
     address: Optional[str] = None
     postal_code: Optional[str] = Field(None, max_length=20)
+    roughness: Optional[Decimal] = Field(
+        None,
+        description="Surface roughness for wind calculations. Valid values: 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0"
+    )
 
 
 class WindfarmCreate(WindfarmBase):
@@ -70,6 +77,10 @@ class WindfarmUpdate(BaseModel):
     investment_currency: Optional[str] = Field(None, max_length=3)
     address: Optional[str] = None
     postal_code: Optional[str] = Field(None, max_length=20)
+    roughness: Optional[Decimal] = Field(
+        None,
+        description="Surface roughness for wind calculations. Valid values: 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0"
+    )
 
 
 class Windfarm(WindfarmBase):
