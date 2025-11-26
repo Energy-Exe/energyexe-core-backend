@@ -72,6 +72,9 @@ class Windfarm(Base):
     address = Column(Text, nullable=True)
     postal_code = Column(String(20), nullable=True)
 
+    # Surface roughness for wind calculations (0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0)
+    roughness = Column(DECIMAL(2, 1), nullable=True)
+
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -93,3 +96,4 @@ class Windfarm(Base):
     generation_data = relationship("GenerationData", back_populates="windfarm")
     weather_data = relationship("WeatherData", back_populates="windfarm")
     report_commentaries = relationship("ReportCommentary", back_populates="windfarm", cascade="all, delete-orphan")
+    ppas = relationship("PPA", back_populates="windfarm", cascade="all, delete-orphan")

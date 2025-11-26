@@ -22,6 +22,7 @@ from .turbine_unit import TurbineUnit
 from .user import User
 from .windfarm import Windfarm
 from .windfarm_owner import WindfarmOwner
+from .ppa import PPA
 
 __all__ = [
     "AuditLog",
@@ -52,4 +53,5 @@ __all__ = [
     "WeatherData",
     "Windfarm",
     "WindfarmOwner",
+    "PPA",
 ]
