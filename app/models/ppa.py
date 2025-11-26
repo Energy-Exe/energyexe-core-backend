@@ -33,7 +33,7 @@ class PPA(Base):
 
     # PPA details
     ppa_buyer = Column(String(255), nullable=False)
-    ppa_size_mw = Column(DECIMAL(10, 2), nullable=False)
+    ppa_size_mw = Column(DECIMAL(10, 2), nullable=True)
     ppa_duration_years = Column(Integer, nullable=True)
     ppa_start_date = Column(Date, nullable=True)
     ppa_end_date = Column(Date, nullable=True)
