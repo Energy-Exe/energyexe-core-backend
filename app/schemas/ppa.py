@@ -10,7 +10,7 @@ class PPABase(BaseModel):
 
     windfarm_id: int
     ppa_buyer: str = Field(..., min_length=1, max_length=255)
-    ppa_size_mw: Decimal = Field(..., gt=0, decimal_places=2)
+    ppa_size_mw: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
     ppa_duration_years: Optional[int] = Field(None, ge=0)
     ppa_start_date: Optional[date] = None
     ppa_end_date: Optional[date] = None
@@ -69,7 +69,7 @@ class PPAImportRow(BaseModel):
 
     windfarm_name: str = Field(..., min_length=1, max_length=255)
     ppa_buyer: str = Field(..., min_length=1, max_length=255)
-    ppa_size_mw: Decimal = Field(..., gt=0)
+    ppa_size_mw: Optional[Decimal] = Field(None, gt=0)
     ppa_duration_years: Optional[int] = Field(None, ge=0)
     ppa_start_date: Optional[date] = None
     ppa_end_date: Optional[date] = None
