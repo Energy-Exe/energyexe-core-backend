@@ -24,3 +24,4 @@ class Bidzone(Base):
     # Relationships
     windfarms = relationship("Windfarm", back_populates="bidzone")
     countries = relationship("Country", secondary=bidzone_countries, back_populates="bidzones")
+    price_data = relationship("PriceData", back_populates="bidzone")
