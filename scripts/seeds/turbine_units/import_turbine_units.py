@@ -3,11 +3,21 @@
 Import turbine units from CSV file with optimized performance.
 
 This script:
-1. Reads turbine_units.csv
-2. Matches windfarms by name
-3. Matches turbine models by model name
-4. Generates code as {windfarm_code}-{serial_number}
-5. Bulk inserts turbine units with start/end dates
+1. Reads turbine_units.csv with aggregated format (one row = multiple turbines)
+2. Matches windfarms by name (fuzzy matching supported)
+3. Matches turbine models by model name (fuzzy matching supported)
+4. Expands aggregated rows based on 'Number of units of this model' column
+5. Generates unique codes as {windfarm_code}-{serial_number} for each turbine
+6. Bulk inserts turbine units with INSERT ON CONFLICT DO UPDATE (non-destructive)
+
+CSV Format Expected:
+- wind_farm_name: Windfarm name
+- turbine_model: Turbine model identifier
+- Number of units of this model: Count of turbines to create
+- turbine_status: Operational status (Operational/Decommissioned/etc.)
+- start_date: Operational start date
+- end_date: Decommission date (optional)
+- hub_height: Hub height in meters (optional)
 """
 
 import argparse
@@ -62,9 +72,13 @@ def normalize_string(s):
     """Normalize string for comparison."""
     if pd.isna(s) or not s:
         return ''
-    # Remove spaces, hyphens, and convert to lowercase for fuzzy matching
+    # Remove spaces, hyphens, apostrophes and convert to lowercase for fuzzy matching
     normalized = str(s).strip().lower()
+    # Replace common special characters
     normalized = normalized.replace(' ', '').replace('-', '').replace('/', '')
+    # Remove all types of apostrophes and quotes
+    for char in ["'", "'", "'", '"', '"', '"', '\x92', '\x91', '\u2019', '\u2018']:
+        normalized = normalized.replace(char, '')
     return normalized
 
 
@@ -262,8 +276,8 @@ class TurbineUnitImporter:
 
         print(f"  Total rows to process: {len(df)}")
 
-        # Required columns
-        required_cols = ['turbine_unit_id', 'windfarm_name', 'turbine_model', 'start_date']
+        # Required columns (updated for aggregated format)
+        required_cols = ['wind_farm_name', 'turbine_model', 'Number of units of this model', 'start_date']
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
             raise ValueError(f"Missing required columns: {missing_cols}")
@@ -274,31 +288,38 @@ class TurbineUnitImporter:
         for idx, row in df.iterrows():
             self.stats['rows_processed'] += 1
 
-            # Get windfarm
-            windfarm_name = str(row['windfarm_name']).strip()
+            # Get windfarm (use 'wind_farm_name' from CSV)
+            windfarm_name = str(row['wind_farm_name']).strip()
             windfarm = self.get_windfarm(windfarm_name)
             if not windfarm:
                 self.stats['windfarms_not_found'].add(windfarm_name)
-                self.stats['turbine_units_skipped'] += 1
+                # Skip all units for this windfarm
+                num_units = int(row['Number of units of this model']) if not pd.isna(row['Number of units of this model']) else 1
+                self.stats['turbine_units_skipped'] += num_units
                 continue
 
             # Get turbine model
             turbine_model = self.get_turbine_model(row['turbine_model'])
             if not turbine_model:
                 self.stats['models_not_found'].add(str(row['turbine_model']))
-                self.stats['turbine_units_skipped'] += 1
+                # Skip all units for this model
+                num_units = int(row['Number of units of this model']) if not pd.isna(row['Number of units of this model']) else 1
+                self.stats['turbine_units_skipped'] += num_units
                 continue
-
-            # Use GSRN (turbine_unit_id) as the code for ENERGISTYRELSEN turbines
-            # This allows direct matching with generation data
-            turbine_code = str(row['turbine_unit_id']).strip()
 
             # Parse dates
             start_date = parse_date(row['start_date'])
             end_date = parse_date(row.get('end_date'))
 
             # Parse status
-            status = normalize_string(row.get('turbine_status', 'operational'))
+            status = str(row.get('turbine_status', 'Operational')).strip().lower()
+            # Normalize status to match database enum
+            if status in ['operational', 'operating']:
+                status = 'operational'
+            elif status in ['decommissioned', 'retired']:
+                status = 'decommissioned'
+            elif status in ['installing', 'under construction', 'construction']:
+                status = 'installing'
 
             # Parse hub height
             hub_height = None
@@ -308,27 +329,39 @@ class TurbineUnitImporter:
                 except (ValueError, TypeError):
                     pass
 
-            # Default lat/lng to windfarm location (will be updated later with actual turbine positions)
-            # For now, we use windfarm location as placeholder
-            lat = 0.0  # Placeholder - should be updated with actual turbine location
-            lng = 0.0  # Placeholder
+            # Get number of units to create from this row
+            num_units = 1
+            if 'Number of units of this model' in row and not pd.isna(row['Number of units of this model']):
+                try:
+                    num_units = int(row['Number of units of this model'])
+                except (ValueError, TypeError):
+                    num_units = 1
 
-            # Create turbine unit dict
-            turbine_unit = {
-                'code': turbine_code,
-                'windfarm_id': windfarm.id,
-                'turbine_model_id': turbine_model.id,
-                'lat': lat,
-                'lng': lng,
-                'status': status,
-                'hub_height_m': hub_height,
-                'start_date': start_date,
-                'end_date': end_date,
-                'created_at': datetime.utcnow(),
-                'updated_at': datetime.utcnow()
-            }
+            # Create N turbine units for this row (expanding aggregated data)
+            for unit_num in range(num_units):
+                # Generate unique turbine code using windfarm code and serial number
+                turbine_code = self.generate_turbine_code(windfarm.code, unit_num)
 
-            turbine_units_to_insert.append(turbine_unit)
+                # Use windfarm location as default (will be updated later with actual turbine positions)
+                lat = windfarm.lat if windfarm.lat else 0.0
+                lng = windfarm.lng if windfarm.lng else 0.0
+
+                # Create turbine unit dict
+                turbine_unit = {
+                    'code': turbine_code,
+                    'windfarm_id': windfarm.id,
+                    'turbine_model_id': turbine_model.id,
+                    'lat': lat,
+                    'lng': lng,
+                    'status': status,
+                    'hub_height_m': hub_height,
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'created_at': datetime.utcnow(),
+                    'updated_at': datetime.utcnow()
+                }
+
+                turbine_units_to_insert.append(turbine_unit)
 
         print(f"\n  Prepared {len(turbine_units_to_insert)} turbine units for insertion")
 

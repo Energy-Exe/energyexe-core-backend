@@ -7,6 +7,7 @@ from .control_area import ControlArea
 from .country import Country
 from .data_anomaly import DataAnomaly, AnomalyType, AnomalyStatus, AnomalySeverity
 from .generation_data import GenerationDataRaw, GenerationData, GenerationUnitMapping
+from .price_data import PriceDataRaw, PriceData
 from .generation_unit import GenerationUnit
 from .weather_data import WeatherDataRaw, WeatherData
 from .report_commentary import ReportCommentary
@@ -40,6 +41,8 @@ __all__ = [
     "GenerationUnit",
     "MarketBalanceArea",
     "Owner",
+    "PriceDataRaw",
+    "PriceData",
     "Project",
     "Region",
     "ReportCommentary",

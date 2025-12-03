@@ -18,6 +18,7 @@ from app.api.v1.endpoints import (
     market_balance_areas,
     owners,
     ppas,
+    price_data,
     projects,
     raw_data_fetch,
     regions,
@@ -62,6 +63,9 @@ api_router.include_router(ppas.router, prefix="/ppas", tags=["ppas"])
 
 # New unified generation data endpoints
 api_router.include_router(generation.router, prefix="/generation", tags=["generation"])
+
+# Price data and analytics endpoints
+api_router.include_router(price_data.router)
 
 # Comparison and analytics endpoints
 api_router.include_router(comparison.router, prefix="/comparison", tags=["comparison"])
