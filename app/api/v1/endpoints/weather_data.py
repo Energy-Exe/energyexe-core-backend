@@ -8,6 +8,7 @@ from app.core.deps import get_db
 from app.services.weather_data_service import WeatherDataService
 from app.services.weather_analytics_service import WeatherAnalyticsService
 from app.services.weather_correlation_service import WeatherCorrelationService
+from app.services.weather_summary_service import WeatherSummaryService
 from app.schemas.weather_data import (
     DateAvailability,
     WeatherFetchRequest,
@@ -26,6 +27,7 @@ from app.schemas.weather_data import (
     HeatmapData,
     WindSpeedDurationCurve,
 )
+from app.schemas.weather_summary import WeatherSummaryResponse
 
 router = APIRouter(prefix="/weather-data", tags=["Weather Data"])
 
@@ -33,6 +35,7 @@ router = APIRouter(prefix="/weather-data", tags=["Weather Data"])
 # ============================================================================
 # AVAILABILITY & FETCH ENDPOINTS
 # ============================================================================
+
 
 @router.get("/availability", response_model=List[DateAvailability])
 async def get_weather_availability(
@@ -96,6 +99,7 @@ async def get_fetch_job_status(
 # BASIC ANALYTICS ENDPOINTS
 # ============================================================================
 
+
 @router.get("/windfarms/{windfarm_id}/timeseries", response_model=WeatherTimeseries)
 async def get_weather_timeseries(
     windfarm_id: int,
@@ -110,9 +114,7 @@ async def get_weather_timeseries(
     Supports hourly, daily, or monthly aggregation.
     """
     service = WeatherAnalyticsService()
-    return await service.get_weather_timeseries(
-        db, windfarm_id, start_date, end_date, aggregation
-    )
+    return await service.get_weather_timeseries(db, windfarm_id, start_date, end_date, aggregation)
 
 
 @router.get("/windfarms/{windfarm_id}/statistics", response_model=WindStatistics)
@@ -134,6 +136,7 @@ async def get_wind_statistics(
 # ============================================================================
 # WIND ANALYSIS ENDPOINTS
 # ============================================================================
+
 
 @router.get("/windfarms/{windfarm_id}/wind-rose", response_model=WindRoseData)
 async def get_wind_rose(
@@ -219,6 +222,7 @@ async def get_duration_curve(
 # CORRELATION ENDPOINTS
 # ============================================================================
 
+
 @router.get("/windfarms/{windfarm_id}/correlation", response_model=CorrelationData)
 async def get_weather_generation_correlation(
     windfarm_id: int,
@@ -232,9 +236,7 @@ async def get_weather_generation_correlation(
     Returns binned averages and correlation coefficient.
     """
     service = WeatherCorrelationService()
-    return await service.get_weather_generation_correlation(
-        db, windfarm_id, start_date, end_date
-    )
+    return await service.get_weather_generation_correlation(db, windfarm_id, start_date, end_date)
 
 
 @router.get("/windfarms/{windfarm_id}/power-curve", response_model=PowerCurveData)
@@ -321,3 +323,42 @@ async def get_weather_heatmap(
     return await service.get_weather_generation_heatmap_daterange(
         db, windfarm_id, start_date, end_date, metric
     )
+
+
+# ============================================================================
+# HISTORICAL SUMMARY ENDPOINTS
+# ============================================================================
+
+
+@router.get("/windfarms/{windfarm_id}/weather-summary", response_model=WeatherSummaryResponse)
+async def get_weather_summary(
+    windfarm_id: int,
+    period_type: str = Query(
+        "monthly", regex="^(monthly|yearly)$", description="Aggregation period"
+    ),
+    start_year: Optional[int] = Query(None, ge=2000, le=2100, description="Filter start year"),
+    end_year: Optional[int] = Query(None, ge=2000, le=2100, description="Filter end year"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get historical wind speed and direction summaries grouped by year or month.
+
+    Returns for each period:
+    - Average, min, max, std wind speed
+    - Prevailing wind direction (vector-averaged for circular data)
+    - Direction distribution histogram (16 compass bins)
+    - Data completeness metrics
+
+    Useful for analyzing year-over-year or seasonal trends in wind patterns.
+    """
+    service = WeatherSummaryService()
+    try:
+        return await service.get_period_summaries(
+            db,
+            windfarm_id=windfarm_id,
+            period_type=period_type,
+            start_year=start_year,
+            end_year=end_year,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
