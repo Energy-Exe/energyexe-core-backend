@@ -25,6 +25,7 @@ class WeatherImportService:
         start_date: date,
         end_date: date,
         user_id: Optional[int] = None,
+        force_refresh: bool = False,
     ) -> WeatherImportJob:
         """
         Create a new weather import job.
@@ -33,6 +34,7 @@ class WeatherImportService:
             start_date: Start date for import
             end_date: End date for import
             user_id: User creating the job
+            force_refresh: If True, re-fetch data even for days that already have complete data
 
         Returns:
             Created WeatherImportJob
@@ -51,6 +53,7 @@ class WeatherImportService:
                 'total_dates': total_dates,
                 'dates_completed': 0,
                 'current_phase': 'pending',
+                'force_refresh': force_refresh,
             },
             created_at=datetime.now(timezone.utc).replace(tzinfo=None),
             updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
@@ -118,12 +121,14 @@ class WeatherImportService:
 
             start_date = job.import_start_date.date()
             end_date = job.import_end_date.date()
+            force_refresh = job.job_metadata.get('force_refresh', False) if job.job_metadata else False
 
         logger.info(
             f"Executing weather import job",
             job_id=job_id,
             start_date=start_date,
-            end_date=end_date
+            end_date=end_date,
+            force_refresh=force_refresh
         )
 
         try:
@@ -132,7 +137,8 @@ class WeatherImportService:
             stats = await weather_import.fetch_and_process_date_range(
                 start_date=start_date,
                 end_date=end_date,
-                job_id=job_id
+                job_id=job_id,
+                force_refresh=force_refresh
             )
 
             # Create new session to update results

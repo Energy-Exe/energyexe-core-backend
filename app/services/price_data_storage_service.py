@@ -412,3 +412,226 @@ class PriceDataStorageService:
             return [self._make_json_serializable(item) for item in obj]
         else:
             return obj
+
+    async def get_price_availability(
+        self,
+        year: int,
+        month: int,
+        bidzone_codes: Optional[List[str]] = None,
+        price_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get price data availability for a specific month.
+
+        Args:
+            year: Year for availability check
+            month: Month (1-12) for availability check
+            bidzone_codes: Optional list of bidzone codes to filter
+            price_type: Optional price type filter ("day_ahead" or "intraday")
+
+        Returns:
+            Dict with availability by day and summary statistics
+        """
+        from calendar import monthrange
+        from sqlalchemy import func
+
+        # Get days in month
+        days_in_month = monthrange(year, month)[1]
+        start_date = datetime(year, month, 1, tzinfo=timezone.utc)
+        end_date = datetime(year, month, days_in_month, 23, 59, 59, tzinfo=timezone.utc)
+
+        # Build query to get daily aggregates
+        query = select(
+            func.date(PriceDataRaw.period_start).label('date'),
+            PriceDataRaw.identifier.label('bidzone'),
+            PriceDataRaw.price_type,
+            func.count(PriceDataRaw.id).label('count')
+        ).where(
+            and_(
+                PriceDataRaw.source == "ENTSOE",
+                PriceDataRaw.period_start >= start_date,
+                PriceDataRaw.period_start <= end_date,
+            )
+        )
+
+        # Apply filters
+        if bidzone_codes:
+            query = query.where(PriceDataRaw.identifier.in_(bidzone_codes))
+
+        if price_type:
+            query = query.where(PriceDataRaw.price_type == price_type)
+
+        query = query.group_by(
+            func.date(PriceDataRaw.period_start),
+            PriceDataRaw.identifier,
+            PriceDataRaw.price_type
+        )
+
+        result = await self.db.execute(query)
+        rows = result.all()
+
+        # Process results into availability structure
+        availability = {}
+        all_bidzones = set()
+        all_price_types = set()
+
+        for row in rows:
+            date_str = row.date.strftime('%Y-%m-%d')
+
+            if date_str not in availability:
+                availability[date_str] = {
+                    'bidzones': [],
+                    'recordCount': 0,
+                    'priceTypes': []
+                }
+
+            if row.bidzone not in availability[date_str]['bidzones']:
+                availability[date_str]['bidzones'].append(row.bidzone)
+
+            if row.price_type not in availability[date_str]['priceTypes']:
+                availability[date_str]['priceTypes'].append(row.price_type)
+
+            availability[date_str]['recordCount'] += row.count
+
+            all_bidzones.add(row.bidzone)
+            all_price_types.add(row.price_type)
+
+        # Calculate summary
+        days_with_data = len(availability)
+        coverage = (days_with_data / days_in_month) * 100 if days_in_month > 0 else 0
+
+        return {
+            'availability': availability,
+            'summary': {
+                'totalDays': days_in_month,
+                'daysWithData': days_with_data,
+                'coverage': round(coverage, 1),
+                'bidzones': sorted(list(all_bidzones)),
+                'priceTypes': sorted(list(all_price_types))
+            }
+        }
+
+    async def fetch_and_store_prices_for_dates(
+        self,
+        dates: List,
+        bidzone_codes: List[str],
+        price_types: Optional[List[str]] = None,
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Fetch and store price data for specific dates and bidzones.
+
+        Args:
+            dates: List of dates to fetch
+            bidzone_codes: List of bidzone codes (e.g., NO_1, SE_1)
+            price_types: List of price types to fetch (default: ["day_ahead"])
+            user_id: User triggering the fetch
+
+        Returns:
+            Detailed results of the fetch operation by date and bidzone
+        """
+        from datetime import date as date_type
+
+        if price_types is None:
+            price_types = ["day_ahead"]
+
+        start_time = datetime.now()
+        client = ENTSOEPriceClient()
+
+        results = {
+            "success": True,
+            "dates_requested": [d.isoformat() if hasattr(d, 'isoformat') else str(d) for d in dates],
+            "bidzone_codes": bidzone_codes,
+            "price_types": price_types,
+            "results": [],
+            "total_records_stored": 0,
+            "total_records_updated": 0,
+            "errors": [],
+        }
+
+        for fetch_date in dates:
+            # Ensure fetch_date is a date object
+            if isinstance(fetch_date, datetime):
+                fetch_date = fetch_date.date()
+
+            # Convert date to datetime range (full day in UTC)
+            start_dt = datetime.combine(fetch_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            end_dt = datetime.combine(fetch_date + timedelta(days=1), datetime.min.time()).replace(tzinfo=timezone.utc)
+
+            date_result = {
+                "date": fetch_date.isoformat(),
+                "success": True,
+                "by_bidzone": {},
+                "total_records": 0,
+                "errors": [],
+            }
+
+            for bidzone_code in bidzone_codes:
+                bidzone_result = {
+                    "bidzone_code": bidzone_code,
+                    "records_stored": 0,
+                    "records_updated": 0,
+                    "by_price_type": {},
+                    "errors": [],
+                }
+
+                try:
+                    # Fetch prices from ENTSOE API
+                    df, metadata = await client.fetch_prices(
+                        start=start_dt,
+                        end=end_dt,
+                        area_code=bidzone_code,
+                        price_types=price_types,
+                    )
+
+                    if df.empty:
+                        bidzone_result["errors"].append(f"No data returned for {bidzone_code} on {fetch_date}")
+                        if metadata.get("errors"):
+                            bidzone_result["errors"].extend(metadata["errors"])
+                        date_result["by_bidzone"][bidzone_code] = bidzone_result
+                        continue
+
+                    # Store the data by price type
+                    for pt in price_types:
+                        type_df = df[df["price_type"] == pt]
+                        if type_df.empty:
+                            continue
+
+                        stored, updated = await self._store_price_records(
+                            type_df,
+                            bidzone_code,
+                            pt,
+                            user_id,
+                            metadata,
+                        )
+
+                        bidzone_result["by_price_type"][pt] = {
+                            "records_stored": stored,
+                            "records_updated": updated,
+                        }
+                        bidzone_result["records_stored"] += stored
+                        bidzone_result["records_updated"] += updated
+
+                    date_result["total_records"] += bidzone_result["records_stored"]
+                    results["total_records_stored"] += bidzone_result["records_stored"]
+                    results["total_records_updated"] += bidzone_result["records_updated"]
+
+                except Exception as e:
+                    error_msg = f"Error fetching prices for {bidzone_code} on {fetch_date}: {str(e)}"
+                    logger.error(error_msg)
+                    bidzone_result["errors"].append(error_msg)
+                    date_result["success"] = False
+                    results["success"] = False
+
+                date_result["by_bidzone"][bidzone_code] = bidzone_result
+
+            if date_result["errors"] or not date_result["success"]:
+                results["errors"].extend(date_result["errors"])
+
+            results["results"].append(date_result)
+
+        # Calculate response time
+        end_time = datetime.now()
+        results["duration_seconds"] = round((end_time - start_time).total_seconds(), 2)
+
+        return results

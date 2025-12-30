@@ -31,16 +31,20 @@ class WeatherImportCore:
         start_date: date,
         end_date: date,
         job_id: Optional[int] = None,
+        force_refresh: bool = False,
     ) -> Dict[str, any]:
         """
         Fetch and process ERA5 data for a date range.
 
         This is the main entry point that orchestrates the entire import process.
+        By default, it skips dates that already have complete data. Use force_refresh=True
+        to re-fetch and update data for all dates in the range.
 
         Args:
             start_date: Start date for import
             end_date: End date for import
             job_id: Optional job ID for progress tracking
+            force_refresh: If True, re-fetch data even for days that already have complete data
 
         Returns:
             Dict with statistics:
@@ -49,6 +53,7 @@ class WeatherImportCore:
                 - files_deleted: Number of GRIB files cleaned up
                 - api_calls: Number of API calls made
                 - dates_processed: Number of dates successfully processed
+                - dates_skipped: Number of dates skipped (already complete)
                 - errors: List of error messages
         """
         # Check dependencies
@@ -71,6 +76,7 @@ class WeatherImportCore:
             'files_deleted': 0,
             'api_calls': 0,
             'dates_processed': 0,
+            'dates_skipped': 0,
             'errors': []
         }
 
@@ -78,26 +84,32 @@ class WeatherImportCore:
             "Starting weather import",
             start_date=str(start_date),
             end_date=str(end_date),
-            job_id=job_id
+            job_id=job_id,
+            force_refresh=force_refresh
         )
 
         # Process each date in range
         current_date = start_date
         while current_date <= end_date:
             try:
-                date_stats = await self._process_single_date(current_date, job_id)
+                date_stats = await self._process_single_date(current_date, job_id, force_refresh)
 
                 # Aggregate stats
                 stats['records'] += date_stats.get('records', 0)
                 stats['files_downloaded'] += date_stats.get('files_downloaded', 0)
                 stats['files_deleted'] += date_stats.get('files_deleted', 0)
                 stats['api_calls'] += date_stats.get('api_calls', 0)
-                stats['dates_processed'] += 1
+
+                if date_stats.get('skipped', False):
+                    stats['dates_skipped'] += 1
+                else:
+                    stats['dates_processed'] += 1
 
                 logger.info(
                     "Date processed successfully",
                     date=str(current_date),
-                    records=date_stats.get('records', 0)
+                    records=date_stats.get('records', 0),
+                    skipped=date_stats.get('skipped', False)
                 )
 
             except Exception as e:
@@ -113,7 +125,8 @@ class WeatherImportCore:
     async def _process_single_date(
         self,
         target_date: date,
-        job_id: Optional[int] = None
+        job_id: Optional[int] = None,
+        force_refresh: bool = False
     ) -> Dict[str, int]:
         """
         Process a single date: fetch GRIB, extract data, insert to DB, cleanup.
@@ -121,9 +134,10 @@ class WeatherImportCore:
         Args:
             target_date: Date to process
             job_id: Optional job ID for progress tracking
+            force_refresh: If True, re-fetch data even if date already has complete data
 
         Returns:
-            Dict with date statistics
+            Dict with date statistics including 'skipped' flag
         """
         # Import here to avoid issues if dependencies not available
         import cdsapi
@@ -138,7 +152,8 @@ class WeatherImportCore:
             'records': 0,
             'files_downloaded': 0,
             'files_deleted': 0,
-            'api_calls': 0
+            'api_calls': 0,
+            'skipped': False
         }
 
         # Get all windfarms
@@ -158,9 +173,10 @@ class WeatherImportCore:
 
         logger.info(f"Processing date {target_date} for {len(windfarms)} windfarms")
 
-        # Check if date already complete
-        if await self._is_date_complete(target_date, len(windfarms)):
-            logger.info(f"Date {target_date} already complete, skipping")
+        # Check if date already complete (skip if complete and not forcing refresh)
+        if not force_refresh and await self._is_date_complete(target_date, len(windfarms)):
+            logger.info(f"Date {target_date} already complete, skipping (use force_refresh=True to re-fetch)")
+            stats['skipped'] = True
             return stats
 
         # Setup GRIB directory

@@ -33,6 +33,9 @@ from app.schemas.price_data import (
     PriceProfileRequest,
     PriceProfileResponse,
     CorrelationResponse,
+    PriceAvailabilityResponse,
+    PriceFetchDayRequest,
+    PriceFetchDayResponse,
 )
 
 router = APIRouter(prefix="/prices", tags=["Price Data"])
@@ -114,6 +117,82 @@ async def get_available_bidzones(
         items=[BidzoneAvailabilityResponse(**b) for b in bidzones],
         total=len(bidzones),
     )
+
+
+@router.get("/availability", response_model=PriceAvailabilityResponse)
+async def get_price_availability(
+    year: Optional[int] = Query(None, description="Year for availability check"),
+    month: Optional[int] = Query(None, description="Month for availability check (1-12)"),
+    bidzone_codes: Optional[str] = Query(None, description="Comma-separated list of bidzone codes"),
+    price_type: Optional[str] = Query(None, description="Filter by price type: day_ahead or intraday"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get price data availability for a specified month.
+
+    Shows which days have price data for selected bidzones,
+    including record count and price types available per day.
+
+    Similar to /generation/availability endpoint pattern.
+    """
+    from datetime import datetime as dt
+
+    # Default to current month if not provided
+    now = dt.utcnow()
+    year = year or now.year
+    month = month or now.month
+
+    # Validate month range
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="Month must be between 1 and 12")
+
+    # Parse bidzone_codes from comma-separated string
+    bidzone_list = None
+    if bidzone_codes:
+        bidzone_list = [b.strip() for b in bidzone_codes.split(',') if b.strip()]
+
+    service = PriceDataStorageService(db)
+    result = await service.get_price_availability(
+        year=year,
+        month=month,
+        bidzone_codes=bidzone_list,
+        price_type=price_type,
+    )
+
+    return PriceAvailabilityResponse(**result)
+
+
+@router.post("/fetch-day", response_model=PriceFetchDayResponse)
+async def fetch_prices_for_specific_dates(
+    request: PriceFetchDayRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Fetch price data from ENTSOE API for specific dates and bidzones.
+
+    This endpoint allows fetching day-ahead and/or intraday prices for
+    specific dates rather than a date range. Useful for filling gaps
+    in historical data.
+
+    Supports all Nordic areas:
+    - Norway: NO_1, NO_2, NO_3, NO_4, NO_5
+    - Sweden: SE_1, SE_2, SE_3, SE_4
+    - Denmark: DK_1, DK_2
+    - Finland: FI
+
+    Returns detailed status of import for each date and bidzone.
+    """
+    service = PriceDataStorageService(db)
+    result = await service.fetch_and_store_prices_for_dates(
+        dates=request.dates,
+        bidzone_codes=request.bidzone_codes,
+        price_types=request.price_types,
+        user_id=current_user.id,
+    )
+
+    return PriceFetchDayResponse(**result)
 
 
 # ============================================================

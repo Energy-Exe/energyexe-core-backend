@@ -1,6 +1,6 @@
 """Pydantic schemas for price data."""
 
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Literal
 from uuid import UUID
@@ -300,3 +300,74 @@ class BidzoneListResponse(BaseModel):
     """Response schema for list of bidzones with price data."""
     items: List[BidzoneAvailabilityResponse]
     total: int
+
+
+# ============================================================
+# Price Availability Schemas
+# ============================================================
+
+class PriceAvailabilityDayEntry(BaseModel):
+    """Daily price data availability entry."""
+    bidzones: List[str]
+    recordCount: int
+    priceTypes: List[str]
+
+
+class PriceAvailabilitySummary(BaseModel):
+    """Summary of price data availability."""
+    totalDays: int
+    daysWithData: int
+    coverage: float
+    bidzones: List[str]
+    priceTypes: List[str]
+
+
+class PriceAvailabilityResponse(BaseModel):
+    """Response schema for price availability endpoint."""
+    availability: Dict[str, PriceAvailabilityDayEntry]
+    summary: PriceAvailabilitySummary
+
+
+# ============================================================
+# Fetch Day Schemas
+# ============================================================
+
+class PriceFetchDayRequest(BaseModel):
+    """Request schema for fetching prices for specific date(s)."""
+    dates: List[date] = Field(..., description="List of dates to fetch (YYYY-MM-DD)")
+    bidzone_codes: List[str] = Field(..., description="List of bidzone codes (e.g., NO_1, SE_1)")
+    price_types: Optional[List[str]] = Field(
+        default=["day_ahead"],
+        description="Price types to fetch: day_ahead, intraday"
+    )
+
+
+class PriceFetchDayBidzoneResult(BaseModel):
+    """Result for a single bidzone fetch operation."""
+    bidzone_code: str
+    records_stored: int
+    records_updated: int
+    by_price_type: Dict[str, Dict[str, int]]
+    errors: List[str]
+
+
+class PriceFetchDayDateResult(BaseModel):
+    """Result for a single date fetch operation."""
+    date: str
+    success: bool
+    by_bidzone: Dict[str, PriceFetchDayBidzoneResult]
+    total_records: int
+    errors: List[str]
+
+
+class PriceFetchDayResponse(BaseModel):
+    """Response schema for fetch-day operation."""
+    success: bool
+    dates_requested: List[str]
+    bidzone_codes: List[str]
+    price_types: List[str]
+    results: List[PriceFetchDayDateResult]
+    total_records_stored: int
+    total_records_updated: int
+    duration_seconds: float
+    errors: List[str]

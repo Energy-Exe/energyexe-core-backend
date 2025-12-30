@@ -21,6 +21,10 @@ class WeatherImportRequest(BaseModel):
     """Request schema for creating a weather import job."""
     start_date: date = Field(..., description="Start date for import (YYYY-MM-DD)")
     end_date: date = Field(..., description="End date for import (YYYY-MM-DD)")
+    force_refresh: bool = Field(
+        default=False,
+        description="If True, re-fetch data even for days that already have complete data"
+    )
 
 
 class WeatherImportJobSummary(BaseModel):
@@ -133,6 +137,7 @@ async def trigger_weather_import(
         start_date=request.start_date,
         end_date=request.end_date,
         user_id=current_user.id,
+        force_refresh=request.force_refresh,
     )
 
     # Execute in background (non-blocking)
