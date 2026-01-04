@@ -22,6 +22,7 @@ class WindfarmBase(BaseModel):
     control_area_id: Optional[int] = None
     nameplate_capacity_mw: Optional[float] = None
     project_id: Optional[int] = None
+    substation_id: Optional[int] = None
     commercial_operational_date: Optional[date] = None
     first_power_date: Optional[date] = None
     lat: Optional[float] = None
@@ -60,6 +61,7 @@ class WindfarmUpdate(BaseModel):
     control_area_id: Optional[int] = None
     nameplate_capacity_mw: Optional[float] = None
     project_id: Optional[int] = None
+    substation_id: Optional[int] = None
     commercial_operational_date: Optional[date] = None
     first_power_date: Optional[date] = None
     lat: Optional[float] = None

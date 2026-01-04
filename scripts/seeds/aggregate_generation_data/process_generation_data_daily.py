@@ -378,22 +378,27 @@ class DailyGenerationProcessor:
         hourly_records = []
 
         for (hour, identifier), records in hourly_groups.items():
-            resolution = records[0].data.get('resolution_code', 'PT60M')
+            # Filter out records with null values
+            valid_records = [r for r in records if r.value_extracted is not None]
+            if not valid_records:
+                continue  # Skip this hour if no valid data
+
+            resolution = valid_records[0].data.get('resolution_code', 'PT60M')
 
             if resolution == 'PT15M':
                 # Average of 4 values per hour (harmonization rule)
-                generation_mw = np.mean([float(r.value_extracted) for r in records])
+                generation_mw = np.mean([float(r.value_extracted) for r in valid_records])
                 expected_points = 4
             else:
                 # Hourly data - use directly
-                generation_mw = float(records[0].value_extracted)
+                generation_mw = float(valid_records[0].value_extracted)
                 expected_points = 1
 
             # Get raw capacity from ENTSOE data (store separately)
             raw_capacity_mw = None
-            if records[0].data and 'installed_capacity_mw' in records[0].data:
+            if valid_records[0].data and 'installed_capacity_mw' in valid_records[0].data:
                 try:
-                    raw_capacity_mw = float(records[0].data['installed_capacity_mw'])
+                    raw_capacity_mw = float(valid_records[0].data['installed_capacity_mw'])
                 except (TypeError, ValueError):
                     raw_capacity_mw = None
 
@@ -410,8 +415,8 @@ class DailyGenerationProcessor:
                 identifier=identifier,
                 generation_mwh=generation_mw,  # MW for 1 hour = MWh
                 capacity_mw=capacity_mw,  # From generation_units table (only if operational)
-                raw_data_ids=[r.id for r in records],
-                data_points=len(records),
+                raw_data_ids=[r.id for r in valid_records],
+                data_points=len(valid_records),
                 expected_points=expected_points,
                 metadata={
                     'resolution_code': resolution,
@@ -439,9 +444,14 @@ class DailyGenerationProcessor:
         hourly_records = []
 
         for (hour, identifier), records in hourly_groups.items():
+            # Filter out records with null values
+            valid_records = [r for r in records if r.value_extracted is not None]
+            if not valid_records:
+                continue  # Skip this hour if no valid data
+
             # Sum the MWh values from the 30-min periods to get hourly total
             # Each record is MWh for 30 minutes, so sum gives MWh for the hour
-            generation_mwh = sum([float(r.value_extracted) for r in records])
+            generation_mwh = sum([float(r.value_extracted) for r in valid_records])
 
             # Get capacity from generation units cache
             unit_key = f"ELEXON:{identifier}"
@@ -456,8 +466,8 @@ class DailyGenerationProcessor:
                 identifier=identifier,
                 generation_mwh=generation_mwh,  # Sum of 30-min MWh values
                 capacity_mw=capacity_mw,
-                raw_data_ids=[r.id for r in records],
-                data_points=len(records),
+                raw_data_ids=[r.id for r in valid_records],
+                data_points=len(valid_records),
                 expected_points=2,
                 metadata={}
             ))
@@ -518,6 +528,10 @@ class DailyGenerationProcessor:
         hourly_data = {}
 
         for record in raw_data:
+            # Skip records with null values
+            if record.value_extracted is None:
+                continue
+
             hour = record.period_start.replace(minute=0, second=0, microsecond=0)
             key = (record.identifier, hour)
 

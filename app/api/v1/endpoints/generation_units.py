@@ -21,7 +21,7 @@ from app.services.generation_unit import GenerationUnitService
 router = APIRouter()
 
 
-@router.get("/", response_model=List[GenerationUnitResponse])
+@router.get("/", response_model=List[GenerationUnitWithWindfarm])
 async def get_generation_units(
     search: str = Query(None, description="Search term for name or code"),
     source: str = Query(None, description="Filter by data source"),

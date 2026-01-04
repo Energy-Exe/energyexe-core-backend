@@ -16,7 +16,7 @@ class GenerationUnit(Base):
     __tablename__ = "generation_units"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
 
     source: Mapped[str] = mapped_column(String(50), nullable=False)

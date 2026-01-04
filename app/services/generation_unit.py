@@ -69,7 +69,9 @@ class GenerationUnitService:
     async def get_all(self, params: GenerationUnitSearchParams) -> List[GenerationUnit]:
         """Get all generation units with optional filtering."""
         try:
-            query = select(GenerationUnit).where(GenerationUnit.is_active == params.is_active)
+            query = select(GenerationUnit).options(
+                selectinload(GenerationUnit.windfarm)
+            ).where(GenerationUnit.is_active == params.is_active)
 
             # Apply search filter
             if params.search:
@@ -139,13 +141,6 @@ class GenerationUnitService:
     async def create(self, unit_data: GenerationUnitCreate) -> GenerationUnit:
         """Create a new generation unit."""
         try:
-            # Check if code already exists
-            existing_unit = await self.get_by_code(unit_data.code)
-            if existing_unit:
-                raise ValidationException(
-                    f"Generation unit with code '{unit_data.code}' already exists"
-                )
-
             unit = GenerationUnit(**unit_data.model_dump())
             self.db.add(unit)
             await self.db.commit()
@@ -156,7 +151,7 @@ class GenerationUnitService:
         except IntegrityError as e:
             await self.db.rollback()
             logger.error("Integrity error creating generation unit", error=str(e))
-            raise ValidationException("Failed to create generation unit: code must be unique")
+            raise ValidationException("Failed to create generation unit: database constraint violation")
         except Exception as e:
             await self.db.rollback()
             logger.error("Error creating generation unit", error=str(e))
@@ -169,14 +164,6 @@ class GenerationUnitService:
             if not unit:
                 raise NotFoundException(f"Generation unit with ID {unit_id} not found")
 
-            # Check if code is being changed and if it conflicts
-            if unit_data.code and unit_data.code != unit.code:
-                existing_unit = await self.get_by_code(unit_data.code)
-                if existing_unit and existing_unit.id != unit_id:
-                    raise ValidationException(
-                        f"Generation unit with code '{unit_data.code}' already exists"
-                    )
-
             # Update fields
             update_data = unit_data.model_dump(exclude_unset=True)
             for field, value in update_data.items():
@@ -187,13 +174,13 @@ class GenerationUnitService:
 
             logger.info("Generation unit updated", unit_id=unit.id, code=unit.code)
             return unit
-        except (NotFoundException, ValidationException):
+        except NotFoundException:
             await self.db.rollback()
             raise
         except IntegrityError as e:
             await self.db.rollback()
             logger.error("Integrity error updating generation unit", unit_id=unit_id, error=str(e))
-            raise ValidationException("Failed to update generation unit: code must be unique")
+            raise ValidationException("Failed to update generation unit: database constraint violation")
         except Exception as e:
             await self.db.rollback()
             logger.error("Error updating generation unit", unit_id=unit_id, error=str(e))

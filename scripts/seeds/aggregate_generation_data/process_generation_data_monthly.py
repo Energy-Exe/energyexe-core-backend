@@ -465,14 +465,16 @@ async def process_month_range(
     async with session_factory() as db:
         processor = MonthlyGenerationProcessor(db, dry_run=dry_run)
 
-        # Load generation units and turbine units once at the start
+        # Load generation units once at the start
         logger.info("Loading generation units (one-time operation)...")
         await processor.load_generation_units()
         logger.info(f"✓ Loaded {len(processor.generation_units_cache)} generation units")
 
-        logger.info("Loading turbine units for ENERGISTYRELSEN (one-time operation)...")
-        await processor.load_turbine_units()
-        logger.info(f"✓ Loaded {len(processor.turbine_units_cache)} turbine units")
+        # Only load turbine units if ENERGISTYRELSEN is being processed (not needed for EIA)
+        if sources is None or 'ENERGISTYRELSEN' in sources:
+            logger.info("Loading turbine units for ENERGISTYRELSEN (one-time operation)...")
+            await processor.load_turbine_units()
+            logger.info(f"✓ Loaded {len(processor.turbine_units_cache)} turbine units")
 
         for year, month in months_to_process:
             try:

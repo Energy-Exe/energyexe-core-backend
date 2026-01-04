@@ -51,8 +51,30 @@ class Substation(SubstationBase):
         from_attributes = True
 
 
+class LinkedWindfarmSummary(BaseModel):
+    """Summary of a windfarm linked to a substation."""
+    id: int
+    code: str
+    name: str
+    nameplate_capacity_mw: Optional[float] = None
+    status: Optional[str] = None
+    location_type: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class SubstationWithOwners(Substation):
     substation_owners: List[dict] = []
+
+    class Config:
+        from_attributes = True
+
+
+class SubstationWithWindfarms(Substation):
+    """Substation with linked windfarms."""
+    substation_owners: List[dict] = []
+    windfarms: List[LinkedWindfarmSummary] = []
 
     class Config:
         from_attributes = True

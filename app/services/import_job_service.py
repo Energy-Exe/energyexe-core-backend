@@ -418,19 +418,44 @@ class ImportJobService:
         )
 
     def _build_import_command(self, job: ImportJobExecution) -> str:
-        """Build the command to execute based on source."""
+        """Build the command to execute based on source.
+
+        Each command chains raw data import with aggregation using &&.
+        This ensures aggregation only runs if raw import succeeds.
+
+        Sources:
+        - ENTSOE, ELEXON, Taipower: Hourly data → process_generation_data_robust.py
+        - EIA: Monthly data → process_generation_data_monthly.py
+        """
         base_path = Path(__file__).parent.parent.parent / "scripts/seeds/raw_generation_data"
+        agg_path = Path(__file__).parent.parent.parent / "scripts/seeds/aggregate_generation_data"
 
         start_date = job.import_start_date.strftime("%Y-%m-%d")
         end_date = job.import_end_date.strftime("%Y-%m-%d")
 
         # Use python directly (works in Docker without poetry)
         # The app is already in PYTHONPATH when FastAPI starts
+        # Each command: raw import && aggregation (aggregation runs only if import succeeds)
         commands = {
-            "ENTSOE": f"python {base_path}/entsoe/import_from_api.py --start {start_date} --end {end_date}",
-            "Taipower": f"python {base_path}/taipower/import_from_api.py",
-            "ELEXON": f"python {base_path}/elexon/import_from_api.py --start {start_date} --end {end_date}",
-            "EIA": f"python {base_path}/eia/import_from_api.py --start-year {job.import_start_date.year} --start-month {job.import_start_date.month} --end-year {job.import_end_date.year} --end-month {job.import_end_date.month}",
+            "ENTSOE": (
+                f"python {base_path}/entsoe/import_from_api.py --start {start_date} --end {end_date} && "
+                f"python {agg_path}/process_generation_data_robust.py --source ENTSOE --start {start_date} --end {end_date}"
+            ),
+            "Taipower": (
+                f"python {base_path}/taipower/import_from_api.py && "
+                f"python {agg_path}/process_generation_data_robust.py --source TAIPOWER --start {start_date} --end {end_date}"
+            ),
+            "ELEXON": (
+                f"python {base_path}/elexon/import_from_api.py --start {start_date} --end {end_date} && "
+                f"python {agg_path}/process_generation_data_robust.py --source ELEXON --start {start_date} --end {end_date}"
+            ),
+            "EIA": (
+                f"python {base_path}/eia/import_from_api.py --start-year {job.import_start_date.year} "
+                f"--start-month {job.import_start_date.month} --end-year {job.import_end_date.year} "
+                f"--end-month {job.import_end_date.month} && "
+                f"python {agg_path}/process_generation_data_monthly.py --source EIA "
+                f"--start {job.import_start_date.strftime('%Y-%m')} --end {job.import_end_date.strftime('%Y-%m')}"
+            ),
         }
 
         command = commands.get(job.source)

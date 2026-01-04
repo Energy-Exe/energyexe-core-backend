@@ -43,3 +43,4 @@ class Substation(Base):
     substation_owners = relationship(
         "SubstationOwner", back_populates="substation", cascade="all, delete-orphan"
     )
+    windfarms = relationship("Windfarm", back_populates="substation")

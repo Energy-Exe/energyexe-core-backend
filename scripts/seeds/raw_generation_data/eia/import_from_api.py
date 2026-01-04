@@ -304,25 +304,32 @@ async def fetch_and_store_eia_data(
                         f"within batch"
                     )
 
-                # Bulk upsert with deduplicated records
-                stmt = insert(GenerationDataRaw).values(unique_records)
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=['source', 'identifier', 'period_start'],
-                    set_={
-                        'value_extracted': stmt.excluded.value_extracted,
-                        'data': stmt.excluded.data,
-                        'updated_at': datetime.now(timezone.utc),
-                        'period_end': stmt.excluded.period_end,
-                        'period_type': stmt.excluded.period_type,
-                        'unit': stmt.excluded.unit,
-                    }
-                )
+                # Bulk upsert with deduplicated records in batches
+                # PostgreSQL has a limit of 32767 parameters, so we batch inserts
+                BATCH_SIZE = 2000  # ~11 params per record, well under the limit
+                total_stored = 0
 
-                await db.execute(stmt)
-                await db.commit()
+                for i in range(0, len(unique_records), BATCH_SIZE):
+                    batch = unique_records[i:i + BATCH_SIZE]
+                    stmt = insert(GenerationDataRaw).values(batch)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=['source', 'identifier', 'period_start'],
+                        set_={
+                            'value_extracted': stmt.excluded.value_extracted,
+                            'data': stmt.excluded.data,
+                            'updated_at': datetime.now(timezone.utc),
+                            'period_end': stmt.excluded.period_end,
+                            'period_type': stmt.excluded.period_type,
+                            'unit': stmt.excluded.unit,
+                        }
+                    )
+                    await db.execute(stmt)
+                    await db.commit()
+                    total_stored += len(batch)
+                    logger.info(f"Inserted batch {i // BATCH_SIZE + 1}: {len(batch)} records (total: {total_stored})")
 
-                result['records_stored'] += len(unique_records)
-                logger.info(f"Stored {len(unique_records)} records")
+                result['records_stored'] += total_stored
+                logger.info(f"Stored {total_stored} records")
 
         logger.info(f"Completed: {result['records_stored']} total records stored")
 

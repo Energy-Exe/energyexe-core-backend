@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.schemas.substation import (
+    LinkedWindfarmSummary,
     Substation,
     SubstationCreate,
     SubstationCreateWithOwners,
@@ -17,6 +18,7 @@ from app.schemas.substation_owner import (
 )
 from app.services.substation import SubstationService
 from app.services.substation_owner import SubstationOwnerService
+from app.services.windfarm import WindfarmService
 
 router = APIRouter()
 
@@ -282,3 +284,51 @@ async def remove_substation_owner(
     if not deleted_owner:
         raise HTTPException(status_code=404, detail="Substation owner relationship not found")
     return deleted_owner
+
+
+# Linked Windfarm endpoints
+@router.get("/{substation_id}/windfarms", response_model=List[LinkedWindfarmSummary])
+async def get_substation_windfarms(substation_id: int, db: AsyncSession = Depends(get_db)):
+    """Get all windfarms linked to a substation"""
+    # Check if substation exists
+    substation = await SubstationService.get_substation(db, substation_id)
+    if not substation:
+        raise HTTPException(status_code=404, detail="Substation not found")
+
+    return await WindfarmService.get_windfarms_by_substation(db, substation_id)
+
+
+@router.post("/{substation_id}/windfarms/{windfarm_id}", status_code=200)
+async def link_windfarm_to_substation(
+    substation_id: int, windfarm_id: int, db: AsyncSession = Depends(get_db)
+):
+    """Link a windfarm to a substation"""
+    # Check if substation exists
+    substation = await SubstationService.get_substation(db, substation_id)
+    if not substation:
+        raise HTTPException(status_code=404, detail="Substation not found")
+
+    # Update windfarm's substation_id
+    windfarm = await WindfarmService.link_to_substation(db, windfarm_id, substation_id)
+    if not windfarm:
+        raise HTTPException(status_code=404, detail="Windfarm not found")
+
+    return {"message": f"Windfarm {windfarm_id} linked to substation {substation_id}"}
+
+
+@router.delete("/{substation_id}/windfarms/{windfarm_id}", status_code=200)
+async def unlink_windfarm_from_substation(
+    substation_id: int, windfarm_id: int, db: AsyncSession = Depends(get_db)
+):
+    """Unlink a windfarm from a substation"""
+    # Check if substation exists
+    substation = await SubstationService.get_substation(db, substation_id)
+    if not substation:
+        raise HTTPException(status_code=404, detail="Substation not found")
+
+    # Remove windfarm's substation_id
+    windfarm = await WindfarmService.unlink_from_substation(db, windfarm_id, substation_id)
+    if not windfarm:
+        raise HTTPException(status_code=404, detail="Windfarm not found or not linked to this substation")
+
+    return {"message": f"Windfarm {windfarm_id} unlinked from substation {substation_id}"}

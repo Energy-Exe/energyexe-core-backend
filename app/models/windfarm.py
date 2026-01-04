@@ -38,6 +38,7 @@ class Windfarm(Base):
 
     # Relationships to energy entities
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    substation_id = Column(Integer, ForeignKey("substations.id"), nullable=True)
 
     # Dates
     commercial_operational_date = Column(Date, nullable=True)
@@ -86,6 +87,7 @@ class Windfarm(Base):
     market_balance_area = relationship("MarketBalanceArea", back_populates="windfarms")
     control_area = relationship("ControlArea", back_populates="windfarms")
     project = relationship("Project", back_populates="windfarms")
+    substation = relationship("Substation", back_populates="windfarms")
     windfarm_owners = relationship(
         "WindfarmOwner", back_populates="windfarm", cascade="all, delete-orphan"
     )

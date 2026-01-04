@@ -141,3 +141,54 @@ class WindfarmService:
         await db.delete(db_windfarm)
         await db.commit()
         return db_windfarm
+
+    @staticmethod
+    async def get_windfarms_by_substation(
+        db: AsyncSession, substation_id: int
+    ) -> List[Windfarm]:
+        """Get all windfarms linked to a specific substation."""
+        result = await db.execute(
+            select(Windfarm)
+            .where(Windfarm.substation_id == substation_id)
+            .order_by(Windfarm.name)
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    async def link_to_substation(
+        db: AsyncSession, windfarm_id: int, substation_id: int
+    ) -> Optional[Windfarm]:
+        """Link a windfarm to a substation by setting its substation_id."""
+        result = await db.execute(select(Windfarm).where(Windfarm.id == windfarm_id))
+        db_windfarm = result.scalar_one_or_none()
+
+        if not db_windfarm:
+            return None
+
+        db_windfarm.substation_id = substation_id
+        await db.commit()
+        await db.refresh(db_windfarm)
+        return db_windfarm
+
+    @staticmethod
+    async def unlink_from_substation(
+        db: AsyncSession, windfarm_id: int, substation_id: int
+    ) -> Optional[Windfarm]:
+        """Unlink a windfarm from a substation by removing its substation_id."""
+        result = await db.execute(
+            select(Windfarm).where(
+                and_(
+                    Windfarm.id == windfarm_id,
+                    Windfarm.substation_id == substation_id
+                )
+            )
+        )
+        db_windfarm = result.scalar_one_or_none()
+
+        if not db_windfarm:
+            return None
+
+        db_windfarm.substation_id = None
+        await db.commit()
+        await db.refresh(db_windfarm)
+        return db_windfarm

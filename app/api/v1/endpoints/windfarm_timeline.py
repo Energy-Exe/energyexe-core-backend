@@ -191,6 +191,33 @@ async def get_windfarm_timeline(
         return source_date.replace(year=year, month=month, day=day)
 
     enhanced_timeline = []
+    today = date.today()
+
+    # If no events but windfarm has capacity, create a timeline from earliest unit start to today
+    if not capacity_timeline and (gen_units or turbine_units_data):
+        # Find earliest start date
+        earliest_dates = []
+        for u in gen_units:
+            if u.start_date:
+                earliest_dates.append(u.start_date)
+        for tu, _ in turbine_units_data:
+            if tu.start_date:
+                earliest_dates.append(tu.start_date)
+
+        if earliest_dates:
+            start_date = min(earliest_dates)
+            # Calculate current capacity
+            gen_cap = sum(float(u.capacity_mw) if u.capacity_mw else 0 for u in gen_units if not u.end_date or u.end_date > today)
+            turb_cap = sum(float(tm.rated_power_kw / 1000.0) if tm.rated_power_kw else 0 for tu, tm in turbine_units_data if not tu.end_date or tu.end_date > today)
+
+            # Create initial point
+            capacity_timeline = [{
+                "date": start_date.isoformat(),
+                "total_capacity_mw": round(max(gen_cap, turb_cap), 2),
+                "generation_unit_capacity_mw": round(gen_cap, 2),
+                "turbine_capacity_mw": round(turb_cap, 2),
+            }]
+
     for i, snapshot in enumerate(capacity_timeline):
         # Add the actual event point
         enhanced_timeline.append(snapshot)
@@ -217,6 +244,27 @@ async def get_windfarm_timeline(
                     )
                     fill_date = add_months(fill_date, 1)
                     fill_date = fill_date.replace(day=1)
+
+    # Extend timeline from last event to today (fill with monthly points)
+    if enhanced_timeline:
+        last_snapshot = enhanced_timeline[-1]
+        last_date = datetime.fromisoformat(last_snapshot["date"]).date()
+
+        if (today - last_date).days > 32:
+            fill_date = add_months(last_date, 1)
+            fill_date = fill_date.replace(day=1)
+
+            while fill_date <= today:
+                enhanced_timeline.append(
+                    {
+                        "date": fill_date.isoformat(),
+                        "total_capacity_mw": last_snapshot["total_capacity_mw"],
+                        "generation_unit_capacity_mw": last_snapshot["generation_unit_capacity_mw"],
+                        "turbine_capacity_mw": last_snapshot["turbine_capacity_mw"],
+                    }
+                )
+                fill_date = add_months(fill_date, 1)
+                fill_date = fill_date.replace(day=1)
 
     # Sort by date to ensure proper ordering
     enhanced_timeline.sort(key=lambda x: x["date"])
@@ -313,6 +361,9 @@ async def get_windfarm_generation_timeline(
     unit_conditions.append(GenerationData.windfarm_id == windfarm_id)
 
     # Get generation data - match by generation_unit_id OR turbine_unit_id OR windfarm_id
+    # Set limit based on aggregation level - monthly needs more records to cover full history
+    query_limit = 50000 if aggregation == "hourly" else 500000
+
     query = (
         select(GenerationData)
         .where(
@@ -325,8 +376,8 @@ async def get_windfarm_generation_timeline(
             )
         )
         .order_by(GenerationData.hour)
-        .limit(50000)
-    )  # Limit to prevent huge queries
+        .limit(query_limit)
+    )  # Limit based on aggregation level
 
     result = await db.execute(query)
     generation_records = result.scalars().all()
@@ -365,7 +416,8 @@ async def get_windfarm_generation_timeline(
             {
                 "timestamp": day,
                 "generation_mwh": round(data["generation"], 2),
-                "capacity_mw": data["capacity"],
+                # Convert capacity to MWh for the period (capacity_mw * hours)
+                "capacity_mw": round(data["capacity"] * data["count"], 2) if data["capacity"] else None,
                 "hours_count": data["count"],
             }
             for day, data in sorted(daily_data.items())
@@ -388,7 +440,8 @@ async def get_windfarm_generation_timeline(
             {
                 "timestamp": month,
                 "generation_mwh": round(data["generation"], 2),
-                "capacity_mw": data["capacity"],
+                # Convert capacity to MWh for the period (capacity_mw * hours)
+                "capacity_mw": round(data["capacity"] * data["count"], 2) if data["capacity"] else None,
                 "hours_count": data["count"],
             }
             for month, data in sorted(monthly_data.items())
