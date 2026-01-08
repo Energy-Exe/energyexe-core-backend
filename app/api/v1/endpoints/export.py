@@ -13,8 +13,6 @@ from app.services.generation_export_service import GenerationExportService
 
 router = APIRouter()
 
-# Maximum date range for exports (in days)
-MAX_EXPORT_DATE_RANGE_DAYS = 730  # 2 years
 # Maximum number of windfarms per export
 MAX_WINDFARMS_PER_EXPORT = 500
 
@@ -113,15 +111,6 @@ async def export_generation_csv(
         raise HTTPException(
             status_code=400,
             detail="start_date must be before or equal to end_date"
-        )
-
-    # Validate date range is not too large
-    date_range_days = (end_date - start_date).days
-    if date_range_days > MAX_EXPORT_DATE_RANGE_DAYS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Date range cannot exceed {MAX_EXPORT_DATE_RANGE_DAYS} days ({MAX_EXPORT_DATE_RANGE_DAYS // 365} years). "
-                   f"Your range is {date_range_days} days."
         )
 
     # Validate at least one filter is provided
