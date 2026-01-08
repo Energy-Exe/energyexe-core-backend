@@ -128,16 +128,25 @@ async def import_with_copy(
     
     # Prepare data for COPY
     output = StringIO()
-    
+
     # Calculate period_start and period_end from settlement_date and settlement_period
-    # Each settlement period is 30 minutes, starting from 00:00
-    filtered_df['period_start'] = pd.to_datetime(filtered_df['settlement_date'], format='%Y%m%d') + \
-                                   pd.to_timedelta((filtered_df['settlement_period'] - 1) * 30, unit='m')
+    # Settlement date is in UK local time (BST/GMT), needs conversion to UTC
+    # During BST (summer): UK midnight = 23:00 UTC (previous day)
+    # During GMT (winter): UK midnight = 00:00 UTC (same day)
+    uk_dates = pd.to_datetime(filtered_df['settlement_date'], format='%Y%m%d').dt.tz_localize(
+        'Europe/London', ambiguous='infer', nonexistent='shift_forward'
+    )
+    utc_dates = uk_dates.dt.tz_convert('UTC')
+
+    # Add settlement period offset (each period is 30 minutes)
+    filtered_df['period_start'] = utc_dates + pd.to_timedelta(
+        (filtered_df['settlement_period'] - 1) * 30, unit='m'
+    )
     filtered_df['period_end'] = filtered_df['period_start'] + pd.Timedelta(minutes=30)
-    
-    # Store as UTC directly (no DST conversion)
-    filtered_df['period_start'] = filtered_df['period_start'].dt.tz_localize('UTC')
-    filtered_df['period_end'] = filtered_df['period_end'].dt.tz_localize('UTC')
+
+    # Convert to naive UTC for storage (tz_localize(None) removes timezone info but keeps UTC values)
+    filtered_df['period_start'] = filtered_df['period_start'].dt.tz_localize(None)
+    filtered_df['period_end'] = filtered_df['period_end'].dt.tz_localize(None)
     
     # Columns that exist in generation_data_raw table
     columns = ['source', 'source_type', 'identifier', 'period_type', 'period_start', 'period_end', 
@@ -148,7 +157,13 @@ async def import_with_copy(
     filtered_df['source_type'] = 'csv'  # Since we're importing from CSV files
     filtered_df['identifier'] = filtered_df['bmu_id']
     filtered_df['period_type'] = 'ACTUAL'
-    filtered_df['value_extracted'] = filtered_df['metered_volume']
+    # Apply sign based on import_export_ind: I=Import (negative), E=Export (positive)
+    import numpy as np
+    filtered_df['value_extracted'] = np.where(
+        filtered_df['import_export_ind'] == 'I',
+        -filtered_df['metered_volume'],
+        filtered_df['metered_volume']
+    )
     filtered_df['unit'] = 'MW'
     
     # Create JSONB data column with all original data

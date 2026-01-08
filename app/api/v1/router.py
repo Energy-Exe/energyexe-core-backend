@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     control_areas,
     countries,
     data_anomalies,
+    export,
     external_data_sources,
     generation,
     generation_units,
@@ -96,6 +97,9 @@ api_router.include_router(windfarm_reports.router, tags=["windfarm-reports"])
 
 # Report commentary (LLM-generated) endpoints
 api_router.include_router(report_commentary.router, prefix="/report-commentary", tags=["report-commentary"])
+
+# Data export endpoints
+api_router.include_router(export.router, prefix="/export", tags=["export"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])

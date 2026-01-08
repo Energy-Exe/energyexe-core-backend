@@ -5,8 +5,13 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional, Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 import pandas as pd
 from io import StringIO
+
+# UK timezone constants for DST handling
+UK_TZ = ZoneInfo('Europe/London')
+UTC_TZ = ZoneInfo('UTC')
 
 from sqlalchemy import select, update, and_, or_
 from sqlalchemy.dialects.postgresql import insert
@@ -52,28 +57,39 @@ class UnifiedGenerationService:
         
         for _, row in df.iterrows():
             # Calculate period start and end for 30-minute settlement period
+            # Settlement date is in UK local time, needs conversion to UTC
             settlement_date = pd.to_datetime(row['settlement_date'])
             period_number = int(row['settlement_period'])
-            
+
+            # Localize to UK timezone and convert to UTC for proper DST handling
+            # During BST: UK midnight = 23:00 UTC (previous day)
+            # During GMT: UK midnight = 00:00 UTC (same day)
+            uk_datetime = datetime(
+                settlement_date.year, settlement_date.month, settlement_date.day,
+                0, 0, 0, tzinfo=UK_TZ
+            )
+            utc_datetime = uk_datetime.astimezone(UTC_TZ)
+
             # Each period is 30 minutes: Period 1 = 00:00-00:30, Period 2 = 00:30-01:00, etc.
             minutes_start = (period_number - 1) * 30
-            period_start = settlement_date + timedelta(minutes=minutes_start)
+            period_start = utc_datetime + timedelta(minutes=minutes_start)
+            period_start = period_start.replace(tzinfo=None)  # Store as naive UTC
             period_end = period_start + timedelta(minutes=30)
             
             # Convert import/export indicator to sign
             value = float(row['metered_volume'])
             if row['import_export_ind'] == 'I':
                 value = -value  # Imports are negative
-            
+
             record = {
                 'source': 'ELEXON',
                 'source_type': 'csv',
-                'period_start': period_start.replace(tzinfo=timezone.utc),
-                'period_end': period_end.replace(tzinfo=timezone.utc),
+                'period_start': period_start.replace(tzinfo=timezone.utc) if period_start.tzinfo is None else period_start,
+                'period_end': period_end.replace(tzinfo=timezone.utc) if period_end.tzinfo is None else period_end,
                 'period_type': '30min',
                 'data': {
                     'bmu_id': row['bmu_id'].strip(),
-                    'settlement_date': row['settlement_date'].isoformat(),
+                    'settlement_date': row['settlement_date'].isoformat() if hasattr(row['settlement_date'], 'isoformat') else str(row['settlement_date']),
                     'settlement_run_type': row['settlement_run_type'],
                     'cdca_run_number': int(row['cdca_run_number']),
                     'settlement_period': period_number,
@@ -85,9 +101,9 @@ class UnifiedGenerationService:
                 'value_extracted': value,
                 'unit': 'MW'
             }
-            
+
             records_to_insert.append(record)
-        
+
         # Bulk insert
         if records_to_insert:
             stmt = insert(GenerationDataRaw).values(records_to_insert)
@@ -129,33 +145,44 @@ class UnifiedGenerationService:
         
         for _, row in df_chunk.iterrows():
             # Calculate period start and end for 30-minute settlement period
+            # Settlement date is in UK local time, needs conversion to UTC
             settlement_date = pd.to_datetime(row['settlement_date'])
             period_number = int(row['settlement_period'])
-            
+
+            # Localize to UK timezone and convert to UTC for proper DST handling
+            # During BST: UK midnight = 23:00 UTC (previous day)
+            # During GMT: UK midnight = 00:00 UTC (same day)
+            uk_datetime = datetime(
+                settlement_date.year, settlement_date.month, settlement_date.day,
+                0, 0, 0, tzinfo=UK_TZ
+            )
+            utc_datetime = uk_datetime.astimezone(UTC_TZ)
+
             # Each period is 30 minutes: Period 1 = 00:00-00:30, Period 2 = 00:30-01:00, etc.
             minutes_start = (period_number - 1) * 30
-            period_start = settlement_date + timedelta(minutes=minutes_start)
+            period_start = utc_datetime + timedelta(minutes=minutes_start)
+            period_start = period_start.replace(tzinfo=None)  # Store as naive UTC
             period_end = period_start + timedelta(minutes=30)
-            
+
             # Track first and last periods
             if first_period is None:
                 first_period = period_start
             last_period = period_end
-            
+
             # Convert import/export indicator to sign
             value = float(row['metered_volume'])
             if row['import_export_ind'] == 'I':
                 value = -value  # Imports are negative
-            
+
             record = {
                 'source': 'ELEXON',
                 'source_type': 'csv',
-                'period_start': period_start.replace(tzinfo=timezone.utc),
-                'period_end': period_end.replace(tzinfo=timezone.utc),
+                'period_start': period_start.replace(tzinfo=timezone.utc) if period_start.tzinfo is None else period_start,
+                'period_end': period_end.replace(tzinfo=timezone.utc) if period_end.tzinfo is None else period_end,
                 'period_type': '30min',
                 'data': {
                     'bmu_id': row['bmu_id'].strip(),
-                    'settlement_date': row['settlement_date'].isoformat(),
+                    'settlement_date': row['settlement_date'].isoformat() if hasattr(row['settlement_date'], 'isoformat') else str(row['settlement_date']),
                     'settlement_run_type': row['settlement_run_type'],
                     'cdca_run_number': int(row['cdca_run_number']),
                     'settlement_period': period_number,
@@ -167,7 +194,7 @@ class UnifiedGenerationService:
                 'value_extracted': value,
                 'unit': 'MW'
             }
-            
+
             records_to_insert.append(record)
             
             # Insert in batches to avoid parameter limit
@@ -351,16 +378,28 @@ class UnifiedGenerationService:
         
         elif source == 'ELEXON':
             # Handle both API and CSV formats
+            # Settlement date is in UK local time, needs conversion to UTC
             if 'settlement_date' in item:
                 date = pd.to_datetime(item['settlement_date'])
                 period = int(item['settlement_period'])
+
+                # Localize to UK timezone and convert to UTC for proper DST handling
+                uk_datetime = datetime(
+                    date.year, date.month, date.day,
+                    0, 0, 0, tzinfo=UK_TZ
+                )
+                utc_datetime = uk_datetime.astimezone(UTC_TZ)
+
+                # Calculate period start in UTC
+                minutes_start = (period - 1) * 30
+                period_start = utc_datetime + timedelta(minutes=minutes_start)
+                period_start = period_start.replace(tzinfo=None)  # Store as naive UTC
             else:
                 date = pd.to_datetime(item.get('timestamp'))
                 period = item.get('period', 1)
-            
-            minutes_start = (period - 1) * 30
-            period_start = date + timedelta(minutes=minutes_start)
-            
+                minutes_start = (period - 1) * 30
+                period_start = date + timedelta(minutes=minutes_start)
+
             return {
                 'start': period_start,
                 'end': period_start + timedelta(minutes=30),

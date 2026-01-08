@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
@@ -135,12 +136,27 @@ class ElexonClient:
 
                     df = df.rename(columns=column_mapping)
 
-                    # Convert settlement date and period to timestamp
+                    # Convert settlement date and period to UTC timestamp
+                    # Handles UK DST correctly:
+                    # - Normal days: 48 settlement periods
+                    # - Spring forward (March): 46 periods (clock skips 01:00-02:00)
+                    # - Fall back (October): 50 periods (clock repeats 01:00-02:00)
                     if "settlement_date" in df.columns and "settlement_period" in df.columns:
-                        # Each settlement period is 30 minutes, starting from 00:00
-                        df["timestamp"] = pd.to_datetime(df["settlement_date"]) + pd.to_timedelta(
+                        # Parse dates and localize to UK timezone (Europe/London)
+                        # This correctly handles BST (UTC+1) vs GMT (UTC+0)
+                        uk_dates = pd.to_datetime(df["settlement_date"]).dt.tz_localize(
+                            "Europe/London", ambiguous="infer", nonexistent="shift_forward"
+                        )
+                        # Convert UK midnight to UTC (this gives the actual UTC time
+                        # when the settlement day starts in UK)
+                        utc_dates = uk_dates.dt.tz_convert("UTC")
+                        # Add settlement period offset (period 1 = 00:00, each period is 30 min)
+                        # Adding in UTC avoids DST complications
+                        df["timestamp"] = utc_dates + pd.to_timedelta(
                             (df["settlement_period"] - 1) * 30, unit="minutes"
                         )
+                        # Remove timezone info and format as ISO string
+                        df["timestamp"] = df["timestamp"].dt.tz_localize(None)
                         df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%dT%H:%M:%S")
 
                     # Convert value to float and handle nulls

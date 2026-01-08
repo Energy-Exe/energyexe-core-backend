@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 import numpy as np
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete, func
@@ -426,32 +427,109 @@ class DailyGenerationProcessor:
 
         return hourly_records
 
+    def _calculate_correct_elexon_hour(self, record: GenerationDataRaw) -> datetime:
+        """Calculate correct UTC hour from settlement_date + settlement_period.
+
+        Handles UK DST correctly:
+        - During BST (summer): UK midnight = 23:00 UTC previous day
+        - During GMT (winter): UK midnight = 00:00 UTC same day
+
+        Falls back to period_start if JSONB fields are missing.
+        """
+        UK_TZ = ZoneInfo('Europe/London')
+        UTC_TZ = ZoneInfo('UTC')
+
+        if record.data and 'settlement_date' in record.data and 'settlement_period' in record.data:
+            settlement_date = str(record.data['settlement_date'])
+            settlement_period = int(record.data['settlement_period'])
+
+            # Parse settlement date (supports YYYYMMDD and ISO formats)
+            if len(settlement_date) == 8:  # YYYYMMDD format
+                year = int(settlement_date[:4])
+                month = int(settlement_date[4:6])
+                day = int(settlement_date[6:8])
+            else:  # ISO format (YYYY-MM-DD...)
+                parts = settlement_date[:10].split('-')
+                year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+
+            # Create UK midnight and convert to UTC
+            uk_midnight = datetime(year, month, day, 0, 0, 0, tzinfo=UK_TZ)
+            utc_midnight = uk_midnight.astimezone(UTC_TZ)
+
+            # Add settlement period offset (SP 1 = 00:00-00:30, each SP is 30 min)
+            utc_timestamp = utc_midnight + timedelta(minutes=(settlement_period - 1) * 30)
+
+            # Floor to hour boundary
+            return utc_timestamp.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+
+        # Fallback to period_start (for data without JSONB fields)
+        period_start = record.period_start
+        if period_start.tzinfo is not None:
+            period_start = period_start.replace(tzinfo=None)
+        return period_start.replace(minute=0, second=0, microsecond=0)
+
+    def _get_elexon_value_with_sign(self, record: GenerationDataRaw) -> float:
+        """Get the value from ELEXON record with correct sign based on import_export_ind.
+
+        Elexon uses import_export_ind to indicate direction:
+        - 'I' = Import (consuming from grid) = negative generation
+        - 'E' = Export (generating to grid) = positive generation
+
+        Reads from JSONB metered_volume if available, falls back to value_extracted.
+        """
+        # Try to get metered_volume from JSONB (more reliable)
+        if record.data and 'metered_volume' in record.data:
+            value = float(record.data['metered_volume'])
+            import_export_ind = record.data.get('import_export_ind', '')
+        else:
+            # Fallback to value_extracted (may already have sign applied or not)
+            value = float(record.value_extracted) if record.value_extracted is not None else 0.0
+            import_export_ind = record.data.get('import_export_ind', '') if record.data else ''
+
+        # Apply sign based on import_export_ind
+        if import_export_ind == 'I':
+            value = -abs(value)  # Imports are negative
+        elif import_export_ind == 'E':
+            value = abs(value)  # Exports are positive
+
+        return value
+
     def transform_elexon(self, raw_data: List[GenerationDataRaw]) -> List[HourlyRecord]:
         """Transform ELEXON data (30-min periods).
 
         ELEXON provides data in 30-minute settlement periods.
         Each value represents MWh generated in that 30-min period.
         To get hourly MWh, we sum the two 30-min periods.
+
+        Uses settlement_date and settlement_period from JSONB to calculate
+        correct UTC timestamps, handling UK DST properly.
+
+        Applies sign based on import_export_ind (I=Import=negative, E=Export=positive).
         """
 
         hourly_groups = defaultdict(list)
 
         for record in raw_data:
-            hour = record.period_start.replace(minute=0, second=0, microsecond=0)
+            # Calculate correct UTC hour from settlement_date + settlement_period
+            hour = self._calculate_correct_elexon_hour(record)
             key = (hour, record.identifier)
             hourly_groups[key].append(record)
 
         hourly_records = []
 
         for (hour, identifier), records in hourly_groups.items():
-            # Filter out records with null values
-            valid_records = [r for r in records if r.value_extracted is not None]
+            # Filter out records with null values (check JSONB metered_volume first)
+            valid_records = []
+            for r in records:
+                has_value = (r.data and 'metered_volume' in r.data and r.data['metered_volume'] is not None) or r.value_extracted is not None
+                if has_value:
+                    valid_records.append(r)
             if not valid_records:
                 continue  # Skip this hour if no valid data
 
             # Sum the MWh values from the 30-min periods to get hourly total
-            # Each record is MWh for 30 minutes, so sum gives MWh for the hour
-            generation_mwh = sum([float(r.value_extracted) for r in valid_records])
+            # Apply correct sign based on import_export_ind
+            generation_mwh = sum([self._get_elexon_value_with_sign(r) for r in valid_records])
 
             # Get capacity from generation units cache
             unit_key = f"ELEXON:{identifier}"
