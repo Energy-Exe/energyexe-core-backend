@@ -83,7 +83,8 @@ class DailyGenerationProcessor:
         date: datetime,
         sources: Optional[List[str]] = None,
         skip_load_units: bool = False,
-        skip_commit: bool = False
+        skip_commit: bool = False,
+        windfarm_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """Process all data for a specific day.
 
@@ -92,6 +93,7 @@ class DailyGenerationProcessor:
             sources: List of sources to process
             skip_load_units: Skip loading generation units (for batch processing)
             skip_commit: Skip committing (for batch processing - commit will be done externally)
+            windfarm_id: Optional windfarm ID to filter data (only process this windfarm's data)
         """
 
         # Ensure date is at start of day in UTC
@@ -114,7 +116,7 @@ class DailyGenerationProcessor:
         for source in sources:
             try:
                 source_result = await self.process_source_for_day(
-                    source, day_start, day_end
+                    source, day_start, day_end, windfarm_id=windfarm_id
                 )
                 results[source] = source_result
 
@@ -260,14 +262,22 @@ class DailyGenerationProcessor:
         self,
         source: str,
         day_start: datetime,
-        day_end: datetime
+        day_end: datetime,
+        windfarm_id: Optional[int] = None
     ) -> Dict[str, Any]:
-        """Process a single source for a specific day."""
+        """Process a single source for a specific day.
 
-        logger.info(f"Processing {source} for {day_start.date()}")
+        Args:
+            source: Data source (e.g., 'ELEXON', 'ENTSOE')
+            day_start: Start of day (UTC)
+            day_end: End of day (UTC)
+            windfarm_id: Optional windfarm ID to filter data
+        """
 
-        # Fetch raw data for the day
-        raw_data = await self.fetch_raw_data(source, day_start, day_end)
+        logger.info(f"Processing {source} for {day_start.date()}" + (f" (windfarm_id={windfarm_id})" if windfarm_id else ""))
+
+        # Fetch raw data for the day (filtered by windfarm if specified)
+        raw_data = await self.fetch_raw_data(source, day_start, day_end, windfarm_id=windfarm_id)
 
         if not raw_data:
             logger.info(f"No data found for {source} on {day_start.date()}")
@@ -283,8 +293,9 @@ class DailyGenerationProcessor:
             return {'processed': 0, 'raw_records': len(raw_data)}
 
         # Clear existing data for this day/source (idempotent)
+        # Only clear data for the specific windfarm if filtering
         if not self.dry_run:
-            await self.clear_existing_data(source, day_start, day_end)
+            await self.clear_existing_data(source, day_start, day_end, windfarm_id=windfarm_id)
 
         # Save hourly records
         saved_count = 0
@@ -303,9 +314,26 @@ class DailyGenerationProcessor:
         self,
         source: str,
         day_start: datetime,
-        day_end: datetime
+        day_end: datetime,
+        windfarm_id: Optional[int] = None
     ) -> List[GenerationDataRaw]:
-        """Fetch raw data for a specific source and day."""
+        """Fetch raw data for a specific source and day.
+
+        Args:
+            source: Data source (e.g., 'ELEXON', 'ENTSOE')
+            day_start: Start of day (UTC)
+            day_end: End of day (UTC)
+            windfarm_id: Optional windfarm ID to filter data by its generation unit identifiers
+        """
+
+        # Get identifiers for windfarm filtering if specified
+        identifiers = None
+        if windfarm_id:
+            identifiers = await self._get_windfarm_identifiers(windfarm_id, source)
+            if not identifiers:
+                logger.warning(f"No generation units found for windfarm {windfarm_id} with source {source}")
+                return []
+            logger.debug(f"Filtering by identifiers: {identifiers}")
 
         # For monthly sources, we need to check if the month contains this day
         if source == 'ENERGISTYRELSEN':
@@ -314,35 +342,49 @@ class DailyGenerationProcessor:
             month_end = (month_start + timedelta(days=32)).replace(day=1)
 
             logger.debug(f"Fetching {source} data for month {month_start.date()} to {month_end.date()}")
-            result = await self.db.execute(
-                select(GenerationDataRaw)
-                .where(
-                    and_(
-                        GenerationDataRaw.source == source,
-                        GenerationDataRaw.period_start >= month_start,
-                        GenerationDataRaw.period_start < month_end
-                    )
+            query = select(GenerationDataRaw).where(
+                and_(
+                    GenerationDataRaw.source == source,
+                    GenerationDataRaw.period_start >= month_start,
+                    GenerationDataRaw.period_start < month_end
                 )
             )
+            if identifiers:
+                query = query.where(GenerationDataRaw.identifier.in_(identifiers))
+            result = await self.db.execute(query)
         else:
             # Fetch data for the specific day
             logger.debug(f"Fetching {source} data for {day_start} to {day_end}")
-            result = await self.db.execute(
-                select(GenerationDataRaw)
-                .where(
-                    and_(
-                        GenerationDataRaw.source == source,
-                        GenerationDataRaw.period_start >= day_start,
-                        GenerationDataRaw.period_start < day_end
-                    )
+            query = select(GenerationDataRaw).where(
+                and_(
+                    GenerationDataRaw.source == source,
+                    GenerationDataRaw.period_start >= day_start,
+                    GenerationDataRaw.period_start < day_end
                 )
-                .order_by(GenerationDataRaw.period_start, GenerationDataRaw.identifier)
             )
+            if identifiers:
+                query = query.where(GenerationDataRaw.identifier.in_(identifiers))
+            query = query.order_by(GenerationDataRaw.period_start, GenerationDataRaw.identifier)
+            result = await self.db.execute(query)
 
         logger.debug(f"Query executed, fetching all records...")
         records = result.scalars().all()
         logger.debug(f"Fetched {len(records)} records")
         return records
+
+    async def _get_windfarm_identifiers(self, windfarm_id: int, source: str) -> List[str]:
+        """Get generation unit identifiers (codes) for a specific windfarm and source."""
+        result = await self.db.execute(
+            select(GenerationUnit.code)
+            .where(
+                and_(
+                    GenerationUnit.windfarm_id == windfarm_id,
+                    GenerationUnit.source == source
+                )
+            )
+        )
+        codes = result.scalars().all()
+        return [code for code in codes if code]
 
     def transform_source_data(
         self,
@@ -434,14 +476,33 @@ class DailyGenerationProcessor:
         - During BST (summer): UK midnight = 23:00 UTC previous day
         - During GMT (winter): UK midnight = 00:00 UTC same day
 
-        Falls back to period_start if JSONB fields are missing.
+        Falls back to period_start if JSONB fields are missing or invalid.
         """
         UK_TZ = ZoneInfo('Europe/London')
         UTC_TZ = ZoneInfo('UTC')
 
         if record.data and 'settlement_date' in record.data and 'settlement_period' in record.data:
-            settlement_date = str(record.data['settlement_date'])
-            settlement_period = int(record.data['settlement_period'])
+            settlement_date_raw = record.data['settlement_date']
+            settlement_period_raw = record.data['settlement_period']
+
+            # Handle None or 'None' string values - fall back to period_start
+            if settlement_date_raw is None or settlement_date_raw == 'None' or \
+               settlement_period_raw is None or settlement_period_raw == 'None':
+                # Fall back to period_start
+                period_start = record.period_start
+                if period_start.tzinfo is not None:
+                    period_start = period_start.replace(tzinfo=None)
+                return period_start.replace(minute=0, second=0, microsecond=0)
+
+            settlement_date = str(settlement_date_raw)
+            try:
+                settlement_period = int(settlement_period_raw)
+            except (ValueError, TypeError):
+                # Invalid settlement_period - fall back to period_start
+                period_start = record.period_start
+                if period_start.tzinfo is not None:
+                    period_start = period_start.replace(tzinfo=None)
+                return period_start.replace(minute=0, second=0, microsecond=0)
 
             # Parse settlement date (supports YYYYMMDD and ISO formats)
             if len(settlement_date) == 8:  # YYYYMMDD format
@@ -669,25 +730,38 @@ class DailyGenerationProcessor:
         self,
         source: str,
         day_start: datetime,
-        day_end: datetime
+        day_end: datetime,
+        windfarm_id: Optional[int] = None
     ):
-        """Clear existing data for re-processing (idempotent)."""
+        """Clear existing data for re-processing (idempotent).
+
+        Args:
+            source: Data source
+            day_start: Start of day (UTC)
+            day_end: End of day (UTC)
+            windfarm_id: Optional windfarm ID to limit deletion to specific windfarm
+        """
+
+        # Build delete query
+        conditions = [
+            GenerationData.source == source,
+            GenerationData.hour >= day_start,
+            GenerationData.hour < day_end
+        ]
+
+        # Add windfarm filter if specified
+        if windfarm_id:
+            conditions.append(GenerationData.windfarm_id == windfarm_id)
 
         result = await self.db.execute(
             delete(GenerationData)
-            .where(
-                and_(
-                    GenerationData.source == source,
-                    GenerationData.hour >= day_start,
-                    GenerationData.hour < day_end
-                )
-            )
+            .where(and_(*conditions))
             .returning(GenerationData.id)
         )
 
         deleted_count = len(result.all())
         if deleted_count > 0:
-            logger.info(f"Cleared {deleted_count} existing records for {source}")
+            logger.info(f"Cleared {deleted_count} existing records for {source}" + (f" (windfarm_id={windfarm_id})" if windfarm_id else ""))
 
     async def save_hourly_records(
         self,

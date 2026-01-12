@@ -560,7 +560,8 @@ class DataAnomalyService:
                         date=current_date,
                         sources=sources,
                         skip_load_units=True,  # Already loaded
-                        skip_commit=False  # Commit after each day to avoid conflicts
+                        skip_commit=False,  # Commit after each day to avoid conflicts
+                        windfarm_id=windfarm_id  # Filter by windfarm if specified
                     )
 
                     # Track stats

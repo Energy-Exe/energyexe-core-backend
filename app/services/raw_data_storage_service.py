@@ -724,12 +724,27 @@ class RawDataStorageService:
             settlement_date = row.get("settlementDate")
             if isinstance(settlement_date, datetime):
                 settlement_date = settlement_date.isoformat()
+            elif pd.isna(settlement_date):
+                settlement_date = None
+
+            # Safely extract values, handling NaN/None properly
+            level_from = None
+            if "levelFrom" in row and pd.notna(row["levelFrom"]):
+                level_from = float(row["levelFrom"])
+
+            level_to = None
+            if "levelTo" in row and pd.notna(row["levelTo"]):
+                level_to = float(row["levelTo"])
+
+            settlement_period = None
+            if "settlementPeriod" in row and pd.notna(row["settlementPeriod"]):
+                settlement_period = int(row["settlementPeriod"])
 
             data = {
                 "bm_unit": unit.code,
-                "level_from": float(row["levelFrom"]) if "levelFrom" in row else None,
-                "level_to": float(row["levelTo"]) if "levelTo" in row else None,
-                "settlement_period": int(row["settlementPeriod"]) if "settlementPeriod" in row else None,
+                "level_from": level_from,
+                "level_to": level_to,
+                "settlement_period": settlement_period,
                 "settlement_date": settlement_date,
                 "fetch_metadata": {
                     "fetched_by_user_id": user_id,
