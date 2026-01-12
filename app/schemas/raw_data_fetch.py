@@ -26,13 +26,18 @@ class UnifiedRawDataFetchRequest(BaseModel):
     )
     start_date: datetime = Field(..., description="Start date for data fetch")
     end_date: datetime = Field(..., description="End date for data fetch")
+    process_to_hourly: bool = Field(
+        default=False,
+        description="If True, automatically aggregate raw data to hourly resolution after fetching"
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "source": "ENTSOE",
                 "start_date": "2025-10-18T00:00:00Z",
-                "end_date": "2025-10-19T23:59:59Z"
+                "end_date": "2025-10-19T23:59:59Z",
+                "process_to_hourly": True
             }
         }
 
@@ -79,6 +84,16 @@ class RawDataFetchJob(BaseModel):
     result: Optional[RawDataFetchResponse] = None
 
 
+class AggregationResult(BaseModel):
+    """Result of hourly aggregation processing."""
+
+    success: bool
+    source: str
+    raw_records_processed: int = 0
+    hourly_records_created: int = 0
+    errors: List[str] = Field(default_factory=list)
+
+
 class UnifiedRawDataFetchResponse(BaseModel):
     """Response from unified raw data fetch (auto-detected sources)."""
 
@@ -101,6 +116,10 @@ class UnifiedRawDataFetchResponse(BaseModel):
         description="Overall summary across all sources"
     )
     errors: List[str] = Field(default_factory=list)
+    aggregation_results: Optional[List[AggregationResult]] = Field(
+        default=None,
+        description="Results of hourly aggregation if process_to_hourly was True"
+    )
 
 
 class FileUploadRequest(BaseModel):

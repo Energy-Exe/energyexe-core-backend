@@ -43,13 +43,15 @@ async def fetch_raw_data_unified(
     Examples:
     - Fetch specific windfarms: {"windfarm_ids": [1,2,3], "start_date": "...", "end_date": "..."}
     - Fetch all ENTSOE data: {"source": "ENTSOE", "start_date": "...", "end_date": "..."}
+    - Fetch and aggregate: {"windfarm_ids": [1,2,3], "start_date": "...", "end_date": "...", "process_to_hourly": true}
 
     This will:
     1. Determine windfarms (from IDs or by source)
     2. Fetch data from each source's external API
     3. Transform the data to match generation_data_raw format
     4. Store or update records in the database (source_type='api')
-    5. Return summary of what was stored/updated per source
+    5. Optionally aggregate raw data to hourly resolution (if process_to_hourly=true)
+    6. Return summary of what was stored/updated per source
     """
     # Validate input
     if not request.windfarm_ids and not request.source:
@@ -67,6 +69,7 @@ async def fetch_raw_data_unified(
             end_date=request.end_date,
             user_id=current_user.id,
             source_filter=request.source,
+            process_to_hourly=request.process_to_hourly,
         )
         return result
     except Exception as e:

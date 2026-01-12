@@ -39,6 +39,7 @@ class RawDataStorageService:
         end_date: datetime,
         user_id: int,
         source_filter: Optional[str] = None,
+        process_to_hourly: bool = False,
     ) -> Dict[str, Any]:
         """
         Fetch data from all available sources for the given windfarms.
@@ -54,6 +55,7 @@ class RawDataStorageService:
             user_id: User triggering the fetch
             source_filter: Optional source name (e.g., 'ENTSOE'). If provided without windfarm_ids,
                           fetches all windfarms for this source.
+            process_to_hourly: If True, aggregate raw data to hourly resolution after fetching.
         """
         from sqlalchemy.orm import selectinload
 
@@ -190,6 +192,48 @@ class RawDataStorageService:
                 logger.error(f"Error fetching {source} data: {str(e)}")
                 all_errors.append(error_msg)
 
+        # Process to hourly if requested
+        aggregation_results = None
+        if process_to_hourly and total_stored > 0:
+            from app.services.unified_generation_service import UnifiedGenerationService
+            from app.schemas.raw_data_fetch import AggregationResult
+
+            aggregation_results = []
+            generation_service = UnifiedGenerationService(self.db)
+
+            for source in sources_map.keys():
+                try:
+                    logger.info(f"Aggregating {source} data to hourly resolution")
+                    agg_result = await generation_service.process_to_hourly(
+                        source=source,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+
+                    aggregation_results.append(AggregationResult(
+                        success=agg_result.get('success', False),
+                        source=source,
+                        raw_records_processed=agg_result.get('raw_records_processed', 0),
+                        hourly_records_created=agg_result.get('hourly_records_created', 0),
+                        errors=[],
+                    ))
+                    logger.info(
+                        f"Aggregated {source}: {agg_result.get('raw_records_processed', 0)} raw -> "
+                        f"{agg_result.get('hourly_records_created', 0)} hourly records"
+                    )
+
+                except Exception as e:
+                    error_msg = f"Aggregation error for {source}: {str(e)}"
+                    logger.error(error_msg)
+                    aggregation_results.append(AggregationResult(
+                        success=False,
+                        source=source,
+                        raw_records_processed=0,
+                        hourly_records_created=0,
+                        errors=[str(e)],
+                    ))
+                    all_errors.append(error_msg)
+
         from app.schemas.raw_data_fetch import UnifiedRawDataFetchResponse
         return UnifiedRawDataFetchResponse(
             success=len(all_errors) == 0,
@@ -208,6 +252,7 @@ class RawDataStorageService:
                 "sources_with_data": len([r for r in results_by_source.values() if r.records_stored > 0 or r.records_updated > 0]),
             },
             errors=all_errors,
+            aggregation_results=aggregation_results,
         )
 
     async def fetch_and_store_entsoe(
@@ -390,12 +435,19 @@ class RawDataStorageService:
         user_id: int,
         api_metadata: Dict,
     ) -> Tuple[int, int]:
-        """Store ENTSOE records in generation_data_raw using bulk upsert."""
+        """Store ENTSOE records in generation_data_raw using bulk upsert.
+
+        Records are inserted in batches to avoid PostgreSQL's parameter limit (65,535).
+        """
         from sqlalchemy.dialects.postgresql import insert
         from decimal import Decimal
 
         if df.empty:
             return 0, 0
+
+        # Batch size to avoid PostgreSQL parameter limit
+        # Each record has ~10 columns, so 1000 records = ~10,000 parameters (well under 65,535)
+        BATCH_SIZE = 1000
 
         # Convert api_metadata to JSON-serializable format
         serializable_metadata = self._make_json_serializable(api_metadata)
@@ -462,32 +514,38 @@ class RawDataStorageService:
         if not records_to_insert:
             return 0, 0
 
-        # Use PostgreSQL bulk upsert with unique constraint
+        # Use PostgreSQL bulk upsert in batches to avoid parameter limit
+        total_records = len(records_to_insert)
+        records_stored = 0
+
         try:
-            stmt = insert(GenerationDataRaw).values(records_to_insert)
+            for i in range(0, total_records, BATCH_SIZE):
+                batch = records_to_insert[i:i + BATCH_SIZE]
 
-            # Use upsert to handle existing records
-            stmt = stmt.on_conflict_do_update(
-                index_elements=['source', 'identifier', 'period_start'],
-                set_={
-                    'value_extracted': stmt.excluded.value_extracted,
-                    'data': stmt.excluded.data,
-                    'updated_at': datetime.now(timezone.utc),
-                    'period_end': stmt.excluded.period_end,
-                    'period_type': stmt.excluded.period_type,
-                    'unit': stmt.excluded.unit,
-                }
-            )
+                stmt = insert(GenerationDataRaw).values(batch)
 
-            result = await self.db.execute(stmt)
+                # Use upsert to handle existing records
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['source', 'identifier', 'period_start'],
+                    set_={
+                        'value_extracted': stmt.excluded.value_extracted,
+                        'data': stmt.excluded.data,
+                        'updated_at': datetime.now(timezone.utc),
+                        'period_end': stmt.excluded.period_end,
+                        'period_type': stmt.excluded.period_type,
+                        'unit': stmt.excluded.unit,
+                    }
+                )
+
+                await self.db.execute(stmt)
+                records_stored += len(batch)
+
+                logger.debug(f"Batch {i // BATCH_SIZE + 1}: upserted {len(batch)} records for unit {unit.code}")
+
             await self.db.commit()
+            logger.info(f"Bulk upserted {total_records} records for unit {unit.code} in {(total_records + BATCH_SIZE - 1) // BATCH_SIZE} batches")
 
-            records_stored = len(records_to_insert)
-            records_updated = 0
-
-            logger.info(f"Bulk upserted {len(records_to_insert)} records for unit {unit.code}")
-
-            return records_stored, records_updated
+            return records_stored, 0
 
         except Exception as e:
             logger.error(f"Error storing records for unit {unit.code}: {str(e)}")
@@ -625,12 +683,19 @@ class RawDataStorageService:
         user_id: int,
         api_metadata: Dict,
     ) -> Tuple[int, int]:
-        """Store ELEXON records in generation_data_raw using bulk upsert."""
+        """Store ELEXON records in generation_data_raw using bulk upsert.
+
+        Records are inserted in batches to avoid PostgreSQL's parameter limit (65,535).
+        """
         from sqlalchemy.dialects.postgresql import insert
         from decimal import Decimal
 
         if df.empty:
             return 0, 0
+
+        # Batch size to avoid PostgreSQL parameter limit
+        # Each record has ~10 columns, so 1000 records = ~10,000 parameters (well under 65,535)
+        BATCH_SIZE = 1000
 
         # Convert api_metadata to JSON-serializable format
         serializable_metadata = self._make_json_serializable(api_metadata)
@@ -692,32 +757,38 @@ class RawDataStorageService:
         if not records_to_insert:
             return 0, 0
 
-        # Use PostgreSQL bulk upsert (now that unique constraint exists)
+        # Use PostgreSQL bulk upsert in batches to avoid parameter limit
+        total_records = len(records_to_insert)
+        records_stored = 0
+
         try:
-            stmt = insert(GenerationDataRaw).values(records_to_insert)
+            for i in range(0, total_records, BATCH_SIZE):
+                batch = records_to_insert[i:i + BATCH_SIZE]
 
-            # Use upsert to handle existing records
-            stmt = stmt.on_conflict_do_update(
-                index_elements=['source', 'identifier', 'period_start'],
-                set_={
-                    'value_extracted': stmt.excluded.value_extracted,
-                    'data': stmt.excluded.data,
-                    'updated_at': datetime.now(timezone.utc),
-                    'period_end': stmt.excluded.period_end,
-                    'period_type': stmt.excluded.period_type,
-                    'unit': stmt.excluded.unit,
-                }
-            )
+                stmt = insert(GenerationDataRaw).values(batch)
 
-            result = await self.db.execute(stmt)
+                # Use upsert to handle existing records
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['source', 'identifier', 'period_start'],
+                    set_={
+                        'value_extracted': stmt.excluded.value_extracted,
+                        'data': stmt.excluded.data,
+                        'updated_at': datetime.now(timezone.utc),
+                        'period_end': stmt.excluded.period_end,
+                        'period_type': stmt.excluded.period_type,
+                        'unit': stmt.excluded.unit,
+                    }
+                )
+
+                await self.db.execute(stmt)
+                records_stored += len(batch)
+
+                logger.debug(f"Batch {i // BATCH_SIZE + 1}: upserted {len(batch)} records for unit {unit.code}")
+
             await self.db.commit()
+            logger.info(f"Bulk upserted {total_records} records for unit {unit.code} in {(total_records + BATCH_SIZE - 1) // BATCH_SIZE} batches")
 
-            logger.info(f"Bulk upserted {len(records_to_insert)} records for unit {unit.code}")
-
-            records_stored = len(records_to_insert)
-            records_updated = 0
-
-            return records_stored, records_updated
+            return records_stored, 0
 
         except Exception as e:
             logger.error(f"Error storing records for unit {unit.code}: {str(e)}")
