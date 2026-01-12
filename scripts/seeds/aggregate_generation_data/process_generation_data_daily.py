@@ -414,7 +414,10 @@ class DailyGenerationProcessor:
         hourly_groups = defaultdict(list)
 
         for record in raw_data:
+            # Ensure UTC timezone for PostgreSQL TIMESTAMP WITH TIME ZONE
             hour = record.period_start.replace(minute=0, second=0, microsecond=0)
+            if hour.tzinfo is None:
+                hour = hour.replace(tzinfo=ZoneInfo('UTC'))
             key = (hour, record.identifier)
             hourly_groups[key].append(record)
 
@@ -488,10 +491,10 @@ class DailyGenerationProcessor:
             # Handle None or 'None' string values - fall back to period_start
             if settlement_date_raw is None or settlement_date_raw == 'None' or \
                settlement_period_raw is None or settlement_period_raw == 'None':
-                # Fall back to period_start
+                # Fall back to period_start - ensure UTC timezone
                 period_start = record.period_start
-                if period_start.tzinfo is not None:
-                    period_start = period_start.replace(tzinfo=None)
+                if period_start.tzinfo is None:
+                    period_start = period_start.replace(tzinfo=ZoneInfo('UTC'))
                 return period_start.replace(minute=0, second=0, microsecond=0)
 
             settlement_date = str(settlement_date_raw)
@@ -500,8 +503,8 @@ class DailyGenerationProcessor:
             except (ValueError, TypeError):
                 # Invalid settlement_period - fall back to period_start
                 period_start = record.period_start
-                if period_start.tzinfo is not None:
-                    period_start = period_start.replace(tzinfo=None)
+                if period_start.tzinfo is None:
+                    period_start = period_start.replace(tzinfo=ZoneInfo('UTC'))
                 return period_start.replace(minute=0, second=0, microsecond=0)
 
             # Parse settlement date (supports YYYYMMDD and ISO formats)
@@ -520,13 +523,13 @@ class DailyGenerationProcessor:
             # Add settlement period offset (SP 1 = 00:00-00:30, each SP is 30 min)
             utc_timestamp = utc_midnight + timedelta(minutes=(settlement_period - 1) * 30)
 
-            # Floor to hour boundary
-            return utc_timestamp.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+            # Floor to hour boundary - keep UTC tzinfo for PostgreSQL TIMESTAMP WITH TIME ZONE
+            return utc_timestamp.replace(minute=0, second=0, microsecond=0)
 
         # Fallback to period_start (for data without JSONB fields)
         period_start = record.period_start
-        if period_start.tzinfo is not None:
-            period_start = period_start.replace(tzinfo=None)
+        if period_start.tzinfo is None:
+            period_start = period_start.replace(tzinfo=ZoneInfo('UTC'))
         return period_start.replace(minute=0, second=0, microsecond=0)
 
     def _get_elexon_value_with_sign(self, record: GenerationDataRaw) -> float:
@@ -627,6 +630,8 @@ class DailyGenerationProcessor:
             # Note: Check if timezone conversion is needed
             # If data was imported in UTC+8, convert to UTC
             hour = record.period_start.replace(minute=0, second=0, microsecond=0)
+            if hour.tzinfo is None:
+                hour = hour.replace(tzinfo=ZoneInfo('UTC'))
 
             # Get raw capacity from TAIPOWER data (store separately)
             raw_capacity_mw = None
@@ -672,6 +677,8 @@ class DailyGenerationProcessor:
                 continue
 
             hour = record.period_start.replace(minute=0, second=0, microsecond=0)
+            if hour.tzinfo is None:
+                hour = hour.replace(tzinfo=ZoneInfo('UTC'))
             key = (record.identifier, hour)
 
             if key not in hourly_data:

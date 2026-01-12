@@ -722,6 +722,16 @@ async def main():
             end_date,
             resume=args.resume
         )
+
+        # Exit with non-zero code if any days/months failed
+        # This ensures the import job status reflects aggregation failures
+        if processor.failed_days > 0 or processor.failed_months > 0:
+            logger.warning(
+                f"Aggregation completed with failures: "
+                f"{processor.failed_days} failed days, {processor.failed_months} failed months"
+            )
+            sys.exit(1)
+
     except KeyboardInterrupt:
         logger.info("Processing interrupted by user")
         processor.save_results()
