@@ -530,10 +530,11 @@ class UnifiedGenerationService:
         hourly_groups = defaultdict(list)
         
         for record in raw_records:
-            if record.period_type == 'hourly':
+            # Support both 'hourly' (ENTSOE) and 'hour' (NVE, TAIPOWER) period types
+            if record.period_type in ('hourly', 'hour'):
                 hour = record.period_start.replace(minute=0, second=0, microsecond=0)
                 hourly_groups[(hour, record.identifier)].append(record)
-            
+
             elif record.period_type in ['15min', '30min']:
                 hour = record.period_start.replace(minute=0, second=0, microsecond=0)
                 hourly_groups[(hour, record.identifier)].append(record)
@@ -568,7 +569,8 @@ class UnifiedGenerationService:
         # Calculate hourly value based on resolution
         first_record = raw_records[0]
         
-        if first_record.period_type == 'hourly':
+        # Support both 'hourly' (ENTSOE) and 'hour' (NVE, TAIPOWER) period types
+        if first_record.period_type in ('hourly', 'hour'):
             generation_mwh = float(first_record.value_extracted)
             quality_flag = 'measured'
             quality_score = 1.0

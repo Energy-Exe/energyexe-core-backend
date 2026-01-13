@@ -1,0 +1,60 @@
+{
+  "summary": {
+    "start_time": "2026-01-13T01:57:41.902937",
+    "end_time": "2026-01-13T01:58:13.325859",
+    "total_days": 4,
+    "processed_days": 4,
+    "failed_days": 0,
+    "skipped_days": 0,
+    "total_raw_records": 0,
+    "total_hourly_records": 0,
+    "source": "ELEXON",
+    "dry_run": false
+  },
+  "daily_results": [
+    {
+      "date": "2025-12-30",
+      "source": "ELEXON",
+      "status": "success",
+      "raw_records": 0,
+      "hourly_records": 0,
+      "processing_time_seconds": 11.63,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-01-13T01:57:41.933171"
+    },
+    {
+      "date": "2025-12-31",
+      "source": "ELEXON",
+      "status": "success",
+      "raw_records": 0,
+      "hourly_records": 0,
+      "processing_time_seconds": 5.47,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-01-13T01:57:53.564792"
+    },
+    {
+      "date": "2026-01-01",
+      "source": "ELEXON",
+      "status": "success",
+      "raw_records": 0,
+      "hourly_records": 0,
+      "processing_time_seconds": 6.38,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-01-13T01:57:59.031721"
+    },
+    {
+      "date": "2026-01-02",
+      "source": "ELEXON",
+      "status": "success",
+      "raw_records": 0,
+      "hourly_records": 0,
+      "processing_time_seconds": 7.92,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-01-13T01:58:05.410504"
+    }
+  ]
+}

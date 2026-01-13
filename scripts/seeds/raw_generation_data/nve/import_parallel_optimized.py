@@ -119,9 +119,15 @@ def process_nve_chunk(args: Tuple[pd.DataFrame, Dict, int, int, Dict]) -> List[D
 
             # NVE data is in Norwegian local time (Europe/Oslo timezone)
             # Convert to UTC for storage in the database
+            # Use ambiguous="infer" for fall-back DST (when 02:00-02:59 occurs twice)
+            # Use nonexistent="shift_forward" for spring-forward DST (when 02:00-02:59 doesn't exist)
             if timestamp.tzinfo is None:
                 # If naive, localize to Europe/Oslo then convert to UTC
-                timestamp = timestamp.tz_localize('Europe/Oslo').tz_convert('UTC')
+                timestamp = timestamp.tz_localize(
+                    'Europe/Oslo',
+                    ambiguous='infer',
+                    nonexistent='shift_forward'
+                ).tz_convert('UTC')
             elif timestamp.tzinfo != pd.Timestamp.now(tz='UTC').tzinfo:
                 # If already timezone-aware but not UTC, convert to UTC
                 timestamp = timestamp.tz_convert('UTC')
