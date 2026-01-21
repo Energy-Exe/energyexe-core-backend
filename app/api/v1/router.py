@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     admin,
+    alerts,
     audit_logs,
     auth,
     bidzones,
@@ -106,6 +107,9 @@ api_router.include_router(report_commentary.router, prefix="/report-commentary",
 
 # Data export endpoints
 api_router.include_router(export.router, prefix="/export", tags=["export"])
+
+# Alerts and notifications endpoints
+api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])

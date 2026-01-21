@@ -24,6 +24,19 @@ from .turbine_unit import TurbineUnit
 from .user import User
 from .user_feature import UserFeature, DEFAULT_FEATURES
 from .portfolio import Portfolio, PortfolioItem, UserFavorite, PortfolioType
+from .alert import (
+    AlertRule,
+    AlertTrigger,
+    Notification,
+    NotificationPreference,
+    AlertMetric,
+    AlertCondition,
+    AlertScope,
+    AlertSeverity,
+    AlertTriggerStatus,
+    NotificationChannel,
+    NotificationStatus,
+)
 from .windfarm import Windfarm
 from .windfarm_owner import WindfarmOwner
 from .ppa import PPA
@@ -62,6 +75,17 @@ __all__ = [
     "PortfolioItem",
     "UserFavorite",
     "PortfolioType",
+    "AlertRule",
+    "AlertTrigger",
+    "Notification",
+    "NotificationPreference",
+    "AlertMetric",
+    "AlertCondition",
+    "AlertScope",
+    "AlertSeverity",
+    "AlertTriggerStatus",
+    "NotificationChannel",
+    "NotificationStatus",
     "WeatherDataRaw",
     "WeatherData",
     "Windfarm",

@@ -64,6 +64,31 @@ from .portfolio import (
     PortfolioPerformance,
     PortfolioTypeEnum,
 )
+from .alert import (
+    AlertRuleCreate,
+    AlertRuleUpdate,
+    AlertRuleResponse,
+    AlertRuleListResponse,
+    AlertTriggerResponse,
+    AlertTriggerListResponse,
+    AlertTriggerStatusUpdate,
+    NotificationResponse,
+    NotificationListResponse,
+    NotificationMarkRead,
+    NotificationMarkAllRead,
+    NotificationPreferenceBase,
+    NotificationPreferenceUpdate,
+    NotificationPreferenceResponse,
+    AlertsSummary,
+    AlertsOverview,
+    AlertMetricEnum,
+    AlertConditionEnum,
+    AlertScopeEnum,
+    AlertSeverityEnum,
+    NotificationChannelEnum,
+    AlertTriggerStatusEnum,
+    NotificationStatusEnum,
+)
 
 __all__ = [
     # User schemas
@@ -135,6 +160,30 @@ __all__ = [
     "PortfolioSummary",
     "PortfolioPerformance",
     "PortfolioTypeEnum",
+    # Alert schemas
+    "AlertRuleCreate",
+    "AlertRuleUpdate",
+    "AlertRuleResponse",
+    "AlertRuleListResponse",
+    "AlertTriggerResponse",
+    "AlertTriggerListResponse",
+    "AlertTriggerStatusUpdate",
+    "NotificationResponse",
+    "NotificationListResponse",
+    "NotificationMarkRead",
+    "NotificationMarkAllRead",
+    "NotificationPreferenceBase",
+    "NotificationPreferenceUpdate",
+    "NotificationPreferenceResponse",
+    "AlertsSummary",
+    "AlertsOverview",
+    "AlertMetricEnum",
+    "AlertConditionEnum",
+    "AlertScopeEnum",
+    "AlertSeverityEnum",
+    "NotificationChannelEnum",
+    "AlertTriggerStatusEnum",
+    "NotificationStatusEnum",
 ]
 
 # Resolve forward references

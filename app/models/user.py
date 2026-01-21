@@ -57,6 +57,11 @@ class User(Base):
     )
     portfolios = relationship("Portfolio", back_populates="user", cascade="all, delete-orphan")
     favorites = relationship("UserFavorite", back_populates="user", cascade="all, delete-orphan")
+    alert_rules = relationship("AlertRule", back_populates="user", cascade="all, delete-orphan")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    notification_preferences = relationship(
+        "NotificationPreference", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         """String representation of User."""
