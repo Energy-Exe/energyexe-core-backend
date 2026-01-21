@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    admin,
     audit_logs,
     auth,
     bidzones,
@@ -18,6 +19,7 @@ from app.api.v1.endpoints import (
     import_jobs,
     market_balance_areas,
     owners,
+    portfolio,
     ppas,
     price_data,
     projects,
@@ -40,6 +42,7 @@ api_router = APIRouter()
 
 # Include all endpoint routers
 api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
+api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
 api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["audit-logs"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(countries.router, prefix="/countries", tags=["countries"])
@@ -70,6 +73,9 @@ api_router.include_router(price_data.router)
 
 # Comparison and analytics endpoints
 api_router.include_router(comparison.router, prefix="/comparison", tags=["comparison"])
+
+# Portfolio management endpoints
+api_router.include_router(portfolio.router, prefix="/portfolios", tags=["portfolios"])
 
 # Windfarm timeline and evolution endpoints
 api_router.include_router(windfarm_timeline.router, prefix="/windfarms", tags=["windfarm-timeline"])

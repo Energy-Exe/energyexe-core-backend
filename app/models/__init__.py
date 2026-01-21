@@ -11,6 +11,7 @@ from .price_data import PriceDataRaw, PriceData
 from .generation_unit import GenerationUnit
 from .weather_data import WeatherDataRaw, WeatherData
 from .report_commentary import ReportCommentary
+from .invitation import Invitation
 from .market_balance_area import MarketBalanceArea
 from .owner import Owner
 from .project import Project
@@ -21,6 +22,8 @@ from .substation_owner import SubstationOwner
 from .turbine_model import TurbineModel
 from .turbine_unit import TurbineUnit
 from .user import User
+from .user_feature import UserFeature, DEFAULT_FEATURES
+from .portfolio import Portfolio, PortfolioItem, UserFavorite, PortfolioType
 from .windfarm import Windfarm
 from .windfarm_owner import WindfarmOwner
 from .ppa import PPA
@@ -35,10 +38,12 @@ __all__ = [
     "AnomalyType",
     "AnomalyStatus",
     "AnomalySeverity",
+    "DEFAULT_FEATURES",
     "GenerationDataRaw",
     "GenerationData",
     "GenerationUnitMapping",
     "GenerationUnit",
+    "Invitation",
     "MarketBalanceArea",
     "Owner",
     "PriceDataRaw",
@@ -52,6 +57,11 @@ __all__ = [
     "TurbineModel",
     "TurbineUnit",
     "User",
+    "UserFeature",
+    "Portfolio",
+    "PortfolioItem",
+    "UserFavorite",
+    "PortfolioType",
     "WeatherDataRaw",
     "WeatherData",
     "Windfarm",

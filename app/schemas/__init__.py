@@ -24,15 +24,73 @@ from .generation_unit import (
 )
 from .market_balance_area import MarketBalanceArea, MarketBalanceAreaCreate, MarketBalanceAreaUpdate
 from .state import State, StateCreate, StateInDB, StateUpdate, StateWithCountry
-from .user import Token, TokenData, UserCreate, UserLogin, UserResponse, UserUpdate
+from .invitation import (
+    BulkInvitationCreate,
+    BulkInvitationResult,
+    InvitationAccept,
+    InvitationCreate,
+    InvitationResponse,
+    InvitationValidation,
+)
+from .user import (
+    ClientRegister,
+    EmailVerification,
+    ForgotPassword,
+    PendingUserResponse,
+    ResendVerification,
+    ResetPassword,
+    Token,
+    TokenData,
+    UserApproval,
+    UserCreate,
+    UserFeatureResponse,
+    UserFeatureUpdate,
+    UserLogin,
+    UserResponse,
+    UserResponseExtended,
+    UserUpdate,
+)
+from .portfolio import (
+    PortfolioCreate,
+    PortfolioUpdate,
+    PortfolioResponse,
+    PortfolioWithItems,
+    PortfolioItemCreate,
+    PortfolioItemResponse,
+    FavoriteCreate,
+    FavoriteResponse,
+    FavoriteListResponse,
+    PortfolioSummary,
+    PortfolioPerformance,
+    PortfolioTypeEnum,
+)
 
 __all__ = [
+    # User schemas
     "UserResponse",
+    "UserResponseExtended",
     "UserCreate",
     "UserUpdate",
     "UserLogin",
     "Token",
     "TokenData",
+    "ClientRegister",
+    "EmailVerification",
+    "ResendVerification",
+    "ForgotPassword",
+    "ResetPassword",
+    "UserApproval",
+    "UserFeatureUpdate",
+    "UserFeatureResponse",
+    "PendingUserResponse",
+    # Invitation schemas
+    "InvitationCreate",
+    "BulkInvitationCreate",
+    "InvitationAccept",
+    "InvitationResponse",
+    "InvitationValidation",
+    "BulkInvitationResult",
+    # Other schemas
     "Country",
     "CountryCreate",
     "CountryUpdate",
@@ -64,6 +122,19 @@ __all__ = [
     "ReaggregationResponse",
     "AnomalyListFilters",
     "AnomalyListResponse",
+    # Portfolio schemas
+    "PortfolioCreate",
+    "PortfolioUpdate",
+    "PortfolioResponse",
+    "PortfolioWithItems",
+    "PortfolioItemCreate",
+    "PortfolioItemResponse",
+    "FavoriteCreate",
+    "FavoriteResponse",
+    "FavoriteListResponse",
+    "PortfolioSummary",
+    "PortfolioPerformance",
+    "PortfolioTypeEnum",
 ]
 
 # Resolve forward references
