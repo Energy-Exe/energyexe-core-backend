@@ -12,14 +12,27 @@ from app.core.database import Base
 from app.core.deps import get_db
 from app.main import create_application
 
-# Import all models here to ensure they are registered on Base.metadata
-from app.models import audit_log, user  # noqa: F401
+# Import only auth-related models to avoid JSONB issues with SQLite
+# These models don't use JSONB columns and are safe for SQLite testing
+from app.models.user import User
+from app.models.audit_log import AuditLog
+from app.models.invitation import Invitation
+from app.models.user_feature import UserFeature
 
 # Force testing environment
 os.environ["TESTING"] = "true"
 
 # Use SQLite for testing
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+# Define tables that are safe for SQLite (no JSONB columns)
+# We'll only create these tables for testing
+AUTH_TEST_TABLES = [
+    User.__table__,
+    AuditLog.__table__,
+    Invitation.__table__,
+    UserFeature.__table__,
+]
 
 
 @pytest.fixture(scope="session")
@@ -40,15 +53,17 @@ async def test_engine():
         connect_args={"check_same_thread": False},
     )
 
-    # Create all tables
+    # Create only auth-related tables (avoid JSONB-using tables)
     async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+        for table in AUTH_TEST_TABLES:
+            await connection.run_sync(table.create, checkfirst=True)
 
     yield engine
 
-    # Drop all tables and dispose engine
+    # Drop only the tables we created
     async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.drop_all)
+        for table in reversed(AUTH_TEST_TABLES):
+            await connection.run_sync(table.drop, checkfirst=True)
     await engine.dispose()
 
 

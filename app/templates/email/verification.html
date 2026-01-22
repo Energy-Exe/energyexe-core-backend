@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Verify Your Email - EnergyExe{% endblock %}
+
+{% block content %}
+<p class="greeting">Hi {{ user_name }},</p>
+
+<div class="message">
+    <p>Welcome to EnergyExe! To complete your registration, please verify your email address by clicking the button below.</p>
+</div>
+
+<div class="button-container">
+    <a href="{{ verification_url }}" class="button">Verify Email Address</a>
+</div>
+
+<div class="note">
+    <p><strong>Note:</strong> This verification link will expire in {{ expire_hours }} hours.</p>
+    <p>If you didn't create an account with EnergyExe, you can safely ignore this email.</p>
+</div>
+
+<p class="url-fallback">
+    If the button doesn't work, copy and paste this link into your browser:<br>
+    {{ verification_url }}
+</p>
+{% endblock %}

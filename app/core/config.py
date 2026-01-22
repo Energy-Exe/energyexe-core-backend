@@ -74,14 +74,18 @@ class Settings(BaseSettings):
     # Redis (optional)
     REDIS_URL: Optional[str] = None
 
-    # Email settings (optional)
-    SMTP_TLS: bool = True
-    SMTP_PORT: Optional[int] = None
-    SMTP_HOST: Optional[str] = None
-    SMTP_USER: Optional[str] = None
-    SMTP_PASSWORD: Optional[str] = None
-    EMAILS_FROM_EMAIL: Optional[str] = None
-    EMAILS_FROM_NAME: Optional[str] = None
+    # Email settings (Resend)
+    RESEND_API_KEY: Optional[str] = "re_cuZBFx6s_AcoKN8e6napuB1gU19f4nxyB"
+    EMAILS_FROM_EMAIL: str = "noreply@energyexe.com"
+    EMAILS_FROM_NAME: str = "EnergyExe"
+
+    # Client Portal settings
+    CLIENT_PORTAL_URL: str = "http://localhost:3000"
+    ADMIN_PORTAL_URL: str = "http://localhost:5173"
+    EMAIL_VERIFICATION_EXPIRE_HOURS: int = 24
+    PASSWORD_RESET_EXPIRE_HOURS: int = 1
+    INVITATION_EXPIRE_DAYS: int = 7
+    SUPPORT_EMAIL: str = "hello@energyexe.com"
 
     # Testing
     TESTING: bool = os.getenv("TESTING", "false").lower() == "true"

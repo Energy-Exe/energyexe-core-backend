@@ -416,8 +416,8 @@ async def get_windfarm_generation_timeline(
             {
                 "timestamp": day,
                 "generation_mwh": round(data["generation"], 2),
-                # Convert capacity to MWh for the period (capacity_mw * hours)
-                "capacity_mw": round(data["capacity"] * data["count"], 2) if data["capacity"] else None,
+                # Theoretical max MWh: capacity × 24 hours (fixed daily hours)
+                "capacity_mw": round(data["capacity"] * 24, 2) if data["capacity"] else None,
                 "hours_count": data["count"],
             }
             for day, data in sorted(daily_data.items())
@@ -426,6 +426,7 @@ async def get_windfarm_generation_timeline(
     elif aggregation == "monthly":
         # Group by month
         from collections import defaultdict
+        from calendar import monthrange
 
         monthly_data = defaultdict(lambda: {"generation": 0, "count": 0, "capacity": None})
 
@@ -436,16 +437,20 @@ async def get_windfarm_generation_timeline(
             if record.capacity_mw:
                 monthly_data[month_key]["capacity"] = float(record.capacity_mw)
 
-        aggregated_data = [
-            {
+        aggregated_data = []
+        for month, data in sorted(monthly_data.items()):
+            # Calculate expected hours based on actual days in the month
+            year, mon = map(int, month.split("-"))
+            days_in_month = monthrange(year, mon)[1]
+            expected_hours = days_in_month * 24
+
+            aggregated_data.append({
                 "timestamp": month,
                 "generation_mwh": round(data["generation"], 2),
-                # Convert capacity to MWh for the period (capacity_mw * hours)
-                "capacity_mw": round(data["capacity"] * data["count"], 2) if data["capacity"] else None,
+                # Theoretical max MWh: capacity × expected hours in month
+                "capacity_mw": round(data["capacity"] * expected_hours, 2) if data["capacity"] else None,
                 "hours_count": data["count"],
-            }
-            for month, data in sorted(monthly_data.items())
-        ]
+            })
 
     return {
         "windfarm_id": windfarm_id,

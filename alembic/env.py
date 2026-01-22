@@ -20,6 +20,7 @@ from app.models import (  # noqa: F401
     cable,
     control_area,
     country,
+    invitation,
     market_balance_area,
     owner,
     project,
@@ -29,6 +30,7 @@ from app.models import (  # noqa: F401
     turbine_model,
     turbine_unit,
     user,
+    user_feature,
     windfarm,
 )
 

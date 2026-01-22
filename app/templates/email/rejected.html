@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Account Update - EnergyExe{% endblock %}
+
+{% block content %}
+<p class="greeting">Hi {{ user_name }},</p>
+
+<div class="message">
+    <p>Thank you for your interest in EnergyExe. After reviewing your account application, we're unable to approve your account at this time.</p>
+
+    {% if reason %}
+    <p><strong>Reason:</strong> {{ reason }}</p>
+    {% endif %}
+</div>
+
+<div class="note">
+    <p>If you believe this was a mistake or would like more information, please contact our support team at <a href="mailto:{{ support_email }}">{{ support_email }}</a>.</p>
+</div>
+{% endblock %}

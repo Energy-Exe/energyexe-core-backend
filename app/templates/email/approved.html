@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Account Approved - EnergyExe{% endblock %}
+
+{% block content %}
+<p class="greeting">Hi {{ user_name }},</p>
+
+<div class="message">
+    <p>Great news! Your EnergyExe account has been approved.</p>
+    <p>You now have full access to the platform and can start exploring all the features available to you.</p>
+</div>
+
+<div class="button-container">
+    <a href="{{ login_url }}" class="button">Log In to Your Account</a>
+</div>
+
+<div class="note">
+    <p>If you have any questions or need assistance getting started, don't hesitate to reach out to our support team.</p>
+</div>
+{% endblock %}
