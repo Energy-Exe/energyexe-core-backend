@@ -325,5 +325,209 @@ class TestWeatherAPIPerformance:
         assert elapsed < 15.0, f"Wind rose endpoint took too long: {elapsed:.2f}s"
 
 
+class TestPortfolioWeatherSummaryAPI:
+    """Test suite for portfolio weather summary endpoints."""
+
+    def test_get_portfolio_weather_summary(self, api_client, auth_headers):
+        """Test GET /weather-data/portfolio/summary returns aggregated weather stats."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+
+        params = {
+            "start_date": start_date.strftime("%Y-%m-%dT%H:%M:%S"),
+            "end_date": end_date.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+
+        response = api_client.get(
+            "/weather-data/portfolio/summary",
+            params=params,
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check expected fields
+        expected_fields = [
+            "start_date", "end_date", "avg_wind_speed", "min_wind_speed",
+            "max_wind_speed", "avg_temperature", "farm_count", "total_hours",
+            "by_country", "correlation_summary", "seasonal_patterns"
+        ]
+        for field in expected_fields:
+            assert field in data, f"Missing field: {field}"
+
+        # Validate numeric fields are numbers
+        assert isinstance(data["avg_wind_speed"], (int, float))
+        assert isinstance(data["min_wind_speed"], (int, float))
+        assert isinstance(data["max_wind_speed"], (int, float))
+        assert isinstance(data["avg_temperature"], (int, float))
+        assert isinstance(data["farm_count"], int)
+        assert isinstance(data["total_hours"], int)
+
+        # Validate lists
+        assert isinstance(data["by_country"], list)
+        assert isinstance(data["correlation_summary"], list)
+        assert isinstance(data["seasonal_patterns"], list)
+
+    def test_portfolio_weather_by_country_structure(self, api_client, auth_headers):
+        """Test by_country array has expected structure."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+
+        params = {
+            "start_date": start_date.strftime("%Y-%m-%dT%H:%M:%S"),
+            "end_date": end_date.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+
+        response = api_client.get(
+            "/weather-data/portfolio/summary",
+            params=params,
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check by_country structure if data exists
+        if data["by_country"]:
+            country = data["by_country"][0]
+            expected_fields = [
+                "country_id", "country_name", "country_code",
+                "avg_wind_speed", "avg_temperature", "farm_count", "data_points"
+            ]
+            for field in expected_fields:
+                assert field in country, f"Missing country field: {field}"
+
+    def test_portfolio_weather_correlation_structure(self, api_client, auth_headers):
+        """Test correlation_summary array has expected structure."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+
+        params = {
+            "start_date": start_date.strftime("%Y-%m-%dT%H:%M:%S"),
+            "end_date": end_date.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+
+        response = api_client.get(
+            "/weather-data/portfolio/summary",
+            params=params,
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check correlation_summary structure if data exists
+        if data["correlation_summary"]:
+            corr = data["correlation_summary"][0]
+            expected_fields = [
+                "windfarm_id", "windfarm_name", "windfarm_code", "country_name",
+                "avg_wind_speed", "avg_generation_mwh", "capacity_factor",
+                "wind_gen_correlation", "data_points"
+            ]
+            for field in expected_fields:
+                assert field in corr, f"Missing correlation field: {field}"
+
+    def test_portfolio_weather_seasonal_structure(self, api_client, auth_headers):
+        """Test seasonal_patterns array has expected structure."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=365)
+
+        params = {
+            "start_date": start_date.strftime("%Y-%m-%dT%H:%M:%S"),
+            "end_date": end_date.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+
+        response = api_client.get(
+            "/weather-data/portfolio/summary",
+            params=params,
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check seasonal_patterns structure if data exists
+        if data["seasonal_patterns"]:
+            pattern = data["seasonal_patterns"][0]
+            expected_fields = [
+                "month", "month_name", "avg_wind_speed",
+                "avg_temperature", "farm_count", "data_points"
+            ]
+            for field in expected_fields:
+                assert field in pattern, f"Missing seasonal field: {field}"
+
+
+class TestPortfolioWeatherSummaryAPIValidation:
+    """Validation tests for portfolio weather summary API."""
+
+    def test_requires_authentication(self, api_client):
+        """Test endpoint requires authentication."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=30)
+
+        params = {
+            "start_date": start_date.strftime("%Y-%m-%dT%H:%M:%S"),
+            "end_date": end_date.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+
+        try:
+            response = api_client.get("/weather-data/portfolio/summary", params=params)
+        except httpx.ConnectError:
+            pytest.skip("API server not running")
+
+        # 404 means server not running/endpoint not registered
+        if response.status_code == 404:
+            pytest.skip("API server not running or endpoint not registered")
+
+        assert response.status_code == 401
+
+    def test_requires_date_parameters(self, api_client, auth_headers):
+        """Test endpoint requires start_date and end_date parameters."""
+        # Test missing start_date
+        response = api_client.get(
+            "/weather-data/portfolio/summary",
+            params={"end_date": "2024-01-01T00:00:00"},
+            headers=auth_headers
+        )
+        assert response.status_code == 422
+
+        # Test missing end_date
+        response = api_client.get(
+            "/weather-data/portfolio/summary",
+            params={"start_date": "2024-01-01T00:00:00"},
+            headers=auth_headers
+        )
+        assert response.status_code == 422
+
+
+class TestPortfolioWeatherSummaryAPIPerformance:
+    """Performance tests for portfolio weather summary API."""
+
+    def test_portfolio_summary_response_time(self, api_client, auth_headers):
+        """Test portfolio summary responds in reasonable time."""
+        import time
+
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+
+        params = {
+            "start_date": start_date.strftime("%Y-%m-%dT%H:%M:%S"),
+            "end_date": end_date.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+
+        start = time.time()
+        response = api_client.get(
+            "/weather-data/portfolio/summary",
+            params=params,
+            headers=auth_headers
+        )
+        elapsed = time.time() - start
+
+        assert response.status_code == 200
+        # Should complete in less than 30 seconds
+        assert elapsed < 30.0, f"Portfolio weather summary took too long: {elapsed:.2f}s"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
