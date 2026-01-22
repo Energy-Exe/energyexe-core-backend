@@ -539,5 +539,200 @@ class TestPortfolioGenerationAPIPerformance:
         assert elapsed < 20.0, f"Portfolio timeseries endpoint took too long: {elapsed:.2f}s"
 
 
+class TestPortfolioPerformanceAPI:
+    """Test suite for portfolio performance endpoints."""
+
+    def test_get_portfolio_performance(self, api_client, auth_headers):
+        """Test GET /generation/portfolio/performance returns performance metrics."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+        response = api_client.get("/generation/portfolio/performance", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check expected top-level fields
+        expected_fields = [
+            "start_date", "end_date", "hours_in_period", "farm_count",
+            "cf_distribution", "performance_ranking", "performance_trend",
+            "by_technology", "statistics"
+        ]
+        for field in expected_fields:
+            assert field in data, f"Missing field: {field}"
+
+        # Check statistics structure
+        stats = data["statistics"]
+        assert "avg_capacity_factor" in stats
+        assert "max_capacity_factor" in stats
+        assert "min_capacity_factor" in stats
+        assert "total_capacity_mw" in stats
+        assert "total_generation_mwh" in stats
+
+    def test_portfolio_performance_cf_distribution(self, api_client, auth_headers):
+        """Test CF distribution histogram structure."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+        response = api_client.get("/generation/portfolio/performance", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check CF distribution structure
+        cf_dist = data["cf_distribution"]
+        assert isinstance(cf_dist, list)
+        if cf_dist:
+            bin_item = cf_dist[0]
+            assert "bin_start" in bin_item
+            assert "bin_end" in bin_item
+            assert "bin_label" in bin_item
+            assert "count" in bin_item
+
+    def test_portfolio_performance_ranking(self, api_client, auth_headers):
+        """Test performance ranking structure."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+        response = api_client.get("/generation/portfolio/performance", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check ranking structure
+        ranking = data["performance_ranking"]
+        assert isinstance(ranking, list)
+        if ranking:
+            farm = ranking[0]
+            expected_fields = [
+                "windfarm_id", "windfarm_name", "windfarm_code",
+                "country_name", "capacity_mw", "total_mwh",
+                "capacity_factor", "avg_quality", "record_count"
+            ]
+            for field in expected_fields:
+                assert field in farm, f"Missing ranking field: {field}"
+
+    def test_portfolio_performance_trend(self, api_client, auth_headers):
+        """Test performance trend structure."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=365)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+        response = api_client.get("/generation/portfolio/performance", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check trend structure
+        trend = data["performance_trend"]
+        assert isinstance(trend, list)
+        if trend:
+            point = trend[0]
+            assert "period" in point
+            assert "total_mwh" in point
+            assert "capacity_factor" in point
+            assert "farm_count" in point
+
+    def test_portfolio_performance_by_technology(self, api_client, auth_headers):
+        """Test technology breakdown structure."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+        response = api_client.get("/generation/portfolio/performance", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check technology breakdown structure
+        by_tech = data["by_technology"]
+        assert isinstance(by_tech, list)
+        if by_tech:
+            tech = by_tech[0]
+            expected_fields = [
+                "model_id", "manufacturer", "model_name", "rated_power_kw",
+                "farm_count", "turbine_count", "total_capacity_mw",
+                "total_mwh", "capacity_factor"
+            ]
+            for field in expected_fields:
+                assert field in tech, f"Missing technology field: {field}"
+
+
+class TestPortfolioPerformanceAPIValidation:
+    """Validation tests for portfolio performance API."""
+
+    def test_portfolio_performance_requires_dates(self, api_client, auth_headers):
+        """Test portfolio performance endpoint requires date parameters."""
+        response = api_client.get("/generation/portfolio/performance", headers=auth_headers)
+        assert response.status_code == 422
+
+    def test_portfolio_performance_requires_auth(self, api_client):
+        """Test portfolio performance requires authentication."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=30)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+        try:
+            response = api_client.get("/generation/portfolio/performance", params=params)
+        except Exception:
+            pytest.skip("API server not running")
+
+        if response.status_code == 404:
+            pytest.skip("API server not running or endpoint not registered")
+
+        assert response.status_code == 401
+
+
+class TestPortfolioPerformanceAPIPerformance:
+    """Performance tests for portfolio performance API."""
+
+    def test_portfolio_performance_response_time(self, api_client, auth_headers):
+        """Test portfolio performance endpoint responds in reasonable time."""
+        import time
+
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+        start = time.time()
+        response = api_client.get("/generation/portfolio/performance", params=params, headers=auth_headers)
+        elapsed = time.time() - start
+
+        assert response.status_code == 200
+        # Should complete in less than 30 seconds
+        assert elapsed < 30.0, f"Portfolio performance endpoint took too long: {elapsed:.2f}s"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

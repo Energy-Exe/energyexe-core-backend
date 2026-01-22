@@ -744,3 +744,250 @@ async def get_portfolio_generation_timeseries(
         'timeseries': timeseries,
         'by_farm': farm_breakdown,
     }
+
+
+@router.get("/portfolio/performance")
+async def get_portfolio_performance(
+    start_date: datetime = Query(..., description="Start date"),
+    end_date: datetime = Query(..., description="End date"),
+    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Get portfolio-wide performance metrics and benchmarks.
+
+    Returns:
+    - Capacity factor distribution histogram
+    - Performance ranking table (all farms)
+    - Performance trends over time
+    - Technology comparison (by turbine model)
+    """
+    from app.models.generation_data import GenerationData
+    from app.models.windfarm import Windfarm
+    from app.models.turbine_unit import TurbineUnit
+    from app.models.turbine_model import TurbineModel
+    from app.models.portfolio import PortfolioItem
+    from app.models.geography import Country
+    from sqlalchemy import select, func, and_, text
+
+    # Calculate hours in period
+    hours_in_period = (end_date - start_date).total_seconds() / 3600
+
+    # Build windfarm filter based on portfolio or country
+    windfarm_filter_ids = None
+    if portfolio_id:
+        windfarm_ids_query = select(PortfolioItem.windfarm_id).where(
+            PortfolioItem.portfolio_id == portfolio_id
+        )
+        windfarm_ids_result = await db.execute(windfarm_ids_query)
+        windfarm_filter_ids = [row[0] for row in windfarm_ids_result.fetchall()]
+        if not windfarm_filter_ids:
+            return {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "hours_in_period": hours_in_period,
+                "farm_count": 0,
+                "cf_distribution": [],
+                "performance_ranking": [],
+                "performance_trend": [],
+                "by_technology": [],
+                "statistics": {
+                    "avg_capacity_factor": 0,
+                    "max_capacity_factor": 0,
+                    "min_capacity_factor": 0,
+                    "total_capacity_mw": 0,
+                    "total_generation_mwh": 0,
+                },
+            }
+
+    # Calculate capacity factor for each farm
+    farm_cf_query = text("""
+        SELECT
+            wf.id as windfarm_id,
+            wf.name as windfarm_name,
+            wf.code as windfarm_code,
+            wf.nameplate_capacity_mw,
+            c.name as country_name,
+            SUM(g.generation_mwh) as total_mwh,
+            AVG(g.quality_score) as avg_quality,
+            COUNT(g.id) as record_count,
+            CASE
+                WHEN wf.nameplate_capacity_mw > 0 AND :hours > 0
+                THEN (SUM(g.generation_mwh) / (wf.nameplate_capacity_mw * :hours)) * 100
+                ELSE 0
+            END as capacity_factor
+        FROM generation_data g
+        JOIN windfarms wf ON g.windfarm_id = wf.id
+        LEFT JOIN countries c ON wf.country_id = c.id
+        WHERE g.hour >= :start_date
+          AND g.hour < :end_date
+          AND g.generation_mwh IS NOT NULL
+    """ + (" AND g.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
+    (" AND wf.country_id = :country_id" if country_id else "") + """
+        GROUP BY wf.id, wf.name, wf.code, wf.nameplate_capacity_mw, c.name
+        HAVING SUM(g.generation_mwh) > 0
+        ORDER BY capacity_factor DESC
+    """)
+
+    params = {
+        'start_date': start_date,
+        'end_date': end_date + timedelta(days=1),
+        'hours': hours_in_period,
+    }
+    if windfarm_filter_ids:
+        params['windfarm_ids'] = windfarm_filter_ids
+    if country_id:
+        params['country_id'] = country_id
+
+    farm_cf_result = await db.execute(farm_cf_query, params)
+    farm_cf_rows = farm_cf_result.fetchall()
+
+    # Build performance ranking
+    performance_ranking = []
+    capacity_factors = []
+    total_capacity_mw = 0
+    total_generation_mwh = 0
+
+    for row in farm_cf_rows:
+        cf = float(row.capacity_factor or 0)
+        capacity_factors.append(cf)
+        total_capacity_mw += float(row.nameplate_capacity_mw or 0)
+        total_generation_mwh += float(row.total_mwh or 0)
+
+        performance_ranking.append({
+            "windfarm_id": row.windfarm_id,
+            "windfarm_name": row.windfarm_name,
+            "windfarm_code": row.windfarm_code,
+            "country_name": row.country_name,
+            "capacity_mw": round(float(row.nameplate_capacity_mw or 0), 2),
+            "total_mwh": round(float(row.total_mwh or 0), 2),
+            "capacity_factor": round(cf, 2),
+            "avg_quality": round(float(row.avg_quality or 0), 2),
+            "record_count": row.record_count,
+        })
+
+    # Build CF distribution histogram (bins of 5%)
+    cf_bins = list(range(0, 105, 5))  # 0, 5, 10, ..., 100
+    cf_distribution = []
+    for i in range(len(cf_bins) - 1):
+        bin_start = cf_bins[i]
+        bin_end = cf_bins[i + 1]
+        count = sum(1 for cf in capacity_factors if bin_start <= cf < bin_end)
+        cf_distribution.append({
+            "bin_start": bin_start,
+            "bin_end": bin_end,
+            "bin_label": f"{bin_start}-{bin_end}%",
+            "count": count,
+        })
+
+    # Performance trend over time (monthly)
+    trend_query = text("""
+        SELECT
+            date_trunc('month', g.hour) as period,
+            SUM(g.generation_mwh) as total_mwh,
+            SUM(wf.nameplate_capacity_mw) as total_capacity,
+            COUNT(DISTINCT g.windfarm_id) as farm_count,
+            EXTRACT(EPOCH FROM (date_trunc('month', g.hour) + interval '1 month' - date_trunc('month', g.hour))) / 3600 as period_hours
+        FROM generation_data g
+        JOIN windfarms wf ON g.windfarm_id = wf.id
+        WHERE g.hour >= :start_date
+          AND g.hour < :end_date
+          AND g.generation_mwh IS NOT NULL
+    """ + (" AND g.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
+    (" AND wf.country_id = :country_id" if country_id else "") + """
+        GROUP BY date_trunc('month', g.hour)
+        ORDER BY period
+    """)
+
+    trend_result = await db.execute(trend_query, params)
+    trend_rows = trend_result.fetchall()
+
+    performance_trend = []
+    for row in trend_rows:
+        period_hours = float(row.period_hours or 730)  # ~730 hours per month
+        # Calculate capacity factor for the period
+        period_cf = 0
+        if row.total_capacity and row.total_mwh and period_hours > 0:
+            # Divide by farm_count to get average capacity per farm
+            avg_capacity = float(row.total_capacity) / row.farm_count if row.farm_count else 0
+            if avg_capacity > 0:
+                period_cf = (float(row.total_mwh) / (avg_capacity * row.farm_count * period_hours)) * 100
+
+        performance_trend.append({
+            "period": row.period.isoformat() if row.period else None,
+            "total_mwh": round(float(row.total_mwh or 0), 2),
+            "capacity_factor": round(period_cf, 2),
+            "farm_count": row.farm_count,
+        })
+
+    # Technology comparison (by turbine model)
+    tech_query = text("""
+        SELECT
+            tm.id as model_id,
+            tm.manufacturer,
+            tm.model_name,
+            tm.rated_power_kw,
+            COUNT(DISTINCT tu.windfarm_id) as farm_count,
+            COUNT(DISTINCT tu.id) as turbine_count,
+            SUM(tu.rated_power_kw) / 1000 as total_capacity_mw,
+            SUM(g.generation_mwh) as total_mwh,
+            CASE
+                WHEN SUM(tu.rated_power_kw) > 0 AND :hours > 0
+                THEN (SUM(g.generation_mwh) / (SUM(tu.rated_power_kw) / 1000 * :hours)) * 100
+                ELSE 0
+            END as capacity_factor
+        FROM generation_data g
+        JOIN turbine_units tu ON g.windfarm_id = tu.windfarm_id
+        JOIN turbine_models tm ON tu.turbine_model_id = tm.id
+        JOIN windfarms wf ON g.windfarm_id = wf.id
+        WHERE g.hour >= :start_date
+          AND g.hour < :end_date
+          AND g.generation_mwh IS NOT NULL
+    """ + (" AND g.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
+    (" AND wf.country_id = :country_id" if country_id else "") + """
+        GROUP BY tm.id, tm.manufacturer, tm.model_name, tm.rated_power_kw
+        HAVING SUM(g.generation_mwh) > 0
+        ORDER BY capacity_factor DESC
+    """)
+
+    tech_result = await db.execute(tech_query, params)
+    tech_rows = tech_result.fetchall()
+
+    by_technology = []
+    for row in tech_rows:
+        by_technology.append({
+            "model_id": row.model_id,
+            "manufacturer": row.manufacturer,
+            "model_name": row.model_name,
+            "rated_power_kw": float(row.rated_power_kw or 0),
+            "farm_count": row.farm_count,
+            "turbine_count": row.turbine_count,
+            "total_capacity_mw": round(float(row.total_capacity_mw or 0), 2),
+            "total_mwh": round(float(row.total_mwh or 0), 2),
+            "capacity_factor": round(float(row.capacity_factor or 0), 2),
+        })
+
+    # Calculate statistics
+    avg_cf = sum(capacity_factors) / len(capacity_factors) if capacity_factors else 0
+    max_cf = max(capacity_factors) if capacity_factors else 0
+    min_cf = min(capacity_factors) if capacity_factors else 0
+
+    return {
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "hours_in_period": hours_in_period,
+        "farm_count": len(performance_ranking),
+        "cf_distribution": cf_distribution,
+        "performance_ranking": performance_ranking,
+        "performance_trend": performance_trend,
+        "by_technology": by_technology,
+        "statistics": {
+            "avg_capacity_factor": round(avg_cf, 2),
+            "max_capacity_factor": round(max_cf, 2),
+            "min_capacity_factor": round(min_cf, 2),
+            "total_capacity_mw": round(total_capacity_mw, 2),
+            "total_generation_mwh": round(total_generation_mwh, 2),
+        },
+    }
