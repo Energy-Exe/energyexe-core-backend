@@ -438,6 +438,30 @@ async def get_price_profile(
     return PriceProfileResponse(**result)
 
 
+@router.get("/analytics/price-profile/{bidzone_id}", response_model=PriceProfileResponse)
+async def get_price_profile_by_bidzone(
+    bidzone_id: int,
+    start_date: datetime = Query(..., description="Start date"),
+    end_date: datetime = Query(..., description="End date"),
+    aggregation: str = Query("hourly", description="Aggregation: hourly or daily"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get price profile for a bidzone (GET variant).
+
+    Shows average prices by hour of day or day of week.
+    """
+    service = PriceAnalyticsService(db)
+    result = await service.get_price_profile(
+        bidzone_id=bidzone_id,
+        start_date=start_date,
+        end_date=end_date,
+        aggregation=aggregation,
+    )
+    return PriceProfileResponse(**result)
+
+
 @router.get("/analytics/correlation/{windfarm_id}", response_model=CorrelationResponse)
 async def get_generation_price_correlation(
     windfarm_id: int,

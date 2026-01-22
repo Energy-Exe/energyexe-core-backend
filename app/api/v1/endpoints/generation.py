@@ -295,6 +295,100 @@ async def get_generation_stats(
     }
 
 
+@router.get("/windfarm-stats")
+async def get_windfarm_stats(
+    windfarm_id: int = Query(..., description="Wind farm ID"),
+    start_date: datetime = Query(..., description="Start date"),
+    end_date: datetime = Query(..., description="End date"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    """Get generation statistics for a specific windfarm within a date range.
+
+    Returns:
+        - total_generation_mwh: Total generation in the period
+        - avg_hourly_generation_mwh: Average hourly generation
+        - max_hourly_generation_mwh: Maximum hourly generation
+        - peak_hour: Hour with maximum generation
+        - capacity_factor_percent: Average capacity factor as percentage
+        - operating_hours: Hours with generation > 0
+        - total_hours: Total hours in the period
+        - avg_quality_score: Average data quality score
+    """
+    from app.models.generation_data import GenerationData
+    from app.models.windfarm import Windfarm
+    from sqlalchemy import select, func, and_, case
+
+    # Get windfarm info for nameplate capacity
+    windfarm_query = select(Windfarm).where(Windfarm.id == windfarm_id)
+    windfarm_result = await db.execute(windfarm_query)
+    windfarm = windfarm_result.scalar_one_or_none()
+
+    if not windfarm:
+        raise HTTPException(status_code=404, detail=f"Windfarm with id {windfarm_id} not found")
+
+    # Calculate statistics
+    stats_query = select(
+        func.sum(GenerationData.generation_mwh).label('total_generation'),
+        func.avg(GenerationData.generation_mwh).label('avg_generation'),
+        func.max(GenerationData.generation_mwh).label('max_generation'),
+        func.avg(GenerationData.capacity_factor).label('avg_capacity_factor'),
+        func.avg(GenerationData.quality_score).label('avg_quality_score'),
+        func.count(GenerationData.id).label('total_hours'),
+        func.count(case((GenerationData.generation_mwh > 0, 1))).label('operating_hours')
+    ).where(
+        and_(
+            GenerationData.windfarm_id == windfarm_id,
+            GenerationData.hour >= start_date,
+            GenerationData.hour <= end_date
+        )
+    )
+
+    result = await db.execute(stats_query)
+    stats = result.one()
+
+    # Get peak hour
+    peak_query = select(
+        GenerationData.hour,
+        GenerationData.generation_mwh
+    ).where(
+        and_(
+            GenerationData.windfarm_id == windfarm_id,
+            GenerationData.hour >= start_date,
+            GenerationData.hour <= end_date
+        )
+    ).order_by(GenerationData.generation_mwh.desc()).limit(1)
+
+    peak_result = await db.execute(peak_query)
+    peak_row = peak_result.first()
+
+    # Calculate capacity factor if we have nameplate capacity and total generation
+    capacity_factor_percent = None
+    if windfarm.nameplate_capacity_mw and stats.total_generation and stats.total_hours:
+        # Capacity factor = actual generation / (capacity * hours)
+        max_possible_generation = float(windfarm.nameplate_capacity_mw) * float(stats.total_hours)
+        if max_possible_generation > 0:
+            capacity_factor_percent = (float(stats.total_generation) / max_possible_generation) * 100
+
+    # If we have capacity factor from the data, use that instead
+    if stats.avg_capacity_factor:
+        capacity_factor_percent = float(stats.avg_capacity_factor) * 100
+
+    return {
+        'total_generation_mwh': float(stats.total_generation) if stats.total_generation else 0,
+        'avg_hourly_generation_mwh': float(stats.avg_generation) if stats.avg_generation else 0,
+        'max_hourly_generation_mwh': float(stats.max_generation) if stats.max_generation else 0,
+        'peak_hour': peak_row.hour.isoformat() if peak_row else None,
+        'capacity_factor_percent': capacity_factor_percent,
+        'operating_hours': stats.operating_hours or 0,
+        'total_hours': stats.total_hours or 0,
+        'avg_quality_score': float(stats.avg_quality_score) if stats.avg_quality_score else 0,
+        'nameplate_capacity_mw': float(windfarm.nameplate_capacity_mw) if windfarm.nameplate_capacity_mw else None,
+        'windfarm_name': windfarm.name,
+        'windfarm_code': windfarm.code
+    }
+
+
 @router.get("/availability")
 async def get_availability(
     year: Optional[int] = Query(None, description="Year for availability check"),
