@@ -458,3 +458,304 @@ async def get_generation_price_correlation(
         end_date=end_date,
     )
     return CorrelationResponse(**result)
+
+
+# ============================================================
+# Portfolio-Level Analytics Endpoints
+# ============================================================
+
+from datetime import timedelta
+from typing import Dict, Any
+
+@router.get("/analytics/portfolio/revenue")
+async def get_portfolio_revenue(
+    start_date: datetime = Query(..., description="Start date for analysis"),
+    end_date: datetime = Query(..., description="End date for analysis"),
+    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    aggregation: Literal["day", "week", "month"] = Query("month", description="Time aggregation"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Get aggregated revenue metrics across all accessible wind farms.
+
+    Returns total revenue, average achieved price, by-farm breakdown, and monthly trends.
+    """
+    from app.models.generation_data import GenerationData
+    from app.models.price_data import PriceData
+    from app.models.windfarm import Windfarm
+    from app.models.portfolio import PortfolioItem
+    from sqlalchemy import select, func, and_, desc, text
+
+    # Build base conditions
+    conditions = [
+        GenerationData.hour >= start_date,
+        GenerationData.hour < end_date + timedelta(days=1),
+    ]
+
+    # Filter by portfolio or country
+    windfarm_filter_ids = None
+    if portfolio_id:
+        windfarm_ids_query = select(PortfolioItem.windfarm_id).where(
+            PortfolioItem.portfolio_id == portfolio_id
+        )
+        windfarm_ids_result = await db.execute(windfarm_ids_query)
+        windfarm_filter_ids = [row[0] for row in windfarm_ids_result.fetchall()]
+        if windfarm_filter_ids:
+            conditions.append(GenerationData.windfarm_id.in_(windfarm_filter_ids))
+        else:
+            return {
+                'total_revenue_eur': 0,
+                'total_generation_mwh': 0,
+                'avg_achieved_price': 0,
+                'avg_market_price': 0,
+                'avg_capture_rate': 0,
+                'farm_count': 0,
+                'by_farm': [],
+                'by_period': [],
+            }
+
+    if country_id:
+        windfarm_ids_query = select(Windfarm.id).where(Windfarm.country_id == country_id)
+        windfarm_ids_result = await db.execute(windfarm_ids_query)
+        country_windfarm_ids = [row[0] for row in windfarm_ids_result.fetchall()]
+        if country_windfarm_ids:
+            conditions.append(GenerationData.windfarm_id.in_(country_windfarm_ids))
+
+    # Map aggregation to date_trunc
+    agg_map = {'day': 'day', 'week': 'week', 'month': 'month'}
+    trunc_period = agg_map.get(aggregation, 'month')
+
+    # Get total revenue and generation with price join
+    total_query = text("""
+        SELECT
+            SUM(g.generation_mwh) as total_generation,
+            SUM(g.generation_mwh * p.day_ahead_price) as total_revenue,
+            AVG(p.day_ahead_price) as avg_market_price,
+            COUNT(DISTINCT g.windfarm_id) as farm_count
+        FROM generation_data g
+        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+        WHERE g.hour >= :start_date
+          AND g.hour < :end_date
+          AND g.generation_mwh > 0
+          AND p.day_ahead_price IS NOT NULL
+    """)
+
+    total_result = await db.execute(total_query, {
+        'start_date': start_date,
+        'end_date': end_date + timedelta(days=1),
+    })
+    total_data = total_result.fetchone()
+
+    total_generation = float(total_data.total_generation or 0)
+    total_revenue = float(total_data.total_revenue or 0)
+    avg_market_price = float(total_data.avg_market_price or 0)
+    farm_count = total_data.farm_count or 0
+
+    # Calculate achieved price
+    avg_achieved_price = total_revenue / total_generation if total_generation > 0 else 0
+    avg_capture_rate = (avg_achieved_price / avg_market_price * 100) if avg_market_price > 0 else 0
+
+    # Get by-farm breakdown
+    farm_query = text("""
+        SELECT
+            g.windfarm_id,
+            w.name as windfarm_name,
+            SUM(g.generation_mwh) as total_generation,
+            SUM(g.generation_mwh * p.day_ahead_price) as total_revenue,
+            CASE
+                WHEN SUM(g.generation_mwh) > 0
+                THEN SUM(g.generation_mwh * p.day_ahead_price) / SUM(g.generation_mwh)
+                ELSE 0
+            END as achieved_price
+        FROM generation_data g
+        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+        JOIN windfarms w ON g.windfarm_id = w.id
+        WHERE g.hour >= :start_date
+          AND g.hour < :end_date
+          AND g.generation_mwh > 0
+          AND p.day_ahead_price IS NOT NULL
+        GROUP BY g.windfarm_id, w.name
+        ORDER BY total_revenue DESC
+    """)
+
+    farm_result = await db.execute(farm_query, {
+        'start_date': start_date,
+        'end_date': end_date + timedelta(days=1),
+    })
+    farm_data = farm_result.fetchall()
+
+    by_farm = []
+    for row in farm_data:
+        capture_rate = (float(row.achieved_price) / avg_market_price * 100) if avg_market_price > 0 else 0
+        by_farm.append({
+            'windfarm_id': row.windfarm_id,
+            'name': row.windfarm_name,
+            'total_generation_mwh': round(float(row.total_generation), 2),
+            'total_revenue_eur': round(float(row.total_revenue), 2),
+            'achieved_price': round(float(row.achieved_price), 2),
+            'capture_rate': round(capture_rate, 1),
+        })
+
+    # Get by-period breakdown
+    period_query = text(f"""
+        SELECT
+            DATE_TRUNC(:aggregation, g.hour) as period,
+            SUM(g.generation_mwh) as total_generation,
+            SUM(g.generation_mwh * p.day_ahead_price) as total_revenue,
+            AVG(p.day_ahead_price) as avg_price,
+            COUNT(DISTINCT g.windfarm_id) as farm_count
+        FROM generation_data g
+        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+        WHERE g.hour >= :start_date
+          AND g.hour < :end_date
+          AND g.generation_mwh > 0
+          AND p.day_ahead_price IS NOT NULL
+        GROUP BY DATE_TRUNC(:aggregation, g.hour)
+        ORDER BY period
+    """)
+
+    period_result = await db.execute(period_query, {
+        'start_date': start_date,
+        'end_date': end_date + timedelta(days=1),
+        'aggregation': trunc_period,
+    })
+    period_data = period_result.fetchall()
+
+    by_period = []
+    for row in period_data:
+        gen = float(row.total_generation or 0)
+        rev = float(row.total_revenue or 0)
+        achieved = rev / gen if gen > 0 else 0
+        by_period.append({
+            'period': row.period.isoformat() if row.period else None,
+            'total_generation_mwh': round(gen, 2),
+            'total_revenue_eur': round(rev, 2),
+            'avg_price': round(float(row.avg_price or 0), 2),
+            'achieved_price': round(achieved, 2),
+            'farm_count': row.farm_count or 0,
+        })
+
+    return {
+        'start_date': start_date.isoformat(),
+        'end_date': end_date.isoformat(),
+        'aggregation': aggregation,
+        'total_revenue_eur': round(total_revenue, 2),
+        'total_generation_mwh': round(total_generation, 2),
+        'avg_achieved_price': round(avg_achieved_price, 2),
+        'avg_market_price': round(avg_market_price, 2),
+        'avg_capture_rate': round(avg_capture_rate, 1),
+        'farm_count': farm_count,
+        'by_farm': by_farm[:20],  # Top 20 farms by revenue
+        'by_period': by_period,
+    }
+
+
+@router.get("/analytics/portfolio/capture-rates")
+async def get_portfolio_capture_rates(
+    start_date: datetime = Query(..., description="Start date for analysis"),
+    end_date: datetime = Query(..., description="End date for analysis"),
+    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    sort_by: Literal["capture_rate", "revenue", "generation"] = Query("capture_rate"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Get capture rates for all wind farms, sorted by performance.
+
+    Capture Rate = Achieved Price / Market Average Price
+    """
+    from app.models.windfarm import Windfarm
+    from app.models.portfolio import PortfolioItem
+    from sqlalchemy import select, text
+
+    # Get market average price first
+    market_avg_query = text("""
+        SELECT AVG(day_ahead_price) as market_avg
+        FROM price_data
+        WHERE hour >= :start_date
+          AND hour < :end_date
+          AND day_ahead_price IS NOT NULL
+    """)
+
+    market_result = await db.execute(market_avg_query, {
+        'start_date': start_date,
+        'end_date': end_date + timedelta(days=1),
+    })
+    market_row = market_result.fetchone()
+    market_avg = float(market_row.market_avg or 0) if market_row else 0
+
+    # Get per-farm capture rates
+    farm_query = text("""
+        SELECT
+            g.windfarm_id,
+            w.name as windfarm_name,
+            w.bidzone_id,
+            b.code as bidzone_code,
+            SUM(g.generation_mwh) as total_generation,
+            SUM(g.generation_mwh * p.day_ahead_price) as total_revenue,
+            CASE
+                WHEN SUM(g.generation_mwh) > 0
+                THEN SUM(g.generation_mwh * p.day_ahead_price) / SUM(g.generation_mwh)
+                ELSE 0
+            END as achieved_price
+        FROM generation_data g
+        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+        JOIN windfarms w ON g.windfarm_id = w.id
+        LEFT JOIN bidzones b ON w.bidzone_id = b.id
+        WHERE g.hour >= :start_date
+          AND g.hour < :end_date
+          AND g.generation_mwh > 0
+          AND p.day_ahead_price IS NOT NULL
+        GROUP BY g.windfarm_id, w.name, w.bidzone_id, b.code
+        HAVING SUM(g.generation_mwh) > 0
+    """)
+
+    farm_result = await db.execute(farm_query, {
+        'start_date': start_date,
+        'end_date': end_date + timedelta(days=1),
+    })
+    farm_data = farm_result.fetchall()
+
+    farms = []
+    for row in farm_data:
+        achieved = float(row.achieved_price or 0)
+        capture_rate = (achieved / market_avg * 100) if market_avg > 0 else 0
+        farms.append({
+            'windfarm_id': row.windfarm_id,
+            'name': row.windfarm_name,
+            'bidzone_code': row.bidzone_code,
+            'total_generation_mwh': round(float(row.total_generation), 2),
+            'total_revenue_eur': round(float(row.total_revenue), 2),
+            'achieved_price': round(achieved, 2),
+            'capture_rate': round(capture_rate, 1),
+        })
+
+    # Sort based on sort_by parameter
+    if sort_by == "capture_rate":
+        farms.sort(key=lambda x: x['capture_rate'], reverse=True)
+    elif sort_by == "revenue":
+        farms.sort(key=lambda x: x['total_revenue_eur'], reverse=True)
+    elif sort_by == "generation":
+        farms.sort(key=lambda x: x['total_generation_mwh'], reverse=True)
+
+    # Calculate statistics
+    capture_rates = [f['capture_rate'] for f in farms if f['capture_rate'] > 0]
+    avg_capture_rate = sum(capture_rates) / len(capture_rates) if capture_rates else 0
+    max_capture_rate = max(capture_rates) if capture_rates else 0
+    min_capture_rate = min(capture_rates) if capture_rates else 0
+
+    return {
+        'start_date': start_date.isoformat(),
+        'end_date': end_date.isoformat(),
+        'market_average_price': round(market_avg, 2),
+        'farm_count': len(farms),
+        'statistics': {
+            'avg_capture_rate': round(avg_capture_rate, 1),
+            'max_capture_rate': round(max_capture_rate, 1),
+            'min_capture_rate': round(min_capture_rate, 1),
+        },
+        'farms': farms,
+    }

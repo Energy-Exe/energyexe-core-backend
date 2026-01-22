@@ -360,3 +360,230 @@ class TestMarketAPIValidation:
         )
 
         assert response.status_code in [400, 422]
+
+
+class TestPortfolioRevenueAPI:
+    """Test suite for portfolio-level revenue analytics endpoints."""
+
+    def test_get_portfolio_revenue(self, api_client, auth_headers, date_range):
+        """Test GET /prices/analytics/portfolio/revenue returns aggregated revenue data."""
+        params = {**date_range, "aggregation": "month"}
+        response = api_client.get(
+            "/prices/analytics/portfolio/revenue",
+            params=params,
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check response structure
+        assert "total_revenue_eur" in data
+        assert "total_generation_mwh" in data
+        assert "avg_achieved_price" in data
+        assert "avg_market_price" in data
+        assert "avg_capture_rate" in data
+        assert "farm_count" in data
+        assert "by_farm" in data
+        assert "by_period" in data
+
+        # Verify data types
+        assert isinstance(data["total_revenue_eur"], (int, float))
+        assert isinstance(data["total_generation_mwh"], (int, float))
+        assert isinstance(data["by_farm"], list)
+        assert isinstance(data["by_period"], list)
+
+    def test_get_portfolio_revenue_by_farm_structure(self, api_client, auth_headers, date_range):
+        """Test that by_farm breakdown has correct structure."""
+        params = {**date_range, "aggregation": "month"}
+        response = api_client.get(
+            "/prices/analytics/portfolio/revenue",
+            params=params,
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        if data["by_farm"]:
+            farm = data["by_farm"][0]
+            assert "windfarm_id" in farm
+            assert "name" in farm
+            assert "total_generation_mwh" in farm
+            assert "total_revenue_eur" in farm
+            assert "achieved_price" in farm
+            assert "capture_rate" in farm
+
+    def test_get_portfolio_revenue_by_period_structure(self, api_client, auth_headers, date_range):
+        """Test that by_period breakdown has correct structure."""
+        params = {**date_range, "aggregation": "month"}
+        response = api_client.get(
+            "/prices/analytics/portfolio/revenue",
+            params=params,
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        if data["by_period"]:
+            period = data["by_period"][0]
+            assert "period" in period
+            assert "total_generation_mwh" in period
+            assert "total_revenue_eur" in period
+            assert "avg_price" in period
+            assert "achieved_price" in period
+            assert "farm_count" in period
+
+    def test_get_portfolio_revenue_different_aggregations(self, api_client, auth_headers, date_range):
+        """Test portfolio revenue with different aggregation levels."""
+        for agg in ["day", "week", "month"]:
+            params = {**date_range, "aggregation": agg}
+            response = api_client.get(
+                "/prices/analytics/portfolio/revenue",
+                params=params,
+                headers=auth_headers
+            )
+
+            assert response.status_code == 200, f"Failed for aggregation: {agg}"
+            data = response.json()
+            assert data["aggregation"] == agg
+
+
+class TestPortfolioCaptureRatesAPI:
+    """Test suite for portfolio-level capture rates endpoint."""
+
+    def test_get_portfolio_capture_rates(self, api_client, auth_headers, date_range):
+        """Test GET /prices/analytics/portfolio/capture-rates returns capture rate ranking."""
+        response = api_client.get(
+            "/prices/analytics/portfolio/capture-rates",
+            params=date_range,
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check response structure
+        assert "market_average_price" in data
+        assert "farm_count" in data
+        assert "statistics" in data
+        assert "farms" in data
+
+        # Check statistics structure
+        stats = data["statistics"]
+        assert "avg_capture_rate" in stats
+        assert "max_capture_rate" in stats
+        assert "min_capture_rate" in stats
+
+        assert isinstance(data["farms"], list)
+
+    def test_get_portfolio_capture_rates_farm_structure(self, api_client, auth_headers, date_range):
+        """Test that farms in capture rates have correct structure."""
+        response = api_client.get(
+            "/prices/analytics/portfolio/capture-rates",
+            params=date_range,
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        if data["farms"]:
+            farm = data["farms"][0]
+            assert "windfarm_id" in farm
+            assert "name" in farm
+            assert "bidzone_code" in farm
+            assert "total_generation_mwh" in farm
+            assert "total_revenue_eur" in farm
+            assert "achieved_price" in farm
+            assert "capture_rate" in farm
+
+    def test_get_portfolio_capture_rates_sorting(self, api_client, auth_headers, date_range):
+        """Test capture rates sorting options."""
+        for sort_by in ["capture_rate", "revenue", "generation"]:
+            params = {**date_range, "sort_by": sort_by}
+            response = api_client.get(
+                "/prices/analytics/portfolio/capture-rates",
+                params=params,
+                headers=auth_headers
+            )
+
+            assert response.status_code == 200, f"Failed for sort_by: {sort_by}"
+
+
+class TestPortfolioRevenueAPIValidation:
+    """Validation tests for portfolio revenue endpoints."""
+
+    def test_portfolio_revenue_requires_dates(self, api_client, auth_headers):
+        """Test portfolio revenue endpoint requires date parameters."""
+        response = api_client.get(
+            "/prices/analytics/portfolio/revenue",
+            headers=auth_headers
+        )
+
+        # Should return validation error for missing required parameters
+        assert response.status_code == 422
+
+    def test_portfolio_capture_rates_requires_dates(self, api_client, auth_headers):
+        """Test capture rates endpoint requires date parameters."""
+        response = api_client.get(
+            "/prices/analytics/portfolio/capture-rates",
+            headers=auth_headers
+        )
+
+        # Should return validation error for missing required parameters
+        assert response.status_code == 422
+
+    def test_portfolio_revenue_invalid_aggregation(self, api_client, auth_headers, date_range):
+        """Test portfolio revenue rejects invalid aggregation."""
+        params = {**date_range, "aggregation": "invalid"}
+        response = api_client.get(
+            "/prices/analytics/portfolio/revenue",
+            params=params,
+            headers=auth_headers
+        )
+
+        # Should return validation error for invalid aggregation
+        assert response.status_code == 422
+
+
+class TestPortfolioRevenueAPIPerformance:
+    """Performance tests for portfolio revenue endpoints."""
+
+    def test_portfolio_revenue_response_time(self, api_client, auth_headers, date_range):
+        """Test portfolio revenue endpoint responds in reasonable time."""
+        import time
+
+        params = {**date_range, "aggregation": "month"}
+        start_time = time.time()
+
+        response = api_client.get(
+            "/prices/analytics/portfolio/revenue",
+            params=params,
+            headers=auth_headers
+        )
+
+        elapsed_time = time.time() - start_time
+
+        assert response.status_code == 200
+        # Should complete in less than 20 seconds
+        assert elapsed_time < 20.0, f"Portfolio revenue endpoint took too long: {elapsed_time:.2f}s"
+
+    def test_portfolio_capture_rates_response_time(self, api_client, auth_headers, date_range):
+        """Test capture rates endpoint responds in reasonable time."""
+        import time
+
+        start_time = time.time()
+
+        response = api_client.get(
+            "/prices/analytics/portfolio/capture-rates",
+            params=date_range,
+            headers=auth_headers
+        )
+
+        elapsed_time = time.time() - start_time
+
+        assert response.status_code == 200
+        # Should complete in less than 20 seconds
+        assert elapsed_time < 20.0, f"Capture rates endpoint took too long: {elapsed_time:.2f}s"
