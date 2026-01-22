@@ -1,4 +1,4 @@
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,12 +13,57 @@ router = APIRouter()
 
 @router.get("", response_model=List[TurbineUnit])
 async def get_turbine_units(
+    windfarm_id: Optional[int] = Query(None, description="Filter by wind farm ID"),
+    model_id: Optional[int] = Query(None, description="Filter by turbine model ID"),
+    status: Optional[str] = Query(None, description="Filter by status (operational, installing, decommissioned)"),
+    search: Optional[str] = Query(None, description="Search by turbine code"),
     skip: int = Query(0, ge=0),
     limit: int = Query(DEFAULT_PAGINATION_LIMIT, ge=MIN_PAGINATION_LIMIT, le=MAX_PAGINATION_LIMIT),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get all turbine_units with pagination"""
-    return await TurbineUnitService.get_turbine_units(db, skip=skip, limit=limit)
+    """
+    Get all turbine units with optional filtering.
+
+    Filters:
+    - windfarm_id: Filter by wind farm
+    - model_id: Filter by turbine model
+    - status: Filter by status (operational, installing, decommissioned)
+    - search: Search by turbine code (case-insensitive)
+    """
+    return await TurbineUnitService.get_turbine_units_filtered(
+        db,
+        windfarm_id=windfarm_id,
+        model_id=model_id,
+        status=status,
+        search=search,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.get("/stats", response_model=Dict[str, Any])
+async def get_turbine_units_stats(
+    windfarm_id: Optional[int] = Query(None, description="Filter by wind farm ID"),
+    model_id: Optional[int] = Query(None, description="Filter by turbine model ID"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get aggregate statistics for turbine units.
+
+    Returns:
+    - total_count: Total number of turbines
+    - total_capacity_mw: Total nameplate capacity in MW
+    - avg_hub_height_m: Average hub height in meters
+    - windfarm_count: Number of unique wind farms
+    - status_breakdown: Count by status
+    """
+    return await TurbineUnitService.get_turbine_units_stats(
+        db,
+        windfarm_id=windfarm_id,
+        model_id=model_id,
+        status=status,
+    )
 
 
 @router.get("/search", response_model=List[TurbineUnit])
