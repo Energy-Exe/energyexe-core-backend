@@ -262,5 +262,282 @@ class TestGenerationAPIPerformance:
         assert elapsed < 15.0, f"Hourly endpoint took too long: {elapsed:.2f}s"
 
 
+class TestPortfolioGenerationAPI:
+    """Test suite for portfolio-level generation API endpoints."""
+
+    def test_get_portfolio_generation_stats(self, api_client, auth_headers):
+        """Test GET /generation/portfolio/stats returns aggregated statistics."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=30)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+        response = api_client.get("/generation/portfolio/stats", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check response structure
+        assert "total_mwh" in data
+        assert "avg_capacity_factor" in data
+        assert "farm_count" in data
+        assert "record_count" in data
+        assert "avg_quality_score" in data
+        assert "total_capacity_mw" in data
+        assert "top_performers" in data
+        assert "bottom_performers" in data
+
+        # Verify data types
+        assert isinstance(data["total_mwh"], (int, float))
+        assert isinstance(data["avg_capacity_factor"], (int, float))
+        assert isinstance(data["farm_count"], int)
+        assert isinstance(data["record_count"], int)
+        assert isinstance(data["top_performers"], list)
+        assert isinstance(data["bottom_performers"], list)
+
+    def test_get_portfolio_generation_stats_with_portfolio_filter(self, api_client, auth_headers):
+        """Test portfolio stats endpoint with portfolio_id filter."""
+        # First get a portfolio ID
+        portfolio_response = api_client.get("/portfolios", headers=auth_headers)
+        if portfolio_response.status_code != 200 or not portfolio_response.json():
+            pytest.skip("No portfolios available for testing")
+
+        portfolio_id = portfolio_response.json()[0]["id"]
+
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=30)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "portfolio_id": portfolio_id
+        }
+
+        response = api_client.get("/generation/portfolio/stats", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify response structure is correct even with filter
+        assert "total_mwh" in data
+        assert "farm_count" in data
+        assert "top_performers" in data
+
+    def test_get_portfolio_generation_stats_performer_structure(self, api_client, auth_headers):
+        """Test that top/bottom performers have correct structure."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=30)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+        response = api_client.get("/generation/portfolio/stats", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check top performers structure
+        if data["top_performers"]:
+            performer = data["top_performers"][0]
+            assert "windfarm_id" in performer
+            assert "name" in performer
+            assert "total_mwh" in performer
+            assert "capacity_factor" in performer
+            assert "avg_quality" in performer
+
+    def test_get_portfolio_generation_timeseries(self, api_client, auth_headers):
+        """Test GET /generation/portfolio/timeseries returns timeseries data."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=30)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "aggregation": "daily"
+        }
+
+        response = api_client.get("/generation/portfolio/timeseries", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check response structure
+        assert "aggregation" in data
+        assert "start_date" in data
+        assert "end_date" in data
+        assert "timeseries" in data
+        assert "by_farm" in data
+
+        assert data["aggregation"] == "daily"
+        assert isinstance(data["timeseries"], list)
+        assert isinstance(data["by_farm"], dict)
+
+    def test_get_portfolio_generation_timeseries_structure(self, api_client, auth_headers):
+        """Test timeseries data points have correct structure."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=7)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "aggregation": "daily"
+        }
+
+        response = api_client.get("/generation/portfolio/timeseries", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check timeseries point structure
+        if data["timeseries"]:
+            point = data["timeseries"][0]
+            assert "period" in point
+            assert "total_mwh" in point
+            assert "avg_quality" in point
+            assert "farm_count" in point
+
+        # Check farm breakdown structure
+        if data["by_farm"]:
+            farm_name = list(data["by_farm"].keys())[0]
+            farm_data = data["by_farm"][farm_name]
+            assert isinstance(farm_data, list)
+            if farm_data:
+                assert "period" in farm_data[0]
+                assert "mwh" in farm_data[0]
+
+    def test_get_portfolio_generation_timeseries_aggregations(self, api_client, auth_headers):
+        """Test different aggregation levels for timeseries."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=30)
+
+        aggregations = ["daily", "weekly", "monthly"]
+
+        for agg in aggregations:
+            params = {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "aggregation": agg
+            }
+
+            response = api_client.get("/generation/portfolio/timeseries", params=params, headers=auth_headers)
+
+            assert response.status_code == 200, f"Failed for aggregation: {agg}"
+            data = response.json()
+            assert data["aggregation"] == agg
+
+    def test_get_portfolio_generation_timeseries_with_country_filter(self, api_client, auth_headers):
+        """Test timeseries endpoint with country_id filter."""
+        # First get a country ID from a windfarm
+        wf_response = api_client.get("/windfarms", params={"limit": 1}, headers=auth_headers)
+        if wf_response.status_code != 200 or not wf_response.json():
+            pytest.skip("No windfarms available for testing")
+
+        windfarm = wf_response.json()[0]
+        country_id = windfarm.get("country_id")
+        if not country_id:
+            pytest.skip("Windfarm has no country_id for testing")
+
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=30)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "aggregation": "daily",
+            "country_id": country_id
+        }
+
+        response = api_client.get("/generation/portfolio/timeseries", params=params, headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "timeseries" in data
+        assert "by_farm" in data
+
+
+class TestPortfolioGenerationAPIValidation:
+    """Validation tests for portfolio generation API endpoints."""
+
+    def test_portfolio_stats_requires_dates(self, api_client, auth_headers):
+        """Test portfolio stats endpoint requires date parameters."""
+        response = api_client.get("/generation/portfolio/stats", headers=auth_headers)
+
+        # Should return validation error for missing required parameters
+        assert response.status_code == 422
+
+    def test_portfolio_timeseries_requires_dates(self, api_client, auth_headers):
+        """Test timeseries endpoint requires date parameters."""
+        response = api_client.get("/generation/portfolio/timeseries", headers=auth_headers)
+
+        # Should return validation error for missing required parameters
+        assert response.status_code == 422
+
+    def test_portfolio_timeseries_invalid_aggregation(self, api_client, auth_headers):
+        """Test timeseries endpoint rejects invalid aggregation."""
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=30)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "aggregation": "invalid"
+        }
+
+        response = api_client.get("/generation/portfolio/timeseries", params=params, headers=auth_headers)
+
+        # Should return validation error for invalid aggregation
+        assert response.status_code == 422
+
+
+class TestPortfolioGenerationAPIPerformance:
+    """Performance tests for portfolio generation API."""
+
+    def test_portfolio_stats_response_time(self, api_client, auth_headers):
+        """Test portfolio stats endpoint responds in reasonable time."""
+        import time
+
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=30)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+        start = time.time()
+        response = api_client.get("/generation/portfolio/stats", params=params, headers=auth_headers)
+        elapsed = time.time() - start
+
+        assert response.status_code == 200
+        # Should complete in less than 15 seconds
+        assert elapsed < 15.0, f"Portfolio stats endpoint took too long: {elapsed:.2f}s"
+
+    def test_portfolio_timeseries_response_time(self, api_client, auth_headers):
+        """Test portfolio timeseries endpoint responds in reasonable time."""
+        import time
+
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+
+        params = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "aggregation": "daily"
+        }
+
+        start = time.time()
+        response = api_client.get("/generation/portfolio/timeseries", params=params, headers=auth_headers)
+        elapsed = time.time() - start
+
+        assert response.status_code == 200
+        # Should complete in less than 20 seconds for 90 days
+        assert elapsed < 20.0, f"Portfolio timeseries endpoint took too long: {elapsed:.2f}s"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

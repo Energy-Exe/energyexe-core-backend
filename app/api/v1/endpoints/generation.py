@@ -470,3 +470,277 @@ async def get_quality_stats(
             'totalManualOverrides': summary.total_manual_overrides or 0
         }
     }
+
+
+# Portfolio-level generation endpoints
+
+@router.get("/portfolio/stats")
+async def get_portfolio_generation_stats(
+    start_date: datetime = Query(..., description="Start date for statistics"),
+    end_date: datetime = Query(..., description="End date for statistics"),
+    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Get aggregated generation statistics across all accessible wind farms.
+
+    Returns total MWh, average capacity factor, farm count, and top performers.
+    """
+    from app.models.generation_data import GenerationData
+    from app.models.windfarm import Windfarm
+    from app.models.portfolio import PortfolioItem
+    from sqlalchemy import select, func, and_, desc
+    from sqlalchemy.orm import selectinload
+
+    # Build base query for generation aggregation
+    conditions = [
+        GenerationData.hour >= start_date,
+        GenerationData.hour < end_date + timedelta(days=1),
+    ]
+
+    # If portfolio_id is specified, filter by portfolio items
+    if portfolio_id:
+        windfarm_ids_query = select(PortfolioItem.windfarm_id).where(
+            PortfolioItem.portfolio_id == portfolio_id
+        )
+        windfarm_ids_result = await db.execute(windfarm_ids_query)
+        windfarm_ids = [row[0] for row in windfarm_ids_result.fetchall()]
+        if windfarm_ids:
+            conditions.append(GenerationData.windfarm_id.in_(windfarm_ids))
+        else:
+            # Empty portfolio - return zeros
+            return {
+                'total_mwh': 0,
+                'avg_capacity_factor': 0,
+                'farm_count': 0,
+                'record_count': 0,
+                'avg_quality_score': 0,
+                'top_performers': [],
+                'bottom_performers': [],
+            }
+
+    # If country_id is specified, filter windfarms by country
+    if country_id:
+        windfarm_ids_query = select(Windfarm.id).where(Windfarm.country_id == country_id)
+        windfarm_ids_result = await db.execute(windfarm_ids_query)
+        country_windfarm_ids = [row[0] for row in windfarm_ids_result.fetchall()]
+        if country_windfarm_ids:
+            conditions.append(GenerationData.windfarm_id.in_(country_windfarm_ids))
+
+    # Get total generation stats
+    stats_query = select(
+        func.sum(GenerationData.generation_mwh).label('total_mwh'),
+        func.avg(GenerationData.quality_score).label('avg_quality'),
+        func.count(func.distinct(GenerationData.windfarm_id)).label('farm_count'),
+        func.count(GenerationData.id).label('record_count'),
+    ).where(and_(*conditions))
+
+    stats_result = await db.execute(stats_query)
+    stats = stats_result.first()
+
+    # Get per-farm stats for ranking
+    farm_stats_query = select(
+        GenerationData.windfarm_id,
+        func.sum(GenerationData.generation_mwh).label('total_mwh'),
+        func.avg(GenerationData.quality_score).label('avg_quality'),
+    ).where(
+        and_(*conditions)
+    ).group_by(
+        GenerationData.windfarm_id
+    ).order_by(
+        desc('total_mwh')
+    )
+
+    farm_stats_result = await db.execute(farm_stats_query)
+    farm_stats = farm_stats_result.fetchall()
+
+    # Get windfarm details for top/bottom performers
+    windfarm_ids = [row.windfarm_id for row in farm_stats]
+    windfarm_details = {}
+    if windfarm_ids:
+        windfarms_query = select(Windfarm).where(Windfarm.id.in_(windfarm_ids))
+        windfarms_result = await db.execute(windfarms_query)
+        for wf in windfarms_result.scalars().all():
+            windfarm_details[wf.id] = {
+                'id': wf.id,
+                'name': wf.name,
+                'code': wf.code,
+                'capacity_mw': float(wf.nameplate_capacity_mw) if wf.nameplate_capacity_mw else 0,
+            }
+
+    # Calculate capacity factors
+    hours_in_period = (end_date - start_date).total_seconds() / 3600
+
+    top_performers = []
+    bottom_performers = []
+
+    for row in farm_stats[:10]:  # Top 10
+        wf = windfarm_details.get(row.windfarm_id, {})
+        capacity = wf.get('capacity_mw', 0)
+        cf = (float(row.total_mwh) / (capacity * hours_in_period) * 100) if capacity and hours_in_period else 0
+        top_performers.append({
+            'windfarm_id': row.windfarm_id,
+            'name': wf.get('name', f'Farm {row.windfarm_id}'),
+            'total_mwh': round(float(row.total_mwh), 2),
+            'capacity_factor': round(cf, 1),
+            'avg_quality': round(float(row.avg_quality or 0), 2),
+        })
+
+    for row in farm_stats[-10:] if len(farm_stats) > 10 else []:  # Bottom 10
+        wf = windfarm_details.get(row.windfarm_id, {})
+        capacity = wf.get('capacity_mw', 0)
+        cf = (float(row.total_mwh) / (capacity * hours_in_period) * 100) if capacity and hours_in_period else 0
+        bottom_performers.append({
+            'windfarm_id': row.windfarm_id,
+            'name': wf.get('name', f'Farm {row.windfarm_id}'),
+            'total_mwh': round(float(row.total_mwh), 2),
+            'capacity_factor': round(cf, 1),
+            'avg_quality': round(float(row.avg_quality or 0), 2),
+        })
+
+    # Calculate portfolio-level capacity factor
+    total_capacity_mw = sum(wf.get('capacity_mw', 0) for wf in windfarm_details.values())
+    avg_capacity_factor = 0
+    if total_capacity_mw and hours_in_period and stats.total_mwh:
+        avg_capacity_factor = (float(stats.total_mwh) / (total_capacity_mw * hours_in_period)) * 100
+
+    return {
+        'total_mwh': round(float(stats.total_mwh or 0), 2),
+        'avg_capacity_factor': round(avg_capacity_factor, 1),
+        'farm_count': stats.farm_count or 0,
+        'record_count': stats.record_count or 0,
+        'avg_quality_score': round(float(stats.avg_quality or 0), 2),
+        'total_capacity_mw': round(total_capacity_mw, 2),
+        'top_performers': top_performers,
+        'bottom_performers': bottom_performers,
+    }
+
+
+@router.get("/portfolio/timeseries")
+async def get_portfolio_generation_timeseries(
+    start_date: datetime = Query(..., description="Start date"),
+    end_date: datetime = Query(..., description="End date"),
+    aggregation: str = Query("daily", regex="^(hourly|daily|weekly|monthly)$"),
+    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Get portfolio generation timeseries with breakdown by wind farm.
+
+    Returns timeseries data aggregated by the specified period (hourly/daily/weekly/monthly).
+    """
+    from app.models.generation_data import GenerationData
+    from app.models.windfarm import Windfarm
+    from app.models.portfolio import PortfolioItem
+    from sqlalchemy import select, func, and_, text
+
+    # Build base conditions
+    conditions = [
+        GenerationData.hour >= start_date,
+        GenerationData.hour < end_date + timedelta(days=1),
+    ]
+
+    # Filter by portfolio or country
+    windfarm_filter_ids = None
+    if portfolio_id:
+        windfarm_ids_query = select(PortfolioItem.windfarm_id).where(
+            PortfolioItem.portfolio_id == portfolio_id
+        )
+        windfarm_ids_result = await db.execute(windfarm_ids_query)
+        windfarm_filter_ids = [row[0] for row in windfarm_ids_result.fetchall()]
+        if windfarm_filter_ids:
+            conditions.append(GenerationData.windfarm_id.in_(windfarm_filter_ids))
+
+    if country_id:
+        windfarm_ids_query = select(Windfarm.id).where(Windfarm.country_id == country_id)
+        windfarm_ids_result = await db.execute(windfarm_ids_query)
+        country_windfarm_ids = [row[0] for row in windfarm_ids_result.fetchall()]
+        if country_windfarm_ids:
+            conditions.append(GenerationData.windfarm_id.in_(country_windfarm_ids))
+
+    # Map aggregation to PostgreSQL date_trunc
+    agg_map = {
+        'hourly': 'hour',
+        'daily': 'day',
+        'weekly': 'week',
+        'monthly': 'month',
+    }
+    trunc_period = agg_map.get(aggregation, 'day')
+
+    # Get total timeseries
+    total_query = select(
+        func.date_trunc(trunc_period, GenerationData.hour).label('period'),
+        func.sum(GenerationData.generation_mwh).label('total_mwh'),
+        func.avg(GenerationData.quality_score).label('avg_quality'),
+        func.count(func.distinct(GenerationData.windfarm_id)).label('farm_count'),
+    ).where(
+        and_(*conditions)
+    ).group_by(
+        func.date_trunc(trunc_period, GenerationData.hour)
+    ).order_by('period')
+
+    total_result = await db.execute(total_query)
+    total_data = total_result.fetchall()
+
+    # Get per-farm breakdown
+    farm_query = select(
+        func.date_trunc(trunc_period, GenerationData.hour).label('period'),
+        GenerationData.windfarm_id,
+        func.sum(GenerationData.generation_mwh).label('total_mwh'),
+    ).where(
+        and_(*conditions)
+    ).group_by(
+        func.date_trunc(trunc_period, GenerationData.hour),
+        GenerationData.windfarm_id,
+    ).order_by('period', GenerationData.windfarm_id)
+
+    farm_result = await db.execute(farm_query)
+    farm_data = farm_result.fetchall()
+
+    # Get windfarm names
+    unique_windfarm_ids = set(row.windfarm_id for row in farm_data)
+    windfarm_names = {}
+    if unique_windfarm_ids:
+        windfarms_query = select(Windfarm.id, Windfarm.name).where(
+            Windfarm.id.in_(unique_windfarm_ids)
+        )
+        windfarms_result = await db.execute(windfarms_query)
+        for row in windfarms_result.fetchall():
+            windfarm_names[row.id] = row.name
+
+    # Build response
+    timeseries = []
+    for row in total_data:
+        period_str = row.period.isoformat() if row.period else None
+        timeseries.append({
+            'period': period_str,
+            'total_mwh': round(float(row.total_mwh or 0), 2),
+            'avg_quality': round(float(row.avg_quality or 0), 2),
+            'farm_count': row.farm_count or 0,
+        })
+
+    # Build per-farm breakdown
+    farm_breakdown = {}
+    for row in farm_data:
+        period_str = row.period.isoformat() if row.period else None
+        wf_name = windfarm_names.get(row.windfarm_id, f'Farm {row.windfarm_id}')
+
+        if wf_name not in farm_breakdown:
+            farm_breakdown[wf_name] = []
+
+        farm_breakdown[wf_name].append({
+            'period': period_str,
+            'mwh': round(float(row.total_mwh or 0), 2),
+        })
+
+    return {
+        'aggregation': aggregation,
+        'start_date': start_date.isoformat(),
+        'end_date': end_date.isoformat(),
+        'timeseries': timeseries,
+        'by_farm': farm_breakdown,
+    }
