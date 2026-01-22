@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     REDIS_URL: Optional[str] = None
 
     # Email settings (Resend)
-    RESEND_API_KEY: Optional[str] = "re_cuZBFx6s_AcoKN8e6napuB1gU19f4nxyB"
+    RESEND_API_KEY: Optional[str] = None  # Set via environment variable
     EMAILS_FROM_EMAIL: str = "noreply@energyexe.com"
     EMAILS_FROM_NAME: str = "EnergyExe"
 
@@ -94,21 +94,21 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # ENTSOE Integration
-    ENTSOE_API_KEY: str = "3b00489d-a886-48a4-95ad-981da57f7b62"
+    ENTSOE_API_KEY: str = ""  # Set via environment variable
     ENTSOE_DEFAULT_AREAS: str = "DE_LU,FR,ES,GB,NL,BE"
     ENTSOE_FETCH_BATCH_DAYS: int = 7
     ENTSOE_RATE_LIMIT_REQUESTS: int = 100
     ENTSOE_RATE_LIMIT_PERIOD: int = 60
 
     # Elexon Integration
-    ELEXON_API_KEY: str = "ytitiohgylom033"
+    ELEXON_API_KEY: str = ""  # Set via environment variable
 
     # EIA Integration
-    EIA_API_KEY: str = "bLXfqlf12SKY6t6kIz03IKGgoTfTBxr9pOLKiZeZ"
+    EIA_API_KEY: str = ""  # Set via environment variable
 
     # CDS API (Copernicus Climate Data Store) for ERA5 weather data
     CDSAPI_URL: str = "https://cds.climate.copernicus.eu/api"
-    CDSAPI_KEY: str = "fea40a33-7b81-4f9a-a145-a1556b25c940"
+    CDSAPI_KEY: str = ""  # Set via environment variable
 
     # LLM / AI Commentary Generation
     ANTHROPIC_API_KEY: Optional[str] = None  # Claude API key
@@ -119,9 +119,9 @@ class Settings(BaseSettings):
     LLM_MAX_COST_PER_REPORT: float = 0.50  # USD
 
     # Valkey/Redis settings for Celery
-    VALKEY_PUBLIC_HOST: str = "valkey-production-515f.up.railway.app"
+    VALKEY_PUBLIC_HOST: str = ""  # Set via environment variable
     VALKEY_PUBLIC_PORT: str = "6379"
-    VALKEY_PASSWORD: str = "roKX3R37u09uQhjf~YjWnScP11nrdU7p"
+    VALKEY_PASSWORD: str = ""  # Set via environment variable
     VALKEY_USER: str = "default"
     
     # Celery settings
@@ -136,7 +136,7 @@ class Settings(BaseSettings):
             return "sqlite:///./test.db"
 
         if not self.DATABASE_URL:
-            return "postgresql://postgres:RwaN9FJDCgP2AhuALxZ4Wa7QfvbKXQ647AAickORJ0rq5N6lUG19UneFJJTJ9Jnv@146.235.201.245:5432/energyexe_db"
+            raise ValueError("DATABASE_URL environment variable is required")
 
         url = str(self.DATABASE_URL)
         if url.startswith("postgresql+asyncpg://"):
@@ -151,7 +151,7 @@ class Settings(BaseSettings):
             return "sqlite+aiosqlite:///:memory:"
 
         if not self.DATABASE_URL:
-            return "postgresql+asyncpg://postgres:RwaN9FJDCgP2AhuALxZ4Wa7QfvbKXQ647AAickORJ0rq5N6lUG19UneFJJTJ9Jnv@146.235.201.245:5432/energyexe_db"
+            raise ValueError("DATABASE_URL environment variable is required")
 
         url = str(self.DATABASE_URL)
         if url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
