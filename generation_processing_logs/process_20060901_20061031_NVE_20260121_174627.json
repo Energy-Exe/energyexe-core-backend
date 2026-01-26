@@ -1,0 +1,38 @@
+{
+  "summary": {
+    "start_time": "2026-01-21T17:46:27.521040",
+    "end_time": "2026-01-21T17:48:22.274604",
+    "total_days": 61,
+    "processed_days": 0,
+    "failed_days": 0,
+    "skipped_days": 61,
+    "total_raw_records": 15914,
+    "total_hourly_records": 15914,
+    "source": "NVE",
+    "dry_run": false
+  },
+  "daily_results": [
+    {
+      "date": "2006-09",
+      "source": "NVE",
+      "status": "success",
+      "raw_records": 7345,
+      "hourly_records": 7345,
+      "processing_time_seconds": 58.45,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-01-21T17:46:27.538598"
+    },
+    {
+      "date": "2006-10",
+      "source": "NVE",
+      "status": "success",
+      "raw_records": 8569,
+      "hourly_records": 8569,
+      "processing_time_seconds": 56.29,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-01-21T17:47:25.984536"
+    }
+  ]
+}

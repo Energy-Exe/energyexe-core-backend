@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from app.core.database import get_session_factory
 from app.models.generation_data import GenerationDataRaw, GenerationData
 from app.models.generation_unit import GenerationUnit
+from app.models.windfarm import Windfarm
 
 # Configure logging
 logging.basicConfig(
@@ -61,6 +62,9 @@ class HourlyRecord:
     data_points: int
     expected_points: int
     metadata: Dict[str, Any]
+    # Curtailment tracking (ELEXON BOAV integration)
+    metered_mwh: Optional[float] = None  # What was delivered to grid (B1610)
+    curtailed_mwh: Optional[float] = None  # What was curtailed (BOAV bids)
 
 
 class DailyGenerationProcessor:
@@ -146,15 +150,31 @@ class DailyGenerationProcessor:
         """Load generation units into memory for faster lookups.
 
         For sources like NVE with multiple phases per code, stores lists of units.
+        Also loads commercial_operational_date from windfarms for capacity factor calculation.
         """
 
-        result = await self.db.execute(select(GenerationUnit).order_by(GenerationUnit.code, GenerationUnit.start_date))
-        units = result.scalars().all()
+        # Join with windfarms to get commercial_operational_date
+        result = await self.db.execute(
+            select(GenerationUnit, Windfarm)
+            .outerjoin(Windfarm, GenerationUnit.windfarm_id == Windfarm.id)
+            .order_by(GenerationUnit.code, GenerationUnit.start_date)
+        )
+        rows = result.all()
+
+        # Also build a cache of commercial_operational_date by windfarm_id
+        self.windfarm_commercial_dates = {}
 
         # Group by source:code (multiple phases can have same code)
-        for unit in units:
+        for unit, windfarm in rows:
             # Use uppercase for case-insensitive matching (TAIPOWER vs Taipower)
             key = f"{unit.source.upper()}:{unit.code}"
+
+            # Get commercial_operational_date from windfarm if available
+            commercial_date = None
+            if windfarm and windfarm.commercial_operational_date:
+                commercial_date = windfarm.commercial_operational_date
+                # Cache by windfarm_id for units without direct windfarm link
+                self.windfarm_commercial_dates[windfarm.id] = commercial_date
 
             unit_info = {
                 'id': unit.id,
@@ -162,7 +182,9 @@ class DailyGenerationProcessor:
                 'capacity_mw': float(unit.capacity_mw) if unit.capacity_mw else None,
                 'name': unit.name,
                 'start_date': unit.start_date,
-                'end_date': unit.end_date
+                'end_date': unit.end_date,
+                'first_power_date': unit.first_power_date,  # For data filtering (takes precedence over start_date)
+                'commercial_operational_date': commercial_date  # For capacity factor calculation
             }
 
             # If key exists, convert to list or append
@@ -200,16 +222,18 @@ class DailyGenerationProcessor:
         else:
             check_date_naive = check_date
 
-        # Check start date
-        start_date = unit_info.get('start_date')
-        if start_date:
+        # Check start date - use first_power_date if set, otherwise fallback to start_date
+        # first_power_date represents when the unit first generated power (earliest data date)
+        # start_date represents when the unit officially started operations
+        effective_start = unit_info.get('first_power_date') or unit_info.get('start_date')
+        if effective_start:
             # Convert to datetime if it's a date object
-            if not isinstance(start_date, datetime):
-                start_date = datetime.combine(start_date, datetime.min.time())
+            if not isinstance(effective_start, datetime):
+                effective_start = datetime.combine(effective_start, datetime.min.time())
             # Remove timezone info if present
-            if hasattr(start_date, 'tzinfo') and start_date.tzinfo:
-                start_date = start_date.replace(tzinfo=None)
-            if check_date_naive < start_date:
+            if hasattr(effective_start, 'tzinfo') and effective_start.tzinfo:
+                effective_start = effective_start.replace(tzinfo=None)
+            if check_date_naive < effective_start:
                 return False
 
         # Check end date
@@ -277,7 +301,15 @@ class DailyGenerationProcessor:
         logger.info(f"Processing {source} for {day_start.date()}" + (f" (windfarm_id={windfarm_id})" if windfarm_id else ""))
 
         # Fetch raw data for the day (filtered by windfarm if specified)
-        raw_data = await self.fetch_raw_data(source, day_start, day_end, windfarm_id=windfarm_id)
+        # For ELEXON, exclude BOAV data from main fetch (we'll fetch it separately)
+        if source == 'ELEXON':
+            raw_data = await self.fetch_raw_data(
+                source, day_start, day_end,
+                windfarm_id=windfarm_id,
+                source_type='api'  # Only B1610 data
+            )
+        else:
+            raw_data = await self.fetch_raw_data(source, day_start, day_end, windfarm_id=windfarm_id)
 
         if not raw_data:
             logger.info(f"No data found for {source} on {day_start.date()}")
@@ -286,8 +318,19 @@ class DailyGenerationProcessor:
         logger.info(f"Found {len(raw_data)} raw records for {source}")
         self.stats['raw_records_processed'] += len(raw_data)
 
+        # For ELEXON, also fetch BOAV data for curtailment calculations
+        boav_data = []
+        if source == 'ELEXON':
+            boav_data = await self.fetch_boav_data(day_start, day_end, windfarm_id=windfarm_id)
+            if boav_data:
+                logger.info(f"Found {len(boav_data)} BOAV bid records for curtailment calculation")
+                self.stats['raw_records_processed'] += len(boav_data)
+
         # Transform to hourly records
-        hourly_records = self.transform_source_data(source, raw_data)
+        if source == 'ELEXON':
+            hourly_records = self.transform_elexon(raw_data, boav_data)
+        else:
+            hourly_records = self.transform_source_data(source, raw_data)
 
         if not hourly_records:
             return {'processed': 0, 'raw_records': len(raw_data)}
@@ -306,6 +349,7 @@ class DailyGenerationProcessor:
 
         return {
             'raw_records': len(raw_data),
+            'boav_records': len(boav_data) if source == 'ELEXON' else 0,
             'hourly_records': len(hourly_records),
             'saved': saved_count
         }
@@ -315,7 +359,8 @@ class DailyGenerationProcessor:
         source: str,
         day_start: datetime,
         day_end: datetime,
-        windfarm_id: Optional[int] = None
+        windfarm_id: Optional[int] = None,
+        source_type: Optional[str] = None
     ) -> List[GenerationDataRaw]:
         """Fetch raw data for a specific source and day.
 
@@ -324,6 +369,7 @@ class DailyGenerationProcessor:
             day_start: Start of day (UTC)
             day_end: End of day (UTC)
             windfarm_id: Optional windfarm ID to filter data by its generation unit identifiers
+            source_type: Optional source_type filter (e.g., 'api', 'boav_bid', 'boav_offer')
         """
 
         # Get identifiers for windfarm filtering if specified
@@ -351,10 +397,13 @@ class DailyGenerationProcessor:
             )
             if identifiers:
                 query = query.where(GenerationDataRaw.identifier.in_(identifiers))
+            if source_type:
+                query = query.where(GenerationDataRaw.source_type == source_type)
             result = await self.db.execute(query)
         else:
             # Fetch data for the specific day
-            logger.debug(f"Fetching {source} data for {day_start} to {day_end}")
+            logger.debug(f"Fetching {source} data for {day_start} to {day_end}" +
+                        (f" (source_type={source_type})" if source_type else ""))
             query = select(GenerationDataRaw).where(
                 and_(
                     GenerationDataRaw.source == source,
@@ -364,6 +413,8 @@ class DailyGenerationProcessor:
             )
             if identifiers:
                 query = query.where(GenerationDataRaw.identifier.in_(identifiers))
+            if source_type:
+                query = query.where(GenerationDataRaw.source_type == source_type)
             query = query.order_by(GenerationDataRaw.period_start, GenerationDataRaw.identifier)
             result = await self.db.execute(query)
 
@@ -371,6 +422,30 @@ class DailyGenerationProcessor:
         records = result.scalars().all()
         logger.debug(f"Fetched {len(records)} records")
         return records
+
+    async def fetch_boav_data(
+        self,
+        day_start: datetime,
+        day_end: datetime,
+        windfarm_id: Optional[int] = None
+    ) -> List[GenerationDataRaw]:
+        """Fetch BOAV bid data (curtailment) for ELEXON.
+
+        Args:
+            day_start: Start of day (UTC)
+            day_end: End of day (UTC)
+            windfarm_id: Optional windfarm ID to filter data
+
+        Returns:
+            List of BOAV bid records
+        """
+        return await self.fetch_raw_data(
+            source='ELEXON',
+            day_start=day_start,
+            day_end=day_end,
+            windfarm_id=windfarm_id,
+            source_type='boav_bid'
+        )
 
     async def _get_windfarm_identifiers(self, windfarm_id: int, source: str) -> List[str]:
         """Get generation unit identifiers (codes) for a specific windfarm and source."""
@@ -391,12 +466,17 @@ class DailyGenerationProcessor:
         source: str,
         raw_data: List[GenerationDataRaw]
     ) -> List[HourlyRecord]:
-        """Transform raw data based on source-specific rules."""
+        """Transform raw data based on source-specific rules.
+
+        Note: ELEXON is handled separately in process_source_for_day
+        to incorporate BOAV data for curtailment calculations.
+        """
 
         if source == 'ENTSOE':
             return self.transform_entsoe(raw_data)
         elif source == 'ELEXON':
-            return self.transform_elexon(raw_data)
+            # Should not reach here - ELEXON is handled separately
+            return self.transform_elexon(raw_data, [])
         elif source == 'TAIPOWER':
             return self.transform_taipower(raw_data)
         elif source == 'NVE':
@@ -558,12 +638,21 @@ class DailyGenerationProcessor:
 
         return value
 
-    def transform_elexon(self, raw_data: List[GenerationDataRaw]) -> List[HourlyRecord]:
-        """Transform ELEXON data (30-min periods).
+    def transform_elexon(
+        self,
+        raw_data: List[GenerationDataRaw],
+        boav_data: List[GenerationDataRaw]
+    ) -> List[HourlyRecord]:
+        """Transform ELEXON data (30-min periods) with BOAV curtailment integration.
 
         ELEXON provides data in 30-minute settlement periods.
         Each value represents MWh generated in that 30-min period.
         To get hourly MWh, we sum the two 30-min periods.
+
+        BOAV Integration:
+        - Accepted bids represent curtailment (generator paid to reduce output)
+        - Actual Production = Metered Generation (B1610) + abs(Curtailed Volume)
+        - generation_mwh = metered_mwh + curtailed_mwh
 
         Uses settlement_date and settlement_period from JSONB to calculate
         correct UTC timestamps, handling UK DST properly.
@@ -571,6 +660,7 @@ class DailyGenerationProcessor:
         Applies sign based on import_export_ind (I=Import=negative, E=Export=positive).
         """
 
+        # Group B1610 data by hour and identifier
         hourly_groups = defaultdict(list)
 
         for record in raw_data:
@@ -578,6 +668,13 @@ class DailyGenerationProcessor:
             hour = self._calculate_correct_elexon_hour(record)
             key = (hour, record.identifier)
             hourly_groups[key].append(record)
+
+        # Group BOAV bid data by hour and identifier
+        boav_hourly_groups = defaultdict(list)
+        for record in boav_data:
+            hour = self._calculate_correct_elexon_hour(record)
+            key = (hour, record.identifier)
+            boav_hourly_groups[key].append(record)
 
         hourly_records = []
 
@@ -591,9 +688,27 @@ class DailyGenerationProcessor:
             if not valid_records:
                 continue  # Skip this hour if no valid data
 
-            # Sum the MWh values from the 30-min periods to get hourly total
+            # Sum the MWh values from the 30-min periods to get hourly total (metered generation)
             # Apply correct sign based on import_export_ind
-            generation_mwh = sum([self._get_elexon_value_with_sign(r) for r in valid_records])
+            metered_mwh = sum([self._get_elexon_value_with_sign(r) for r in valid_records])
+
+            # Get BOAV bid data for this hour/identifier (curtailment)
+            boav_records = boav_hourly_groups.get((hour, identifier), [])
+            curtailed_mwh = 0.0
+            boav_raw_ids = []
+
+            if boav_records:
+                # Sum of absolute bid volumes (bids are stored as negative values)
+                # Curtailment = abs(sum of bid volumes)
+                for boav_record in boav_records:
+                    # value_extracted contains the bid volume (negative for curtailment)
+                    if boav_record.value_extracted is not None:
+                        # Take absolute value since bids are negative
+                        curtailed_mwh += abs(float(boav_record.value_extracted))
+                        boav_raw_ids.append(boav_record.id)
+
+            # Actual production = metered + curtailed
+            generation_mwh = metered_mwh + curtailed_mwh
 
             # Get capacity from generation units cache
             unit_key = f"ELEXON:{identifier}"
@@ -603,15 +718,68 @@ class DailyGenerationProcessor:
             # Get capacity if unit is operational
             capacity_mw = unit_info.get('capacity_mw') if unit_info else None
 
+            # Combine raw data IDs from both B1610 and BOAV
+            all_raw_ids = [r.id for r in valid_records] + boav_raw_ids
+
             hourly_records.append(HourlyRecord(
                 hour=hour,
                 identifier=identifier,
-                generation_mwh=generation_mwh,  # Sum of 30-min MWh values
+                generation_mwh=generation_mwh,  # Actual production (metered + curtailed)
                 capacity_mw=capacity_mw,
-                raw_data_ids=[r.id for r in valid_records],
+                raw_data_ids=all_raw_ids,
                 data_points=len(valid_records),
                 expected_points=2,
-                metadata={}
+                metadata={
+                    'has_curtailment': curtailed_mwh > 0,
+                    'boav_records_count': len(boav_records)
+                },
+                metered_mwh=metered_mwh,  # What was delivered to grid
+                curtailed_mwh=curtailed_mwh if curtailed_mwh > 0 else None  # What was curtailed
+            ))
+
+        # Process BOAV-only hours (curtailment without corresponding B1610 metered data)
+        # This captures periods when windfarms were fully curtailed (no metered output)
+        b1610_hours = set(hourly_groups.keys())
+        boav_only_hours = set(boav_hourly_groups.keys()) - b1610_hours
+
+        for (hour, identifier) in boav_only_hours:
+            boav_records = boav_hourly_groups[(hour, identifier)]
+
+            # Sum of absolute bid volumes (bids are stored as negative values)
+            curtailed_mwh = 0.0
+            boav_raw_ids = []
+
+            for boav_record in boav_records:
+                if boav_record.value_extracted is not None:
+                    curtailed_mwh += abs(float(boav_record.value_extracted))
+                    boav_raw_ids.append(boav_record.id)
+
+            # Skip if no valid curtailment data
+            if curtailed_mwh == 0:
+                continue
+
+            # Get capacity from generation units cache
+            unit_key = f"ELEXON:{identifier}"
+            cache_entry = self.generation_units_cache.get(unit_key)
+            unit_info = self.get_operational_unit(cache_entry, hour)
+            capacity_mw = unit_info.get('capacity_mw') if unit_info else None
+
+            # For BOAV-only hours: metered=0, generation=curtailed
+            hourly_records.append(HourlyRecord(
+                hour=hour,
+                identifier=identifier,
+                generation_mwh=curtailed_mwh,  # Actual production = curtailed (metered is 0)
+                capacity_mw=capacity_mw,
+                raw_data_ids=boav_raw_ids,
+                data_points=0,  # No B1610 data points
+                expected_points=2,
+                metadata={
+                    'has_curtailment': True,
+                    'boav_records_count': len(boav_records),
+                    'boav_only': True  # Flag to indicate this is a BOAV-only record
+                },
+                metered_mwh=0.0,  # No metered output (fully curtailed)
+                curtailed_mwh=curtailed_mwh
             ))
 
         return hourly_records
@@ -801,19 +969,37 @@ class DailyGenerationProcessor:
                 raw_cf_value = record.generation_mwh / raw_capacity_mw
                 raw_capacity_factor = min(raw_cf_value, 9.9999)
 
+            # Get unit info (handles both single units and multiple phases)
+            # Moved earlier so we can check commercial_operational_date for capacity factor
+            unit_key = f"{source}:{record.identifier}"
+            cache_entry = self.generation_units_cache.get(unit_key)
+            unit_info = self.get_operational_unit(cache_entry, record.hour)
+
+            # Check if we're before commercial operational date
+            # If so, don't calculate capacity factor (pre-commercial/commissioning data)
+            is_pre_commercial = False
+            commercial_date = unit_info.get('commercial_operational_date') if unit_info else None
+            if commercial_date:
+                # Convert record.hour to date for comparison
+                record_date = record.hour.date() if hasattr(record.hour, 'date') else record.hour
+                if isinstance(commercial_date, datetime):
+                    commercial_date = commercial_date.date()
+                if record_date < commercial_date:
+                    is_pre_commercial = True
+
             # Calculate capacity factor from generation_units capacity
+            # Only calculate if we're at or after commercial operational date
             capacity_factor = None
-            if record.capacity_mw and record.capacity_mw > 0:
+            effective_capacity_mw = record.capacity_mw
+            if is_pre_commercial:
+                # Pre-commercial period: don't show capacity factor or capacity
+                effective_capacity_mw = None
+            elif record.capacity_mw and record.capacity_mw > 0:
                 # Calculate capacity factor using generation_units capacity
                 calculated_cf = record.generation_mwh / record.capacity_mw
                 # Cap at 9.9999 to fit in NUMERIC(5,4) - values > 1.0 can occur
                 # when actual generation exceeds nameplate capacity
                 capacity_factor = min(calculated_cf, 9.9999)
-
-            # Get unit info (handles both single units and multiple phases)
-            unit_key = f"{source}:{record.identifier}"
-            cache_entry = self.generation_units_cache.get(unit_key)
-            unit_info = self.get_operational_unit(cache_entry, record.hour)
 
             # Create GenerationData object
             obj = GenerationData(
@@ -823,10 +1009,13 @@ class DailyGenerationProcessor:
                 windfarm_id=unit_info['windfarm_id'] if unit_info else None,
                 turbine_unit_id=None,  # Will be set when we have turbine-level data
                 generation_mwh=Decimal(str(record.generation_mwh)),
-                capacity_mw=Decimal(str(record.capacity_mw)) if record.capacity_mw else None,
+                capacity_mw=Decimal(str(effective_capacity_mw)) if effective_capacity_mw else None,
                 capacity_factor=Decimal(str(capacity_factor)) if capacity_factor else None,
                 raw_capacity_mw=Decimal(str(raw_capacity_mw)) if raw_capacity_mw else None,
                 raw_capacity_factor=Decimal(str(raw_capacity_factor)) if raw_capacity_factor else None,
+                # Curtailment tracking (ELEXON BOAV integration)
+                metered_mwh=Decimal(str(record.metered_mwh)) if record.metered_mwh is not None else None,
+                curtailed_mwh=Decimal(str(record.curtailed_mwh)) if record.curtailed_mwh else None,
                 source=source,
                 source_resolution=self.get_source_resolution(source),
                 raw_data_ids=record.raw_data_ids,

@@ -92,6 +92,13 @@ class GenerationData(Base):
     capacity_mw: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     capacity_factor: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 4))
 
+    # Curtailment tracking (ELEXON BOAV integration)
+    # metered_mwh: What was delivered to the grid (from B1610)
+    # curtailed_mwh: What was curtailed via accepted bids (from BOAV)
+    # generation_mwh = metered_mwh + curtailed_mwh (actual production)
+    metered_mwh: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
+    curtailed_mwh: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3), default=0)
+
     # Raw values from source
     raw_capacity_mw: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     raw_capacity_factor: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 4))

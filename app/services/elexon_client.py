@@ -1,6 +1,6 @@
 """Elexon API client service."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -207,3 +207,187 @@ class ElexonClient:
         # For now, we'll assume direct mapping (code = bmUnit)
         # In a real system, you might need a mapping table or transformation logic
         return generation_unit_codes
+
+    async def fetch_acceptance_volumes(
+        self,
+        settlement_date: date,
+        bid_offer: str,
+        bm_units: Optional[List[str]] = None,
+    ) -> Tuple[pd.DataFrame, Dict]:
+        """
+        Fetch bid-offer acceptance volumes from BOAV API.
+
+        BOAV data captures:
+        - Bids Accepted: Generator paid to REDUCE output (curtailment)
+        - Offers Accepted: Generator paid to INCREASE output
+
+        For calculating actual production:
+        Actual Production = Metered Generation (B1610) + abs(Curtailed Volume from Bids)
+
+        Args:
+            settlement_date: Date to fetch (YYYY-MM-DD)
+            bid_offer: 'bid' (curtailment) or 'offer' (increase)
+            bm_units: Optional list of BM units to filter
+
+        Returns:
+            Tuple of (DataFrame with acceptance data, metadata dict)
+
+        DataFrame columns:
+            - timestamp: UTC timestamp (DST-aware converted)
+            - settlement_date: Original UK date
+            - settlement_period: 1-50
+            - bm_unit: BM Unit identifier
+            - acceptance_id: Unique acceptance ID
+            - total_volume_accepted: Volume in MWh (negative for bids)
+            - acceptance_duration: 'S' (short) or 'L' (long)
+            - pair_volumes: JSONB with detailed volume breakdown
+        """
+        try:
+            metadata = {
+                "settlement_date": settlement_date,
+                "bid_offer": bid_offer,
+                "success": True,
+                "errors": [],
+                "bm_units_requested": bm_units or [],
+                "bm_units_found": set(),
+            }
+
+            # Format date for API
+            date_str = (
+                settlement_date.strftime("%Y-%m-%d")
+                if isinstance(settlement_date, date)
+                else settlement_date
+            )
+
+            # Build URL
+            url = f"{self.BASE_URL}/balancing/settlement/acceptance/volumes/all/{bid_offer}/{date_str}"
+
+            logger.info(
+                f"Fetching BOAV {bid_offer} data for {date_str}",
+                url=url,
+                bm_units=bm_units,
+            )
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.get(url, headers=self.headers)
+
+                if response.status_code != 200:
+                    error_msg = (
+                        f"Elexon BOAV API error: {response.status_code} - {response.text}"
+                    )
+                    logger.error(error_msg)
+                    metadata["success"] = False
+                    metadata["errors"].append({"error": error_msg})
+                    return pd.DataFrame(), metadata
+
+                data = response.json()
+
+                # Handle response structure - data may be in 'data' key
+                if isinstance(data, dict) and "data" in data:
+                    records = data["data"]
+                elif isinstance(data, list):
+                    records = data
+                else:
+                    logger.warning("Unexpected BOAV API response structure")
+                    metadata["errors"].append({"error": "Unexpected response structure"})
+                    metadata["success"] = False
+                    return pd.DataFrame(), metadata
+
+                if not records:
+                    logger.warning(f"No BOAV {bid_offer} data for {date_str}")
+                    metadata["records"] = 0
+                    return pd.DataFrame(), metadata
+
+                # Convert to DataFrame
+                df = pd.DataFrame(records)
+
+                logger.info(f"Received {len(df)} BOAV records from Elexon API")
+
+                # Filter by BM units if specified
+                if bm_units and "bmUnit" in df.columns:
+                    original_count = len(df)
+                    df = df[df["bmUnit"].isin(bm_units)]
+                    if df.empty:
+                        logger.info(
+                            f"No BOAV {bid_offer} data for specified BM units on {date_str} "
+                            f"(API returned {original_count} records for other units)"
+                        )
+                        metadata["records"] = 0
+                        metadata["total_api_records"] = original_count
+                        return pd.DataFrame(), metadata
+                    logger.info(
+                        f"Filtered to {len(df)} records matching our BM units "
+                        f"(from {original_count} total)"
+                    )
+
+                # Process and standardize the data
+                if not df.empty:
+                    # Rename columns to match our schema
+                    column_mapping = {
+                        "settlementDate": "settlement_date",
+                        "settlementPeriod": "settlement_period",
+                        "bmUnit": "bm_unit",
+                        "acceptanceId": "acceptance_id",
+                        "totalVolumeAccepted": "total_volume_accepted",
+                        "acceptanceDuration": "acceptance_duration",
+                        "pairVolumes": "pair_volumes",
+                    }
+
+                    df = df.rename(columns=column_mapping)
+
+                    # Convert settlement date and period to UTC timestamp
+                    # Uses same DST-aware logic as fetch_physical_data (B1610)
+                    if (
+                        "settlement_date" in df.columns
+                        and "settlement_period" in df.columns
+                    ):
+                        # Parse dates and localize to UK timezone (Europe/London)
+                        # This correctly handles BST (UTC+1) vs GMT (UTC+0)
+                        uk_dates = pd.to_datetime(df["settlement_date"]).dt.tz_localize(
+                            "Europe/London",
+                            ambiguous="infer",
+                            nonexistent="shift_forward",
+                        )
+                        # Convert UK midnight to UTC
+                        utc_dates = uk_dates.dt.tz_convert("UTC")
+                        # Add settlement period offset (period 1 = 00:00, each period is 30 min)
+                        df["timestamp"] = utc_dates + pd.to_timedelta(
+                            (df["settlement_period"] - 1) * 30, unit="minutes"
+                        )
+                        # Remove timezone info and format as ISO string
+                        df["timestamp"] = df["timestamp"].dt.tz_localize(None)
+                        df["timestamp"] = df["timestamp"].dt.strftime(
+                            "%Y-%m-%dT%H:%M:%S"
+                        )
+
+                    # Ensure numeric fields are properly typed
+                    if "total_volume_accepted" in df.columns:
+                        df["total_volume_accepted"] = pd.to_numeric(
+                            df["total_volume_accepted"], errors="coerce"
+                        ).fillna(0)
+
+                    if "settlement_period" in df.columns:
+                        df["settlement_period"] = pd.to_numeric(
+                            df["settlement_period"], errors="coerce"
+                        ).fillna(0).astype(int)
+
+                    # Track which BM units were found
+                    if "bm_unit" in df.columns:
+                        metadata["bm_units_found"] = set(df["bm_unit"].unique())
+
+                    metadata["records"] = len(df)
+                else:
+                    metadata["records"] = 0
+
+                return df, metadata
+
+        except Exception as e:
+            logger.error(f"Elexon BOAV API error: {str(e)}")
+            metadata = {
+                "settlement_date": settlement_date,
+                "bid_offer": bid_offer,
+                "success": False,
+                "errors": [{"general": str(e)}],
+                "records": 0,
+            }
+            return pd.DataFrame(), metadata

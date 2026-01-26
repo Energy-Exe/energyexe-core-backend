@@ -60,7 +60,10 @@ class ComparisonService:
             func.avg(GenerationData.raw_capacity_factor).label('avg_raw_capacity_factor'),
             func.avg(GenerationData.raw_capacity_mw).label('avg_raw_capacity'),
             func.avg(GenerationData.capacity_mw).label('avg_capacity'),
-            func.count(GenerationData.id).label('data_points')
+            func.count(GenerationData.id).label('data_points'),
+            # Curtailment data (BOAV integration)
+            func.sum(GenerationData.metered_mwh).label('total_metered'),
+            func.sum(GenerationData.curtailed_mwh).label('total_curtailed'),
         ).join(
             Windfarm, GenerationData.windfarm_id == Windfarm.id
         ).where(
@@ -197,7 +200,10 @@ class ComparisonService:
                         'avg_raw_capacity_factor': float(row.avg_raw_capacity_factor) if row.avg_raw_capacity_factor else 0,
                         'avg_raw_capacity': float(row.avg_raw_capacity) if row.avg_raw_capacity else 0,
                         'avg_capacity': float(row.avg_capacity) if row.avg_capacity else 0,
-                        'data_points': row.data_points
+                        'data_points': row.data_points,
+                        # Curtailment data
+                        'total_metered': float(row.total_metered) if row.total_metered else 0,
+                        'total_curtailed': float(row.total_curtailed) if row.total_curtailed else 0,
                     })
 
                     summary['total_generation'] += float(row.total_generation) if row.total_generation else 0
@@ -221,7 +227,10 @@ class ComparisonService:
                         'avg_raw_capacity_factor': None,  # null means no data
                         'avg_raw_capacity': None,  # null means no data
                         'avg_capacity': None,  # null means no data
-                        'data_points': 0
+                        'data_points': 0,
+                        # Curtailment data
+                        'total_metered': 0,
+                        'total_curtailed': 0,
                     })
 
         if total_data_points_for_cf > 0:
@@ -298,7 +307,10 @@ class ComparisonService:
             func.min(GenerationData.raw_capacity_factor).label('min_raw_capacity_factor'),
             func.avg(GenerationData.raw_capacity_mw).label('avg_raw_capacity'),
             func.count(GenerationData.id).label('data_points'),
-            func.count(case((GenerationData.generation_mwh > 0, 1))).label('active_hours')
+            func.count(case((GenerationData.generation_mwh > 0, 1))).label('active_hours'),
+            # Curtailment data
+            func.sum(GenerationData.metered_mwh).label('total_metered'),
+            func.sum(GenerationData.curtailed_mwh).label('total_curtailed'),
         ).join(
             GenerationData, GenerationData.windfarm_id == Windfarm.id
         ).where(
@@ -320,11 +332,16 @@ class ComparisonService:
         for row in rows:
             availability = (row.active_hours / row.data_points * 100) if row.data_points > 0 else 0
 
+            # Calculate curtailment percentage
+            total_gen = float(row.total_generation) if row.total_generation else 0
+            total_curtailed = float(row.total_curtailed) if row.total_curtailed else 0
+            curtailment_percent = (total_curtailed / total_gen * 100) if total_gen > 0 else 0
+
             stats.append({
                 'windfarm_id': row.id,
                 'windfarm_name': row.name,
                 'capacity_mw': float(row.nameplate_capacity_mw) if row.nameplate_capacity_mw else None,
-                'total_generation': float(row.total_generation) if row.total_generation else 0,
+                'total_generation': total_gen,
                 'peak_generation': float(row.peak_generation) if row.peak_generation else 0,
                 'min_generation': float(row.min_generation) if row.min_generation else 0,
                 'avg_generation': float(row.avg_generation) if row.avg_generation else 0,
@@ -339,7 +356,11 @@ class ComparisonService:
                 'data_points': row.data_points,
                 'period_days': period_days,
                 'availability_percent': availability,
-                'data_completeness': row.data_points / (period_days * 24) * 100 if period_days > 0 else 0
+                'data_completeness': row.data_points / (period_days * 24) * 100 if period_days > 0 else 0,
+                # Curtailment data
+                'total_metered': float(row.total_metered) if row.total_metered else 0,
+                'total_curtailed': total_curtailed,
+                'curtailment_percent': curtailment_percent,
             })
 
         return stats

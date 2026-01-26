@@ -1,10 +1,33 @@
 # NVE Data Processing
 
+## Import Summary (Jan 2026)
+
+| Metric | Value |
+|--------|-------|
+| Raw records imported | 5,441,098 |
+| Aggregated records | 5,441,099 |
+| Data completeness | 99.5% of CSV |
+| Date range | 2002-01-01 to 2024-12-31 |
+| Windfarms linked | 82.4% (4.27M records) |
+
+**Key fixes applied:**
+- Pre-commercial data now imported using `first_power_date` (not `start_date`)
+- Capacity factor set to NULL before `commercial_operational_date`
+- Phase 1 generation units linked to parent windfarms (279 units fixed)
+- Decommissioned windfarm data imported (60,166 records via `import_missing_decommissioned.py`)
+
 ## Source Files
 - **Location**: `data/vindprod2002-2024_kraftverk.xlsx`
 - **Format**: Norwegian wind farm hourly data (pivoted)
 - **Period**: 2002-2024
 - **Coverage**: 71 windfarms, 366 generation unit phases
+- **Timezone**: **UTC** (verified by DST transition analysis)
+
+### Timezone Verification
+The source data is in UTC, confirmed by:
+- All days have exactly 24 hours, including DST transition days
+- Spring forward days (e.g., March 31, 2024) contain 02:00 timestamps, which don't exist in Europe/Oslo local time
+- Fall back days (e.g., October 27, 2024) have only one 02:00 entry instead of two
 
 ## Data Structure - Pivoted Format
 ```
