@@ -306,17 +306,24 @@ class DailyGenerationProcessor:
             raw_data = await self.fetch_raw_data(
                 source, day_start, day_end,
                 windfarm_id=windfarm_id,
-                source_type='api'  # Only B1610 data
+                exclude_source_types=['boav_bid', 'boav_offer']  # All B1610 data (api + csv)
             )
+            # Deduplicate: if both 'api' and 'csv' records exist for the same
+            # (identifier, period_start), prefer 'api' to avoid double-counting
+            if raw_data:
+                seen = {}
+                for r in raw_data:
+                    key = (r.identifier, r.period_start)
+                    if key not in seen:
+                        seen[key] = r
+                    elif r.source_type == 'api':
+                        seen[key] = r  # api takes priority over csv
+                before_count = len(raw_data)
+                raw_data = list(seen.values())
+                if len(raw_data) < before_count:
+                    logger.info(f"Deduplicated {before_count} → {len(raw_data)} B1610 records (api preferred over csv)")
         else:
             raw_data = await self.fetch_raw_data(source, day_start, day_end, windfarm_id=windfarm_id)
-
-        if not raw_data:
-            logger.info(f"No data found for {source} on {day_start.date()}")
-            return {'processed': 0, 'raw_records': 0}
-
-        logger.info(f"Found {len(raw_data)} raw records for {source}")
-        self.stats['raw_records_processed'] += len(raw_data)
 
         # For ELEXON, also fetch BOAV data for curtailment calculations
         boav_data = []
@@ -325,6 +332,14 @@ class DailyGenerationProcessor:
             if boav_data:
                 logger.info(f"Found {len(boav_data)} BOAV bid records for curtailment calculation")
                 self.stats['raw_records_processed'] += len(boav_data)
+
+        if not raw_data and not boav_data:
+            logger.info(f"No data found for {source} on {day_start.date()}")
+            return {'processed': 0, 'raw_records': 0}
+
+        if raw_data:
+            logger.info(f"Found {len(raw_data)} raw records for {source}")
+            self.stats['raw_records_processed'] += len(raw_data)
 
         # Transform to hourly records
         if source == 'ELEXON':
@@ -360,7 +375,8 @@ class DailyGenerationProcessor:
         day_start: datetime,
         day_end: datetime,
         windfarm_id: Optional[int] = None,
-        source_type: Optional[str] = None
+        source_type: Optional[str] = None,
+        exclude_source_types: Optional[List[str]] = None
     ) -> List[GenerationDataRaw]:
         """Fetch raw data for a specific source and day.
 
@@ -370,6 +386,7 @@ class DailyGenerationProcessor:
             day_end: End of day (UTC)
             windfarm_id: Optional windfarm ID to filter data by its generation unit identifiers
             source_type: Optional source_type filter (e.g., 'api', 'boav_bid', 'boav_offer')
+            exclude_source_types: Optional list of source_types to exclude
         """
 
         # Get identifiers for windfarm filtering if specified
@@ -399,6 +416,8 @@ class DailyGenerationProcessor:
                 query = query.where(GenerationDataRaw.identifier.in_(identifiers))
             if source_type:
                 query = query.where(GenerationDataRaw.source_type == source_type)
+            if exclude_source_types:
+                query = query.where(GenerationDataRaw.source_type.notin_(exclude_source_types))
             result = await self.db.execute(query)
         else:
             # Fetch data for the specific day
@@ -415,6 +434,8 @@ class DailyGenerationProcessor:
                 query = query.where(GenerationDataRaw.identifier.in_(identifiers))
             if source_type:
                 query = query.where(GenerationDataRaw.source_type == source_type)
+            if exclude_source_types:
+                query = query.where(GenerationDataRaw.source_type.notin_(exclude_source_types))
             query = query.order_by(GenerationDataRaw.period_start, GenerationDataRaw.identifier)
             result = await self.db.execute(query)
 
@@ -917,10 +938,17 @@ class DailyGenerationProcessor:
             windfarm_id: Optional windfarm ID to limit deletion to specific windfarm
         """
 
+        # For ELEXON, extend clear window 1 hour earlier to handle BST boundary.
+        # During BST, UK settlement dates start at 23:00 UTC (previous day),
+        # so the first settlement periods produce records at 23:00 UTC prev day.
+        clear_start = day_start
+        if source == 'ELEXON':
+            clear_start = day_start - timedelta(hours=1)
+
         # Build delete query
         conditions = [
             GenerationData.source == source,
-            GenerationData.hour >= day_start,
+            GenerationData.hour >= clear_start,
             GenerationData.hour < day_end
         ]
 
