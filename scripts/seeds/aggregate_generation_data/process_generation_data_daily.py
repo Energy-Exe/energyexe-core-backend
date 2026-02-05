@@ -343,7 +343,7 @@ class DailyGenerationProcessor:
 
         # Transform to hourly records
         if source == 'ELEXON':
-            hourly_records = self.transform_elexon(raw_data, boav_data)
+            hourly_records = self.transform_elexon(raw_data, boav_data, day_start, day_end)
         else:
             hourly_records = self.transform_source_data(source, raw_data)
 
@@ -421,13 +421,23 @@ class DailyGenerationProcessor:
             result = await self.db.execute(query)
         else:
             # Fetch data for the specific day
-            logger.debug(f"Fetching {source} data for {day_start} to {day_end}" +
+            # For ELEXON, extend query window by 1 hour to capture BST offset records.
+            # During BST, UK settlement periods 1-2 are at 23:00-00:00 UTC of the previous day,
+            # but raw data has incorrect period_start timestamps (1 hour ahead).
+            # This means settlement periods 1-2 for next UK day are stored at day_end 00:00-01:00 UTC.
+            # The day boundary filter in transform_elexon will correctly include only records
+            # that map to hours within the current UTC day.
+            query_end = day_end
+            if source == 'ELEXON':
+                query_end = day_end + timedelta(hours=1)
+
+            logger.debug(f"Fetching {source} data for {day_start} to {query_end}" +
                         (f" (source_type={source_type})" if source_type else ""))
             query = select(GenerationDataRaw).where(
                 and_(
                     GenerationDataRaw.source == source,
                     GenerationDataRaw.period_start >= day_start,
-                    GenerationDataRaw.period_start < day_end
+                    GenerationDataRaw.period_start < query_end
                 )
             )
             if identifiers:
@@ -662,7 +672,9 @@ class DailyGenerationProcessor:
     def transform_elexon(
         self,
         raw_data: List[GenerationDataRaw],
-        boav_data: List[GenerationDataRaw]
+        boav_data: List[GenerationDataRaw],
+        day_start: Optional[datetime] = None,
+        day_end: Optional[datetime] = None
     ) -> List[HourlyRecord]:
         """Transform ELEXON data (30-min periods) with BOAV curtailment integration.
 
@@ -679,6 +691,12 @@ class DailyGenerationProcessor:
         correct UTC timestamps, handling UK DST properly.
 
         Applies sign based on import_export_ind (I=Import=negative, E=Export=positive).
+
+        Args:
+            raw_data: B1610 metered volume records
+            boav_data: BOAV bid records for curtailment
+            day_start: Optional UTC day start - hours outside [day_start, day_end) are filtered
+            day_end: Optional UTC day end
         """
 
         # Group B1610 data by hour and identifier
@@ -802,6 +820,26 @@ class DailyGenerationProcessor:
                 metered_mwh=0.0,  # No metered output (fully curtailed)
                 curtailed_mwh=curtailed_mwh
             ))
+
+        # Filter hourly records to only include those within the day boundaries.
+        # This is needed because raw data may have incorrect period_start timestamps
+        # (1-hour BST offset bug), causing records to appear in the wrong day's batch.
+        # The _calculate_correct_elexon_hour function corrects the hour using
+        # settlement_date + settlement_period from JSONB, but the raw data query
+        # still uses period_start, so some records may produce hours outside the
+        # expected day range. These will be processed when the correct day is processed.
+        if day_start is not None and day_end is not None:
+            original_count = len(hourly_records)
+            hourly_records = [
+                r for r in hourly_records
+                if r.hour >= day_start and r.hour < day_end
+            ]
+            filtered_count = original_count - len(hourly_records)
+            if filtered_count > 0:
+                logger.debug(
+                    f"Filtered {filtered_count} hourly records outside day boundaries "
+                    f"[{day_start}, {day_end})"
+                )
 
         return hourly_records
 
@@ -938,12 +976,11 @@ class DailyGenerationProcessor:
             windfarm_id: Optional windfarm ID to limit deletion to specific windfarm
         """
 
-        # For ELEXON, extend clear window 1 hour earlier to handle BST boundary.
+        # Note: We do NOT extend the clear window for ELEXON BST handling.
         # During BST, UK settlement dates start at 23:00 UTC (previous day),
-        # so the first settlement periods produce records at 23:00 UTC prev day.
+        # but those records are created when processing the PREVIOUS UTC day.
+        # Extending the window would delete records from the previous day's processing.
         clear_start = day_start
-        if source == 'ELEXON':
-            clear_start = day_start - timedelta(hours=1)
 
         # Build delete query
         conditions = [

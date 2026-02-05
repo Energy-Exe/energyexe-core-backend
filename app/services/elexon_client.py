@@ -171,7 +171,8 @@ class ElexonClient:
                         metadata["bm_units_found"] = set(df["bm_unit"].unique())
 
                     # Select relevant columns
-                    columns_to_keep = ["timestamp", "bm_unit", "value", "unit", "settlement_period"]
+                    # NOTE: settlement_date is crucial for correct UTC hour calculation in aggregation
+                    columns_to_keep = ["timestamp", "bm_unit", "value", "unit", "settlement_period", "settlement_date"]
                     df = df[[col for col in columns_to_keep if col in df.columns]]
 
                     metadata["records"] = len(df)

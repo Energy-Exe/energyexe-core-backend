@@ -124,31 +124,109 @@ data             = JSONB with full details
 }
 ```
 
-## After Import: Run Aggregation
+## After Import: Aggregation Pipeline
 
-Both import methods store data in `generation_data_raw`. After importing, process into hourly aggregates:
+Both import methods store data in `generation_data_raw`. After importing, raw 30-minute records must be aggregated into hourly `generation_data` records.
+
+### How Aggregation Works
+
+Two processors exist:
+
+| Processor | Location | Use case |
+|-----------|----------|----------|
+| `process_generation_data_daily.py` | `scripts/seeds/aggregate_generation_data/` | Multi-source daily cron, uses `settlement_date+SP` for UTC hour |
+| `elexon_processor.py` | `scripts/seeds/` | ELEXON-only batch reprocessing with verify/debug modes |
+
+For each day and each BM unit, the aggregation does:
+
+1. **Fetch** B1610 raw records from `generation_data_raw` (excluding BOAV source types)
+2. **Deduplicate** — if both API and CSV records exist for the same `(identifier, period_start)`, API wins
+3. **Fetch** BOAV bid records separately (curtailment data)
+4. **Calculate correct UTC hour** from `settlement_date` + `settlement_period` in the JSONB `data` column (not from `period_start` — see BST section below)
+5. **Apply import/export sign** — `E` (export to grid) = positive, `I` (import from grid) = negative
+6. **Group** by `(hour, identifier)` and sum:
+   - `metered_mwh` = sum of signed B1610 values (what was delivered to grid)
+   - `curtailed_mwh` = sum of abs(BOAV bid volumes) (what was curtailed)
+   - `generation_mwh` = `metered_mwh` + `curtailed_mwh` (actual production capability)
+7. **Clear** existing aggregated records for that day/source (idempotent — safe to re-run)
+8. **Save** to `generation_data` with capacity factor, quality scores, and `raw_data_ids` linkage
+
+### Running Aggregation
 
 ```bash
-# Aggregate the imported data
-poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py \
-  --source ELEXON \
-  --start 2025-10-11 \
-  --end 2025-10-11
+# Aggregate a date range (daily processor)
+poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_daily.py \
+  --source ELEXON --start 2025-10-01 --end 2025-10-31
+
+# Parallel re-aggregation by month (for large ranges)
+poetry run python scripts/seeds/aggregate_generation_data/reprocess_year_parallel.py \
+  --source ELEXON --year 2025
+
+# ELEXON-specific processor with verification
+poetry run python scripts/seeds/elexon_processor.py process --start 2025-10-01 --end 2025-10-31
+poetry run python scripts/seeds/elexon_processor.py verify --windfarm-id 42
+poetry run python scripts/seeds/elexon_processor.py debug --hour "2025-10-26T01:00:00" --windfarm-id 42
 ```
 
-## Performance Comparison
+### Aggregated Data Schema (`generation_data`)
 
-| Method | Use Case | Speed | API Calls | Best For |
-|--------|----------|-------|-----------|----------|
-| CSV Import | Historical (2013-2024) | Very Fast | 0 | Bulk data |
-| API Import | Recent (last week) | Fast | 1 | Live updates |
+One row per `(hour, generation_unit_id, source)` — enforced by unique constraint.
 
-## Key Notes
+| Field | Meaning |
+|-------|---------|
+| `metered_mwh` | What the grid received — **use this for validation against ELEXON** |
+| `curtailed_mwh` | Energy lost to curtailment (from BOAV bids) |
+| `generation_mwh` | `metered + curtailed` — actual production capability |
+| `capacity_factor` | `generation_mwh / capacity_mw` (from `generation_units`) |
+| `raw_data_ids` | Array of `generation_data_raw.id` values for traceability |
+| `quality_flag` | HIGH/MEDIUM/LOW/POOR based on data completeness |
+
+### BOAV-Only Hours
+
+Some hours have curtailment data but zero metered output (fully curtailed). The pipeline creates records with `metered_mwh = 0`, `generation_mwh = curtailed_mwh`. About 2,900 hour/unit combinations have BOAV data with no corresponding aggregated record (65% at 23:00 UTC day boundary).
+
+---
+
+## Key Things to Keep in Mind
+
+### BST / DST Timezone Handling (Critical)
+
+UK settlement periods are relative to **local time** (`Europe/London`), not UTC. During BST (late March - late October), local time is UTC+1.
+
+- Settlement period 1 starts at 00:00 UK time = **23:00 UTC the previous day** during BST
+- Normal days have **48** settlement periods, spring-forward days have **46**, fall-back days have **50**
+- The aggregation query window extends **+1 hour** beyond the UTC day boundary to capture BST-offset records
+- The correct UTC hour **must** be derived from `settlement_date + settlement_period` in the JSONB `data` column — **not** from `period_start`, which was stored incorrectly for historical CSV imports
+- `settlement_date` must be present in the JSONB `data` column for correct aggregation. If missing, the pipeline falls back to `period_start` which is wrong during BST.
+
+See `docs/ELEXON_BST_FIX_LOG.md` for full details on the BST fixes applied.
+
+### `metered_mwh` vs `generation_mwh`
+
+- `metered_mwh` matches official ELEXON figures — always use this for validation
+- `generation_mwh` includes curtailment and is ~2-5% higher
+
+### Import/Export Indicator
+
+The `import_export_ind` field in JSONB (`I`/`E`) determines the sign during aggregation. Most wind generation is `E` (positive). Some records are `I` (negative — unit consumed from grid).
+
+### API vs CSV Deduplication
+
+Both sources can coexist in `generation_data_raw`. Aggregation always **prefers API** over CSV when duplicates exist for the same `(identifier, period_start)`.
+
+### `start_date` / `first_power_date` Gating
+
+Aggregation skips raw data for dates before a unit's `first_power_date` (or `start_date` as fallback) in `generation_units`. If raw data exists but aggregated data is missing for early months, check these dates.
+
+### Re-aggregation is Idempotent
+
+Both processors clear existing `generation_data` records for the target day/source before inserting. Safe to re-run without creating duplicates. But re-aggregation also updates `raw_data_ids` — if raw data was re-imported (e.g., BST fix), you **must** re-aggregate to update these references.
 
 ### Settlement Periods
 - ELEXON uses 30-minute settlement periods
-- 48 periods per day (Period 1-48)
-- Period 1 = 00:00-00:30, Period 48 = 23:30-00:00
+- Normal days: 48 periods (Period 1 = 00:00-00:30, Period 48 = 23:30-00:00)
+- Spring forward (March): 46 periods (clock skips 01:00-02:00)
+- Fall back (October): 50 periods (clock repeats 01:00-02:00)
 
 ### BM Units
 - Current database has 219 BM units configured
