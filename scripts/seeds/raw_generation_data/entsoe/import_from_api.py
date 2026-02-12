@@ -255,7 +255,7 @@ async def fetch_and_store_control_area_data(
                     # Bulk upsert
                     stmt = insert(GenerationDataRaw).values(records_to_insert)
                     stmt = stmt.on_conflict_do_update(
-                        index_elements=['source', 'identifier', 'period_start'],
+                        index_elements=['source', 'source_type', 'identifier', 'period_start'],
                         set_={
                             'value_extracted': stmt.excluded.value_extracted,
                             'data': stmt.excluded.data,

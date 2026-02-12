@@ -31,6 +31,7 @@ class PriceProcessingService:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         force_reprocess: bool = False,
+        source: str = "ENTSOE",
     ) -> Dict[str, Any]:
         """
         Process raw price data from price_data_raw to windfarm-level price_data.
@@ -43,6 +44,7 @@ class PriceProcessingService:
             start_date: Optional start date filter
             end_date: Optional end date filter
             force_reprocess: If True, reprocess even if data exists
+            source: Price data source ("ENTSOE" or "ELEXON")
 
         Returns:
             Summary of the processing operation
@@ -63,6 +65,8 @@ class PriceProcessingService:
             windfarms = await self._get_windfarms_with_bidzones(
                 windfarm_ids=windfarm_ids,
                 bidzone_codes=bidzone_codes,
+                force_reprocess=force_reprocess,
+                source=source,
             )
 
             if not windfarms:
@@ -97,6 +101,7 @@ class PriceProcessingService:
                     bidzone_code=bidzone_code,
                     start_date=start_date,
                     end_date=end_date,
+                    source=source,
                 )
 
                 if not raw_prices:
@@ -111,6 +116,7 @@ class PriceProcessingService:
                             bidzone=bidzone,
                             raw_prices=raw_prices,
                             force_reprocess=force_reprocess,
+                            source=source,
                         )
 
                         results["windfarms_processed"] += 1
@@ -154,18 +160,21 @@ class PriceProcessingService:
         self,
         windfarm_ids: Optional[List[int]] = None,
         bidzone_codes: Optional[List[str]] = None,
+        force_reprocess: bool = False,
+        source: str = "ENTSOE",
     ) -> List[Windfarm]:
         """Get windfarms that have bidzones configured and need price data processing."""
-        # Only get windfarms that don't have price_data yet (unless force_reprocess)
-        # This significantly speeds up processing by filtering upfront
-        stmt = select(Windfarm).where(
-            and_(
-                Windfarm.bidzone_id.isnot(None),
+        stmt = select(Windfarm).where(Windfarm.bidzone_id.isnot(None))
+
+        if not force_reprocess:
+            # Only get windfarms that don't have price_data for this source yet
+            stmt = stmt.where(
                 ~Windfarm.id.in_(
-                    select(PriceData.windfarm_id).distinct()
+                    select(PriceData.windfarm_id).where(
+                        PriceData.source == source
+                    ).distinct()
                 )
             )
-        )
 
         if windfarm_ids:
             stmt = stmt.where(Windfarm.id.in_(windfarm_ids))
@@ -182,6 +191,7 @@ class PriceProcessingService:
         bidzone_code: str,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
+        source: str = "ENTSOE",
     ) -> Dict[datetime, Dict[str, Decimal]]:
         """
         Get raw prices for a bidzone, organized by hour.
@@ -191,7 +201,7 @@ class PriceProcessingService:
         """
         stmt = select(PriceDataRaw).where(
             and_(
-                PriceDataRaw.source == "ENTSOE",
+                PriceDataRaw.source == source,
                 PriceDataRaw.identifier == bidzone_code,
             )
         )
@@ -266,6 +276,7 @@ class PriceProcessingService:
         raw_prices: Dict[datetime, Dict[str, Any]],
         force_reprocess: bool = False,
         batch_size: int = 2000,  # PostgreSQL has 32767 param limit; 12 params * 2000 = 24000
+        source: str = "ENTSOE",
     ) -> Tuple[int, int]:
         """
         Process raw prices for a single windfarm.
@@ -289,7 +300,7 @@ class PriceProcessingService:
                 "day_ahead_price": price_data["day_ahead"],
                 "intraday_price": price_data["intraday"],
                 "currency": price_data["currency"],
-                "source": "ENTSOE",
+                "source": source,
                 "raw_data_ids": price_data["raw_ids"],
                 "quality_flag": "good" if price_data["day_ahead"] is not None else "partial",
                 "created_at": now,

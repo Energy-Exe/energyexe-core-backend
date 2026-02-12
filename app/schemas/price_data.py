@@ -32,6 +32,42 @@ class PriceProcessRequest(BaseModel):
     force_reprocess: bool = Field(False, description="Reprocess even if data exists")
 
 
+class ElexonPriceFetchRequest(BaseModel):
+    """Request schema for fetching prices from Elexon BMRS API."""
+    start_date: datetime = Field(..., description="Start datetime (UTC)")
+    end_date: datetime = Field(..., description="End datetime (UTC)")
+
+
+class ElexonPriceFetchResponse(BaseModel):
+    """Response schema for Elexon price fetch operation."""
+    success: bool
+    source: str
+    identifier: str
+    date_range: Dict[str, str]
+    total_records_stored: int
+    total_records_updated: int
+    api_calls: int
+    errors: List[str]
+    duration_seconds: Optional[float] = None
+
+
+class ElexonPriceProcessRequest(BaseModel):
+    """Request schema for processing raw Elexon prices to windfarm level."""
+    start_date: Optional[datetime] = Field(None, description="Start datetime filter")
+    end_date: Optional[datetime] = Field(None, description="End datetime filter")
+    force_reprocess: bool = Field(False, description="Reprocess even if data exists")
+
+
+class ElexonPriceSyncResponse(BaseModel):
+    """Response schema for combined Elexon fetch + process operation."""
+    success: bool
+    date_range: Dict[str, str]
+    fetch: Dict[str, Any] = Field(default_factory=dict, description="Raw fetch results")
+    process: Dict[str, Any] = Field(default_factory=dict, description="Windfarm processing results")
+    errors: List[str] = Field(default_factory=list)
+    duration_seconds: Optional[float] = None
+
+
 class CaptureRateRequest(BaseModel):
     """Request schema for capture rate calculation."""
     windfarm_id: int = Field(..., description="Windfarm ID")

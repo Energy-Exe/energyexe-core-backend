@@ -41,6 +41,13 @@ PROJECT_DIR=/Users/mohammadfaisal/Documents/energyexe/energyexe-core-backend
 # 0 12 * * * cd $PROJECT_DIR && poetry run python scripts/jobs/run_import_with_tracking.py taipower-hourly >> /tmp/taipower-daily.log 2>&1
 
 # ============================================================================
+# ENTSOE Prices Import - Daily at 8:00 AM
+# ============================================================================
+# Imports day-ahead prices from 2 days ago for 11 bidzones with windfarms
+# Then processes raw prices to windfarm-level hourly price_data
+0 8 * * * cd $PROJECT_DIR && poetry run python scripts/jobs/run_import_with_tracking.py entsoe-prices-daily >> /tmp/entsoe-prices-daily.log 2>&1
+
+# ============================================================================
 # EIA Import - Monthly on 1st at 2:00 AM
 # ============================================================================
 # Imports USA monthly wind generation data from 2 months ago

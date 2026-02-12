@@ -2,7 +2,7 @@
 
 Summary of all fixes applied to ELEXON BMU metered volume data to resolve BST timezone issues and data gaps.
 
-**Date range of affected data:** January 2020 - December 2025
+**Date range of affected data:** January 2019 - December 2025
 **Last updated:** February 6, 2026
 
 ---
@@ -85,6 +85,41 @@ columns_to_keep = ["timestamp", "bm_unit", "value", "unit", "settlement_period",
 
 ---
 
+## Fix 6: 2019 BST Data Fix (Extending Fix 3 to 2019)
+
+**Script used:** `scripts/seeds/raw_generation_data/elexon/fix_2019_bst.py`
+
+**Problem:** 2019 raw CSV-imported data had the same BST offset bug as 2020-2025 (Fix 3), but was never corrected. Raw `period_start` timestamps were stored as if UK local time equaled UTC, causing a 1-hour shift during BST months (March 31 - October 27, 2019). Additionally, `metered_mwh` was NULL for 97% of aggregated records.
+
+**Fix applied:**
+1. Recalculated `period_start` and `period_end` for all 2,545,440 raw records using PostgreSQL `make_timestamptz()` with `'Europe/London'` timezone, deriving correct UTC timestamps from `settlement_date` + `settlement_period` in JSONB
+2. Re-aggregated all 12 months using `reprocess_year_parallel.py --year 2019 --workers 4`
+
+**Scope:**
+- All 12 months processed (GMT months had no effective change, BST months shifted by -1 hour)
+- 2,545,440 raw records updated
+- 1,294,198 aggregated records regenerated
+
+**Validation Results (2019):**
+| Month | Raw CSV MWh | Agg MWh | Deviation | Status |
+|-------|------------|---------|-----------|--------|
+| Jan | 3,735,163 | 3,719,068 | 0.4% | OK |
+| Feb | 3,835,910 | 3,855,950 | 0.5% | OK |
+| Mar | 4,487,887 | 4,509,025 | 0.5% | OK |
+| Apr | 3,178,985 | 3,184,936 | 0.2% | OK |
+| May | 2,134,487 | 2,120,441 | 0.7% | OK |
+| Jun | 2,805,906 | 2,811,229 | 0.2% | OK |
+| Jul | 2,391,157 | 2,384,685 | 0.3% | OK |
+| Aug | 3,533,548 | 3,538,776 | 0.1% | OK |
+| Sep | 3,710,317 | 3,719,466 | 0.2% | OK |
+| Oct | 4,390,726 | 4,420,471 | 0.7% | OK |
+| Nov | 3,776,577 | 3,789,562 | 0.3% | OK |
+| Dec | 5,282,899 | 5,318,615 | 0.7% | OK |
+
+**Year total:** 43,372,224 MWh (metered), 1,294,198 records, 100% metered_mwh coverage.
+
+---
+
 ## Known Remaining Issues
 
 ### 1. T_AFTOW-1 Missing Settlement Periods on Oct 26, 2025
@@ -134,6 +169,7 @@ DST deviations are expected: clock-change days have 23 or 25 hours, but deduplic
 | `scripts/seeds/raw_generation_data/elexon/reaggregate_windfarm.py` | Per-windfarm re-aggregation utility |
 | `scripts/seeds/raw_generation_data/elexon/verify_fixes.py` | Data validation/verification tool |
 | `scripts/seeds/raw_generation_data/elexon/generate_single_bmu_report.py` | BMU validation reporting |
+| `scripts/seeds/raw_generation_data/elexon/fix_2019_bst.py` | 2019 BST period_start fix (Fix 6) |
 | `tests/test_elexon_curtailment_data_integrity.py` | Curtailment data integrity test |
 
 ---

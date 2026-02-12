@@ -48,6 +48,16 @@ JOB_CONFIGS = {
         "delay_months": 2,  # Import from 2 months ago
         "description": "EIA monthly import (2-month lag)",
     },
+    "entsoe-prices-daily": {
+        "source": "ENTSOE_PRICES",
+        "delay_days": 2,  # Day-ahead prices available within 1-2 days
+        "description": "ENTSOE daily price import (2-day lag)",
+    },
+    "elexon-prices-daily": {
+        "source": "ELEXON_PRICES",
+        "delay_days": 1,  # MID prices available next day
+        "description": "Elexon daily price import (1-day lag)",
+    },
 }
 
 

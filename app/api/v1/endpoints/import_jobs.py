@@ -245,6 +245,14 @@ async def trigger_scheduled_job(
             "source": "EIA",
             "delay_months": 2,
         },
+        "entsoe-prices-daily": {
+            "source": "ENTSOE_PRICES",
+            "delay_days": 2,
+        },
+        "elexon-prices-daily": {
+            "source": "ELEXON_PRICES",
+            "delay_days": 1,
+        },
     }
 
     if job_name not in job_configs:

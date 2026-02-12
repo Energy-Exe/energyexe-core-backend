@@ -192,6 +192,138 @@ class ElexonClient:
             }
             return pd.DataFrame(), metadata
 
+    async def fetch_market_index_prices(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> Tuple[pd.DataFrame, Dict]:
+        """
+        Fetch Market Index Data (MID) prices from Elexon BMRS API.
+
+        MID provides half-hourly electricity prices for GB.
+        Only APXMIDP data provider has real prices (N2EXMIDP is zeros).
+
+        Half-hourly data is aggregated to hourly (average price, sum volume).
+
+        Args:
+            start: Start datetime
+            end: End datetime
+
+        Returns:
+            Tuple of (DataFrame with hourly price data, metadata dict)
+
+        DataFrame columns:
+            - timestamp: UTC hourly datetime
+            - price: Average price in GBP/MWh
+            - volume: Total volume in MWh
+            - price_type: "day_ahead"
+        """
+        metadata = {
+            "start": start,
+            "end": end,
+            "success": True,
+            "errors": [],
+            "records": 0,
+            "api_calls": 0,
+        }
+
+        try:
+            from_date = start.strftime("%Y-%m-%dT%H:%MZ")
+            to_date = end.strftime("%Y-%m-%dT%H:%MZ")
+
+            url = f"{self.BASE_URL}/datasets/MID/stream"
+            params = {
+                "from": from_date,
+                "to": to_date,
+            }
+
+            logger.info(
+                "Fetching Elexon MID price data",
+                from_date=from_date,
+                to_date=to_date,
+            )
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.get(
+                    url,
+                    headers=self.headers,
+                    params=params,
+                )
+                metadata["api_calls"] = 1
+
+                if response.status_code != 200:
+                    error_msg = f"Elexon MID API error: {response.status_code} - {response.text}"
+                    logger.error(error_msg)
+                    metadata["success"] = False
+                    metadata["errors"].append(error_msg)
+                    return pd.DataFrame(), metadata
+
+                data = response.json()
+
+                if not data:
+                    logger.warning("Elexon MID API returned no data")
+                    metadata["success"] = False
+                    metadata["errors"].append("No MID data available")
+                    return pd.DataFrame(), metadata
+
+                df = pd.DataFrame(data)
+                logger.info(f"Received {len(df)} MID records from Elexon API")
+
+                if df.empty:
+                    metadata["records"] = 0
+                    return pd.DataFrame(), metadata
+
+                # Filter to APXMIDP only (N2EXMIDP is always zeros)
+                if "dataProvider" in df.columns:
+                    df = df[df["dataProvider"] == "APXMIDP"]
+                    if df.empty:
+                        logger.warning("No APXMIDP records in MID data")
+                        metadata["records"] = 0
+                        return pd.DataFrame(), metadata
+
+                # Convert settlement date + period to UTC timestamp
+                # Reuses same DST-aware logic as fetch_physical_data
+                if "settlementDate" in df.columns and "settlementPeriod" in df.columns:
+                    uk_dates = pd.to_datetime(df["settlementDate"]).dt.tz_localize(
+                        "Europe/London", ambiguous="infer", nonexistent="shift_forward"
+                    )
+                    utc_dates = uk_dates.dt.tz_convert("UTC")
+                    df["timestamp"] = utc_dates + pd.to_timedelta(
+                        (df["settlementPeriod"] - 1) * 30, unit="minutes"
+                    )
+                    df["timestamp"] = df["timestamp"].dt.tz_localize(None)
+
+                # Extract price and volume
+                if "price" in df.columns:
+                    df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0)
+                if "volume" in df.columns:
+                    df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0)
+
+                # Aggregate half-hourly to hourly: average price, sum volume
+                df["hour"] = df["timestamp"].dt.floor("h")
+                hourly = df.groupby("hour").agg(
+                    price=("price", "mean"),
+                    volume=("volume", "sum"),
+                ).reset_index()
+
+                hourly = hourly.rename(columns={"hour": "timestamp"})
+                hourly["price_type"] = "day_ahead"
+                hourly["currency"] = "GBP"
+                hourly["unit"] = "GBP/MWh"
+
+                metadata["records"] = len(hourly)
+                logger.info(
+                    f"Aggregated to {len(hourly)} hourly MID price records"
+                )
+
+                return hourly, metadata
+
+        except Exception as e:
+            logger.error(f"Elexon MID API error: {str(e)}")
+            metadata["success"] = False
+            metadata["errors"].append(str(e))
+            return pd.DataFrame(), metadata
+
     async def get_bm_units_for_windfarm(self, generation_unit_codes: List[str]) -> List[str]:
         """
         Get BM Unit IDs that match the generation unit codes.

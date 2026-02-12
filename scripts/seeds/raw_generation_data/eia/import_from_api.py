@@ -313,7 +313,7 @@ async def fetch_and_store_eia_data(
                     batch = unique_records[i:i + BATCH_SIZE]
                     stmt = insert(GenerationDataRaw).values(batch)
                     stmt = stmt.on_conflict_do_update(
-                        index_elements=['source', 'identifier', 'period_start'],
+                        index_elements=['source', 'source_type', 'identifier', 'period_start'],
                         set_={
                             'value_extracted': stmt.excluded.value_extracted,
                             'data': stmt.excluded.data,

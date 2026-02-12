@@ -429,6 +429,7 @@ class ImportJobService:
         """
         base_path = Path(__file__).parent.parent.parent / "scripts/seeds/raw_generation_data"
         agg_path = Path(__file__).parent.parent.parent / "scripts/seeds/aggregate_generation_data"
+        prices_path = Path(__file__).parent.parent.parent / "scripts/seeds/power_prices"
 
         start_date = job.import_start_date.strftime("%Y-%m-%d")
         end_date = job.import_end_date.strftime("%Y-%m-%d")
@@ -455,6 +456,14 @@ class ImportJobService:
                 f"--end-month {job.import_end_date.month} && "
                 f"python {agg_path}/process_generation_data_monthly.py --source EIA "
                 f"--start {job.import_start_date.strftime('%Y-%m')} --end {job.import_end_date.strftime('%Y-%m')}"
+            ),
+            "ENTSOE_PRICES": (
+                f"python {prices_path}/import_prices_from_api.py --start {start_date} --end {end_date} --price-types day_ahead && "
+                f"python {prices_path}/process_to_hourly.py --start-date {start_date} --end-date {end_date} --force"
+            ),
+            "ELEXON_PRICES": (
+                f"python {prices_path}/elexon/import_elexon_prices.py --start {start_date} --end {end_date} && "
+                f"python {prices_path}/process_to_hourly.py --source ELEXON --start-date {start_date} --end-date {end_date} --force"
             ),
         }
 
@@ -496,7 +505,11 @@ class ImportJobService:
 
         if "daily" in job_name:
             # Daily jobs run at specific hours
-            if "entsoe" in job_name:
+            if "elexon-prices" in job_name:
+                next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            elif "entsoe-prices" in job_name:
+                next_run = now.replace(hour=8, minute=0, second=0, microsecond=0)
+            elif "entsoe" in job_name:
                 next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
             elif "elexon" in job_name:
                 next_run = now.replace(hour=7, minute=0, second=0, microsecond=0)

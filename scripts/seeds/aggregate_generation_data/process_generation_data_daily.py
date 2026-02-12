@@ -1040,6 +1040,12 @@ class DailyGenerationProcessor:
             cache_entry = self.generation_units_cache.get(unit_key)
             unit_info = self.get_operational_unit(cache_entry, record.hour)
 
+            if not unit_info:
+                logger.warning(
+                    f"Unit lookup failed for {unit_key} at {record.hour} "
+                    f"— record will have NULL generation_unit_id and windfarm_id"
+                )
+
             # Check if we're before commercial operational date
             # If so, don't calculate capacity factor (pre-commercial/commissioning data)
             is_pre_commercial = False

@@ -102,12 +102,22 @@ class ENTSOEPriceClient:
             start_dt = start.replace(tzinfo=None) if start.tzinfo else start
             end_dt = end.replace(tzinfo=None) if end.tzinfo else end
 
+            # DE_LU and AT return only 15-minute resolution data (EXAA block auctions).
+            # entsoe-py skips the 15min→60min fallback for these zones, so we must
+            # request 15min explicitly and resample to hourly ourselves.
+            resolution = '15min' if area_code in ('DE_LU', 'AT') else '60min'
+
             # Query day-ahead prices
             prices = self.client.query_day_ahead_prices(
                 area_code,
                 start=pd.Timestamp(start_dt, tz="UTC"),
                 end=pd.Timestamp(end_dt, tz="UTC"),
+                resolution=resolution,
             )
+
+            # Resample 15-minute data to hourly (average price per hour)
+            if resolution == '15min' and prices is not None and not prices.empty:
+                prices = prices.resample('h').mean()
 
             if prices is None or (isinstance(prices, pd.Series) and prices.empty):
                 logger.warning(f"No day-ahead price data returned for {area_code}")

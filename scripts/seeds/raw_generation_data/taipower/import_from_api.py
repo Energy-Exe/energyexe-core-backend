@@ -222,7 +222,7 @@ async def fetch_and_store_taipower_data(
 
             # On conflict (same source, identifier, period_start), update the values
             stmt = stmt.on_conflict_do_update(
-                index_elements=['source', 'identifier', 'period_start'],
+                index_elements=['source', 'source_type', 'identifier', 'period_start'],
                 set_={
                     'value_extracted': stmt.excluded.value_extracted,
                     'data': stmt.excluded.data,

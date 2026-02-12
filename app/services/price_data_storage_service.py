@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.price_data import PriceDataRaw
 from app.models.bidzone import Bidzone
 from app.services.entsoe_price_client import ENTSOEPriceClient
+from app.core.entsoe_mappings import AREA_CODE_TO_EIC
 
 logger = structlog.get_logger()
 
@@ -138,6 +139,10 @@ class PriceDataStorageService:
         if df.empty:
             return 0, 0
 
+        # Map short area code to EIC code for consistent identifiers
+        # CSV imports already use EIC codes; API imports use short codes like NO_1
+        eic_code = AREA_CODE_TO_EIC.get(bidzone_code, bidzone_code)
+
         # Prepare all records for bulk insert
         records_to_insert = []
         now = datetime.now(timezone.utc)
@@ -179,7 +184,7 @@ class PriceDataStorageService:
                 "source": "ENTSOE",
                 "source_type": "api",
                 "price_type": price_type,
-                "identifier": bidzone_code,
+                "identifier": eic_code,
                 "period_start": timestamp,
                 "period_end": period_end,
                 "period_type": period_type,
@@ -319,6 +324,7 @@ class PriceDataStorageService:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         price_type: Optional[str] = None,
+        source: Optional[str] = None,
         limit: int = 1000,
         offset: int = 0,
     ) -> List[PriceDataRaw]:
@@ -330,13 +336,17 @@ class PriceDataStorageService:
             start_date: Optional start date filter
             end_date: Optional end date filter
             price_type: Optional price type filter ("day_ahead" or "intraday")
+            source: Optional source filter ("ENTSOE" or "ELEXON")
             limit: Maximum records to return
             offset: Pagination offset
 
         Returns:
             List of PriceDataRaw records
         """
-        stmt = select(PriceDataRaw).where(PriceDataRaw.source == "ENTSOE")
+        stmt = select(PriceDataRaw)
+
+        if source:
+            stmt = stmt.where(PriceDataRaw.source == source)
 
         if bidzone_codes:
             stmt = stmt.where(PriceDataRaw.identifier.in_(bidzone_codes))
@@ -356,9 +366,14 @@ class PriceDataStorageService:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_available_bidzones(self) -> List[Dict[str, Any]]:
+    async def get_available_bidzones(
+        self, source: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Get list of bidzones that have price data available.
+
+        Args:
+            source: Optional source filter ("ENTSOE", "ELEXON", or None for all)
 
         Returns:
             List of dicts with bidzone info and data availability
@@ -371,9 +386,12 @@ class PriceDataStorageService:
             func.min(PriceDataRaw.period_start).label("earliest_date"),
             func.max(PriceDataRaw.period_start).label("latest_date"),
             func.count(PriceDataRaw.id).label("record_count"),
-        ).where(
-            PriceDataRaw.source == "ENTSOE"
-        ).group_by(
+        )
+
+        if source:
+            stmt = stmt.where(PriceDataRaw.source == source)
+
+        stmt = stmt.group_by(
             PriceDataRaw.identifier
         )
 
@@ -419,6 +437,7 @@ class PriceDataStorageService:
         month: int,
         bidzone_codes: Optional[List[str]] = None,
         price_type: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get price data availability for a specific month.
@@ -428,6 +447,7 @@ class PriceDataStorageService:
             month: Month (1-12) for availability check
             bidzone_codes: Optional list of bidzone codes to filter
             price_type: Optional price type filter ("day_ahead" or "intraday")
+            source: Optional source filter ("ENTSOE", "ELEXON", or None for all)
 
         Returns:
             Dict with availability by day and summary statistics
@@ -440,6 +460,15 @@ class PriceDataStorageService:
         start_date = datetime(year, month, 1, tzinfo=timezone.utc)
         end_date = datetime(year, month, days_in_month, 23, 59, 59, tzinfo=timezone.utc)
 
+        # Build base conditions
+        conditions = [
+            PriceDataRaw.period_start >= start_date,
+            PriceDataRaw.period_start <= end_date,
+        ]
+
+        if source:
+            conditions.append(PriceDataRaw.source == source)
+
         # Build query to get daily aggregates
         query = select(
             func.date(PriceDataRaw.period_start).label('date'),
@@ -447,11 +476,7 @@ class PriceDataStorageService:
             PriceDataRaw.price_type,
             func.count(PriceDataRaw.id).label('count')
         ).where(
-            and_(
-                PriceDataRaw.source == "ENTSOE",
-                PriceDataRaw.period_start >= start_date,
-                PriceDataRaw.period_start <= end_date,
-            )
+            and_(*conditions)
         )
 
         # Apply filters

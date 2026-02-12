@@ -11,6 +11,7 @@ from app.models.user import User
 from app.services.price_data_storage_service import PriceDataStorageService
 from app.services.price_processing_service import PriceProcessingService
 from app.services.price_analytics_service import PriceAnalyticsService
+from app.services.elexon_price_storage_service import ElexonPriceStorageService
 from app.schemas.price_data import (
     PriceFetchRequest,
     PriceFetchResponse,
@@ -36,6 +37,10 @@ from app.schemas.price_data import (
     PriceAvailabilityResponse,
     PriceFetchDayRequest,
     PriceFetchDayResponse,
+    ElexonPriceFetchRequest,
+    ElexonPriceFetchResponse,
+    ElexonPriceProcessRequest,
+    ElexonPriceSyncResponse,
 )
 
 router = APIRouter(prefix="/prices", tags=["Price Data"])
@@ -299,6 +304,139 @@ async def get_windfarm_price_coverage(
         end_date=end_date,
     )
     return PriceCoverageResponse(**coverage)
+
+
+# ============================================================
+# Elexon Price Data Endpoints
+# ============================================================
+
+@router.post("/elexon/fetch", response_model=ElexonPriceFetchResponse)
+async def fetch_elexon_prices(
+    request: ElexonPriceFetchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Fetch MID price data from Elexon BMRS API and store in database.
+
+    Fetches Market Index Data (day-ahead prices in GBP/MWh) for the GB bidzone.
+    Half-hourly settlement period data is aggregated to hourly.
+    """
+    service = ElexonPriceStorageService(db)
+    result = await service.fetch_and_store_prices(
+        start_date=request.start_date,
+        end_date=request.end_date,
+        user_id=current_user.id,
+    )
+    return ElexonPriceFetchResponse(**result)
+
+
+@router.post("/elexon/process", response_model=PriceProcessResponse)
+async def process_elexon_prices(
+    request: ElexonPriceProcessRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Process raw Elexon prices to windfarm-level hourly data.
+
+    Maps GB bidzone (10YGB----------A) prices to individual GB windfarms
+    based on their bidzone_id and stores in the price_data table.
+    """
+    service = PriceProcessingService(db)
+    result = await service.process_raw_to_hourly(
+        bidzone_codes=["10YGB----------A"],
+        start_date=request.start_date,
+        end_date=request.end_date,
+        force_reprocess=request.force_reprocess,
+        source="ELEXON",
+    )
+    return PriceProcessResponse(**result)
+
+
+@router.post("/elexon/sync", response_model=ElexonPriceSyncResponse)
+async def sync_elexon_prices(
+    days_back: int = Query(1, ge=1, le=30, description="Number of days back to sync"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Fetch and process Elexon prices in a single call.
+
+    Public endpoint (no auth) for cron jobs / GitHub Actions.
+    Fetches raw MID prices from Elexon API, then maps them to all GB windfarms.
+
+    Default: syncs yesterday's data (days_back=1).
+    """
+    import time
+    from datetime import timedelta, timezone
+
+    start_time = time.time()
+    errors = []
+
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    start_date = today - timedelta(days=days_back)
+    end_date = today
+
+    date_range = {
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat(),
+    }
+
+    # Step 1: Fetch raw prices from Elexon API
+    fetch_result = {}
+    try:
+        fetch_service = ElexonPriceStorageService(db)
+        fetch_result = await fetch_service.fetch_and_store_prices(
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if fetch_result.get("errors"):
+            errors.extend(fetch_result["errors"])
+    except Exception as e:
+        errors.append(f"Fetch failed: {str(e)}")
+        return ElexonPriceSyncResponse(
+            success=False,
+            date_range=date_range,
+            fetch=fetch_result,
+            errors=errors,
+            duration_seconds=round(time.time() - start_time, 2),
+        )
+
+    # Step 2: Process raw prices to windfarm-level hourly
+    process_result = {}
+    try:
+        process_service = PriceProcessingService(db)
+        process_result = await process_service.process_raw_to_hourly(
+            bidzone_codes=["10YGB----------A"],
+            start_date=start_date,
+            end_date=end_date,
+            force_reprocess=True,
+            source="ELEXON",
+        )
+        if process_result.get("errors"):
+            errors.extend(process_result["errors"])
+    except Exception as e:
+        errors.append(f"Process failed: {str(e)}")
+
+    duration = round(time.time() - start_time, 2)
+    success = len(errors) == 0
+
+    return ElexonPriceSyncResponse(
+        success=success,
+        date_range=date_range,
+        fetch={
+            "records_stored": fetch_result.get("total_records_stored", 0),
+            "records_updated": fetch_result.get("total_records_updated", 0),
+            "api_calls": fetch_result.get("api_calls", 0),
+        },
+        process={
+            "windfarms_processed": process_result.get("windfarms_processed", 0),
+            "records_created": process_result.get("records_created", 0),
+            "records_updated": process_result.get("records_updated", 0),
+        },
+        errors=errors,
+        duration_seconds=duration,
+    )
 
 
 # ============================================================

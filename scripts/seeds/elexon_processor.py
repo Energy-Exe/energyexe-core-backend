@@ -100,7 +100,7 @@ class ElexonProcessor:
         rows = result.all()
 
         for unit, windfarm in rows:
-            self.generation_units_cache[unit.code] = {
+            self.generation_units_cache[f"ELEXON:{unit.code}"] = {
                 'id': unit.id,
                 'windfarm_id': unit.windfarm_id,
                 'capacity_mw': float(unit.capacity_mw) if unit.capacity_mw else None,
@@ -314,7 +314,7 @@ class ElexonProcessor:
             curtailed_mwh = sum(abs(float(r.value_extracted)) for r in boav if r.value_extracted is not None)
 
             # Get unit info
-            unit_info = self.generation_units_cache.get(identifier, {})
+            unit_info = self.generation_units_cache.get(f"ELEXON:{identifier}", {})
 
             hourly_records.append(HourlyRecord(
                 hour=hour,
@@ -339,7 +339,7 @@ class ElexonProcessor:
             if curtailed_mwh == 0:
                 continue
 
-            unit_info = self.generation_units_cache.get(identifier, {})
+            unit_info = self.generation_units_cache.get(f"ELEXON:{identifier}", {})
 
             hourly_records.append(HourlyRecord(
                 hour=hour,
@@ -368,8 +368,10 @@ class ElexonProcessor:
         IMPORTANT: Clear by generation_unit_id, NOT windfarm_id!
         This ensures we delete even records with NULL windfarm_id.
         """
-        # Extend window 1 hour earlier for BST boundary
-        clear_start = day_start - timedelta(hours=1)
+        # Do NOT extend clear window earlier - that would delete records from
+        # the previous day's processing. BST boundary records at 23:00 UTC are
+        # created when processing the previous UTC day.
+        clear_start = day_start
 
         if generation_unit_ids:
             # Delete by generation_unit_id (more precise)

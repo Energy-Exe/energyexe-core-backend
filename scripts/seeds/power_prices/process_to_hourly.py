@@ -56,6 +56,7 @@ async def process_prices(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     force_reprocess: bool = False,
+    source: str = "ENTSOE",
 ):
     """Process raw prices to windfarm-level hourly data.
 
@@ -65,12 +66,14 @@ async def process_prices(
         start_date: Optional start date filter
         end_date: Optional end date filter
         force_reprocess: If True, reprocess even if data exists
+        source: Price data source ("ENTSOE" or "ELEXON")
     """
     print("=" * 60)
     print("Process Price Data to Windfarm-Level Hourly")
     print("=" * 60)
 
     # Print processing parameters
+    print(f"Source: {source}")
     print(f"Windfarm IDs: {windfarm_ids or 'All'}")
     print(f"Bidzone Codes: {bidzone_codes or 'All'}")
     print(f"Start Date: {start_date or 'Not specified'}")
@@ -91,6 +94,7 @@ async def process_prices(
             start_date=start_date,
             end_date=end_date,
             force_reprocess=force_reprocess,
+            source=source,
         )
 
     # Print results
@@ -149,6 +153,11 @@ def main():
         action='store_true',
         help='Reprocess even if data exists'
     )
+    parser.add_argument(
+        '--source',
+        default='ENTSOE',
+        help='Price data source: ENTSOE or ELEXON (default: ENTSOE)'
+    )
 
     args = parser.parse_args()
 
@@ -165,6 +174,7 @@ def main():
         start_date=start_date,
         end_date=end_date,
         force_reprocess=args.force,
+        source=args.source,
     ))
 
 

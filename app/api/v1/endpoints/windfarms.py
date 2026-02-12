@@ -99,6 +99,19 @@ async def search_windfarms(
     return result
 
 
+@router.get("/names")
+async def get_windfarm_names(db: AsyncSession = Depends(get_db)):
+    """Get all windfarms with only id, name, code - lightweight endpoint for dropdowns"""
+    from sqlalchemy import select as sa_select
+    from app.models.windfarm import Windfarm as WindfarmModel
+
+    result = await db.execute(
+        sa_select(WindfarmModel.id, WindfarmModel.name, WindfarmModel.code)
+        .order_by(WindfarmModel.name)
+    )
+    return [{"id": row.id, "name": row.name, "code": row.code} for row in result.all()]
+
+
 @router.get("/{windfarm_id}", response_model=Windfarm)
 async def get_windfarm(windfarm_id: int, db: AsyncSession = Depends(get_db)):
     """Get a specific windfarm by ID"""
