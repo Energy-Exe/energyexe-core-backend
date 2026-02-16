@@ -34,6 +34,9 @@ RUN pip install --retries 5 --timeout 30 -r requirements.txt
 # Copy source code
 COPY --chown=app:app . .
 
+# Create log directory for generation processing (used by cron scripts)
+RUN mkdir -p /app/generation_processing_logs && chown app:app /app/generation_processing_logs
+
 # Switch to non-root user
 USER app
 
@@ -51,6 +54,9 @@ RUN pip install --retries 5 --timeout 30 -r requirements.txt
 
 # Copy source code
 COPY --chown=app:app . .
+
+# Create log directory for generation processing (used by cron scripts)
+RUN mkdir -p /app/generation_processing_logs && chown app:app /app/generation_processing_logs
 
 # Switch to non-root user
 USER app

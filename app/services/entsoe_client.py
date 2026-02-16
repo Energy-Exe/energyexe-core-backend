@@ -105,7 +105,11 @@ class ENTSOEClient:
                     start_dt = start.replace(tzinfo=None) if hasattr(start, 'tzinfo') and start.tzinfo else start
                     end_dt = end.replace(tzinfo=None) if hasattr(end, 'tzinfo') and end.tzinfo else end
 
-                    df = self.client.query_generation(
+                    # entsoe-py is a synchronous library — run in a thread to avoid
+                    # blocking the event loop (which causes greenlet_spawn errors
+                    # when an AsyncSession is active).
+                    df = await asyncio.to_thread(
+                        self.client.query_generation,
                         area_code,
                         start=pd.Timestamp(start_dt, tz="UTC"),
                         end=pd.Timestamp(end_dt, tz="UTC"),
@@ -295,7 +299,11 @@ class ENTSOEClient:
             last_error = None
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
-                    df = self.client.query_generation_per_plant(
+                    # entsoe-py is a synchronous library — run in a thread to avoid
+                    # blocking the event loop (which causes greenlet_spawn errors
+                    # when an AsyncSession is active).
+                    df = await asyncio.to_thread(
+                        self.client.query_generation_per_plant,
                         area_code,
                         start=pd.Timestamp(start_dt, tz="UTC"),
                         end=pd.Timestamp(end_dt, tz="UTC"),
