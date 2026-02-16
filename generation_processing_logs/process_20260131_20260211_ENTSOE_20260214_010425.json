@@ -1,0 +1,148 @@
+{
+  "summary": {
+    "start_time": "2026-02-14T01:04:25.355557",
+    "end_time": "2026-02-14T01:05:55.937679",
+    "total_days": 12,
+    "processed_days": 12,
+    "failed_days": 0,
+    "skipped_days": 0,
+    "total_raw_records": 22346,
+    "total_hourly_records": 7776,
+    "source": "ENTSOE",
+    "dry_run": false
+  },
+  "daily_results": [
+    {
+      "date": "2026-01-31",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1863,
+      "hourly_records": 648,
+      "processing_time_seconds": 26.91,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:04:25.367081"
+    },
+    {
+      "date": "2026-02-01",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1866,
+      "hourly_records": 648,
+      "processing_time_seconds": 6.22,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:04:52.280458"
+    },
+    {
+      "date": "2026-02-02",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1851,
+      "hourly_records": 648,
+      "processing_time_seconds": 5.74,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:04:58.502357"
+    },
+    {
+      "date": "2026-02-03",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1871,
+      "hourly_records": 648,
+      "processing_time_seconds": 5.24,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:05:04.245138"
+    },
+    {
+      "date": "2026-02-04",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1872,
+      "hourly_records": 648,
+      "processing_time_seconds": 7.2,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:05:09.486167"
+    },
+    {
+      "date": "2026-02-05",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1872,
+      "hourly_records": 648,
+      "processing_time_seconds": 6.12,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:05:16.687231"
+    },
+    {
+      "date": "2026-02-06",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1872,
+      "hourly_records": 648,
+      "processing_time_seconds": 5.07,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:05:22.809181"
+    },
+    {
+      "date": "2026-02-07",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1868,
+      "hourly_records": 648,
+      "processing_time_seconds": 4.95,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:05:27.879039"
+    },
+    {
+      "date": "2026-02-08",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1795,
+      "hourly_records": 648,
+      "processing_time_seconds": 5.71,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:05:32.826670"
+    },
+    {
+      "date": "2026-02-09",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1872,
+      "hourly_records": 648,
+      "processing_time_seconds": 6.11,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:05:38.541049"
+    },
+    {
+      "date": "2026-02-10",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1872,
+      "hourly_records": 648,
+      "processing_time_seconds": 5.63,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:05:44.656538"
+    },
+    {
+      "date": "2026-02-11",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1872,
+      "hourly_records": 648,
+      "processing_time_seconds": 5.65,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:05:50.285422"
+    }
+  ]
+}

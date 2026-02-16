@@ -529,7 +529,7 @@ class WindfarmReportService:
                 extract('year', GenerationData.hour).label('year'),
                 extract('month', GenerationData.hour).label('month'),
                 func.avg(GenerationData.capacity_factor).label('avg_cf'),
-                func.sum(GenerationData.generation_mwh).label('total_gen_mwh')
+                func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_gen_mwh')
             )
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
             .where(
@@ -841,7 +841,7 @@ class WindfarmReportService:
     ) -> List[float]:
         """Get list of monthly total generation in GWh."""
         stmt = (
-            select(func.sum(GenerationData.generation_mwh) / 1000.0)
+            select(func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)) / 1000.0)
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
             .where(
                 and_(
@@ -968,7 +968,7 @@ class WindfarmReportService:
             select(
                 extract('year', GenerationData.hour).label('year'),
                 func.avg(GenerationData.capacity_factor).label('avg_capacity_factor'),
-                func.sum(GenerationData.generation_mwh).label('total_generation_mwh')
+                func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_generation_mwh')
             )
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
             .where(
@@ -1832,7 +1832,7 @@ class WindfarmReportService:
             select(
                 extract('year', GenerationData.hour).label('year'),
                 extract('month', GenerationData.hour).label('month'),
-                func.sum(GenerationData.generation_mwh).label('total_generation_mwh'),
+                func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_generation_mwh'),
                 func.avg(GenerationData.capacity_factor).label('avg_cf')
             )
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
@@ -2033,7 +2033,7 @@ class WindfarmReportService:
             select(
                 extract('year', GenerationData.hour).label('year'),
                 func.avg(GenerationData.capacity_mw).label('avg_capacity_mw'),
-                func.sum(GenerationData.generation_mwh).label('total_generation_mwh'),
+                func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_generation_mwh'),
                 func.avg(GenerationData.capacity_factor).label('avg_cf')
             )
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
@@ -2176,7 +2176,7 @@ class WindfarmReportService:
         capacity_stmt = (
             select(
                 extract('year', GenerationData.hour).label('year'),
-                func.sum(GenerationData.generation_mwh).label('total_generation_mwh')
+                func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_generation_mwh')
             )
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
             .join(Windfarm, GenerationUnit.windfarm_id == Windfarm.id)

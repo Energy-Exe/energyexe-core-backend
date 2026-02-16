@@ -247,9 +247,9 @@ class WeatherCorrelationService:
                     WHEN wd.wind_speed_100m < 20 THEN 17.5
                     ELSE 22.5
                 END as wind_center,
-                AVG(gd.generation_mwh) as avg_generation,
+                AVG(gd.generation_mwh - COALESCE(gd.consumption_mwh, 0)) as avg_generation,
                 COUNT(*) as frequency,
-                SUM(gd.generation_mwh) as total_generation
+                SUM(gd.generation_mwh - COALESCE(gd.consumption_mwh, 0)) as total_generation
             FROM weather_data wd
             JOIN generation_data gd ON
                 gd.windfarm_id = wd.windfarm_id
@@ -339,7 +339,7 @@ class WeatherCorrelationService:
         query = text("""
             SELECT
                 FLOOR(wd.wind_direction_deg / 22.5) * 22.5 as direction_bin,
-                SUM(gd.generation_mwh) as total_generation,
+                SUM(gd.generation_mwh - COALESCE(gd.consumption_mwh, 0)) as total_generation,
                 COUNT(*) as frequency
             FROM weather_data wd
             JOIN generation_data gd ON

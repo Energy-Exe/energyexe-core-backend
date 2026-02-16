@@ -22,7 +22,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Any
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import argparse
 import sys
 from dataclasses import dataclass
@@ -62,6 +62,8 @@ class HourlyRecord:
     data_points: int
     expected_points: int
     metadata: Dict[str, Any]
+    # Consumption tracking (ENTSOE reports both gen and consumption)
+    consumption_mwh: Optional[float] = None
     # Curtailment tracking (ELEXON BOAV integration)
     metered_mwh: Optional[float] = None  # What was delivered to grid (B1610)
     curtailed_mwh: Optional[float] = None  # What was curtailed (BOAV bids)
@@ -302,6 +304,7 @@ class DailyGenerationProcessor:
 
         # Fetch raw data for the day (filtered by windfarm if specified)
         # For ELEXON, exclude BOAV data from main fetch (we'll fetch it separately)
+        # For ENTSOE, exclude consumption source_types from generation fetch
         if source == 'ELEXON':
             raw_data = await self.fetch_raw_data(
                 source, day_start, day_end,
@@ -322,6 +325,26 @@ class DailyGenerationProcessor:
                 raw_data = list(seen.values())
                 if len(raw_data) < before_count:
                     logger.info(f"Deduplicated {before_count} → {len(raw_data)} B1610 records (api preferred over csv)")
+        elif source == 'ENTSOE':
+            raw_data = await self.fetch_raw_data(
+                source, day_start, day_end,
+                windfarm_id=windfarm_id,
+                exclude_source_types=['api_consumption', 'excel_consumption']
+            )
+            # Deduplicate: if both 'api' and 'excel' records exist for the same
+            # (identifier, period_start), prefer most recently updated record
+            if raw_data:
+                seen = {}
+                for r in raw_data:
+                    key = (r.identifier, r.period_start)
+                    if key not in seen:
+                        seen[key] = r
+                    elif r.updated_at and seen[key].updated_at and r.updated_at > seen[key].updated_at:
+                        seen[key] = r  # More recent update wins
+                before_count = len(raw_data)
+                raw_data = list(seen.values())
+                if len(raw_data) < before_count:
+                    logger.info(f"Deduplicated {before_count} → {len(raw_data)} ENTSOE records (latest update preferred)")
         else:
             raw_data = await self.fetch_raw_data(source, day_start, day_end, windfarm_id=windfarm_id)
 
@@ -332,6 +355,24 @@ class DailyGenerationProcessor:
             if boav_data:
                 logger.info(f"Found {len(boav_data)} BOAV bid records for curtailment calculation")
                 self.stats['raw_records_processed'] += len(boav_data)
+
+        # For ENTSOE, fetch consumption data separately
+        consumption_data = []
+        if source == 'ENTSOE':
+            consumption_data = await self.fetch_raw_data(
+                source, day_start, day_end,
+                windfarm_id=windfarm_id,
+                source_type=None,
+                exclude_source_types=None,
+            )
+            # Filter to only consumption source_types
+            consumption_data = [
+                r for r in consumption_data
+                if r.source_type in ('api_consumption', 'excel_consumption')
+            ]
+            if consumption_data:
+                logger.info(f"Found {len(consumption_data)} ENTSOE consumption records")
+                self.stats['raw_records_processed'] += len(consumption_data)
 
         if not raw_data and not boav_data:
             logger.info(f"No data found for {source} on {day_start.date()}")
@@ -344,6 +385,8 @@ class DailyGenerationProcessor:
         # Transform to hourly records
         if source == 'ELEXON':
             hourly_records = self.transform_elexon(raw_data, boav_data, day_start, day_end)
+        elif source == 'ENTSOE':
+            hourly_records = self.transform_entsoe(raw_data, consumption_data)
         else:
             hourly_records = self.transform_source_data(source, raw_data)
 
@@ -519,8 +562,17 @@ class DailyGenerationProcessor:
             logger.warning(f"Unknown source: {source}")
             return []
 
-    def transform_entsoe(self, raw_data: List[GenerationDataRaw]) -> List[HourlyRecord]:
-        """Transform ENTSOE data (15-min or hourly)."""
+    def transform_entsoe(
+        self,
+        raw_data: List[GenerationDataRaw],
+        consumption_data: Optional[List[GenerationDataRaw]] = None
+    ) -> List[HourlyRecord]:
+        """Transform ENTSOE data (15-min or hourly) with optional consumption.
+
+        Args:
+            raw_data: Generation records (source_type='api' or 'excel', excluding consumption)
+            consumption_data: Consumption records (source_type='api_consumption' or 'excel_consumption')
+        """
 
         hourly_groups = defaultdict(list)
 
@@ -532,24 +584,70 @@ class DailyGenerationProcessor:
             key = (hour, record.identifier)
             hourly_groups[key].append(record)
 
+        # Group consumption data by (hour, identifier)
+        consumption_groups = defaultdict(list)
+        if consumption_data:
+            for record in consumption_data:
+                hour = record.period_start.replace(minute=0, second=0, microsecond=0)
+                if hour.tzinfo is None:
+                    hour = hour.replace(tzinfo=ZoneInfo('UTC'))
+                key = (hour, record.identifier)
+                consumption_groups[key].append(record)
+
         hourly_records = []
 
         for (hour, identifier), records in hourly_groups.items():
-            # Filter out records with null values
-            valid_records = [r for r in records if r.value_extracted is not None]
+            # Filter out records with null or NaN values
+            # (PostgreSQL NaN loads as Decimal('NaN') which is not None)
+            valid_records = [
+                r for r in records
+                if r.value_extracted is not None and not Decimal(str(r.value_extracted)).is_nan()
+            ]
             if not valid_records:
                 continue  # Skip this hour if no valid data
 
-            resolution = valid_records[0].data.get('resolution_code', 'PT60M')
+            jsonb_resolution = valid_records[0].data.get('resolution_code', 'PT60M')
+
+            # Heuristic: use record count to detect sub-hourly data regardless of metadata
+            # This handles cases where entsoe-py didn't provide resolution_code and
+            # existing data has incorrect 'PT60M' stored in JSONB
+            if len(valid_records) >= 3:
+                resolution = 'PT15M'
+            elif len(valid_records) == 2:
+                resolution = 'PT30M'
+            else:
+                resolution = jsonb_resolution
 
             if resolution == 'PT15M':
-                # Average of 4 values per hour (harmonization rule)
-                generation_mw = np.mean([float(r.value_extracted) for r in valid_records])
+                # Average of sub-hourly values per hour (harmonization rule)
+                # Use Decimal arithmetic to preserve precision (avoids float rounding)
+                values = [Decimal(str(r.value_extracted)) for r in valid_records]
+                generation_mw = float(sum(values) / len(values))
                 expected_points = 4
+            elif resolution == 'PT30M':
+                # Average of 2 half-hourly values
+                values = [Decimal(str(r.value_extracted)) for r in valid_records]
+                generation_mw = float(sum(values) / len(values))
+                expected_points = 2
             else:
                 # Hourly data - use directly
                 generation_mw = float(valid_records[0].value_extracted)
                 expected_points = 1
+
+            # Calculate consumption for this hour/identifier
+            consumption_mw = None
+            consumption_records = consumption_groups.get((hour, identifier), [])
+            valid_consumption = [
+                r for r in consumption_records
+                if r.value_extracted is not None and not Decimal(str(r.value_extracted)).is_nan()
+            ]
+            if valid_consumption:
+                if len(valid_consumption) >= 3:
+                    consumption_mw = np.mean([float(r.value_extracted) for r in valid_consumption])
+                elif len(valid_consumption) == 2:
+                    consumption_mw = np.mean([float(r.value_extracted) for r in valid_consumption])
+                else:
+                    consumption_mw = float(valid_consumption[0].value_extracted)
 
             # Get raw capacity from ENTSOE data (store separately)
             raw_capacity_mw = None
@@ -567,19 +665,69 @@ class DailyGenerationProcessor:
             # Get capacity if unit is operational
             capacity_mw = unit_info.get('capacity_mw') if unit_info else None
 
+            all_raw_ids = [r.id for r in valid_records] + [r.id for r in valid_consumption]
+
             hourly_records.append(HourlyRecord(
                 hour=hour,
                 identifier=identifier,
                 generation_mwh=generation_mw,  # MW for 1 hour = MWh
                 capacity_mw=capacity_mw,  # From generation_units table (only if operational)
-                raw_data_ids=[r.id for r in valid_records],
+                raw_data_ids=all_raw_ids,
                 data_points=len(valid_records),
                 expected_points=expected_points,
+                consumption_mwh=consumption_mw,
                 metadata={
                     'resolution_code': resolution,
-                    'raw_capacity_mw': raw_capacity_mw  # Store raw value separately
+                    'raw_capacity_mw': raw_capacity_mw,  # Store raw value separately
+                    'has_consumption': consumption_mw is not None,
                 }
             ))
+
+        # Handle consumption-only hours (no generation data for this hour/identifier)
+        # These occur when a unit is only consuming (e.g., auxiliary load during zero wind)
+        processed_keys = set(hourly_groups.keys())
+        consumption_only_count = 0
+        for (hour, identifier), consumption_records in consumption_groups.items():
+            if (hour, identifier) in processed_keys:
+                continue  # Already handled above with generation data
+
+            valid_consumption = [
+                r for r in consumption_records
+                if r.value_extracted is not None and not Decimal(str(r.value_extracted)).is_nan()
+            ]
+            if not valid_consumption:
+                continue
+
+            # Average consumption values
+            if len(valid_consumption) >= 2:
+                consumption_mw = np.mean([float(r.value_extracted) for r in valid_consumption])
+            else:
+                consumption_mw = float(valid_consumption[0].value_extracted)
+
+            unit_key = f"ENTSOE:{identifier}"
+            cache_entry = self.generation_units_cache.get(unit_key)
+            unit_info = self.get_operational_unit(cache_entry, hour)
+            capacity_mw = unit_info.get('capacity_mw') if unit_info else None
+
+            consumption_only_count += 1
+            hourly_records.append(HourlyRecord(
+                hour=hour,
+                identifier=identifier,
+                generation_mwh=0.0,  # No generation during consumption-only hours
+                capacity_mw=capacity_mw,
+                raw_data_ids=[r.id for r in valid_consumption],
+                data_points=0,
+                expected_points=0,
+                consumption_mwh=consumption_mw,
+                metadata={
+                    'resolution_code': 'PT15M' if len(valid_consumption) >= 3 else 'PT60M',
+                    'consumption_only': True,
+                    'has_consumption': True,
+                }
+            ))
+
+        if consumption_only_count > 0:
+            logger.info(f"Created {consumption_only_count} consumption-only hourly records")
 
         return hourly_records
 
@@ -1014,7 +1162,7 @@ class DailyGenerationProcessor:
 
         for record in hourly_records:
             # Calculate quality metrics
-            completeness = min(1.0, record.data_points / record.expected_points)
+            completeness = min(1.0, record.data_points / record.expected_points) if record.expected_points > 0 else 0.0
             quality_score = self.calculate_quality_score(
                 record.data_points,
                 record.expected_points
@@ -1079,11 +1227,13 @@ class DailyGenerationProcessor:
                 generation_unit_id=unit_info['id'] if unit_info else None,
                 windfarm_id=unit_info['windfarm_id'] if unit_info else None,
                 turbine_unit_id=None,  # Will be set when we have turbine-level data
-                generation_mwh=Decimal(str(record.generation_mwh)),
+                generation_mwh=Decimal(str(record.generation_mwh)).quantize(Decimal('0.001'), rounding=ROUND_HALF_UP),
                 capacity_mw=Decimal(str(effective_capacity_mw)) if effective_capacity_mw else None,
                 capacity_factor=Decimal(str(capacity_factor)) if capacity_factor else None,
                 raw_capacity_mw=Decimal(str(raw_capacity_mw)) if raw_capacity_mw else None,
                 raw_capacity_factor=Decimal(str(raw_capacity_factor)) if raw_capacity_factor else None,
+                # Consumption tracking (ENTSOE)
+                consumption_mwh=Decimal(str(record.consumption_mwh)).quantize(Decimal('0.001'), rounding=ROUND_HALF_UP) if record.consumption_mwh is not None else None,
                 # Curtailment tracking (ELEXON BOAV integration)
                 metered_mwh=Decimal(str(record.metered_mwh)) if record.metered_mwh is not None else None,
                 curtailed_mwh=Decimal(str(record.curtailed_mwh)) if record.curtailed_mwh else None,

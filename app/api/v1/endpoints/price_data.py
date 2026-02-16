@@ -691,16 +691,23 @@ async def get_portfolio_revenue(
 
     # Get total revenue and generation with price join
     total_query = text("""
+        WITH preferred_source AS (
+            SELECT w.id as windfarm_id,
+                CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END as pref_source
+            FROM windfarms w
+            LEFT JOIN bidzones b ON w.bidzone_id = b.id
+        )
         SELECT
-            SUM(g.generation_mwh) as total_generation,
-            SUM(g.generation_mwh * p.day_ahead_price) as total_revenue,
+            SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation,
+            SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) as total_revenue,
             AVG(p.day_ahead_price) as avg_market_price,
             COUNT(DISTINCT g.windfarm_id) as farm_count
         FROM generation_data g
-        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+        JOIN preferred_source ps ON g.windfarm_id = ps.windfarm_id
+        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = ps.pref_source
         WHERE g.hour >= :start_date
           AND g.hour < :end_date
-          AND g.generation_mwh > 0
+          AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
           AND p.day_ahead_price IS NOT NULL
     """)
 
@@ -721,22 +728,29 @@ async def get_portfolio_revenue(
 
     # Get by-farm breakdown
     farm_query = text("""
+        WITH preferred_source AS (
+            SELECT w.id as windfarm_id,
+                CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END as pref_source
+            FROM windfarms w
+            LEFT JOIN bidzones b ON w.bidzone_id = b.id
+        )
         SELECT
             g.windfarm_id,
             w.name as windfarm_name,
-            SUM(g.generation_mwh) as total_generation,
-            SUM(g.generation_mwh * p.day_ahead_price) as total_revenue,
+            SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation,
+            SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) as total_revenue,
             CASE
-                WHEN SUM(g.generation_mwh) > 0
-                THEN SUM(g.generation_mwh * p.day_ahead_price) / SUM(g.generation_mwh)
+                WHEN SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+                THEN SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) / SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0))
                 ELSE 0
             END as achieved_price
         FROM generation_data g
-        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+        JOIN preferred_source ps ON g.windfarm_id = ps.windfarm_id
+        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = ps.pref_source
         JOIN windfarms w ON g.windfarm_id = w.id
         WHERE g.hour >= :start_date
           AND g.hour < :end_date
-          AND g.generation_mwh > 0
+          AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
           AND p.day_ahead_price IS NOT NULL
         GROUP BY g.windfarm_id, w.name
         ORDER BY total_revenue DESC
@@ -762,17 +776,24 @@ async def get_portfolio_revenue(
 
     # Get by-period breakdown
     period_query = text(f"""
+        WITH preferred_source AS (
+            SELECT w.id as windfarm_id,
+                CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END as pref_source
+            FROM windfarms w
+            LEFT JOIN bidzones b ON w.bidzone_id = b.id
+        )
         SELECT
             DATE_TRUNC(:aggregation, g.hour) as period,
-            SUM(g.generation_mwh) as total_generation,
-            SUM(g.generation_mwh * p.day_ahead_price) as total_revenue,
+            SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation,
+            SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) as total_revenue,
             AVG(p.day_ahead_price) as avg_price,
             COUNT(DISTINCT g.windfarm_id) as farm_count
         FROM generation_data g
-        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+        JOIN preferred_source ps ON g.windfarm_id = ps.windfarm_id
+        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = ps.pref_source
         WHERE g.hour >= :start_date
           AND g.hour < :end_date
-          AND g.generation_mwh > 0
+          AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
           AND p.day_ahead_price IS NOT NULL
         GROUP BY DATE_TRUNC(:aggregation, g.hour)
         ORDER BY period
@@ -833,13 +854,17 @@ async def get_portfolio_capture_rates(
     from app.models.portfolio import PortfolioItem
     from sqlalchemy import select, text
 
-    # Get market average price first
+    # Get market average price first (use preferred source per bidzone)
     market_avg_query = text("""
         SELECT AVG(day_ahead_price) as market_avg
         FROM price_data
         WHERE hour >= :start_date
           AND hour < :end_date
           AND day_ahead_price IS NOT NULL
+          AND source = CASE
+              WHEN bidzone_id = (SELECT id FROM bidzones WHERE code = '10YGB----------A') THEN 'ELEXON'
+              ELSE 'ENTSOE'
+          END
     """)
 
     market_result = await db.execute(market_avg_query, {
@@ -851,28 +876,35 @@ async def get_portfolio_capture_rates(
 
     # Get per-farm capture rates
     farm_query = text("""
+        WITH preferred_source AS (
+            SELECT w.id as windfarm_id,
+                CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END as pref_source
+            FROM windfarms w
+            LEFT JOIN bidzones b ON w.bidzone_id = b.id
+        )
         SELECT
             g.windfarm_id,
             w.name as windfarm_name,
             w.bidzone_id,
             b.code as bidzone_code,
-            SUM(g.generation_mwh) as total_generation,
-            SUM(g.generation_mwh * p.day_ahead_price) as total_revenue,
+            SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation,
+            SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) as total_revenue,
             CASE
-                WHEN SUM(g.generation_mwh) > 0
-                THEN SUM(g.generation_mwh * p.day_ahead_price) / SUM(g.generation_mwh)
+                WHEN SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+                THEN SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) / SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0))
                 ELSE 0
             END as achieved_price
         FROM generation_data g
-        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+        JOIN preferred_source ps ON g.windfarm_id = ps.windfarm_id
+        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = ps.pref_source
         JOIN windfarms w ON g.windfarm_id = w.id
         LEFT JOIN bidzones b ON w.bidzone_id = b.id
         WHERE g.hour >= :start_date
           AND g.hour < :end_date
-          AND g.generation_mwh > 0
+          AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
           AND p.day_ahead_price IS NOT NULL
         GROUP BY g.windfarm_id, w.name, w.bidzone_id, b.code
-        HAVING SUM(g.generation_mwh) > 0
+        HAVING SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
     """)
 
     farm_result = await db.execute(farm_query, {

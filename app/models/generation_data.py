@@ -92,6 +92,11 @@ class GenerationData(Base):
     capacity_mw: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     capacity_factor: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 4))
 
+    # Consumption tracking (ENTSOE generation per unit reports both gen and consumption)
+    # consumption_mwh: Power consumed by the unit (e.g., pumped storage, self-consumption)
+    # net generation = generation_mwh - consumption_mwh
+    consumption_mwh: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
+
     # Curtailment tracking (ELEXON BOAV integration)
     # metered_mwh: What was delivered to the grid (from B1610)
     # curtailed_mwh: What was curtailed via accepted bids (from BOAV)

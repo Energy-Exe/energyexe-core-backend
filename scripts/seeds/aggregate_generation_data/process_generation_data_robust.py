@@ -89,7 +89,12 @@ class RobustGenerationProcessor:
         self.source = source
         self.dry_run = dry_run
         self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(exist_ok=True)
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Fallback to /tmp if configured path isn't writable (e.g. Docker)
+            self.log_dir = Path("/tmp") / log_dir
+            self.log_dir.mkdir(parents=True, exist_ok=True)
         self.monthly = monthly
 
         # Initialize results tracking

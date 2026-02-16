@@ -247,7 +247,10 @@ async def get_windfarm_generation_units(windfarm_id: int, db: AsyncSession = Dep
     from sqlalchemy import select
     
     result = await db.execute(
-        select(GenerationUnit).where(GenerationUnit.windfarm_id == windfarm_id)
+        select(GenerationUnit).where(
+            GenerationUnit.windfarm_id == windfarm_id,
+            GenerationUnit.is_active == True,
+        )
     )
     units = result.scalars().all()
     
@@ -372,7 +375,7 @@ async def get_windfarm_with_generation_units(windfarm_id: int, db: AsyncSession 
                 if unit.commissioned_date
                 else None,
             }
-            for unit in windfarm.generation_units
+            for unit in windfarm.generation_units if unit.is_active
         ] if hasattr(windfarm, 'generation_units') else [],
     }
 

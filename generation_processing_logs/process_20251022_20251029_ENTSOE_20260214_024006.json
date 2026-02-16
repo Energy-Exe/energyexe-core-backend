@@ -1,0 +1,27 @@
+{
+  "summary": {
+    "start_time": "2026-02-14T02:40:06.469100",
+    "end_time": "2026-02-14T02:40:35.536870",
+    "total_days": 8,
+    "processed_days": 0,
+    "failed_days": 0,
+    "skipped_days": 8,
+    "total_raw_records": 14857,
+    "total_hourly_records": 5161,
+    "source": "ENTSOE",
+    "dry_run": false
+  },
+  "daily_results": [
+    {
+      "date": "2025-10",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 14857,
+      "hourly_records": 5161,
+      "processing_time_seconds": 29.05,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T02:40:06.484905"
+    }
+  ]
+}

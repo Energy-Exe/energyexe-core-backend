@@ -43,6 +43,7 @@ from app.models.generation_unit import GenerationUnit
 from app.models.windfarm import Windfarm
 from app.models.bidzone import Bidzone
 from app.services.entsoe_client import ENTSOEClient
+from app.services.raw_data_storage_service import _detect_entsoe_resolution
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.dialects.postgresql import insert
@@ -182,7 +183,8 @@ async def fetch_and_store_control_area_data(
             logger.info(f"DRY RUN: Would store {len(df)} records")
             return result
 
-        # Store data for each unit
+        # Store data for each unit, split by data direction (generation vs consumption)
+        import pandas as pd
         AsyncSessionLocal = get_session_factory()
         async with AsyncSessionLocal() as db:
             for unit in area_data['units']:
@@ -192,85 +194,112 @@ async def fetch_and_store_control_area_data(
                 if unit_df.empty:
                     continue
 
-                # Prepare records for bulk upsert
-                records_to_insert = []
+                # Split by data_direction to avoid CardinalityViolation
+                # (same unit can have both generation and consumption records)
+                has_direction = 'data_direction' in unit_df.columns
+                if has_direction:
+                    directions = unit_df['data_direction'].unique()
+                else:
+                    directions = ['generation']
 
-                for idx, row in unit_df.iterrows():
-                    # Extract timestamp
-                    timestamp = row.get("timestamp", idx)
-                    if not isinstance(timestamp, datetime):
-                        import pandas as pd
-                        timestamp = pd.to_datetime(timestamp)
-
-                    # Ensure timezone-aware
-                    if timestamp.tzinfo is None:
-                        timestamp = timestamp.replace(tzinfo=timezone.utc)
-
-                    # Determine period type
-                    resolution = row.get("resolution_code", "PT60M")
-                    if resolution == "PT15M":
-                        period_end = timestamp + timedelta(minutes=15)
-                        period_type = "PT15M"
-                    elif resolution == "PT60M":
-                        period_end = timestamp + timedelta(hours=1)
-                        period_type = "PT60M"
+                for direction in directions:
+                    if has_direction:
+                        dir_df = unit_df[unit_df['data_direction'] == direction]
                     else:
-                        period_end = timestamp + timedelta(hours=1)
-                        period_type = "PT60M"
+                        dir_df = unit_df
 
-                    # Extract value
-                    value = float(row.get("value", 0))
+                    if dir_df.empty:
+                        continue
 
-                    # Build data JSONB
-                    data = {
-                        "eic_code": unit.code,
-                        "area_code": control_area_code,
-                        "production_type": row.get("production_type", "wind"),
-                        "resolution_code": resolution,
-                        "installed_capacity_mw": float(row["installed_capacity_mw"])
-                            if "installed_capacity_mw" in row and pd.notna(row["installed_capacity_mw"])
-                            else None,
-                        "import_metadata": {
-                            "import_timestamp": datetime.now(timezone.utc).isoformat(),
-                            "import_method": "api_script",
-                            "import_script": "import_from_api.py",
-                        },
-                    }
+                    source_type = 'api_consumption' if direction == 'consumption' else 'api'
 
-                    records_to_insert.append({
-                        "source": "ENTSOE",
-                        "source_type": "api",
-                        "identifier": unit.code,
-                        "period_start": timestamp,
-                        "period_end": period_end,
-                        "period_type": period_type,
-                        "value_extracted": Decimal(str(value)),
-                        "unit": "MW",
-                        "data": data,
-                        "created_at": datetime.now(timezone.utc),
-                        "updated_at": datetime.now(timezone.utc),
-                    })
+                    # Detect resolution from timestamp spacing
+                    detected_resolution = _detect_entsoe_resolution(dir_df)
 
-                if records_to_insert:
-                    # Bulk upsert
-                    stmt = insert(GenerationDataRaw).values(records_to_insert)
-                    stmt = stmt.on_conflict_do_update(
-                        index_elements=['source', 'source_type', 'identifier', 'period_start'],
-                        set_={
-                            'value_extracted': stmt.excluded.value_extracted,
-                            'data': stmt.excluded.data,
-                            'updated_at': datetime.now(timezone.utc),
-                            'period_end': stmt.excluded.period_end,
-                            'period_type': stmt.excluded.period_type,
-                            'unit': stmt.excluded.unit,
+                    # Prepare records for bulk upsert
+                    records_to_insert = []
+
+                    for idx, row in dir_df.iterrows():
+                        # Extract timestamp
+                        timestamp = row.get("timestamp", idx)
+                        if not isinstance(timestamp, datetime):
+                            timestamp = pd.to_datetime(timestamp)
+
+                        # Ensure timezone-aware
+                        if timestamp.tzinfo is None:
+                            timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+                        # Use detected resolution (not row-level)
+                        resolution = detected_resolution
+                        if resolution == "PT15M":
+                            period_end = timestamp + timedelta(minutes=15)
+                            period_type = "PT15M"
+                        elif resolution == "PT30M":
+                            period_end = timestamp + timedelta(minutes=30)
+                            period_type = "PT30M"
+                        else:
+                            period_end = timestamp + timedelta(hours=1)
+                            period_type = "PT60M"
+
+                        # Extract value
+                        value = float(row.get("value", 0))
+
+                        # Skip NaN records (ENTSOE reports NaN when unit isn't
+                        # generating/consuming in that period)
+                        if pd.isna(value):
+                            continue
+
+                        # Build data JSONB
+                        data = {
+                            "eic_code": unit.code,
+                            "area_code": control_area_code,
+                            "production_type": row.get("production_type", "wind"),
+                            "resolution_code": resolution,
+                            "data_direction": direction,
+                            "installed_capacity_mw": float(row["installed_capacity_mw"])
+                                if "installed_capacity_mw" in row and pd.notna(row["installed_capacity_mw"])
+                                else None,
+                            "import_metadata": {
+                                "import_timestamp": datetime.now(timezone.utc).isoformat(),
+                                "import_method": "api_script",
+                                "import_script": "import_from_api.py",
+                            },
                         }
-                    )
 
-                    await db.execute(stmt)
-                    await db.commit()
+                        records_to_insert.append({
+                            "source": "ENTSOE",
+                            "source_type": source_type,
+                            "identifier": unit.code,
+                            "period_start": timestamp,
+                            "period_end": period_end,
+                            "period_type": period_type,
+                            "value_extracted": Decimal(str(value)),
+                            "unit": "MW",
+                            "data": data,
+                            "created_at": datetime.now(timezone.utc),
+                            "updated_at": datetime.now(timezone.utc),
+                        })
 
-                    result['records_stored'] += len(records_to_insert)
-                    logger.info(f"Stored {len(records_to_insert)} records for unit {unit.code}")
+                    if records_to_insert:
+                        # Bulk upsert
+                        stmt = insert(GenerationDataRaw).values(records_to_insert)
+                        stmt = stmt.on_conflict_do_update(
+                            index_elements=['source', 'source_type', 'identifier', 'period_start'],
+                            set_={
+                                'value_extracted': stmt.excluded.value_extracted,
+                                'data': stmt.excluded.data,
+                                'updated_at': datetime.now(timezone.utc),
+                                'period_end': stmt.excluded.period_end,
+                                'period_type': stmt.excluded.period_type,
+                                'unit': stmt.excluded.unit,
+                            }
+                        )
+
+                        await db.execute(stmt)
+                        await db.commit()
+
+                        result['records_stored'] += len(records_to_insert)
+                        logger.info(f"Stored {len(records_to_insert)} {direction} records for unit {unit.code}")
 
         logger.info(
             f"Completed {area_data['control_area_name']}: "
@@ -386,15 +415,15 @@ async def main(start_date: str, end_date: str, zones: Optional[List[str]] = None
                     # Check if it's InvalidBusinessParameterError (control area doesn't support per-unit data)
                     if "InvalidBusinessParameterError" in error_str or "units_found: []" in error_str:
                         logger.warning(
-                            f"⚠️  Control Area {area_data['control_area_name']} ({control_area_code}) does not support per-unit generation data API. "
+                            f"⚠️  Control Area {zone_data['control_area_name']} ({control_area_code}) does not support per-unit generation data API. "
                             f"This control area may not provide detailed per-unit data through ENTSOE API."
                         )
                         # Create skipped result (don't retry)
                         result = {
-                            'control_area': area_data['control_area_name'],
+                            'control_area': zone_data['control_area_name'],
                             'control_area_code': control_area_code,
-                            'windfarms': len(area_data['windfarms']),
-                            'units': len(area_data['units']),
+                            'windfarms': len(zone_data['windfarms']),
+                            'units': len(zone_data['units']),
                             'api_calls': 0,
                             'records_stored': 0,
                             'records_updated': 0,
@@ -405,16 +434,16 @@ async def main(start_date: str, end_date: str, zones: Optional[List[str]] = None
                     # For other errors, retry
                     retry_count += 1
                     if retry_count < max_retries:
-                        logger.warning(f"Control Area {area_data['control_area_name']} failed (attempt {retry_count}), retrying...")
+                        logger.warning(f"Control Area {zone_data['control_area_name']} failed (attempt {retry_count}), retrying...")
                         await asyncio.sleep(5)
                     else:
-                        logger.error(f"Control Area {area_data['control_area_name']} failed after {max_retries} attempts")
+                        logger.error(f"Control Area {zone_data['control_area_name']} failed after {max_retries} attempts")
                         # Create error result
                         result = {
-                            'control_area': area_data['control_area_name'],
+                            'control_area': zone_data['control_area_name'],
                             'control_area_code': control_area_code,
-                            'windfarms': len(area_data['windfarms']),
-                            'units': len(area_data['units']),
+                            'windfarms': len(zone_data['windfarms']),
+                            'units': len(zone_data['units']),
                             'api_calls': 0,
                             'records_stored': 0,
                             'records_updated': 0,

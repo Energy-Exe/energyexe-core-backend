@@ -124,6 +124,7 @@ async def get_hourly_data(
         {
             'hour': record.hour.isoformat(),
             'generation_mwh': float(record.generation_mwh),
+            'consumption_mwh': float(record.consumption_mwh) if record.consumption_mwh else None,
             'generation_unit_id': record.generation_unit_id,
             'windfarm_id': record.windfarm_id,
             'source': record.source,
@@ -328,10 +329,12 @@ async def get_windfarm_stats(
         raise HTTPException(status_code=404, detail=f"Windfarm with id {windfarm_id} not found")
 
     # Calculate statistics
+    # Net generation = generation_mwh - COALESCE(consumption_mwh, 0)
+    net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
     stats_query = select(
-        func.sum(GenerationData.generation_mwh).label('total_generation'),
-        func.avg(GenerationData.generation_mwh).label('avg_generation'),
-        func.max(GenerationData.generation_mwh).label('max_generation'),
+        func.sum(net_gen).label('total_generation'),
+        func.avg(net_gen).label('avg_generation'),
+        func.max(net_gen).label('max_generation'),
         func.avg(GenerationData.capacity_factor).label('avg_capacity_factor'),
         func.avg(GenerationData.quality_score).label('avg_quality_score'),
         func.count(GenerationData.id).label('total_hours'),
@@ -623,9 +626,10 @@ async def get_portfolio_generation_stats(
         if country_windfarm_ids:
             conditions.append(GenerationData.windfarm_id.in_(country_windfarm_ids))
 
-    # Get total generation stats
+    # Get total generation stats (net = generation - consumption)
+    net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
     stats_query = select(
-        func.sum(GenerationData.generation_mwh).label('total_mwh'),
+        func.sum(net_gen).label('total_mwh'),
         func.avg(GenerationData.quality_score).label('avg_quality'),
         func.count(func.distinct(GenerationData.windfarm_id)).label('farm_count'),
         func.count(GenerationData.id).label('record_count'),
@@ -637,7 +641,7 @@ async def get_portfolio_generation_stats(
     # Get per-farm stats for ranking
     farm_stats_query = select(
         GenerationData.windfarm_id,
-        func.sum(GenerationData.generation_mwh).label('total_mwh'),
+        func.sum(net_gen).label('total_mwh'),
         func.avg(GenerationData.quality_score).label('avg_quality'),
     ).where(
         and_(*conditions)
@@ -765,10 +769,11 @@ async def get_portfolio_generation_timeseries(
     }
     trunc_period = agg_map.get(aggregation, 'day')
 
-    # Get total timeseries
+    # Get total timeseries (net = generation - consumption)
+    net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
     total_query = select(
         func.date_trunc(trunc_period, GenerationData.hour).label('period'),
-        func.sum(GenerationData.generation_mwh).label('total_mwh'),
+        func.sum(net_gen).label('total_mwh'),
         func.avg(GenerationData.quality_score).label('avg_quality'),
         func.count(func.distinct(GenerationData.windfarm_id)).label('farm_count'),
     ).where(
@@ -784,7 +789,7 @@ async def get_portfolio_generation_timeseries(
     farm_query = select(
         func.date_trunc(trunc_period, GenerationData.hour).label('period'),
         GenerationData.windfarm_id,
-        func.sum(GenerationData.generation_mwh).label('total_mwh'),
+        func.sum(net_gen).label('total_mwh'),
     ).where(
         and_(*conditions)
     ).group_by(
@@ -904,12 +909,12 @@ async def get_portfolio_performance(
             wf.code as windfarm_code,
             wf.nameplate_capacity_mw,
             c.name as country_name,
-            SUM(g.generation_mwh) as total_mwh,
+            SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_mwh,
             AVG(g.quality_score) as avg_quality,
             COUNT(g.id) as record_count,
             CASE
                 WHEN wf.nameplate_capacity_mw > 0 AND :hours > 0
-                THEN (SUM(g.generation_mwh) / (wf.nameplate_capacity_mw * :hours)) * 100
+                THEN (SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) / (wf.nameplate_capacity_mw * :hours)) * 100
                 ELSE 0
             END as capacity_factor
         FROM generation_data g
@@ -921,7 +926,7 @@ async def get_portfolio_performance(
     """ + (" AND g.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
     (" AND wf.country_id = :country_id" if country_id else "") + """
         GROUP BY wf.id, wf.name, wf.code, wf.nameplate_capacity_mw, c.name
-        HAVING SUM(g.generation_mwh) > 0
+        HAVING SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
         ORDER BY capacity_factor DESC
     """)
 
@@ -980,7 +985,7 @@ async def get_portfolio_performance(
     trend_query = text("""
         SELECT
             date_trunc('month', g.hour) as period,
-            SUM(g.generation_mwh) as total_mwh,
+            SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_mwh,
             SUM(wf.nameplate_capacity_mw) as total_capacity,
             COUNT(DISTINCT g.windfarm_id) as farm_count,
             EXTRACT(EPOCH FROM (date_trunc('month', g.hour) + interval '1 month' - date_trunc('month', g.hour))) / 3600 as period_hours
@@ -1026,10 +1031,10 @@ async def get_portfolio_performance(
             COUNT(DISTINCT tu.windfarm_id) as farm_count,
             COUNT(DISTINCT tu.id) as turbine_count,
             SUM(tu.rated_power_kw) / 1000 as total_capacity_mw,
-            SUM(g.generation_mwh) as total_mwh,
+            SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_mwh,
             CASE
                 WHEN SUM(tu.rated_power_kw) > 0 AND :hours > 0
-                THEN (SUM(g.generation_mwh) / (SUM(tu.rated_power_kw) / 1000 * :hours)) * 100
+                THEN (SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) / (SUM(tu.rated_power_kw) / 1000 * :hours)) * 100
                 ELSE 0
             END as capacity_factor
         FROM generation_data g
@@ -1042,7 +1047,7 @@ async def get_portfolio_performance(
     """ + (" AND g.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
     (" AND wf.country_id = :country_id" if country_id else "") + """
         GROUP BY tm.id, tm.manufacturer, tm.model_name, tm.rated_power_kw
-        HAVING SUM(g.generation_mwh) > 0
+        HAVING SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
         ORDER BY capacity_factor DESC
     """)
 

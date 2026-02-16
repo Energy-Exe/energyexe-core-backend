@@ -50,26 +50,27 @@ class PriceAnalyticsService:
             Dict with capture rate metrics by period
         """
         price_column = "day_ahead_price" if price_type == "day_ahead" else "intraday_price"
+        price_source = await self._get_preferred_price_source(windfarm_id)
 
         # SQL query for capture rate calculation
         query = text(f"""
             WITH windfarm_metrics AS (
                 SELECT
                     DATE_TRUNC(:aggregation, g.hour) as period,
-                    SUM(g.generation_mwh) as total_generation_mwh,
-                    SUM(g.generation_mwh * p.{price_column}) as revenue_eur,
+                    SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation_mwh,
+                    SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.{price_column}) as revenue_eur,
                     CASE
-                        WHEN SUM(g.generation_mwh) > 0
-                        THEN SUM(g.generation_mwh * p.{price_column}) / SUM(g.generation_mwh)
+                        WHEN SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+                        THEN SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.{price_column}) / SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0))
                         ELSE NULL
                     END as achieved_price
                 FROM generation_data g
-                JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+                JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = :price_source
                 WHERE g.windfarm_id = :windfarm_id
                   AND g.hour >= :start_date
                   AND g.hour < :end_date
                   AND p.{price_column} IS NOT NULL
-                  AND g.generation_mwh > 0
+                  AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
                 GROUP BY DATE_TRUNC(:aggregation, g.hour)
             ),
             market_metrics AS (
@@ -82,6 +83,7 @@ class PriceAnalyticsService:
                   AND p.hour >= :start_date
                   AND p.hour < :end_date
                   AND p.{price_column} IS NOT NULL
+                  AND p.source = :price_source
                 GROUP BY DATE_TRUNC(:aggregation, p.hour)
             )
             SELECT
@@ -108,6 +110,7 @@ class PriceAnalyticsService:
                 "start_date": start_date,
                 "end_date": end_date,
                 "aggregation": aggregation,
+                "price_source": price_source,
             }
         )
         rows = result.fetchall()
@@ -147,6 +150,7 @@ class PriceAnalyticsService:
               AND hour >= :start_date
               AND hour < :end_date
               AND {price_column} IS NOT NULL
+              AND source = :price_source
         """)
         market_avg_result = await self.db.execute(
             market_avg_query,
@@ -154,6 +158,7 @@ class PriceAnalyticsService:
                 "windfarm_id": windfarm_id,
                 "start_date": start_date,
                 "end_date": end_date,
+                "price_source": price_source,
             }
         )
         market_avg_row = market_avg_result.fetchone()
@@ -201,21 +206,23 @@ class PriceAnalyticsService:
         Returns:
             Dict with revenue metrics by period
         """
+        price_source = await self._get_preferred_price_source(windfarm_id)
+
         query = text("""
             SELECT
                 DATE_TRUNC(:aggregation, g.hour) as period,
-                SUM(g.generation_mwh) as total_generation_mwh,
-                SUM(g.generation_mwh * p.day_ahead_price) as day_ahead_revenue,
-                SUM(g.generation_mwh * COALESCE(p.intraday_price, p.day_ahead_price)) as total_revenue,
+                SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation_mwh,
+                SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) as day_ahead_revenue,
+                SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * COALESCE(p.intraday_price, p.day_ahead_price)) as total_revenue,
                 AVG(p.day_ahead_price) as avg_day_ahead_price,
                 AVG(p.intraday_price) as avg_intraday_price,
                 COUNT(DISTINCT g.hour) as hours_with_generation
             FROM generation_data g
-            JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+            JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = :price_source
             WHERE g.windfarm_id = :windfarm_id
               AND g.hour >= :start_date
               AND g.hour < :end_date
-              AND g.generation_mwh > 0
+              AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
             GROUP BY DATE_TRUNC(:aggregation, g.hour)
             ORDER BY period
         """)
@@ -227,6 +234,7 @@ class PriceAnalyticsService:
                 "start_date": start_date,
                 "end_date": end_date,
                 "aggregation": aggregation,
+                "price_source": price_source,
             }
         )
         rows = result.fetchall()
@@ -338,6 +346,10 @@ class PriceAnalyticsService:
                   AND hour >= :start_date
                   AND hour < :end_date
                   AND day_ahead_price IS NOT NULL
+                  AND source = CASE
+                      WHEN :bidzone_id = (SELECT id FROM bidzones WHERE code = '10YGB----------A') THEN 'ELEXON'
+                      ELSE 'ENTSOE'
+                  END
                 GROUP BY EXTRACT(HOUR FROM hour)
                 ORDER BY hour_of_day
             """)
@@ -356,6 +368,10 @@ class PriceAnalyticsService:
                   AND hour >= :start_date
                   AND hour < :end_date
                   AND day_ahead_price IS NOT NULL
+                  AND source = CASE
+                      WHEN :bidzone_id = (SELECT id FROM bidzones WHERE code = '10YGB----------A') THEN 'ELEXON'
+                      ELSE 'ENTSOE'
+                  END
                 GROUP BY EXTRACT(DOW FROM hour)
                 ORDER BY day_of_week
             """)
@@ -418,12 +434,14 @@ class PriceAnalyticsService:
         This helps understand if the windfarm tends to generate more when
         prices are high (positive correlation) or low (negative correlation).
         """
+        price_source = await self._get_preferred_price_source(windfarm_id)
+
         query = text("""
             SELECT
                 g.generation_mwh,
                 p.day_ahead_price
             FROM generation_data g
-            JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour
+            JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = :price_source
             WHERE g.windfarm_id = :windfarm_id
               AND g.hour >= :start_date
               AND g.hour < :end_date
@@ -437,6 +455,7 @@ class PriceAnalyticsService:
                 "windfarm_id": windfarm_id,
                 "start_date": start_date,
                 "end_date": end_date,
+                "price_source": price_source,
             }
         )
         rows = result.fetchall()
@@ -500,6 +519,18 @@ class PriceAnalyticsService:
             return "Moderate negative - generation tends to be low when prices are high"
         else:
             return "Strong negative - generation is typically low when prices are high"
+
+    async def _get_preferred_price_source(self, windfarm_id: int) -> str:
+        """Resolve preferred price source: ELEXON for GB windfarms, ENTSOE for all others."""
+        query = text("""
+            SELECT CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END as source
+            FROM windfarms w
+            JOIN bidzones b ON w.bidzone_id = b.id
+            WHERE w.id = :windfarm_id
+        """)
+        result = await self.db.execute(query, {"windfarm_id": windfarm_id})
+        row = result.fetchone()
+        return row.source if row else "ENTSOE"
 
     async def _get_windfarm(self, windfarm_id: int) -> Optional[Windfarm]:
         """Get windfarm by ID."""

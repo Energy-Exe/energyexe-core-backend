@@ -1,5 +1,6 @@
 """ENTSOE API client service."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -11,6 +12,10 @@ from entsoe import EntsoePandasClient
 from app.core.config import get_settings
 
 logger = structlog.get_logger()
+
+# Retry constants
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2  # seconds, exponential backoff: 2, 4, 8
 
 
 class ENTSOEClient:
@@ -197,9 +202,15 @@ class ENTSOEClient:
                 elif "level_0" in result_df.columns and "timestamp" not in result_df.columns:
                     result_df.rename(columns={"level_0": "timestamp"}, inplace=True)
 
-                # Ensure timestamp is in ISO format
+                # Convert timestamps to UTC before formatting
+                # entsoe-py returns local timezone (e.g. Europe/Copenhagen for DK,
+                # Europe/Paris for FR) which must be converted to UTC to avoid
+                # storing local times as if they were UTC.
                 if "timestamp" in result_df.columns:
-                    result_df["timestamp"] = pd.to_datetime(result_df["timestamp"]).dt.strftime(
+                    ts = pd.to_datetime(result_df["timestamp"])
+                    if ts.dt.tz is not None:
+                        ts = ts.dt.tz_convert("UTC")
+                    result_df["timestamp"] = ts.dt.strftime(
                         "%Y-%m-%dT%H:%M:%S"
                     )
 
@@ -279,15 +290,46 @@ class ENTSOEClient:
             start_dt = start.replace(tzinfo=None) if hasattr(start, 'tzinfo') and start.tzinfo else start
             end_dt = end.replace(tzinfo=None) if hasattr(end, 'tzinfo') and end.tzinfo else end
 
-            # Query generation per plant with EIC codes included
-            df = self.client.query_generation_per_plant(
-                area_code,
-                start=pd.Timestamp(start_dt, tz="UTC"),
-                end=pd.Timestamp(end_dt, tz="UTC"),
-                psr_type=psr_type,
-                include_eic=True,  # Include EIC codes in the output
-            )
-            
+            # Query generation per plant with retry for transient HTTP/timeout errors
+            df = None
+            last_error = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    df = self.client.query_generation_per_plant(
+                        area_code,
+                        start=pd.Timestamp(start_dt, tz="UTC"),
+                        end=pd.Timestamp(end_dt, tz="UTC"),
+                        psr_type=psr_type,
+                        include_eic=True,
+                    )
+                    break  # Success
+                except Exception as retry_err:
+                    last_error = retry_err
+                    err_type = type(retry_err).__name__
+                    err_msg = str(retry_err)
+                    # entsoe-py bug: RangeIndex.set_levels on empty response (e.g. GB)
+                    if "set_levels" in err_msg and "RangeIndex" in err_msg:
+                        logger.warning(
+                            f"entsoe-py library bug for {area_code}: empty API response "
+                            f"caused RangeIndex.set_levels error (no data available)"
+                        )
+                        df = pd.DataFrame()
+                        break
+
+                    # Only retry on transient errors (HTTP, timeout, connection)
+                    is_transient = any(kw in err_type or kw in err_msg.lower() for kw in [
+                        "HTTPError", "Timeout", "ConnectionError", "502", "503", "429",
+                    ])
+                    if is_transient and attempt < MAX_RETRIES:
+                        delay = RETRY_BASE_DELAY ** attempt
+                        logger.warning(
+                            f"Transient error on attempt {attempt}/{MAX_RETRIES} for {area_code}, "
+                            f"retrying in {delay}s: {err_type}: {err_msg}"
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        raise  # Non-transient or final attempt — propagate
+
             if df is None or df.empty:
                 logger.warning(f"No per-unit data available for {area_code}")
                 metadata["success"] = False
@@ -308,7 +350,7 @@ class ENTSOEClient:
                 for col in df.columns:
                     # Extract unit info from column
                     unit_name = col[0] if isinstance(col, tuple) else str(col)
-                    
+
                     # EIC code position varies:
                     # For wind offshore/onshore: position 3 in (name, type, aggregation, eic_code)
                     # For other types: might be at position 1
@@ -322,28 +364,34 @@ class ENTSOEClient:
                                 continue
                     elif len(col) > 1 and isinstance(col[1], str) and "W" in col[1]:
                         eic_code = col[1]
-                    
+
                     # If we have specific EIC codes to filter, skip others
                     if eic_codes and eic_code and eic_code not in eic_codes:
                         continue
-                    
+
                     # Skip if no EIC code found
                     if not eic_code:
                         continue
-                    
+
+                    # Determine data direction from col[2]: 'Actual Aggregated' vs 'Actual Consumption'
+                    metric = col[2] if len(col) > 2 else None
+                    data_direction = "consumption" if metric and "Consumption" in str(metric) else "generation"
+
                     # Create record for this unit
                     unit_df = pd.DataFrame(df[col])
                     unit_df.columns = ["value"]
                     unit_df["unit_name"] = unit_name
                     unit_df["eic_code"] = eic_code
                     unit_df["area_code"] = area_code
+                    unit_df["data_direction"] = data_direction
                     unit_df = unit_df.reset_index()
                     unit_df.rename(columns={"index": "timestamp"}, inplace=True)
-                    
+
                     all_data.append(unit_df)
                     metadata["units_found"].append({
                         "name": unit_name,
-                        "eic_code": eic_code
+                        "eic_code": eic_code,
+                        "data_direction": data_direction,
                     })
             else:
                 # Single unit case or different structure
@@ -356,9 +404,15 @@ class ENTSOEClient:
             if all_data:
                 result_df = pd.concat(all_data, ignore_index=True)
                 
-                # Ensure timestamp is in ISO format
+                # Convert timestamps to UTC before formatting
+                # entsoe-py returns local timezone (e.g. Europe/Copenhagen for DK,
+                # Europe/Paris for FR) which must be converted to UTC to avoid
+                # storing local times as if they were UTC.
                 if "timestamp" in result_df.columns:
-                    result_df["timestamp"] = pd.to_datetime(result_df["timestamp"]).dt.strftime(
+                    ts = pd.to_datetime(result_df["timestamp"])
+                    if ts.dt.tz is not None:
+                        ts = ts.dt.tz_convert("UTC")
+                    result_df["timestamp"] = ts.dt.strftime(
                         "%Y-%m-%dT%H:%M:%S"
                     )
                 
@@ -380,11 +434,38 @@ class ENTSOEClient:
                 
         except Exception as e:
             error_msg = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
-            logger.error(f"Error fetching per-unit data: {error_msg}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            tb = traceback.format_exc()
+
+            # Classify the error for better diagnostics
+            error_type = type(e).__name__
+            if "NoMatchingDataError" in error_type or "NoMatchingDataError" in error_msg:
+                logger.warning(
+                    f"No matching data for {area_code}: {error_msg}",
+                    area_code=area_code,
+                    eic_codes=eic_codes,
+                )
+            elif "HTTPError" in error_type or "status_code" in error_msg.lower():
+                logger.error(
+                    f"HTTP error fetching per-unit data for {area_code}: {error_msg}",
+                    area_code=area_code,
+                    exc_info=True,
+                )
+            elif "InvalidBusinessParameterError" in error_msg:
+                logger.warning(
+                    f"Invalid parameter for {area_code} (may not support per-unit data): {error_msg}",
+                    area_code=area_code,
+                )
+            else:
+                logger.error(
+                    f"Error fetching per-unit data for {area_code}: {error_msg}",
+                    area_code=area_code,
+                    exc_info=True,
+                )
+            logger.debug(f"Full traceback: {tb}")
+
             metadata["success"] = False
-            metadata["errors"].append(error_msg)
+            metadata["errors"].append(f"{error_type}: {error_msg}")
             return pd.DataFrame(), metadata
 
     def get_available_areas(self) -> Dict[str, str]:

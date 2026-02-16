@@ -1,0 +1,38 @@
+{
+  "summary": {
+    "start_time": "2026-02-14T01:33:07.050325",
+    "end_time": "2026-02-14T01:33:34.016633",
+    "total_days": 2,
+    "processed_days": 2,
+    "failed_days": 0,
+    "skipped_days": 0,
+    "total_raw_records": 2880,
+    "total_hourly_records": 1080,
+    "source": "ENTSOE",
+    "dry_run": false
+  },
+  "daily_results": [
+    {
+      "date": "2025-10-16",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1080,
+      "hourly_records": 450,
+      "processing_time_seconds": 18.59,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:33:07.063128"
+    },
+    {
+      "date": "2025-10-17",
+      "source": "ENTSOE",
+      "status": "success",
+      "raw_records": 1800,
+      "hourly_records": 630,
+      "processing_time_seconds": 8.36,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-14T01:33:25.652318"
+    }
+  ]
+}

@@ -52,18 +52,19 @@ class ComparisonService:
             period_column.label('period'),
             GenerationData.windfarm_id,
             Windfarm.name.label('windfarm_name'),
-            func.sum(GenerationData.generation_mwh).label('total_generation'),
-            func.avg(GenerationData.generation_mwh).label('avg_generation'),
-            func.max(GenerationData.generation_mwh).label('max_generation'),
-            func.min(GenerationData.generation_mwh).label('min_generation'),
+            func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_generation'),
+            func.avg(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('avg_generation'),
+            func.max(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('max_generation'),
+            func.min(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('min_generation'),
             func.avg(GenerationData.capacity_factor).label('avg_capacity_factor'),
             func.avg(GenerationData.raw_capacity_factor).label('avg_raw_capacity_factor'),
             func.avg(GenerationData.raw_capacity_mw).label('avg_raw_capacity'),
             func.avg(GenerationData.capacity_mw).label('avg_capacity'),
             func.count(GenerationData.id).label('data_points'),
             # Curtailment data (BOAV integration)
-            func.sum(GenerationData.metered_mwh).label('total_metered'),
-            func.sum(GenerationData.curtailed_mwh).label('total_curtailed'),
+            # Fall back to generation_mwh when metered_mwh is NULL (non-ELEXON sources)
+            func.sum(func.coalesce(GenerationData.metered_mwh, GenerationData.generation_mwh)).label('total_metered'),
+            func.sum(func.coalesce(GenerationData.curtailed_mwh, 0)).label('total_curtailed'),
         ).join(
             Windfarm, GenerationData.windfarm_id == Windfarm.id
         ).where(
@@ -294,11 +295,11 @@ class ComparisonService:
             Windfarm.id,
             Windfarm.name,
             Windfarm.nameplate_capacity_mw,
-            func.sum(GenerationData.generation_mwh).label('total_generation'),
-            func.avg(GenerationData.generation_mwh).label('avg_generation'),
-            func.max(GenerationData.generation_mwh).label('peak_generation'),
-            func.min(GenerationData.generation_mwh).label('min_generation'),
-            func.stddev(GenerationData.generation_mwh).label('stddev_generation'),
+            func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_generation'),
+            func.avg(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('avg_generation'),
+            func.max(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('peak_generation'),
+            func.min(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('min_generation'),
+            func.stddev(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('stddev_generation'),
             func.avg(GenerationData.capacity_factor).label('avg_capacity_factor'),
             func.max(GenerationData.capacity_factor).label('max_capacity_factor'),
             func.min(GenerationData.capacity_factor).label('min_capacity_factor'),
@@ -308,9 +309,9 @@ class ComparisonService:
             func.avg(GenerationData.raw_capacity_mw).label('avg_raw_capacity'),
             func.count(GenerationData.id).label('data_points'),
             func.count(case((GenerationData.generation_mwh > 0, 1))).label('active_hours'),
-            # Curtailment data
-            func.sum(GenerationData.metered_mwh).label('total_metered'),
-            func.sum(GenerationData.curtailed_mwh).label('total_curtailed'),
+            # Curtailment data — fall back to generation_mwh when metered_mwh is NULL
+            func.sum(func.coalesce(GenerationData.metered_mwh, GenerationData.generation_mwh)).label('total_metered'),
+            func.sum(func.coalesce(GenerationData.curtailed_mwh, 0)).label('total_curtailed'),
         ).join(
             GenerationData, GenerationData.windfarm_id == Windfarm.id
         ).where(

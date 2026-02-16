@@ -151,7 +151,7 @@ class GenerationExportService:
             period_column.label('period'),
             GenerationData.windfarm_id,
             GenerationData.source,
-            func.sum(GenerationData.generation_mwh).label('total_generation_mwh'),
+            func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_generation_mwh'),
             func.avg(GenerationData.capacity_factor).label('avg_capacity_factor'),
             func.count(GenerationData.id).label('data_points'),
         ).where(

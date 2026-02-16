@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.models.data_anomaly import DataAnomaly, AnomalyType, AnomalyStatus, AnomalySeverity
-from app.models.generation_data import GenerationData
+from app.models.generation_data import GenerationData, GenerationDataRaw
 from app.models.generation_unit import GenerationUnit
 from app.models.windfarm import Windfarm
 from app.schemas.data_anomaly import (
@@ -76,6 +76,24 @@ class DataAnomalyService:
             )
             all_anomalies.extend(cf_anomalies)
             summary["anomalies_by_type"][AnomalyType.CAPACITY_FACTOR_OVER_LIMIT] = len(cf_anomalies)
+
+        if AnomalyType.MISSING_DATA in anomaly_types or AnomalyType.DATA_GAP in anomaly_types:
+            gap_anomalies = await self._detect_data_gap_anomalies(
+                windfarm_ids=windfarm_ids,
+                start_date=request.start_date,
+                end_date=request.end_date,
+            )
+            all_anomalies.extend(gap_anomalies)
+            summary["anomalies_by_type"][AnomalyType.DATA_GAP] = len(gap_anomalies)
+
+        if AnomalyType.DATA_SPIKE in anomaly_types:
+            spike_anomalies = await self._detect_data_spike_anomalies(
+                windfarm_ids=windfarm_ids,
+                start_date=request.start_date,
+                end_date=request.end_date,
+            )
+            all_anomalies.extend(spike_anomalies)
+            summary["anomalies_by_type"][AnomalyType.DATA_SPIKE] = len(spike_anomalies)
 
         # Count by severity
         for anomaly in all_anomalies:
@@ -273,6 +291,221 @@ class DataAnomalyService:
             result.append((unit_id, period_groups))
 
         return result
+
+    async def _detect_data_gap_anomalies(
+        self,
+        windfarm_ids: List[int],
+        start_date: Optional[datetime],
+        end_date: Optional[datetime],
+    ) -> List[DataAnomaly]:
+        """
+        Detect missing data gaps in generation_data.
+
+        Compares expected hours vs actual hours for each generation unit
+        within the specified date range.
+
+        Severity:
+            >=48h missing = CRITICAL
+            >=24h missing = HIGH
+            >=6h missing  = MEDIUM
+            <6h missing   = LOW
+        """
+        anomalies = []
+
+        if not start_date or not end_date:
+            return anomalies
+
+        for windfarm_id in windfarm_ids:
+            # Get generation units for this windfarm
+            unit_result = await self.db.execute(
+                select(GenerationUnit.id, GenerationUnit.name, GenerationUnit.code)
+                .where(GenerationUnit.windfarm_id == windfarm_id)
+            )
+            units = unit_result.all()
+
+            for unit_id, unit_name, unit_code in units:
+                # Get actual hours with data
+                actual_result = await self.db.execute(
+                    select(GenerationData.hour)
+                    .where(
+                        and_(
+                            GenerationData.generation_unit_id == unit_id,
+                            GenerationData.hour >= start_date,
+                            GenerationData.hour < end_date,
+                        )
+                    )
+                    .order_by(GenerationData.hour)
+                )
+                actual_hours = [row[0] for row in actual_result.all()]
+
+                if not actual_hours:
+                    # Entire period missing
+                    total_expected = int((end_date - start_date).total_seconds() / 3600)
+                    if total_expected > 0:
+                        severity = self._gap_severity(total_expected)
+                        anomalies.append(DataAnomaly(
+                            anomaly_type=AnomalyType.DATA_GAP,
+                            severity=severity,
+                            status=AnomalyStatus.PENDING,
+                            windfarm_id=windfarm_id,
+                            generation_unit_id=unit_id,
+                            period_start=start_date,
+                            period_end=end_date,
+                            description=f"Complete data gap: {total_expected} hours missing for {unit_name or unit_code}",
+                            anomaly_metadata={
+                                "expected_hours": total_expected,
+                                "actual_hours": 0,
+                                "missing_hours": total_expected,
+                                "generation_unit_name": unit_name,
+                                "generation_unit_code": unit_code,
+                            },
+                            detected_at=datetime.utcnow(),
+                        ))
+                    continue
+
+                # Find gaps (consecutive missing hours)
+                gaps = []
+                current_gap_start = None
+                current_gap_hours = 0
+
+                # Generate expected hours
+                current = start_date
+                actual_set = set(h.replace(tzinfo=None) if h.tzinfo else h for h in actual_hours)
+
+                while current < end_date:
+                    current_naive = current.replace(tzinfo=None) if current.tzinfo else current
+                    if current_naive not in actual_set:
+                        if current_gap_start is None:
+                            current_gap_start = current
+                        current_gap_hours += 1
+                    else:
+                        if current_gap_start is not None and current_gap_hours > 0:
+                            gaps.append((current_gap_start, current, current_gap_hours))
+                            current_gap_start = None
+                            current_gap_hours = 0
+                    current += timedelta(hours=1)
+
+                # Close final gap
+                if current_gap_start is not None and current_gap_hours > 0:
+                    gaps.append((current_gap_start, current, current_gap_hours))
+
+                # Create anomalies for significant gaps (>= 2 hours)
+                for gap_start, gap_end, missing_hours in gaps:
+                    if missing_hours < 2:
+                        continue
+                    severity = self._gap_severity(missing_hours)
+                    anomalies.append(DataAnomaly(
+                        anomaly_type=AnomalyType.DATA_GAP,
+                        severity=severity,
+                        status=AnomalyStatus.PENDING,
+                        windfarm_id=windfarm_id,
+                        generation_unit_id=unit_id,
+                        period_start=gap_start,
+                        period_end=gap_end,
+                        description=f"Data gap: {missing_hours} hours missing for {unit_name or unit_code}",
+                        anomaly_metadata={
+                            "missing_hours": missing_hours,
+                            "generation_unit_name": unit_name,
+                            "generation_unit_code": unit_code,
+                        },
+                        detected_at=datetime.utcnow(),
+                    ))
+
+        return anomalies
+
+    @staticmethod
+    def _gap_severity(missing_hours: int) -> str:
+        """Determine severity based on gap size."""
+        if missing_hours >= 48:
+            return AnomalySeverity.CRITICAL
+        elif missing_hours >= 24:
+            return AnomalySeverity.HIGH
+        elif missing_hours >= 6:
+            return AnomalySeverity.MEDIUM
+        return AnomalySeverity.LOW
+
+    async def _detect_data_spike_anomalies(
+        self,
+        windfarm_ids: List[int],
+        start_date: Optional[datetime],
+        end_date: Optional[datetime],
+        capacity_threshold: float = 1.1,
+    ) -> List[DataAnomaly]:
+        """
+        Detect data spikes where generation exceeds unit capacity.
+
+        Flags records where generation_mwh > capacity_mw * threshold.
+        Absolute threshold: any single record > 10 GW is flagged as critical.
+        """
+        anomalies = []
+
+        if not start_date or not end_date:
+            return anomalies
+
+        # Query for records where generation exceeds capacity
+        query = (
+            select(
+                GenerationData.id,
+                GenerationData.hour,
+                GenerationData.generation_mwh,
+                GenerationData.capacity_mw,
+                GenerationData.windfarm_id,
+                GenerationData.generation_unit_id,
+                GenerationUnit.name.label("unit_name"),
+                GenerationUnit.code.label("unit_code"),
+            )
+            .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
+            .where(
+                and_(
+                    GenerationData.windfarm_id.in_(windfarm_ids),
+                    GenerationData.hour >= start_date,
+                    GenerationData.hour < end_date,
+                    GenerationData.capacity_mw.isnot(None),
+                    GenerationData.capacity_mw > 0,
+                    GenerationData.generation_mwh > GenerationData.capacity_mw * Decimal(str(capacity_threshold)),
+                )
+            )
+            .order_by(GenerationData.hour)
+        )
+
+        result = await self.db.execute(query)
+        spike_records = result.all()
+
+        for rec in spike_records:
+            gen_mwh = float(rec.generation_mwh)
+            cap_mw = float(rec.capacity_mw)
+            ratio = gen_mwh / cap_mw if cap_mw > 0 else 0
+
+            # Absolute threshold: > 10 GW is impossible for a single unit
+            if gen_mwh > 10000:
+                severity = AnomalySeverity.CRITICAL
+            elif ratio >= 2.0:
+                severity = AnomalySeverity.HIGH
+            elif ratio >= 1.5:
+                severity = AnomalySeverity.MEDIUM
+            else:
+                severity = AnomalySeverity.LOW
+
+            anomalies.append(DataAnomaly(
+                anomaly_type=AnomalyType.DATA_SPIKE,
+                severity=severity,
+                status=AnomalyStatus.PENDING,
+                windfarm_id=rec.windfarm_id,
+                generation_unit_id=rec.generation_unit_id,
+                period_start=rec.hour,
+                period_end=rec.hour + timedelta(hours=1),
+                description=f"Data spike: {gen_mwh:.1f} MWh vs {cap_mw:.1f} MW capacity ({ratio:.2f}x) for {rec.unit_name or rec.unit_code}",
+                anomaly_metadata={
+                    "generation_mwh": gen_mwh,
+                    "capacity_mw": cap_mw,
+                    "ratio": round(ratio, 4),
+                    "generation_unit_name": rec.unit_name,
+                    "generation_unit_code": rec.unit_code,
+                },
+                detected_at=datetime.utcnow(),
+            ))
+
+        return anomalies
 
     async def get_anomalies(
         self,

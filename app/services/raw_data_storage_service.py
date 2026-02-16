@@ -26,6 +26,28 @@ from app.services.taipower_client import TaipowerClient
 logger = structlog.get_logger()
 
 
+def _detect_entsoe_resolution(df: pd.DataFrame) -> str:
+    """Detect resolution from timestamp spacing (entsoe-py doesn't provide it as a column).
+
+    Analyzes the minimum time delta between consecutive timestamps to determine
+    whether data is PT15M, PT30M, or PT60M.
+    """
+    if df is None or df.empty or len(df) < 2:
+        return "PT60M"
+    timestamps = pd.to_datetime(
+        df.get("timestamp", df.index) if not isinstance(df.index, pd.RangeIndex) else df.get("timestamp", df.index)
+    )
+    diffs = timestamps.diff().dropna()
+    if diffs.empty:
+        return "PT60M"
+    min_delta = diffs.min().total_seconds()
+    if min_delta <= 900:
+        return "PT15M"
+    elif min_delta <= 1800:
+        return "PT30M"
+    return "PT60M"
+
+
 class RawDataStorageService:
     """Service for fetching from external APIs and storing in generation_data_raw."""
 
@@ -363,7 +385,20 @@ class RawDataStorageService:
                 total_api_calls += 1
 
                 if df.empty:
-                    logger.warning(f"No data returned for bidzone {zone_data['bidzone_name']}")
+                    logger.warning(
+                        f"No data returned for bidzone {zone_data['bidzone_name']}",
+                        bidzone_code=bidzone_code,
+                        start=start_naive.isoformat(),
+                        end=end_naive.isoformat(),
+                        eic_codes=zone_data['eic_codes'],
+                        metadata_errors=metadata.get("errors", []),
+                    )
+                    if metadata.get("errors"):
+                        all_errors.extend([
+                            f"Bidzone {zone_data['bidzone_name']}: {err}"
+                            for err in metadata["errors"]
+                            if isinstance(err, str)
+                        ])
                     continue
 
                 logger.info(f"Received {len(df)} records for {zone_data['bidzone_name']}")
@@ -377,25 +412,45 @@ class RawDataStorageService:
                         logger.debug(f"No data for unit {unit.code} in bidzone response")
                         continue
 
-                    # Transform to generation_data_raw format
-                    records_stored, records_updated = await self._store_entsoe_records(
-                        unit_df,
-                        unit,
-                        bidzone_code,
-                        user_id,
-                        metadata,
-                    )
+                    # Split into generation and consumption subsets
+                    if 'data_direction' in unit_df.columns:
+                        gen_df = unit_df[unit_df['data_direction'] != 'consumption']
+                        consumption_df = unit_df[unit_df['data_direction'] == 'consumption']
+                    else:
+                        gen_df = unit_df
+                        consumption_df = pd.DataFrame()
 
-                    total_records_stored += records_stored
-                    total_records_updated += records_updated
+                    unit_stored = 0
+                    unit_updated = 0
+
+                    # Store generation records (source_type='api')
+                    if not gen_df.empty:
+                        rs, ru = await self._store_entsoe_records(
+                            gen_df, unit, bidzone_code, user_id, metadata,
+                        )
+                        unit_stored += rs
+                        unit_updated += ru
+
+                    # Store consumption records (source_type='api_consumption')
+                    if not consumption_df.empty:
+                        rs, ru = await self._store_entsoe_records(
+                            consumption_df, unit, bidzone_code, user_id, metadata,
+                            source_type_override='api_consumption',
+                        )
+                        unit_stored += rs
+                        unit_updated += ru
+                        logger.info(f"Stored {rs} consumption records for unit {unit.code}")
+
+                    total_records_stored += unit_stored
+                    total_records_updated += unit_updated
 
                     all_generation_units.append(
                         GenerationUnitSummary(
                             id=unit.id,
                             code=unit.code,
                             name=unit.name,
-                            records_stored=records_stored,
-                            records_updated=records_updated,
+                            records_stored=unit_stored,
+                            records_updated=unit_updated,
                         )
                     )
 
@@ -403,6 +458,24 @@ class RawDataStorageService:
                 error_msg = f"Error fetching ENTSOE data for bidzone {zone_data['bidzone_name']}: {str(e)}"
                 logger.error(error_msg)
                 all_errors.append(error_msg)
+
+        # Post-import completeness check
+        total_days = max(1, (request.end_date - request.start_date).days)
+        for unit_summary in all_generation_units:
+            if unit_summary.records_stored == 0:
+                logger.warning(
+                    f"Completeness: unit {unit_summary.code} ({unit_summary.name}) "
+                    f"stored 0 records for {total_days}-day period"
+                )
+            else:
+                # For hourly data expect ~24 * days; for PT15M expect ~96 * days
+                expected_min = total_days * 20  # conservative lower bound
+                if unit_summary.records_stored < expected_min:
+                    logger.warning(
+                        f"Completeness: unit {unit_summary.code} ({unit_summary.name}) "
+                        f"stored only {unit_summary.records_stored} records "
+                        f"(expected >={expected_min} for {total_days} days)"
+                    )
 
         # Calculate response time
         end_time = datetime.now()
@@ -434,10 +507,14 @@ class RawDataStorageService:
         bidzone_code: str,
         user_id: int,
         api_metadata: Dict,
+        source_type_override: str = "api",
     ) -> Tuple[int, int]:
         """Store ENTSOE records in generation_data_raw using bulk upsert.
 
         Records are inserted in batches to avoid PostgreSQL's parameter limit (65,535).
+
+        Args:
+            source_type_override: Use 'api' for generation, 'api_consumption' for consumption.
         """
         from sqlalchemy.dialects.postgresql import insert
         from decimal import Decimal
@@ -452,6 +529,10 @@ class RawDataStorageService:
         # Convert api_metadata to JSON-serializable format
         serializable_metadata = self._make_json_serializable(api_metadata)
 
+        # Detect resolution from timestamp spacing (entsoe-py doesn't provide resolution_code column)
+        detected_resolution = _detect_entsoe_resolution(df)
+        logger.info(f"Detected ENTSOE resolution for unit {unit.code}: {detected_resolution}")
+
         # Prepare all records for bulk insert
         records_to_insert = []
 
@@ -465,28 +546,37 @@ class RawDataStorageService:
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
 
-            # Determine period type and end time
-            resolution = row.get("resolution_code", "PT60M")
+            # Use detected resolution (not row-level, since entsoe-py doesn't provide it)
+            resolution = detected_resolution
             if resolution == "PT15M":
                 period_end = timestamp + timedelta(minutes=15)
                 period_type = "PT15M"
-            elif resolution == "PT60M":
-                period_end = timestamp + timedelta(hours=1)
-                period_type = "PT60M"
+            elif resolution == "PT30M":
+                period_end = timestamp + timedelta(minutes=30)
+                period_type = "PT30M"
             else:
-                # Default to hourly
                 period_end = timestamp + timedelta(hours=1)
                 period_type = "PT60M"
 
-            # Extract value
-            value = float(row.get("value", 0))
+            # Extract value with precision tracking
+            raw_value = row.get("value", 0)
+            value = float(raw_value)
+
+            # Skip records with NaN values (ENTSOE reports NaN when unit isn't
+            # generating/consuming in that period — not useful data)
+            if pd.isna(value):
+                continue
 
             # Build data JSONB
+            data_direction = row.get("data_direction", "generation")
             data = {
+                "source_value_type": type(raw_value).__name__,
+                "source_value_raw": str(raw_value),
                 "eic_code": unit.code,
                 "area_code": bidzone_code,
                 "production_type": row.get("production_type", "wind"),
                 "resolution_code": resolution,
+                "data_direction": data_direction,
                 "installed_capacity_mw": float(row["installed_capacity_mw"]) if "installed_capacity_mw" in row and pd.notna(row["installed_capacity_mw"]) else None,
                 "fetch_metadata": {
                     "fetched_by_user_id": user_id,
@@ -496,10 +586,18 @@ class RawDataStorageService:
                 },
             }
 
+            # Outlier detection: flag values exceeding unit capacity or absolute limits
+            if unit.capacity_mw and value > float(unit.capacity_mw) * 1.1:
+                data["outlier_flag"] = True
+                data["outlier_ratio"] = round(value / float(unit.capacity_mw), 4)
+            if value > 10000:  # >10 GW impossible for single unit
+                data["outlier_flag"] = True
+                data["outlier_severity"] = "critical"
+
             # Add to bulk insert list
             records_to_insert.append({
                 "source": "ENTSOE",
-                "source_type": "api",
+                "source_type": source_type_override,
                 "identifier": unit.code,
                 "period_start": timestamp,
                 "period_end": period_end,
@@ -525,11 +623,17 @@ class RawDataStorageService:
                 stmt = insert(GenerationDataRaw).values(batch)
 
                 # Use upsert to handle existing records
+                # On conflict: store previous value in JSONB for revision tracking
+                from sqlalchemy import func
                 stmt = stmt.on_conflict_do_update(
                     index_elements=['source', 'source_type', 'identifier', 'period_start'],
                     set_={
                         'value_extracted': stmt.excluded.value_extracted,
-                        'data': stmt.excluded.data,
+                        'data': func.jsonb_set(
+                            stmt.excluded.data,
+                            '{previous_value}',
+                            func.to_jsonb(GenerationDataRaw.value_extracted),
+                        ),
                         'updated_at': datetime.now(timezone.utc),
                         'period_end': stmt.excluded.period_end,
                         'period_type': stmt.excluded.period_type,
@@ -783,11 +887,17 @@ class RawDataStorageService:
                 stmt = insert(GenerationDataRaw).values(batch)
 
                 # Use upsert to handle existing records
+                # On conflict: store previous value in JSONB for revision tracking
+                from sqlalchemy import func
                 stmt = stmt.on_conflict_do_update(
                     index_elements=['source', 'source_type', 'identifier', 'period_start'],
                     set_={
                         'value_extracted': stmt.excluded.value_extracted,
-                        'data': stmt.excluded.data,
+                        'data': func.jsonb_set(
+                            stmt.excluded.data,
+                            '{previous_value}',
+                            func.to_jsonb(GenerationDataRaw.value_extracted),
+                        ),
                         'updated_at': datetime.now(timezone.utc),
                         'period_end': stmt.excluded.period_end,
                         'period_type': stmt.excluded.period_type,

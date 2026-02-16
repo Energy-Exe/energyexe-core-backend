@@ -83,6 +83,7 @@ class AnomalyType:
     DATA_SPIKE = "data_spike"
     DATA_GAP = "data_gap"
     INVALID_CAPACITY = "invalid_capacity"
+    GEN_CONSUMPTION_SWAPPED = "gen_consumption_swapped"
 
 
 # Anomaly status constants
