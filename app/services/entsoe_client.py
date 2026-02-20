@@ -273,8 +273,6 @@ class ENTSOEClient:
             "units_found": [],
         }
         
-        print(metadata)
-        
         try:
             logger.info(f"Querying ENTSOE per-unit data for {area_code} from {start} to {end}")
             if eic_codes:
@@ -355,6 +353,46 @@ class ENTSOEClient:
             # Structure can be: (unit_name, type, aggregation, eic_code) for B18/B19
             # or different for other types
             if isinstance(df.columns, pd.MultiIndex):
+                # --- Diagnostic pre-scan: extract all EIC codes from API response ---
+                api_eic_codes = set()
+                for col in df.columns:
+                    if len(col) > 3 and isinstance(col[3], str) and "W" in col[3]:
+                        api_eic_codes.add(col[3])
+                    elif len(col) > 1 and isinstance(col[1], str) and "W" in col[1]:
+                        api_eic_codes.add(col[1])
+
+                if eic_codes:
+                    requested_set = set(eic_codes)
+                    matched = requested_set & api_eic_codes
+                    missing = requested_set - api_eic_codes
+                    logger.info(
+                        f"EIC diagnostic for {area_code}: "
+                        f"API returned {len(api_eic_codes)} EIC codes, "
+                        f"requested {len(requested_set)}, "
+                        f"matched {len(matched)}, missing {len(missing)}",
+                        api_eic_codes_sample=sorted(api_eic_codes)[:20],
+                        requested_eic_codes=sorted(requested_set),
+                        matched_eic_codes=sorted(matched),
+                        missing_eic_codes=sorted(missing),
+                    )
+                    if missing:
+                        logger.warning(
+                            f"Requested EIC codes NOT found in API response for {area_code}: {sorted(missing)}"
+                        )
+                else:
+                    logger.info(
+                        f"EIC diagnostic for {area_code}: API returned {len(api_eic_codes)} EIC codes (no filter requested)",
+                        api_eic_codes_sample=sorted(api_eic_codes)[:20],
+                    )
+
+                metadata["diagnostic"] = {
+                    "api_eic_codes_available": sorted(api_eic_codes),
+                    "requested_eic_codes": sorted(eic_codes) if eic_codes else None,
+                    "matched_eic_codes": sorted(matched) if eic_codes else None,
+                    "missing_eic_codes": sorted(missing) if eic_codes else None,
+                }
+                # --- End diagnostic pre-scan ---
+
                 for col in df.columns:
                     # Extract unit info from column
                     unit_name = col[0] if isinstance(col, tuple) else str(col)
@@ -438,6 +476,13 @@ class ENTSOEClient:
             else:
                 metadata["success"] = False
                 metadata["errors"].append("No matching units found")
+                # Ensure diagnostic info is present even when no units matched
+                if "diagnostic" not in metadata:
+                    metadata["diagnostic"] = {
+                        "api_eic_codes_available": [],
+                        "requested_eic_codes": sorted(eic_codes) if eic_codes else None,
+                        "note": "DataFrame was not MultiIndex — could not extract EIC codes",
+                    }
                 return pd.DataFrame(), metadata
                 
         except Exception as e:

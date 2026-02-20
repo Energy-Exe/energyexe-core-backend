@@ -95,7 +95,9 @@ class ComparisonService:
             end_dt = datetime.combine(end, datetime.min.time()).replace(tzinfo=timezone.utc)
 
             if granularity_type == "hourly":
-                while current <= end_dt:
+                # For hourly, end_dt must be end-of-day so all 24 hours are generated
+                hourly_end = end_dt + timedelta(hours=23)
+                while current <= hourly_end:
                     periods.append(current)
                     current += timedelta(hours=1)
             elif granularity_type == "daily":

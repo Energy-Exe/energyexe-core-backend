@@ -1,0 +1,27 @@
+{
+  "summary": {
+    "start_time": "2026-02-20T16:07:00.208210",
+    "end_time": "2026-02-20T16:11:02.169659",
+    "total_days": 28,
+    "processed_days": 0,
+    "failed_days": 0,
+    "skipped_days": 28,
+    "total_raw_records": 43680,
+    "total_hourly_records": 43680,
+    "source": "NVE",
+    "dry_run": false
+  },
+  "daily_results": [
+    {
+      "date": "2025-02",
+      "source": "NVE",
+      "status": "success",
+      "raw_records": 43680,
+      "hourly_records": 43680,
+      "processing_time_seconds": 241.85,
+      "error": null,
+      "error_traceback": null,
+      "timestamp": "2026-02-20T16:07:00.323827"
+    }
+  ]
+}

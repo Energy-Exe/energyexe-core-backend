@@ -301,7 +301,7 @@ async def get_last_imported_date():
         return max_date
 
 
-async def import_nve_data(workers: int = 4, clean_first: bool = True, sample_size: Optional[int] = None, resume: bool = False):
+async def import_nve_data(workers: int = 4, clean_first: bool = True, sample_size: Optional[int] = None, resume: bool = False, file_path: Optional[str] = None):
     """Main import function for NVE data."""
 
     print("="*80)
@@ -329,21 +329,30 @@ async def import_nve_data(workers: int = 4, clean_first: bool = True, sample_siz
     unit_mapping, windfarm_info_by_code = await get_nve_unit_mapping()
 
     # Load data file (CSV or Excel)
-    csv_file = Path(__file__).parent / "data" / "vindprod2002-2024_kraftverk.csv"
-    xlsx_file = Path(__file__).parent / "data" / "vindprod2002-2024_kraftverk.xlsx"
-
-    # Prefer CSV if it exists (faster to load), otherwise use Excel
-    if csv_file.exists():
-        data_file = csv_file
-        file_type = "csv"
-    elif xlsx_file.exists():
-        data_file = xlsx_file
-        file_type = "xlsx"
+    if file_path:
+        data_file = Path(file_path)
+        if not data_file.is_absolute():
+            data_file = Path.cwd() / data_file
+        if not data_file.exists():
+            print(f"❌ Specified file not found: {data_file}")
+            return
+        file_type = "xlsx" if data_file.suffix.lower() in (".xlsx", ".xls") else "csv"
     else:
-        print("❌ No data file found! Expected either:")
-        print(f"   - {csv_file}")
-        print(f"   - {xlsx_file}")
-        return
+        csv_file = Path(__file__).parent / "data" / "vindprod2002-2024_kraftverk.csv"
+        xlsx_file = Path(__file__).parent / "data" / "vindprod2002-2024_kraftverk.xlsx"
+
+        # Prefer CSV if it exists (faster to load), otherwise use Excel
+        if csv_file.exists():
+            data_file = csv_file
+            file_type = "csv"
+        elif xlsx_file.exists():
+            data_file = xlsx_file
+            file_type = "xlsx"
+        else:
+            print("❌ No data file found! Expected either:")
+            print(f"   - {csv_file}")
+            print(f"   - {xlsx_file}")
+            return
 
     print(f"\n📁 Reading NVE data file: {data_file.name}")
     print(f"   File size: {data_file.stat().st_size / 1024 / 1024:.2f} MB")
@@ -544,6 +553,7 @@ def main():
     parser.add_argument('--no-clean', action='store_true', help='Do not clean existing data before import')
     parser.add_argument('--resume', action='store_true', help='Resume from last imported date (skip existing data)')
     parser.add_argument('--sample', type=int, help='Process only first N rows (for testing)')
+    parser.add_argument('--file', type=str, help='Path to data file (CSV or Excel). Defaults to vindprod2002-2024_kraftverk.*')
 
     args = parser.parse_args()
 
@@ -554,7 +564,8 @@ def main():
         workers=args.workers,
         clean_first=clean_first,
         sample_size=args.sample,
-        resume=args.resume
+        resume=args.resume,
+        file_path=args.file
     ))
 
 

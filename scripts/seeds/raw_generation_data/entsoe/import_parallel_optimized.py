@@ -38,6 +38,24 @@ from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 import asyncpg
 
+# Maximum valid MW value for a single generation unit.
+# Any value above this is treated as corrupt source data (e.g. int16 overflow = 32767).
+# No single offshore wind unit exceeds ~500 MW nameplate capacity.
+MAX_VALID_MW = 1000
+
+# Column name mapping: v2 (r3) format → v1 (r2.1) format
+COLUMN_MAP = {
+    'DateTime(UTC)': 'DateTime (UTC)',
+    'AreaMapCode': 'MapCode',
+    'ActualGenerationOutput[MW]': 'ActualGenerationOutput(MW)',
+    'ActualConsumption[MW]': 'ActualConsumption(MW)',
+}
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize v2 column names to v1 format so the rest of the code uses a single set."""
+    return df.rename(columns=COLUMN_MAP)
+
 
 def signal_handler(signum, frame):
     """Handle interrupt signal gracefully."""
@@ -119,15 +137,65 @@ async def import_with_copy(
     columns = ['source', 'source_type', 'identifier', 'period_type', 'period_start', 'period_end', 
                'value_extracted', 'unit', 'data']
     
-    # Add required columns with correct values
+    # Ensure optional columns exist (v2 files may lack these)
+    if 'ActualConsumption(MW)' not in filtered_df.columns:
+        filtered_df['ActualConsumption(MW)'] = np.nan
+    if 'GenerationUnitInstalledCapacity(MW)' not in filtered_df.columns:
+        filtered_df['GenerationUnitInstalledCapacity(MW)'] = np.nan
+
+    # Determine data direction per row
+    has_gen = filtered_df['ActualGenerationOutput(MW)'].notna() & (filtered_df['ActualGenerationOutput(MW)'] != 0)
+    has_cons = filtered_df['ActualConsumption(MW)'].notna() & (filtered_df['ActualConsumption(MW)'] != 0)
+
+    # Generation rows: have generation value (regardless of consumption)
+    gen_df = filtered_df[has_gen].copy()
+    gen_df['source_type'] = 'excel'
+    gen_df['value_extracted'] = gen_df['ActualGenerationOutput(MW)']
+    gen_df['_data_direction'] = 'generation'
+
+    # Consumption-only rows: have consumption but NO generation
+    cons_df = filtered_df[has_cons & ~has_gen].copy()
+    cons_df['source_type'] = 'excel_consumption'
+    cons_df['value_extracted'] = cons_df['ActualConsumption(MW)']
+    cons_df['_data_direction'] = 'consumption'
+
+    # Combine and proceed
+    filtered_df = pd.concat([gen_df, cons_df], ignore_index=True)
+
+    if filtered_df.empty:
+        return 0
+
+    # Filter out outlier values (e.g. int16 overflow = 32767 MW)
+    outliers = filtered_df['value_extracted'].abs() > MAX_VALID_MW
+    if outliers.any():
+        n_outliers = outliers.sum()
+        sample = filtered_df.loc[outliers, ['GenerationUnitCode', 'DateTime (UTC)', 'value_extracted']].head(5)
+        print(f"  ⚠️ Dropping {n_outliers} rows with value > {MAX_VALID_MW} MW:")
+        for _, r in sample.iterrows():
+            print(f"    {r['GenerationUnitCode']}  {r['DateTime (UTC)']}  {r['value_extracted']:.1f} MW")
+        filtered_df = filtered_df[~outliers]
+
+    if filtered_df.empty:
+        return 0
+
+    # Deduplicate: v2 files have both CTA and BZN rows for the same unit+timestamp.
+    # Keep the first occurrence (same generation value, different area breakdown).
+    before_dedup = len(filtered_df)
+    filtered_df = filtered_df.drop_duplicates(
+        subset=['source_type', 'GenerationUnitCode', 'DateTime (UTC)'],
+        keep='first'
+    )
+    if len(filtered_df) < before_dedup:
+        dropped = before_dedup - len(filtered_df)
+        # Silently drop area-level duplicates (expected for v2 format)
+
+    # Add remaining required columns
     filtered_df['source'] = 'ENTSOE'
-    filtered_df['source_type'] = 'excel'  # Since we're importing from Excel files
     filtered_df['identifier'] = filtered_df['GenerationUnitCode']
     filtered_df['period_type'] = filtered_df['ResolutionCode']
-    filtered_df['value_extracted'] = filtered_df['ActualGenerationOutput(MW)']
     filtered_df['unit'] = 'MW'
-    
-    # Create JSONB data column with all original data
+
+    # Create JSONB data column with all original data (includes data_direction)
     filtered_df['data'] = filtered_df.apply(
         lambda row: json.dumps({
             'area_code': row.get('AreaCode', ''),
@@ -141,7 +209,8 @@ async def import_with_copy(
             'actual_consumption_mw': float(row.get('ActualConsumption(MW)', 0)) if pd.notna(row.get('ActualConsumption(MW)')) else None,
             'installed_capacity_mw': int(row.get('GenerationUnitInstalledCapacity(MW)', 0)) if pd.notna(row.get('GenerationUnitInstalledCapacity(MW)')) else None,
             'resolution_code': row.get('ResolutionCode', ''),
-            'update_time': str(row.get('UpdateTime(UTC)', ''))
+            'update_time': str(row.get('UpdateTime(UTC)', '')),
+            'data_direction': row.get('_data_direction', 'generation'),
         }), axis=1
     )
     
@@ -209,16 +278,19 @@ async def import_with_copy(
 
 def convert_excel_to_csv_optimized(excel_path: str, csv_path: str) -> int:
     """Convert Excel to CSV for faster processing."""
-    
+
     # Read Excel with optimizations
     if HAS_OPENPYXL:
         df = pd.read_excel(excel_path, engine='openpyxl')
     else:
         df = pd.read_excel(excel_path)
-    
+
+    # Normalize v2 column names to v1 format
+    df = normalize_columns(df)
+
     # Save as CSV for faster reading later
     df.to_csv(csv_path, index=False)
-    
+
     return len(df)
 
 
@@ -284,21 +356,27 @@ def import_single_file_worker_optimized(
         # Read CSV in chunks
         print(f"[{worker_name}] 📖 Reading CSV in chunks of {chunk_size:,} rows...")
         
+        # Build dtype dict from columns that actually exist in the file
+        # (v2 files may lack some columns like GenerationUnitInstalledCapacity)
+        all_dtypes = {
+            'GenerationUnitCode': str,
+            'GenerationUnitName': str,
+            'GenerationUnitType': str,
+            'ResolutionCode': str,
+            'AreaCode': str,
+            'AreaDisplayName': str,
+            'MapCode': str,
+            'ActualGenerationOutput(MW)': float,
+            'ActualConsumption(MW)': float,
+            'GenerationUnitInstalledCapacity(MW)': float,
+        }
+        csv_columns = set(pd.read_csv(temp_csv_path, nrows=0).columns)
+        active_dtypes = {k: v for k, v in all_dtypes.items() if k in csv_columns}
+
         chunk_iterator = pd.read_csv(
             temp_csv_path,
             chunksize=chunk_size,
-            dtype={
-                'GenerationUnitCode': str,
-                'GenerationUnitName': str,
-                'GenerationUnitType': str,
-                'ResolutionCode': str,
-                'AreaCode': str,
-                'AreaDisplayName': str,
-                'MapCode': str,
-                'ActualGenerationOutput(MW)': float,
-                'ActualConsumption(MW)': float,
-                'GenerationUnitInstalledCapacity(MW)': float
-            }
+            dtype=active_dtypes,
         )
         
         pbar = tqdm(
@@ -454,33 +532,30 @@ def run_optimized_worker(
 
 async def get_database_stats() -> Dict[str, Any]:
     """Get current database statistics using fast estimation."""
-    AsyncSessionLocal = get_session_factory()
-    
-    async with AsyncSessionLocal() as db:
-        # Count ENTSOE records
-        entsoe_result = await db.execute(
-            select(func.count(GenerationDataRaw.id))
-            .where(GenerationDataRaw.source == 'ENTSOE')
-        )
-        entsoe_count = entsoe_result.scalar() or 0
-        
-        # Use fast estimate for total
-        stats_result = await db.execute(
-            text("""
-                SELECT 
-                    reltuples::BIGINT as estimated_count,
-                    pg_size_pretty(pg_total_relation_size('generation_data_raw')) as table_size
-                FROM pg_class 
-                WHERE relname = 'generation_data_raw'
-            """)
-        )
-        stats = stats_result.first()
-        
-        return {
-            'entsoe_count': entsoe_count,
-            'total_count': stats.estimated_count if stats else 0,
-            'table_size': stats.table_size if stats else 'Unknown'
-        }
+    try:
+        AsyncSessionLocal = get_session_factory()
+
+        async with AsyncSessionLocal() as db:
+            # Use fast estimate (avoids slow COUNT on large tables)
+            stats_result = await db.execute(
+                text("""
+                    SELECT
+                        reltuples::BIGINT as estimated_count,
+                        pg_size_pretty(pg_total_relation_size('generation_data_raw')) as table_size
+                    FROM pg_class
+                    WHERE relname = 'generation_data_raw'
+                """)
+            )
+            stats = stats_result.first()
+
+            return {
+                'entsoe_count': stats.estimated_count if stats else 0,
+                'total_count': stats.estimated_count if stats else 0,
+                'table_size': stats.table_size if stats else 'Unknown'
+            }
+    except Exception as e:
+        print(f"  Warning: Could not fetch stats: {e}")
+        return {'entsoe_count': 0, 'total_count': 0, 'table_size': 'Unknown'}
 
 
 async def run_all_async_operations(
@@ -511,11 +586,64 @@ async def run_all_async_operations(
     }
 
 
+async def delete_existing_excel_records(db_url: str, xlsx_files: List[Path]) -> int:
+    """Delete existing ENTSOE excel/excel_consumption raw records for the date range covered by xlsx files.
+
+    Parses YYYY_MM from file names to determine the date range, then deletes
+    all rows with source_type IN ('excel', 'excel_consumption') in that range.
+    """
+    import re
+
+    # Parse YYYY_MM from filenames like "2023_01_Actual..."
+    months = []
+    for f in xlsx_files:
+        m = re.match(r'(\d{4})_(\d{2})_', f.name)
+        if m:
+            months.append((int(m.group(1)), int(m.group(2))))
+
+    if not months:
+        print("Could not parse date range from file names — skipping delete")
+        return 0
+
+    months.sort()
+    first_year, first_month = months[0]
+    last_year, last_month = months[-1]
+
+    range_start = datetime(first_year, first_month, 1)
+    # End is the first day of the month AFTER the last file
+    if last_month == 12:
+        range_end = datetime(last_year + 1, 1, 1)
+    else:
+        range_end = datetime(last_year, last_month + 1, 1)
+
+    print(f"\n🗑️  Deleting existing ENTSOE excel records: {range_start:%Y-%m-%d} to {range_end:%Y-%m-%d}")
+
+    conn = await asyncpg.connect(db_url)
+    try:
+        result = await conn.execute(
+            """
+            DELETE FROM generation_data_raw
+            WHERE source = 'ENTSOE'
+              AND source_type IN ('excel', 'excel_consumption')
+              AND period_start >= $1
+              AND period_start < $2
+            """,
+            range_start, range_end
+        )
+        deleted = int(result.split()[-1])  # "DELETE <count>"
+        print(f"   Deleted {deleted:,} records")
+        return deleted
+    finally:
+        await conn.close()
+
+
 def import_parallel_optimized(
     num_workers: int = 4,
     skip_duplicates: bool = True,
     use_copy: bool = True,
-    max_files: Optional[int] = None
+    max_files: Optional[int] = None,
+    data_dir: Optional[str] = None,
+    delete_existing: bool = False,
 ):
     """Ultra-optimized parallel import with all performance improvements."""
     
@@ -554,7 +682,7 @@ def import_parallel_optimized(
     db_url = settings.database_url_async.replace('+asyncpg', '')
     
     # Get Excel files
-    data_folder = Path(__file__).parent / "data"
+    data_folder = Path(data_dir) if data_dir else Path(__file__).parent / "data"
     excel_files = sorted(data_folder.glob("*.xlsx"))
     
     if not excel_files:
@@ -571,13 +699,21 @@ def import_parallel_optimized(
     total_size = sum(os.path.getsize(f) for f in excel_files)
     print(f"📊 Total data size: {total_size / 1024 / 1024:.2f} MB")
     
+    if delete_existing:
+        print(f"\n⚠️  --delete-existing is set. This will DELETE all ENTSOE excel/excel_consumption")
+        print(f"   raw records in the date range covered by these {len(excel_files)} files BEFORE importing.")
+
     # Confirm
     response = input("\nProceed with optimized import? (yes/no): ")
     if response.lower() != 'yes':
         print("Cancelled")
         os.unlink(unit_codes_file)
         return
-    
+
+    # Delete existing records if requested
+    if delete_existing:
+        asyncio.run(delete_existing_excel_records(db_url, excel_files))
+
     # Start workers
     actual_workers = min(num_workers, len(excel_files))
     print(f"\n🚀 Starting {actual_workers} workers...")
@@ -728,19 +864,24 @@ if __name__ == "__main__":
     parser.add_argument('--no-copy', action='store_true', help='Disable COPY optimization')
     parser.add_argument('--skip-duplicates', action='store_true', help='Check for duplicates')
     parser.add_argument('--max-files', type=int, help='Maximum number of files to process (for testing)')
-    
+    parser.add_argument('--data-dir', type=str, help='Path to directory containing xlsx files (default: data/)')
+    parser.add_argument('--delete-existing', action='store_true',
+                        help='Delete existing ENTSOE excel raw records in the date range before importing')
+
     args = parser.parse_args()
-    
+
     # Check system
     print(f"System: {cpu_count()} CPUs, {psutil.virtual_memory().total/1e9:.1f}GB RAM")
-    
+
     if not HAS_OPENPYXL:
         print("\n💡 TIP: Install openpyxl for faster Excel reading:")
         print("   poetry add openpyxl")
-    
+
     import_parallel_optimized(
         num_workers=args.workers,
         skip_duplicates=args.skip_duplicates,
         use_copy=not args.no_copy,
-        max_files=args.max_files
+        max_files=args.max_files,
+        data_dir=args.data_dir,
+        delete_existing=args.delete_existing,
     )

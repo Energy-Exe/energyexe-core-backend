@@ -434,16 +434,12 @@ class FileImportService:
                 else:
                     timestamp = pd.to_datetime(timestamp_value)
 
-                # Localize to Europe/Oslo then convert to UTC
-                # Use ambiguous="infer" for fall-back DST (when 02:00-02:59 occurs twice)
-                # Use nonexistent="shift_forward" for spring-forward DST (when 02:00-02:59 doesn't exist)
+                # NVE data is in UTC (verified by DST transition analysis:
+                # all days have exactly 24 hours, spring-forward days contain 02:00
+                # which doesn't exist in Europe/Oslo, fall-back days have only one 02:00)
                 if timestamp.tzinfo is None:
-                    timestamp = timestamp.tz_localize(
-                        "Europe/Oslo",
-                        ambiguous="infer",
-                        nonexistent="shift_forward"
-                    ).tz_convert("UTC")
-                elif timestamp.tzinfo != pd.Timestamp.now(tz="UTC").tzinfo:
+                    timestamp = timestamp.tz_localize("UTC")
+                elif str(timestamp.tzinfo) != "UTC":
                     timestamp = timestamp.tz_convert("UTC")
 
                 # Filter by date range

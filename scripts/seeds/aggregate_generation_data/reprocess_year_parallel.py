@@ -5,8 +5,11 @@ Re-process aggregation for a year in parallel by month.
 This script runs aggregation for multiple months concurrently to speed up processing.
 
 Usage:
-    # Re-process all of 2021 with 4 parallel workers
+    # Re-process all of 2021 with 4 parallel workers (default source: ELEXON)
     poetry run python scripts/seeds/aggregate_generation_data/reprocess_year_parallel.py --year 2021 --workers 4
+
+    # Re-process ENTSOE data for 2024
+    poetry run python scripts/seeds/aggregate_generation_data/reprocess_year_parallel.py --year 2024 --source ENTSOE --workers 4
 
     # Re-process specific months
     poetry run python scripts/seeds/aggregate_generation_data/reprocess_year_parallel.py --year 2021 --months 3,6,11
@@ -38,7 +41,7 @@ def get_month_range(year: int, month: int) -> tuple:
 
 def process_month(args: tuple) -> dict:
     """Process a single month using subprocess."""
-    year, month, dry_run = args
+    year, month, dry_run, source = args
     start, end = get_month_range(year, month)
 
     cmd = [
@@ -46,7 +49,7 @@ def process_month(args: tuple) -> dict:
         "scripts/seeds/aggregate_generation_data/process_generation_data_robust.py",
         "--start", start,
         "--end", end,
-        "--source", "ELEXON",
+        "--source", source,
         "--monthly"
     ]
 
@@ -85,10 +88,14 @@ def main():
     parser.add_argument('--year', type=int, required=True, help='Year to process')
     parser.add_argument('--months', type=str, help='Comma-separated months (1-12), default: all')
     parser.add_argument('--workers', type=int, default=4, help='Number of parallel workers (default: 4)')
+    parser.add_argument('--source', type=str, default='ELEXON',
+                        choices=['ENTSOE', 'ELEXON', 'TAIPOWER', 'NVE', 'ENERGISTYRELSEN'],
+                        help='Data source to reprocess (default: ELEXON)')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be done')
     args = parser.parse_args()
 
     year = args.year
+    source = args.source
 
     if args.months:
         months = [int(m) for m in args.months.split(',')]
@@ -99,6 +106,7 @@ def main():
     print(f"PARALLEL AGGREGATION REPROCESSING - {year}")
     print("=" * 70)
     print(f"Year: {year}")
+    print(f"Source: {source}")
     print(f"Months: {months}")
     print(f"Workers: {args.workers}")
     if args.dry_run:
@@ -106,7 +114,7 @@ def main():
     print("=" * 70)
 
     # Prepare tasks
-    tasks = [(year, month, args.dry_run) for month in months]
+    tasks = [(year, month, args.dry_run, source) for month in months]
 
     # Run in parallel
     results = []

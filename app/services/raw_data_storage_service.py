@@ -312,11 +312,14 @@ class RawDataStorageService:
         total_records_updated = 0
         total_api_calls = 0
 
-        # OPTIMIZATION: Group windfarms by bidding zone
-        # This allows us to make ONE API call per zone instead of one per windfarm
+        # OPTIMIZATION: Group windfarms by control area
+        # ENTSOE's 16.1.A per-unit API requires control area codes, NOT bidzone codes.
+        # This is critical for countries where they differ (e.g. Denmark: bidzone 10YDK-1--------W
+        # vs control area 10Y1001A1001A796).
+        from app.models.control_area import ControlArea
         from app.models.bidzone import Bidzone
 
-        bidzone_groups = {}  # {bidzone_code: {windfarms: [...], units: [...], eic_codes: [...]}}
+        area_groups = {}  # {area_code: {area_name: ..., windfarms: [...], units: [...], eic_codes: [...]}}
 
         for windfarm in windfarms:
             # Get ENTSOE units for this windfarm
@@ -325,59 +328,73 @@ class RawDataStorageService:
             if not entsoe_units:
                 continue
 
-            # Get bidzone
-            if not windfarm.bidzone_id:
-                all_errors.append(f"Windfarm {windfarm.name} has no bidzone configured")
+            # Prefer control area (required for ENTSOE 16.1.A API)
+            area_code = None
+            area_name = None
+
+            if windfarm.control_area_id:
+                stmt = select(ControlArea).where(ControlArea.id == windfarm.control_area_id)
+                result = await self.db.execute(stmt)
+                control_area = result.scalar_one_or_none()
+                if control_area and control_area.code:
+                    area_code = control_area.code
+                    area_name = control_area.name
+
+            # Fallback to bidzone if no control area (with warning)
+            if not area_code and windfarm.bidzone_id:
+                logger.warning(
+                    f"Windfarm {windfarm.name} has no control_area_id, "
+                    f"falling back to bidzone (may fail for countries where they differ)"
+                )
+                stmt = select(Bidzone).where(Bidzone.id == windfarm.bidzone_id)
+                result = await self.db.execute(stmt)
+                bidzone = result.scalar_one_or_none()
+                if bidzone and bidzone.code:
+                    area_code = bidzone.code
+                    area_name = bidzone.name
+
+            if not area_code:
+                all_errors.append(f"Windfarm {windfarm.name} has no control area or bidzone configured")
                 continue
 
-            stmt = select(Bidzone).where(Bidzone.id == windfarm.bidzone_id)
-            result = await self.db.execute(stmt)
-            bidzone = result.scalar_one_or_none()
-
-            if not bidzone or not bidzone.code:
-                all_errors.append(f"Windfarm {windfarm.name} has no bidzone configured")
-                continue
-
-            bidzone_code = bidzone.code
-
-            # Initialize bidzone group if needed
-            if bidzone_code not in bidzone_groups:
-                bidzone_groups[bidzone_code] = {
-                    'bidzone_name': bidzone.name,
+            # Initialize area group if needed
+            if area_code not in area_groups:
+                area_groups[area_code] = {
+                    'area_name': area_name,
                     'windfarms': [],
                     'units': [],
                     'eic_codes': []
                 }
 
-            # Add windfarm and its units to the bidzone group
-            bidzone_groups[bidzone_code]['windfarms'].append(windfarm)
-            bidzone_groups[bidzone_code]['units'].extend(entsoe_units)
-            bidzone_groups[bidzone_code]['eic_codes'].extend([
+            # Add windfarm and its units to the area group
+            area_groups[area_code]['windfarms'].append(windfarm)
+            area_groups[area_code]['units'].extend(entsoe_units)
+            area_groups[area_code]['eic_codes'].extend([
                 u.code for u in entsoe_units if u.code and u.code != 'nan'
             ])
 
-        logger.info(f"Grouped {len(windfarms)} windfarms into {len(bidzone_groups)} bidding zones")
-        for zone_code, zone_data in bidzone_groups.items():
-            logger.info(f"  {zone_data['bidzone_name']} ({zone_code}): {len(zone_data['windfarms'])} windfarms, {len(zone_data['units'])} units")
+        logger.info(f"Grouped {len(windfarms)} windfarms into {len(area_groups)} control areas")
+        for zone_code, zone_data in area_groups.items():
+            logger.info(f"  {zone_data['area_name']} ({zone_code}): {len(zone_data['windfarms'])} windfarms, {len(zone_data['units'])} units")
 
         # Convert dates to naive UTC for ENTSOE client
         start_naive = request.start_date.replace(tzinfo=None) if request.start_date.tzinfo else request.start_date
         end_naive = request.end_date.replace(tzinfo=None) if request.end_date.tzinfo else request.end_date
 
-        # Process each bidding zone (ONE API call per zone!)
-        for bidzone_code, zone_data in bidzone_groups.items():
+        # Process each control area (ONE API call per area!)
+        for area_code, zone_data in area_groups.items():
             try:
                 logger.info(
-                    f"Fetching ENTSOE data for {zone_data['bidzone_name']} "
+                    f"Fetching ENTSOE data for {zone_data['area_name']} "
                     f"({len(zone_data['windfarms'])} windfarms, {len(zone_data['units'])} units)"
                 )
 
-                # Make ONE API call for the entire bidding zone
-                # The API returns ALL wind units in the zone, we filter locally
+                # Make ONE API call for the entire control area
+                # The API returns ALL wind units in the area, we filter locally
                 df, metadata = await client.fetch_generation_per_unit(
                     start=start_naive,
                     end=end_naive,
-                    area_code=bidzone_code,
+                    area_code=area_code,
                     eic_codes=zone_data['eic_codes'],  # Filter for our EIC codes
                     production_types=["wind"],
                 )
@@ -386,8 +403,8 @@ class RawDataStorageService:
 
                 if df.empty:
                     logger.warning(
-                        f"No data returned for bidzone {zone_data['bidzone_name']}",
-                        bidzone_code=bidzone_code,
+                        f"No data returned for area {zone_data['area_name']}",
+                        area_code=area_code,
                         start=start_naive.isoformat(),
                         end=end_naive.isoformat(),
                         eic_codes=zone_data['eic_codes'],
@@ -395,13 +412,13 @@ class RawDataStorageService:
                     )
                     if metadata.get("errors"):
                         all_errors.extend([
-                            f"Bidzone {zone_data['bidzone_name']}: {err}"
+                            f"Area {zone_data['area_name']}: {err}"
                             for err in metadata["errors"]
                             if isinstance(err, str)
                         ])
                     continue
 
-                logger.info(f"Received {len(df)} records for {zone_data['bidzone_name']}")
+                logger.info(f"Received {len(df)} records for {zone_data['area_name']}")
 
                 # Process each unit in this zone
                 for unit in zone_data['units']:
@@ -426,7 +443,7 @@ class RawDataStorageService:
                     # Store generation records (source_type='api')
                     if not gen_df.empty:
                         rs, ru = await self._store_entsoe_records(
-                            gen_df, unit, bidzone_code, user_id, metadata,
+                            gen_df, unit, area_code, user_id, metadata,
                         )
                         unit_stored += rs
                         unit_updated += ru
@@ -434,7 +451,7 @@ class RawDataStorageService:
                     # Store consumption records (source_type='api_consumption')
                     if not consumption_df.empty:
                         rs, ru = await self._store_entsoe_records(
-                            consumption_df, unit, bidzone_code, user_id, metadata,
+                            consumption_df, unit, area_code, user_id, metadata,
                             source_type_override='api_consumption',
                         )
                         unit_stored += rs
@@ -455,7 +472,7 @@ class RawDataStorageService:
                     )
 
             except Exception as e:
-                error_msg = f"Error fetching ENTSOE data for bidzone {zone_data['bidzone_name']}: {str(e)}"
+                error_msg = f"Error fetching ENTSOE data for area {zone_data['area_name']}: {str(e)}"
                 logger.error(error_msg)
                 all_errors.append(error_msg)
 
@@ -504,7 +521,7 @@ class RawDataStorageService:
         self,
         df: pd.DataFrame,
         unit: GenerationUnit,
-        bidzone_code: str,
+        area_code: str,
         user_id: int,
         api_metadata: Dict,
         source_type_override: str = "api",
@@ -514,6 +531,7 @@ class RawDataStorageService:
         Records are inserted in batches to avoid PostgreSQL's parameter limit (65,535).
 
         Args:
+            area_code: Control area code (or bidzone code as fallback).
             source_type_override: Use 'api' for generation, 'api_consumption' for consumption.
         """
         from sqlalchemy.dialects.postgresql import insert
@@ -573,7 +591,7 @@ class RawDataStorageService:
                 "source_value_type": type(raw_value).__name__,
                 "source_value_raw": str(raw_value),
                 "eic_code": unit.code,
-                "area_code": bidzone_code,
+                "area_code": area_code,
                 "production_type": row.get("production_type", "wind"),
                 "resolution_code": resolution,
                 "data_direction": data_direction,
