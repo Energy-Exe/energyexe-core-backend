@@ -86,6 +86,10 @@ async def export_generation_csv(
         True,
         description="Include windfarm metadata columns in output"
     ),
+    exclude_ramp_up: bool = Query(
+        True,
+        description="Exclude ramp-up period records"
+    ),
     # Dependencies
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
@@ -179,6 +183,7 @@ async def export_generation_csv(
             granularity=granularity,
             source=source,
             include_metadata=include_metadata,
+            exclude_ramp_up=exclude_ramp_up,
         ):
             yield chunk
 

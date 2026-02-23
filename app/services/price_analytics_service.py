@@ -31,6 +31,7 @@ class PriceAnalyticsService:
         end_date: datetime,
         aggregation: AggregationType = "month",
         price_type: str = "day_ahead",
+        exclude_ramp_up: bool = True,
     ) -> Dict[str, Any]:
         """
         Calculate capture rate for a windfarm.
@@ -51,6 +52,7 @@ class PriceAnalyticsService:
         """
         price_column = "day_ahead_price" if price_type == "day_ahead" else "intraday_price"
         price_source = await self._get_preferred_price_source(windfarm_id)
+        ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
         # SQL query for capture rate calculation
         query = text(f"""
@@ -71,6 +73,7 @@ class PriceAnalyticsService:
                   AND g.hour < :end_date
                   AND p.{price_column} IS NOT NULL
                   AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+                  {ramp_up_clause}
                 GROUP BY DATE_TRUNC(:aggregation, g.hour)
             ),
             market_metrics AS (
@@ -193,6 +196,7 @@ class PriceAnalyticsService:
         start_date: datetime,
         end_date: datetime,
         aggregation: AggregationType = "month",
+        exclude_ramp_up: bool = True,
     ) -> Dict[str, Any]:
         """
         Calculate revenue metrics for a windfarm.
@@ -207,8 +211,9 @@ class PriceAnalyticsService:
             Dict with revenue metrics by period
         """
         price_source = await self._get_preferred_price_source(windfarm_id)
+        ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
-        query = text("""
+        query = text(f"""
             SELECT
                 DATE_TRUNC(:aggregation, g.hour) as period,
                 SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation_mwh,
@@ -223,6 +228,7 @@ class PriceAnalyticsService:
               AND g.hour >= :start_date
               AND g.hour < :end_date
               AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+              {ramp_up_clause}
             GROUP BY DATE_TRUNC(:aggregation, g.hour)
             ORDER BY period
         """)
@@ -268,6 +274,7 @@ class PriceAnalyticsService:
         start_date: datetime,
         end_date: datetime,
         aggregation: AggregationType = "month",
+        exclude_ramp_up: bool = True,
     ) -> Dict[str, Any]:
         """
         Compare capture rates across multiple windfarms.
@@ -294,6 +301,7 @@ class PriceAnalyticsService:
                 start_date=start_date,
                 end_date=end_date,
                 aggregation=aggregation,
+                exclude_ramp_up=exclude_ramp_up,
             )
 
             results["windfarms"].append({
@@ -427,6 +435,7 @@ class PriceAnalyticsService:
         windfarm_id: int,
         start_date: datetime,
         end_date: datetime,
+        exclude_ramp_up: bool = True,
     ) -> Dict[str, Any]:
         """
         Calculate correlation between generation and prices for a windfarm.
@@ -435,8 +444,9 @@ class PriceAnalyticsService:
         prices are high (positive correlation) or low (negative correlation).
         """
         price_source = await self._get_preferred_price_source(windfarm_id)
+        ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
-        query = text("""
+        query = text(f"""
             SELECT
                 g.generation_mwh,
                 p.day_ahead_price
@@ -447,6 +457,7 @@ class PriceAnalyticsService:
               AND g.hour < :end_date
               AND g.generation_mwh IS NOT NULL
               AND p.day_ahead_price IS NOT NULL
+              {ramp_up_clause}
         """)
 
         result = await self.db.execute(

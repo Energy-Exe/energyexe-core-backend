@@ -28,6 +28,7 @@ class WeatherCorrelationService:
         windfarm_id: int,
         start_date: datetime,
         end_date: datetime,
+        exclude_ramp_up: bool = True,
     ) -> CorrelationData:
         """
         Calculate correlation between wind speed and generation.
@@ -35,7 +36,8 @@ class WeatherCorrelationService:
         Groups by 1 m/s wind speed bins.
         """
         # First, get the correlation coefficient separately
-        corr_query = text("""
+        ramp_up_clause = "AND gd.is_ramp_up = false" if exclude_ramp_up else ""
+        corr_query = text(f"""
             SELECT CORR(wd.wind_speed_100m, gd.generation_mwh) as correlation
             FROM weather_data wd
             JOIN generation_data gd ON
@@ -45,7 +47,8 @@ class WeatherCorrelationService:
               AND wd.hour >= :start_date
               AND wd.hour <= :end_date
               AND wd.source = 'ERA5'
-              AND gd.generation_mwh IS NOT NULL;
+              AND gd.generation_mwh IS NOT NULL
+              {ramp_up_clause};
         """)
 
         corr_result = await db.execute(corr_query, {
@@ -56,7 +59,7 @@ class WeatherCorrelationService:
         correlation = corr_result.scalar() or 0
 
         # Then get the binned data
-        query = text("""
+        query = text(f"""
             SELECT
                 FLOOR(wd.wind_speed_100m) as wind_speed_bin,
                 AVG(gd.generation_mwh) as avg_generation,
@@ -73,6 +76,7 @@ class WeatherCorrelationService:
               AND wd.hour <= :end_date
               AND wd.source = 'ERA5'
               AND gd.generation_mwh IS NOT NULL
+              {ramp_up_clause}
             GROUP BY wind_speed_bin
             HAVING COUNT(*) >= 5  -- Minimum samples for reliability
             ORDER BY wind_speed_bin;
@@ -116,13 +120,15 @@ class WeatherCorrelationService:
         windfarm_id: int,
         start_date: datetime,
         end_date: datetime,
+        exclude_ramp_up: bool = True,
     ) -> PowerCurveData:
         """
         Calculate actual power curve from data.
 
         Uses 0.5 m/s wind speed bins for smooth curve.
         """
-        query = text("""
+        ramp_up_clause = "AND gd.is_ramp_up = false" if exclude_ramp_up else ""
+        query = text(f"""
             SELECT
                 FLOOR(wd.wind_speed_100m * 2) / 2 as wind_speed_bin,
                 AVG(gd.generation_mwh) as avg_generation,
@@ -137,6 +143,7 @@ class WeatherCorrelationService:
               AND wd.hour <= :end_date
               AND wd.source = 'ERA5'
               AND gd.generation_mwh IS NOT NULL
+              {ramp_up_clause}
             GROUP BY wind_speed_bin
             HAVING COUNT(*) >= 10  -- Minimum samples
             ORDER BY wind_speed_bin;
@@ -216,6 +223,7 @@ class WeatherCorrelationService:
         windfarm_id: int,
         start_date: datetime,
         end_date: datetime,
+        exclude_ramp_up: bool = True,
     ) -> CapacityFactorData:
         """
         Calculate capacity factor grouped by wind speed bins.
@@ -231,7 +239,8 @@ class WeatherCorrelationService:
         if not capacity_mw:
             capacity_mw = 1000  # Default if not set
 
-        query = text("""
+        ramp_up_clause = "AND gd.is_ramp_up = false" if exclude_ramp_up else ""
+        query = text(f"""
             SELECT
                 CASE
                     WHEN wd.wind_speed_100m < 5 THEN '0-5'
@@ -259,6 +268,7 @@ class WeatherCorrelationService:
               AND wd.hour <= :end_date
               AND wd.source = 'ERA5'
               AND gd.generation_mwh IS NOT NULL
+              {ramp_up_clause}
             GROUP BY wind_bin, wind_center
             ORDER BY wind_center;
         """)
@@ -330,13 +340,15 @@ class WeatherCorrelationService:
         windfarm_id: int,
         start_date: datetime,
         end_date: datetime,
+        exclude_ramp_up: bool = True,
     ) -> EnergyRoseData:
         """
         Get energy rose - generation by wind direction.
 
         Shows which directions contribute most energy (not just frequency).
         """
-        query = text("""
+        ramp_up_clause = "AND gd.is_ramp_up = false" if exclude_ramp_up else ""
+        query = text(f"""
             SELECT
                 FLOOR(wd.wind_direction_deg / 22.5) * 22.5 as direction_bin,
                 SUM(gd.generation_mwh - COALESCE(gd.consumption_mwh, 0)) as total_generation,
@@ -350,6 +362,7 @@ class WeatherCorrelationService:
               AND wd.hour <= :end_date
               AND wd.source = 'ERA5'
               AND gd.generation_mwh IS NOT NULL
+              {ramp_up_clause}
             GROUP BY direction_bin
             ORDER BY direction_bin;
         """)
@@ -393,6 +406,7 @@ class WeatherCorrelationService:
         start_date: datetime,
         end_date: datetime,
         reference_wind_speed: float = 10.0,
+        exclude_ramp_up: bool = True,
     ) -> TemperatureImpactData:
         """
         Analyze temperature impact on generation at constant wind speed.
@@ -401,7 +415,8 @@ class WeatherCorrelationService:
             reference_wind_speed: Wind speed to analyze (default 10 m/s)
         """
         # Get data for wind speeds within ±1 m/s of reference
-        query = text("""
+        ramp_up_clause = "AND gd.is_ramp_up = false" if exclude_ramp_up else ""
+        query = text(f"""
             SELECT
                 FLOOR(wd.temperature_2m_c / 5) * 5 as temp_bin,
                 AVG(gd.generation_mwh) as avg_generation,
@@ -417,6 +432,7 @@ class WeatherCorrelationService:
               AND wd.wind_speed_100m <= :max_wind
               AND wd.source = 'ERA5'
               AND gd.generation_mwh IS NOT NULL
+              {ramp_up_clause}
             GROUP BY temp_bin
             HAVING COUNT(*) >= 10
             ORDER BY temp_bin;
@@ -468,6 +484,7 @@ class WeatherCorrelationService:
         windfarm_id: int,
         year: int,
         metric: str = "wind_speed",
+        exclude_ramp_up: bool = True,
     ) -> HeatmapData:
         """
         Get hour × month heatmap data.
@@ -479,7 +496,8 @@ class WeatherCorrelationService:
         end_date = datetime(year, 12, 31, 23, 59, 59)
 
         if metric == "generation":
-            query = text("""
+            ramp_up_clause = "AND gd.is_ramp_up = false" if exclude_ramp_up else ""
+            query = text(f"""
                 SELECT
                     EXTRACT(HOUR FROM gd.hour) as hour,
                     EXTRACT(MONTH FROM gd.hour) as month,
@@ -489,6 +507,7 @@ class WeatherCorrelationService:
                   AND gd.hour >= :start_date
                   AND gd.hour <= :end_date
                   AND gd.generation_mwh IS NOT NULL
+                  {ramp_up_clause}
                 GROUP BY hour, month
                 ORDER BY hour, month;
             """)
@@ -544,6 +563,7 @@ class WeatherCorrelationService:
         start_date: datetime,
         end_date: datetime,
         metric: str = "wind_speed",
+        exclude_ramp_up: bool = True,
     ) -> HeatmapData:
         """
         Get hour × month heatmap data for a date range.
@@ -552,7 +572,8 @@ class WeatherCorrelationService:
             metric: "wind_speed", "temperature", or "generation"
         """
         if metric == "generation":
-            query = text("""
+            ramp_up_clause = "AND gd.is_ramp_up = false" if exclude_ramp_up else ""
+            query = text(f"""
                 SELECT
                     EXTRACT(HOUR FROM gd.hour) as hour,
                     EXTRACT(MONTH FROM gd.hour) as month,
@@ -562,6 +583,7 @@ class WeatherCorrelationService:
                   AND gd.hour >= :start_date
                   AND gd.hour <= :end_date
                   AND gd.generation_mwh IS NOT NULL
+                  {ramp_up_clause}
                 GROUP BY hour, month
                 ORDER BY hour, month;
             """)

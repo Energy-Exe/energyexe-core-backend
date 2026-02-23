@@ -115,6 +115,7 @@ class GenerationExportService:
         granularity: str,
         source: Optional[str] = None,
         include_metadata: bool = True,
+        exclude_ramp_up: bool = True,
     ) -> AsyncGenerator[str, None]:
         """
         Stream CSV data as an async generator.
@@ -145,6 +146,10 @@ class GenerationExportService:
         # Add source filter if specified
         if source:
             conditions.append(GenerationData.source == source)
+
+        # Exclude ramp-up period records
+        if exclude_ramp_up:
+            conditions.append(GenerationData.is_ramp_up == False)
 
         # Build aggregation query
         query = select(

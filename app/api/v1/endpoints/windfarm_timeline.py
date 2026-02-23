@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
 from decimal import Decimal
 
+from fastapi import Query
+
 from app.core.database import get_db
 from app.models.generation_unit import GenerationUnit
 from app.models.turbine_unit import TurbineUnit
@@ -314,6 +316,7 @@ async def get_windfarm_generation_timeline(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     aggregation: str = "daily",  # 'hourly', 'daily', 'monthly'
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """
@@ -364,17 +367,19 @@ async def get_windfarm_generation_timeline(
     # Set limit based on aggregation level - monthly needs more records to cover full history
     query_limit = 50000 if aggregation == "hourly" else 500000
 
+    base_conditions = [
+        GenerationData.hour >= start_date,
+        GenerationData.hour <= end_date,
+        or_(*unit_conditions)
+        if unit_conditions
+        else GenerationData.windfarm_id == windfarm_id,
+    ]
+    if exclude_ramp_up:
+        base_conditions.append(GenerationData.is_ramp_up == False)
+
     query = (
         select(GenerationData)
-        .where(
-            and_(
-                GenerationData.hour >= start_date,
-                GenerationData.hour <= end_date,
-                or_(*unit_conditions)
-                if unit_conditions
-                else GenerationData.windfarm_id == windfarm_id,
-            )
-        )
+        .where(and_(*base_conditions))
         .order_by(GenerationData.hour)
         .limit(query_limit)
     )  # Limit based on aggregation level

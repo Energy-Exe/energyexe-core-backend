@@ -228,6 +228,7 @@ async def get_weather_generation_correlation(
     windfarm_id: int,
     start_date: datetime = Query(...),
     end_date: datetime = Query(...),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -236,7 +237,7 @@ async def get_weather_generation_correlation(
     Returns binned averages and correlation coefficient.
     """
     service = WeatherCorrelationService()
-    return await service.get_weather_generation_correlation(db, windfarm_id, start_date, end_date)
+    return await service.get_weather_generation_correlation(db, windfarm_id, start_date, end_date, exclude_ramp_up=exclude_ramp_up)
 
 
 @router.get("/windfarms/{windfarm_id}/power-curve", response_model=PowerCurveData)
@@ -244,6 +245,7 @@ async def get_power_curve(
     windfarm_id: int,
     start_date: datetime = Query(...),
     end_date: datetime = Query(...),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -252,7 +254,7 @@ async def get_power_curve(
     Returns empirical power curve with cut-in/rated/cut-out speeds.
     """
     service = WeatherCorrelationService()
-    return await service.get_power_curve_actual(db, windfarm_id, start_date, end_date)
+    return await service.get_power_curve_actual(db, windfarm_id, start_date, end_date, exclude_ramp_up=exclude_ramp_up)
 
 
 @router.get("/windfarms/{windfarm_id}/capacity-factor-by-wind", response_model=CapacityFactorData)
@@ -260,6 +262,7 @@ async def get_capacity_factor_by_wind(
     windfarm_id: int,
     start_date: datetime = Query(...),
     end_date: datetime = Query(...),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -268,7 +271,7 @@ async def get_capacity_factor_by_wind(
     Shows which wind speeds contribute most to generation.
     """
     service = WeatherCorrelationService()
-    return await service.get_capacity_factor_by_wind(db, windfarm_id, start_date, end_date)
+    return await service.get_capacity_factor_by_wind(db, windfarm_id, start_date, end_date, exclude_ramp_up=exclude_ramp_up)
 
 
 @router.get("/windfarms/{windfarm_id}/energy-rose", response_model=EnergyRoseData)
@@ -276,6 +279,7 @@ async def get_energy_rose(
     windfarm_id: int,
     start_date: datetime = Query(...),
     end_date: datetime = Query(...),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -284,7 +288,7 @@ async def get_energy_rose(
     Shows which directions contribute most energy production.
     """
     service = WeatherCorrelationService()
-    return await service.get_energy_rose_data(db, windfarm_id, start_date, end_date)
+    return await service.get_energy_rose_data(db, windfarm_id, start_date, end_date, exclude_ramp_up=exclude_ramp_up)
 
 
 @router.get("/windfarms/{windfarm_id}/temperature-impact", response_model=TemperatureImpactData)
@@ -293,6 +297,7 @@ async def get_temperature_impact(
     start_date: datetime = Query(...),
     end_date: datetime = Query(...),
     reference_wind_speed: float = Query(10.0, description="Reference wind speed (m/s)"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -302,7 +307,7 @@ async def get_temperature_impact(
     """
     service = WeatherCorrelationService()
     return await service.get_temperature_impact(
-        db, windfarm_id, start_date, end_date, reference_wind_speed
+        db, windfarm_id, start_date, end_date, reference_wind_speed, exclude_ramp_up=exclude_ramp_up
     )
 
 
@@ -312,6 +317,7 @@ async def get_weather_heatmap(
     start_date: datetime = Query(..., description="Start datetime"),
     end_date: datetime = Query(..., description="End datetime"),
     metric: str = Query("wind_speed", regex="^(wind_speed|temperature|generation)$"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -321,7 +327,7 @@ async def get_weather_heatmap(
     """
     service = WeatherCorrelationService()
     return await service.get_weather_generation_heatmap_daterange(
-        db, windfarm_id, start_date, end_date, metric
+        db, windfarm_id, start_date, end_date, metric, exclude_ramp_up=exclude_ramp_up
     )
 
 
@@ -380,6 +386,7 @@ async def get_portfolio_weather_summary(
     end_date: datetime = Query(..., description="End date for analysis"),
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
     country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -490,7 +497,8 @@ async def get_portfolio_weather_summary(
     ]
 
     # Correlation summary - best and worst performers (wind-generation correlation)
-    correlation_query = text("""
+    ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
+    correlation_query = text(f"""
         WITH farm_correlations AS (
             SELECT
                 wf.id as windfarm_id,
@@ -515,6 +523,7 @@ async def get_portfolio_weather_summary(
               AND w.hour < :end_date
               AND w.wind_speed_100m IS NOT NULL
               AND g.generation_mwh IS NOT NULL
+              {ramp_up_clause}
     """ + (" AND w.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
     (" AND wf.country_id = :country_id" if country_id else "") + """
             GROUP BY wf.id, wf.name, wf.code, c.name, wf.nameplate_capacity_mw

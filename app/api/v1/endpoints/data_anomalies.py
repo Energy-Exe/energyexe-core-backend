@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 @router.post("/detect", response_model=AnomalyDetectionResponse)
 async def detect_anomalies(
     request: AnomalyDetectionRequest,
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ) -> AnomalyDetectionResponse:
@@ -50,7 +51,7 @@ async def detect_anomalies(
     service = DataAnomalyService(db)
 
     try:
-        anomaly_dicts, summary = await service.detect_anomalies(request)
+        anomaly_dicts, summary = await service.detect_anomalies(request, exclude_ramp_up=exclude_ramp_up)
 
         return AnomalyDetectionResponse(
             anomalies_detected=len(anomaly_dicts),

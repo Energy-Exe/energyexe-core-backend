@@ -33,7 +33,8 @@ class DataAnomalyService:
 
     async def detect_anomalies(
         self,
-        request: AnomalyDetectionRequest
+        request: AnomalyDetectionRequest,
+        exclude_ramp_up: bool = True,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Detect anomalies based on request parameters.
@@ -72,7 +73,8 @@ class DataAnomalyService:
                 windfarm_ids=windfarm_ids,
                 start_date=request.start_date,
                 end_date=request.end_date,
-                threshold=request.capacity_factor_threshold
+                threshold=request.capacity_factor_threshold,
+                exclude_ramp_up=exclude_ramp_up,
             )
             all_anomalies.extend(cf_anomalies)
             summary["anomalies_by_type"][AnomalyType.CAPACITY_FACTOR_OVER_LIMIT] = len(cf_anomalies)
@@ -82,6 +84,7 @@ class DataAnomalyService:
                 windfarm_ids=windfarm_ids,
                 start_date=request.start_date,
                 end_date=request.end_date,
+                exclude_ramp_up=exclude_ramp_up,
             )
             all_anomalies.extend(gap_anomalies)
             summary["anomalies_by_type"][AnomalyType.DATA_GAP] = len(gap_anomalies)
@@ -91,6 +94,7 @@ class DataAnomalyService:
                 windfarm_ids=windfarm_ids,
                 start_date=request.start_date,
                 end_date=request.end_date,
+                exclude_ramp_up=exclude_ramp_up,
             )
             all_anomalies.extend(spike_anomalies)
             summary["anomalies_by_type"][AnomalyType.DATA_SPIKE] = len(spike_anomalies)
@@ -145,7 +149,8 @@ class DataAnomalyService:
         windfarm_ids: List[int],
         start_date: Optional[datetime],
         end_date: Optional[datetime],
-        threshold: float = 1.2
+        threshold: float = 1.2,
+        exclude_ramp_up: bool = True,
     ) -> List[DataAnomaly]:
         """
         Detect capacity factor > threshold anomalies.
@@ -165,13 +170,14 @@ class DataAnomalyService:
 
         for windfarm_id in windfarm_ids:
             # Build query for problematic data points
-            query = select(GenerationData).where(
-                and_(
-                    GenerationData.windfarm_id == windfarm_id,
-                    GenerationData.capacity_factor > Decimal(str(threshold)),
-                    GenerationData.capacity_factor.isnot(None)
-                )
-            )
+            conditions = [
+                GenerationData.windfarm_id == windfarm_id,
+                GenerationData.capacity_factor > Decimal(str(threshold)),
+                GenerationData.capacity_factor.isnot(None),
+            ]
+            if exclude_ramp_up:
+                conditions.append(GenerationData.is_ramp_up == False)
+            query = select(GenerationData).where(and_(*conditions))
 
             if start_date:
                 query = query.where(GenerationData.hour >= start_date)
@@ -297,6 +303,7 @@ class DataAnomalyService:
         windfarm_ids: List[int],
         start_date: Optional[datetime],
         end_date: Optional[datetime],
+        exclude_ramp_up: bool = True,
     ) -> List[DataAnomaly]:
         """
         Detect missing data gaps in generation_data.
@@ -325,15 +332,16 @@ class DataAnomalyService:
 
             for unit_id, unit_name, unit_code in units:
                 # Get actual hours with data
+                gap_conditions = [
+                    GenerationData.generation_unit_id == unit_id,
+                    GenerationData.hour >= start_date,
+                    GenerationData.hour < end_date,
+                ]
+                if exclude_ramp_up:
+                    gap_conditions.append(GenerationData.is_ramp_up == False)
                 actual_result = await self.db.execute(
                     select(GenerationData.hour)
-                    .where(
-                        and_(
-                            GenerationData.generation_unit_id == unit_id,
-                            GenerationData.hour >= start_date,
-                            GenerationData.hour < end_date,
-                        )
-                    )
+                    .where(and_(*gap_conditions))
                     .order_by(GenerationData.hour)
                 )
                 actual_hours = [row[0] for row in actual_result.all()]
@@ -430,6 +438,7 @@ class DataAnomalyService:
         start_date: Optional[datetime],
         end_date: Optional[datetime],
         capacity_threshold: float = 1.1,
+        exclude_ramp_up: bool = True,
     ) -> List[DataAnomaly]:
         """
         Detect data spikes where generation exceeds unit capacity.
@@ -443,6 +452,17 @@ class DataAnomalyService:
             return anomalies
 
         # Query for records where generation exceeds capacity
+        spike_conditions = [
+            GenerationData.windfarm_id.in_(windfarm_ids),
+            GenerationData.hour >= start_date,
+            GenerationData.hour < end_date,
+            GenerationData.capacity_mw.isnot(None),
+            GenerationData.capacity_mw > 0,
+            GenerationData.generation_mwh > GenerationData.capacity_mw * Decimal(str(capacity_threshold)),
+        ]
+        if exclude_ramp_up:
+            spike_conditions.append(GenerationData.is_ramp_up == False)
+
         query = (
             select(
                 GenerationData.id,
@@ -455,16 +475,7 @@ class DataAnomalyService:
                 GenerationUnit.code.label("unit_code"),
             )
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
-            .where(
-                and_(
-                    GenerationData.windfarm_id.in_(windfarm_ids),
-                    GenerationData.hour >= start_date,
-                    GenerationData.hour < end_date,
-                    GenerationData.capacity_mw.isnot(None),
-                    GenerationData.capacity_mw > 0,
-                    GenerationData.generation_mwh > GenerationData.capacity_mw * Decimal(str(capacity_threshold)),
-                )
-            )
+            .where(and_(*spike_conditions))
             .order_by(GenerationData.hour)
         )
 

@@ -446,6 +446,7 @@ async def sync_elexon_prices(
 @router.post("/analytics/capture-rate", response_model=CaptureRateResponse)
 async def calculate_capture_rate(
     request: CaptureRateRequest,
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -463,6 +464,7 @@ async def calculate_capture_rate(
         end_date=request.end_date,
         aggregation=request.aggregation,
         price_type=request.price_type,
+        exclude_ramp_up=exclude_ramp_up,
     )
     return CaptureRateResponse(**result)
 
@@ -474,6 +476,7 @@ async def get_capture_rate(
     end_date: datetime,
     aggregation: Literal["hour", "day", "week", "month", "year"] = Query("month"),
     price_type: Literal["day_ahead", "intraday"] = Query("day_ahead"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -487,6 +490,7 @@ async def get_capture_rate(
         end_date=end_date,
         aggregation=aggregation,
         price_type=price_type,
+        exclude_ramp_up=exclude_ramp_up,
     )
     return result
 
@@ -494,6 +498,7 @@ async def get_capture_rate(
 @router.post("/analytics/capture-rate/compare", response_model=CaptureRateCompareResponse)
 async def compare_capture_rates(
     request: CaptureRateCompareRequest,
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -508,6 +513,7 @@ async def compare_capture_rates(
         start_date=request.start_date,
         end_date=request.end_date,
         aggregation=request.aggregation,
+        exclude_ramp_up=exclude_ramp_up,
     )
     return CaptureRateCompareResponse(**result)
 
@@ -515,6 +521,7 @@ async def compare_capture_rates(
 @router.post("/analytics/revenue", response_model=RevenueMetricsResponse)
 async def calculate_revenue_metrics(
     request: RevenueMetricsRequest,
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -529,6 +536,7 @@ async def calculate_revenue_metrics(
         start_date=request.start_date,
         end_date=request.end_date,
         aggregation=request.aggregation,
+        exclude_ramp_up=exclude_ramp_up,
     )
     return RevenueMetricsResponse(**result)
 
@@ -539,6 +547,7 @@ async def get_revenue_metrics(
     start_date: datetime,
     end_date: datetime,
     aggregation: Literal["hour", "day", "week", "month", "year"] = Query("month"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -551,6 +560,7 @@ async def get_revenue_metrics(
         start_date=start_date,
         end_date=end_date,
         aggregation=aggregation,
+        exclude_ramp_up=exclude_ramp_up,
     )
     return result
 
@@ -605,6 +615,7 @@ async def get_generation_price_correlation(
     windfarm_id: int,
     start_date: datetime,
     end_date: datetime,
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -618,6 +629,7 @@ async def get_generation_price_correlation(
         windfarm_id=windfarm_id,
         start_date=start_date,
         end_date=end_date,
+        exclude_ramp_up=exclude_ramp_up,
     )
     return CorrelationResponse(**result)
 
@@ -636,6 +648,7 @@ async def get_portfolio_revenue(
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
     country_id: Optional[int] = Query(None, description="Filter by country ID"),
     aggregation: Literal["day", "week", "month"] = Query("month", description="Time aggregation"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -688,9 +701,10 @@ async def get_portfolio_revenue(
     # Map aggregation to date_trunc
     agg_map = {'day': 'day', 'week': 'week', 'month': 'month'}
     trunc_period = agg_map.get(aggregation, 'month')
+    ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
     # Get total revenue and generation with price join
-    total_query = text("""
+    total_query = text(f"""
         WITH preferred_source AS (
             SELECT w.id as windfarm_id,
                 CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END as pref_source
@@ -709,6 +723,7 @@ async def get_portfolio_revenue(
           AND g.hour < :end_date
           AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
           AND p.day_ahead_price IS NOT NULL
+          {ramp_up_clause}
     """)
 
     total_result = await db.execute(total_query, {
@@ -727,7 +742,7 @@ async def get_portfolio_revenue(
     avg_capture_rate = (avg_achieved_price / avg_market_price * 100) if avg_market_price > 0 else 0
 
     # Get by-farm breakdown
-    farm_query = text("""
+    farm_query = text(f"""
         WITH preferred_source AS (
             SELECT w.id as windfarm_id,
                 CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END as pref_source
@@ -752,6 +767,7 @@ async def get_portfolio_revenue(
           AND g.hour < :end_date
           AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
           AND p.day_ahead_price IS NOT NULL
+          {ramp_up_clause}
         GROUP BY g.windfarm_id, w.name
         ORDER BY total_revenue DESC
     """)
@@ -795,6 +811,7 @@ async def get_portfolio_revenue(
           AND g.hour < :end_date
           AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
           AND p.day_ahead_price IS NOT NULL
+          {ramp_up_clause}
         GROUP BY DATE_TRUNC(:aggregation, g.hour)
         ORDER BY period
     """)
@@ -842,6 +859,7 @@ async def get_portfolio_capture_rates(
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
     country_id: Optional[int] = Query(None, description="Filter by country ID"),
     sort_by: Literal["capture_rate", "revenue", "generation"] = Query("capture_rate"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -875,7 +893,8 @@ async def get_portfolio_capture_rates(
     market_avg = float(market_row.market_avg or 0) if market_row else 0
 
     # Get per-farm capture rates
-    farm_query = text("""
+    ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
+    farm_query = text(f"""
         WITH preferred_source AS (
             SELECT w.id as windfarm_id,
                 CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END as pref_source
@@ -903,6 +922,7 @@ async def get_portfolio_capture_rates(
           AND g.hour < :end_date
           AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
           AND p.day_ahead_price IS NOT NULL
+          {ramp_up_clause}
         GROUP BY g.windfarm_id, w.name, w.bidzone_id, b.code
         HAVING SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
     """)
