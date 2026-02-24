@@ -6,7 +6,7 @@ from io import StringIO
 import csv
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, text
+from sqlalchemy import select, func, and_, text, case
 from sqlalchemy.orm import selectinload
 
 from app.models.windfarm import Windfarm
@@ -147,9 +147,11 @@ class GenerationExportService:
         if source:
             conditions.append(GenerationData.source == source)
 
-        # Exclude ramp-up period records
+        # When excluding ramp-up, null out capacity factor but keep generation rows.
         if exclude_ramp_up:
-            conditions.append(GenerationData.is_ramp_up == False)
+            cf_expr = case((GenerationData.is_ramp_up == True, None), else_=GenerationData.capacity_factor)
+        else:
+            cf_expr = GenerationData.capacity_factor
 
         # Build aggregation query
         query = select(
@@ -157,7 +159,7 @@ class GenerationExportService:
             GenerationData.windfarm_id,
             GenerationData.source,
             func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_generation_mwh'),
-            func.avg(GenerationData.capacity_factor).label('avg_capacity_factor'),
+            func.avg(cf_expr).label('avg_capacity_factor'),
             func.count(GenerationData.id).label('data_points'),
         ).where(
             and_(*conditions)
