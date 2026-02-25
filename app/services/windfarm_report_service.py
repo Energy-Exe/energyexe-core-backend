@@ -39,7 +39,8 @@ class WindfarmReportService:
         start_date: datetime,
         end_date: datetime,
         include_peer_groups: Optional[List[str]] = None,
-        generate_commentary: bool = False
+        generate_commentary: bool = False,
+        exclude_ramp_up: bool = True
     ) -> WindfarmReportData:
         """
         Generate complete report data for a windfarm.
@@ -86,7 +87,8 @@ class WindfarmReportService:
             windfarm_id,
             start_date,
             end_date,
-            peer_groups
+            peer_groups,
+            exclude_ramp_up=exclude_ramp_up
         )
         logger.info("step_3_complete", elapsed=round(time.time() - step_start, 2), avg_cf=round(summary.avg_capacity_factor, 2))
 
@@ -97,7 +99,8 @@ class WindfarmReportService:
             windfarm_id,
             start_date,
             end_date,
-            peer_groups
+            peer_groups,
+            exclude_ramp_up=exclude_ramp_up
         )
         logger.info("step_4_complete", elapsed=round(time.time() - step_start, 2), country_rank=rankings.country_rank)
 
@@ -123,7 +126,8 @@ class WindfarmReportService:
         target_monthly_cfs = await self._get_monthly_capacity_factors(
             windfarm_id,
             start_date,
-            end_date
+            end_date,
+            exclude_ramp_up=exclude_ramp_up
         )
         target_stats = self.stats.calculate_performance_metrics(target_monthly_cfs)
 
@@ -368,10 +372,11 @@ class WindfarmReportService:
         windfarm_id: int,
         start_date: datetime,
         end_date: datetime,
-        peer_groups: Dict
+        peer_groups: Dict,
+        exclude_ramp_up: bool = True
     ) -> PerformanceSummary:
         """Calculate summary performance metrics."""
-        monthly_cfs = await self._get_monthly_capacity_factors(windfarm_id, start_date, end_date)
+        monthly_cfs = await self._get_monthly_capacity_factors(windfarm_id, start_date, end_date, exclude_ramp_up=exclude_ramp_up)
         monthly_generation = await self._get_monthly_generation(windfarm_id, start_date, end_date)
 
         if not monthly_cfs:
@@ -424,7 +429,8 @@ class WindfarmReportService:
         windfarm_id: int,
         start_date: datetime,
         end_date: datetime,
-        peer_groups: Dict
+        peer_groups: Dict,
+        exclude_ramp_up: bool = True
     ) -> WindfarmRankings:
         """Calculate rankings within all peer groups."""
         rankings = WindfarmRankings(
@@ -443,7 +449,8 @@ class WindfarmReportService:
                 peer_groups['country'].group_id,
                 windfarm_id,
                 start_date,
-                end_date
+                end_date,
+                exclude_ramp_up=exclude_ramp_up
             )
             rankings.country_table = country_table
             rankings.country_rank = country_rank
@@ -456,7 +463,8 @@ class WindfarmReportService:
                 peer_groups['bidzone'].group_id,
                 windfarm_id,
                 start_date,
-                end_date
+                end_date,
+                exclude_ramp_up=exclude_ramp_up
             )
             rankings.bidzone_table = bidzone_table
             rankings.bidzone_rank = bidzone_rank
@@ -469,7 +477,8 @@ class WindfarmReportService:
                 peer_groups['owner'].group_id,
                 windfarm_id,
                 start_date,
-                end_date
+                end_date,
+                exclude_ramp_up=exclude_ramp_up
             )
             rankings.owner_table = owner_table
             rankings.owner_rank = owner_rank
@@ -482,7 +491,8 @@ class WindfarmReportService:
                 peer_groups['turbine'].group_id,
                 windfarm_id,
                 start_date,
-                end_date
+                end_date,
+                exclude_ramp_up=exclude_ramp_up
             )
             rankings.turbine_table = turbine_table
             rankings.turbine_rank = turbine_rank
@@ -496,7 +506,8 @@ class WindfarmReportService:
         group_id: int,
         target_windfarm_id: int,
         start_date: datetime,
-        end_date: datetime
+        end_date: datetime,
+        exclude_ramp_up: bool = True
     ) -> Tuple[List[RankingRow], int]:
         """
         Generate ranking table for a peer group.
@@ -523,6 +534,15 @@ class WindfarmReportService:
 
         # OPTIMIZATION: Single bulk query for ALL windfarms at once
         # Instead of N separate queries, fetch everything in one go
+        ranking_conditions = [
+            GenerationUnit.windfarm_id.in_(windfarm_ids),
+            GenerationData.hour >= ranking_start_date,
+            GenerationData.hour < end_date,
+            GenerationData.capacity_factor.isnot(None)
+        ]
+        if exclude_ramp_up:
+            ranking_conditions.append(GenerationData.is_ramp_up == False)
+
         stmt = (
             select(
                 GenerationUnit.windfarm_id,
@@ -532,14 +552,7 @@ class WindfarmReportService:
                 func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_gen_mwh')
             )
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
-            .where(
-                and_(
-                    GenerationUnit.windfarm_id.in_(windfarm_ids),
-                    GenerationData.hour >= ranking_start_date,
-                    GenerationData.hour < end_date,
-                    GenerationData.capacity_factor.isnot(None)
-                )
-            )
+            .where(and_(*ranking_conditions))
             .group_by(GenerationUnit.windfarm_id, 'year', 'month')
         )
 
@@ -773,20 +786,23 @@ class WindfarmReportService:
         self,
         windfarm_id: int,
         start_date: datetime,
-        end_date: datetime
+        end_date: datetime,
+        exclude_ramp_up: bool = True
     ) -> List[float]:
         """Get list of monthly average capacity factors."""
+        conditions = [
+            GenerationUnit.windfarm_id == windfarm_id,
+            GenerationData.hour >= start_date,
+            GenerationData.hour < end_date,
+            GenerationData.capacity_factor.isnot(None)
+        ]
+        if exclude_ramp_up:
+            conditions.append(GenerationData.is_ramp_up == False)
+
         stmt = (
             select(func.avg(GenerationData.capacity_factor))
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
-            .where(
-                and_(
-                    GenerationUnit.windfarm_id == windfarm_id,
-                    GenerationData.hour >= start_date,
-                    GenerationData.hour < end_date,
-                    GenerationData.capacity_factor.isnot(None)
-                )
-            )
+            .where(and_(*conditions))
             .group_by(
                 extract('year', GenerationData.hour),
                 extract('month', GenerationData.hour)
@@ -804,9 +820,19 @@ class WindfarmReportService:
         self,
         windfarm_id: int,
         start_date: datetime,
-        end_date: datetime
+        end_date: datetime,
+        exclude_ramp_up: bool = True
     ) -> Dict[str, float]:
         """Get dict of monthly average capacity factors keyed by YYYY-MM."""
+        conditions = [
+            GenerationUnit.windfarm_id == windfarm_id,
+            GenerationData.hour >= start_date,
+            GenerationData.hour < end_date,
+            GenerationData.capacity_factor.isnot(None)
+        ]
+        if exclude_ramp_up:
+            conditions.append(GenerationData.is_ramp_up == False)
+
         stmt = (
             select(
                 extract('year', GenerationData.hour).label('year'),
@@ -814,14 +840,7 @@ class WindfarmReportService:
                 func.avg(GenerationData.capacity_factor).label('avg_cf')
             )
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
-            .where(
-                and_(
-                    GenerationUnit.windfarm_id == windfarm_id,
-                    GenerationData.hour >= start_date,
-                    GenerationData.hour < end_date,
-                    GenerationData.capacity_factor.isnot(None)
-                )
-            )
+            .where(and_(*conditions))
             .group_by('year', 'month')
             .order_by('year', 'month')
         )
@@ -1585,7 +1604,8 @@ class WindfarmReportService:
         self,
         windfarm_id: int,
         start_date: datetime,
-        end_date: datetime
+        end_date: datetime,
+        exclude_ramp_up: bool = True
     ) -> List[dict]:
         """
         Get capacity factor distribution for histogram.
@@ -1594,22 +1614,25 @@ class WindfarmReportService:
             windfarm_id: ID of windfarm
             start_date: Start of analysis period
             end_date: End of analysis period
+            exclude_ramp_up: Whether to exclude ramp-up period records
 
         Returns:
             List of {bin_label, count, percentage}
         """
         # Get all capacity factors
+        dist_conditions = [
+            GenerationUnit.windfarm_id == windfarm_id,
+            GenerationData.hour >= start_date,
+            GenerationData.hour < end_date,
+            GenerationData.capacity_factor.isnot(None)
+        ]
+        if exclude_ramp_up:
+            dist_conditions.append(GenerationData.is_ramp_up == False)
+
         stmt = (
             select(GenerationData.capacity_factor)
             .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
-            .where(
-                and_(
-                    GenerationUnit.windfarm_id == windfarm_id,
-                    GenerationData.hour >= start_date,
-                    GenerationData.hour < end_date,
-                    GenerationData.capacity_factor.isnot(None)
-                )
-            )
+            .where(and_(*dist_conditions))
         )
 
         result = await self.db.execute(stmt)

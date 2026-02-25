@@ -113,6 +113,9 @@ class GenerationData(Base):
     source_resolution: Mapped[Optional[str]] = mapped_column(String(20))
     raw_data_ids: Mapped[Optional[List[int]]] = mapped_column(ARRAY(BigInteger))
     
+    # Ramp-up period flag
+    is_ramp_up: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default='false')
+
     # Quality
     quality_flag: Mapped[Optional[str]] = mapped_column(String(20))
     quality_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(3, 2))

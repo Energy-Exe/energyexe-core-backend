@@ -28,6 +28,7 @@ async def compare_windfarms(
     start_date: date = Query(..., description="Start date for comparison"),
     end_date: date = Query(..., description="End date for comparison"),
     granularity: str = Query("daily", description="Aggregation granularity: hourly, daily, weekly, monthly"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records from results"),
     db: AsyncSession = Depends(get_db),
 ):
     """Compare generation data across multiple windfarms."""
@@ -42,7 +43,8 @@ async def compare_windfarms(
         windfarm_ids=windfarm_ids,
         start_date=start_date,
         end_date=end_date,
-        granularity=granularity
+        granularity=granularity,
+        exclude_ramp_up=exclude_ramp_up
     )
 
 
@@ -50,6 +52,7 @@ async def compare_windfarms(
 async def get_windfarm_statistics(
     windfarm_ids: List[int] = Query(..., description="List of windfarm IDs"),
     period_days: int = Query(30, description="Number of days for statistics"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records from results"),
     db: AsyncSession = Depends(get_db),
 ):
     """Get detailed statistics for selected windfarms."""
@@ -62,5 +65,6 @@ async def get_windfarm_statistics(
     service = ComparisonService(db)
     return await service.get_windfarm_statistics(
         windfarm_ids=windfarm_ids,
-        period_days=period_days
+        period_days=period_days,
+        exclude_ramp_up=exclude_ramp_up
     )

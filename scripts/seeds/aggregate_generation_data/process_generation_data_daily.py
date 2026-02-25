@@ -42,6 +42,7 @@ from app.core.database import get_session_factory
 from app.models.generation_data import GenerationDataRaw, GenerationData
 from app.models.generation_unit import GenerationUnit
 from app.models.windfarm import Windfarm
+from app.utils.ramp_up import is_in_ramp_up_period
 
 # Configure logging
 logging.basicConfig(
@@ -186,7 +187,13 @@ class DailyGenerationProcessor:
                 'start_date': unit.start_date,
                 'end_date': unit.end_date,
                 'first_power_date': unit.first_power_date,  # For data filtering (takes precedence over start_date)
-                'commercial_operational_date': commercial_date  # For capacity factor calculation
+                'commercial_operational_date': commercial_date,  # For capacity factor calculation
+                # Ramp-up period fields
+                'unit_commercial_operational_date': unit.commercial_operational_date,
+                'unit_ramp_up_end_date': unit.ramp_up_end_date,
+                'windfarm_first_power_date': windfarm.first_power_date if windfarm else None,
+                'windfarm_commercial_operational_date': windfarm.commercial_operational_date if windfarm else None,
+                'windfarm_ramp_up_end_date': windfarm.ramp_up_end_date if windfarm else None,
             }
 
             # If key exists, convert to list or append
@@ -1194,26 +1201,16 @@ class DailyGenerationProcessor:
                     f"— record will have NULL generation_unit_id and windfarm_id"
                 )
 
-            # Check if we're before commercial operational date
-            # If so, don't calculate capacity factor (pre-commercial/commissioning data)
-            is_pre_commercial = False
-            commercial_date = unit_info.get('commercial_operational_date') if unit_info else None
-            if commercial_date:
-                # Convert record.hour to date for comparison
-                record_date = record.hour.date() if hasattr(record.hour, 'date') else record.hour
-                if isinstance(commercial_date, datetime):
-                    commercial_date = commercial_date.date()
-                if record_date < commercial_date:
-                    is_pre_commercial = True
+            # Check if record is in ramp-up period
+            ramp_up_flag = False
+            if unit_info:
+                ramp_up_flag = is_in_ramp_up_period(unit_info, record.hour)
 
-            # Calculate capacity factor from generation_units capacity
-            # Only calculate if we're at or after commercial operational date
+            # Always calculate capacity factor (even during ramp-up)
+            # Ramp-up records are flagged, not NULLed
             capacity_factor = None
             effective_capacity_mw = record.capacity_mw
-            if is_pre_commercial:
-                # Pre-commercial period: don't show capacity factor or capacity
-                effective_capacity_mw = None
-            elif record.capacity_mw and record.capacity_mw > 0:
+            if record.capacity_mw and record.capacity_mw > 0:
                 # Calculate capacity factor using generation_units capacity
                 calculated_cf = record.generation_mwh / record.capacity_mw
                 # Cap at 9.9999 to fit in NUMERIC(5,4) - values > 1.0 can occur
@@ -1237,6 +1234,7 @@ class DailyGenerationProcessor:
                 # Curtailment tracking (ELEXON BOAV integration)
                 metered_mwh=Decimal(str(record.metered_mwh)) if record.metered_mwh is not None else None,
                 curtailed_mwh=Decimal(str(record.curtailed_mwh)) if record.curtailed_mwh else None,
+                is_ramp_up=ramp_up_flag,
                 source=source,
                 source_resolution=self.get_source_resolution(source),
                 raw_data_ids=record.raw_data_ids,

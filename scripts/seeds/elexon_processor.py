@@ -45,6 +45,7 @@ from app.core.config import get_settings
 from app.models.generation_data import GenerationDataRaw, GenerationData
 from app.models.generation_unit import GenerationUnit
 from app.models.windfarm import Windfarm
+from app.utils.ramp_up import is_in_ramp_up_period
 
 # Configure logging
 logging.basicConfig(
@@ -107,7 +108,15 @@ class ElexonProcessor:
                 'name': unit.name,
                 'start_date': unit.start_date,
                 'end_date': unit.end_date,
-                'commercial_date': windfarm.commercial_operational_date if windfarm else None
+                'first_power_date': unit.first_power_date,
+                'commercial_date': windfarm.commercial_operational_date if windfarm else None,
+                # Ramp-up period fields
+                'commercial_operational_date': unit.commercial_operational_date or (windfarm.commercial_operational_date if windfarm else None),
+                'unit_commercial_operational_date': unit.commercial_operational_date,
+                'unit_ramp_up_end_date': unit.ramp_up_end_date,
+                'windfarm_first_power_date': windfarm.first_power_date if windfarm else None,
+                'windfarm_commercial_operational_date': windfarm.commercial_operational_date if windfarm else None,
+                'windfarm_ramp_up_end_date': windfarm.ramp_up_end_date if windfarm else None,
             }
 
         logger.info(f"Loaded {len(self.generation_units_cache)} ELEXON generation units")
@@ -424,6 +433,13 @@ class ElexonProcessor:
             completeness = min(1.0, record.data_points / 2)  # Expected 2 half-hours
             quality_score = 1.0 if record.data_points >= 2 else (0.5 if record.data_points == 1 else 0.0)
 
+            # Check ramp-up period
+            ramp_up_flag = False
+            unit_cache_key = f"ELEXON:{record.identifier}"
+            unit_info = self.generation_units_cache.get(unit_cache_key)
+            if unit_info:
+                ramp_up_flag = is_in_ramp_up_period(unit_info, record.hour)
+
             obj = GenerationData(
                 id=str(uuid4()),
                 hour=record.hour,
@@ -435,6 +451,7 @@ class ElexonProcessor:
                 capacity_factor=Decimal(str(capacity_factor)) if capacity_factor else None,
                 metered_mwh=Decimal(str(record.metered_mwh)),
                 curtailed_mwh=Decimal(str(record.curtailed_mwh)) if record.curtailed_mwh > 0 else None,
+                is_ramp_up=ramp_up_flag,
                 source='ELEXON',
                 source_resolution='PT30M',
                 raw_data_ids=record.raw_data_ids,

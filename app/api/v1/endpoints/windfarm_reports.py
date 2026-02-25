@@ -71,6 +71,10 @@ async def get_windfarm_report_data(
         default=False,
         description="Force regeneration, bypassing cache"
     ),
+    exclude_ramp_up: bool = Query(
+        default=True,
+        description="Exclude ramp-up period records from report metrics"
+    ),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ) -> WindfarmReportData:
@@ -122,7 +126,8 @@ async def get_windfarm_report_data(
             start_date=start_date,
             end_date=end_date,
             include_peer_groups=peer_groups,
-            generate_commentary=generate_commentary
+            generate_commentary=generate_commentary,
+            exclude_ramp_up=exclude_ramp_up
         )
 
         # Cache the result (1 hour TTL)
@@ -274,6 +279,7 @@ async def get_windfarm_rankings(
     windfarm_id: int,
     start_date: datetime = Query(...),
     end_date: datetime = Query(...),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -301,7 +307,8 @@ async def get_windfarm_rankings(
             windfarm_id,
             start_date,
             end_date,
-            peer_groups
+            peer_groups,
+            exclude_ramp_up=exclude_ramp_up
         )
 
         return rankings

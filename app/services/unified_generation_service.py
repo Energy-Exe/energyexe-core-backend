@@ -689,14 +689,15 @@ class UnifiedGenerationService:
         source: Optional[str] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
-        min_quality_score: float = 0.0
+        min_quality_score: float = 0.0,
+        exclude_ramp_up: bool = False
     ) -> List[GenerationData]:
         """Query hourly generation data."""
-        
+
         query = select(GenerationData).where(
             GenerationData.quality_score >= min_quality_score
         )
-        
+
         if generation_unit_id:
             query = query.where(GenerationData.generation_unit_id == generation_unit_id)
         if windfarm_id:
@@ -707,7 +708,9 @@ class UnifiedGenerationService:
             query = query.where(GenerationData.hour >= start_date)
         if end_date:
             query = query.where(GenerationData.hour <= end_date)
-        
+        if exclude_ramp_up:
+            query = query.where(GenerationData.is_ramp_up == False)
+
         result = await self.db.execute(query.order_by(GenerationData.hour))
         return result.scalars().all()
     

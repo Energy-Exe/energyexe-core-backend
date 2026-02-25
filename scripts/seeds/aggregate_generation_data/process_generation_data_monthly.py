@@ -37,7 +37,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from app.core.database import get_session_factory
 from app.models.generation_data import GenerationDataRaw, GenerationData
 from app.models.generation_unit import GenerationUnit
+from app.models.windfarm import Windfarm
 from app.models.turbine_unit import TurbineUnit
+from app.utils.ramp_up import is_in_ramp_up_period
 
 # Configure logging
 logging.basicConfig(
@@ -133,10 +135,13 @@ class MonthlyGenerationProcessor:
     async def load_generation_units(self):
         """Load generation units into memory for faster lookups."""
 
-        result = await self.db.execute(select(GenerationUnit))
-        units = result.scalars().all()
+        result = await self.db.execute(
+            select(GenerationUnit, Windfarm)
+            .outerjoin(Windfarm, GenerationUnit.windfarm_id == Windfarm.id)
+        )
+        rows = result.all()
 
-        for unit in units:
+        for unit, windfarm in rows:
             key = f"{unit.source}:{unit.code}"
             self.generation_units_cache[key] = {
                 'id': unit.id,
@@ -144,7 +149,15 @@ class MonthlyGenerationProcessor:
                 'capacity_mw': float(unit.capacity_mw) if unit.capacity_mw else None,
                 'name': unit.name,
                 'start_date': unit.start_date,
-                'end_date': unit.end_date
+                'end_date': unit.end_date,
+                'first_power_date': unit.first_power_date,
+                'commercial_operational_date': unit.commercial_operational_date or (windfarm.commercial_operational_date if windfarm else None),
+                # Ramp-up period fields
+                'unit_commercial_operational_date': unit.commercial_operational_date,
+                'unit_ramp_up_end_date': unit.ramp_up_end_date,
+                'windfarm_first_power_date': windfarm.first_power_date if windfarm else None,
+                'windfarm_commercial_operational_date': windfarm.commercial_operational_date if windfarm else None,
+                'windfarm_ramp_up_end_date': windfarm.ramp_up_end_date if windfarm else None,
             }
 
         logger.info(f"Loaded {len(self.generation_units_cache)} generation units")
@@ -394,12 +407,18 @@ class MonthlyGenerationProcessor:
             generation_unit_id = None
 
             # If not in metadata (e.g., EIA), try generation_units_cache
+            unit_info = None
             if not turbine_unit_id and not windfarm_id:
                 unit_key = f"{source}:{record.identifier}"
                 unit_info = self.generation_units_cache.get(unit_key)
                 if unit_info:
                     generation_unit_id = unit_info['id']
                     windfarm_id = unit_info['windfarm_id']
+
+            # Check ramp-up period
+            ramp_up_flag = False
+            if unit_info:
+                ramp_up_flag = is_in_ramp_up_period(unit_info, record.month)
 
             # Create GenerationData object
             obj = GenerationData(
@@ -413,6 +432,7 @@ class MonthlyGenerationProcessor:
                 capacity_factor=Decimal(str(capacity_factor)) if capacity_factor else None,
                 raw_capacity_mw=None,
                 raw_capacity_factor=None,
+                is_ramp_up=ramp_up_flag,
                 source=source,
                 source_resolution='monthly',  # Important: mark as monthly
                 raw_data_ids=record.raw_data_ids,

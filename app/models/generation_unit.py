@@ -32,6 +32,8 @@ class GenerationUnit(Base):
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     first_power_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    commercial_operational_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    ramp_up_end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     notes: Mapped[str] = mapped_column(Text, nullable=True)
 

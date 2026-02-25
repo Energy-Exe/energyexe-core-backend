@@ -104,11 +104,12 @@ async def get_hourly_data(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     min_quality_score: float = 0.0,
+    exclude_ramp_up: bool = Query(False, description="Exclude ramp-up period records"),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ) -> List[Dict[str, Any]]:
     """Get hourly generation data."""
-    
+
     service = UnifiedGenerationService(db)
     data = await service.get_hourly_data(
         generation_unit_id=generation_unit_id,
@@ -116,7 +117,8 @@ async def get_hourly_data(
         source=source,
         start_date=start_date,
         end_date=end_date,
-        min_quality_score=min_quality_score
+        min_quality_score=min_quality_score,
+        exclude_ramp_up=exclude_ramp_up
     )
     
     # Convert to dict for response

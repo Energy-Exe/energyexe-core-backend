@@ -25,6 +25,7 @@ class WindfarmBase(BaseModel):
     substation_id: Optional[int] = None
     commercial_operational_date: Optional[date] = None
     first_power_date: Optional[date] = None
+    ramp_up_end_date: Optional[date] = Field(None, description="Date when ramp-up period is fully complete (post-COD)")
     lat: Optional[float] = None
     lng: Optional[float] = None
     polygon_wkt: Optional[str] = None
@@ -64,6 +65,7 @@ class WindfarmUpdate(BaseModel):
     substation_id: Optional[int] = None
     commercial_operational_date: Optional[date] = None
     first_power_date: Optional[date] = None
+    ramp_up_end_date: Optional[date] = Field(None, description="Date when ramp-up period is fully complete (post-COD)")
     lat: Optional[float] = None
     lng: Optional[float] = None
     polygon_wkt: Optional[str] = None

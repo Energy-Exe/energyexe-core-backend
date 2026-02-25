@@ -43,6 +43,7 @@ class Windfarm(Base):
     # Dates
     commercial_operational_date = Column(Date, nullable=True)
     first_power_date = Column(Date, nullable=True)
+    ramp_up_end_date = Column(Date, nullable=True)
 
     # Location
     lat = Column(Float, nullable=True)
