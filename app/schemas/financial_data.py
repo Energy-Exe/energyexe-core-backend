@@ -150,3 +150,37 @@ class FinancialDataSummary(BaseModel):
     ebitda: Optional[Decimal] = None
     net_income: Optional[Decimal] = None
     reported_generation_gwh: Optional[Decimal] = None
+
+
+class FinancialRatioPeriod(BaseModel):
+    financial_data_id: int
+    period_start: date
+    period_end: date
+    currency: str
+    # Source financials
+    total_revenue: Optional[Decimal] = None
+    total_operating_expenses: Optional[Decimal] = None
+    ebitda: Optional[Decimal] = None
+    # Generation
+    generation_mwh: Optional[Decimal] = None
+    generation_hours_count: int = 0
+    # Computed ratios
+    revenue_per_mwh: Optional[Decimal] = None
+    opex_per_mwh: Optional[Decimal] = None
+    ebitda_margin_pct: Optional[Decimal] = None
+    # Exclusion metadata
+    is_ramp_up_excluded: bool = False
+    ramp_up_exclusion_reason: Optional[str] = None
+    generation_data_available: bool = True
+    period_coverage_pct: Optional[Decimal] = None
+
+
+class FinancialRatiosResponse(BaseModel):
+    windfarm_id: int
+    windfarm_name: str
+    financial_entity_id: int
+    financial_entity_name: str
+    entity_type: str
+    cod: Optional[date] = None
+    linked_windfarm_ids: List[int]
+    periods: List[FinancialRatioPeriod]

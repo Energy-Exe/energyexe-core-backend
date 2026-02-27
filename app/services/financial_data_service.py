@@ -1,7 +1,7 @@
 """Service for FinancialData CRUD operations, computed fields, Excel import, and analytics."""
 
 import tempfile
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,6 +14,8 @@ from sqlalchemy.orm import selectinload
 
 from app.models.financial_data import FinancialData
 from app.models.financial_entity import FinancialEntity
+from app.models.generation_data import GenerationData
+from app.models.windfarm import Windfarm
 from app.models.windfarm_financial_entity import WindfarmFinancialEntity
 from app.schemas.financial_data import (
     FinancialDataCreate,
@@ -21,6 +23,8 @@ from app.schemas.financial_data import (
     FinancialDataImportResult,
     FinancialDataSummary,
     FinancialDataUpdate,
+    FinancialRatioPeriod,
+    FinancialRatiosResponse,
 )
 
 logger = structlog.get_logger()
@@ -273,6 +277,196 @@ class FinancialDataService:
                     )
                 )
         return summaries
+
+    # --- Financial Ratios ---
+
+    @staticmethod
+    def _compute_ratios(
+        total_revenue: Optional[Decimal],
+        total_opex: Optional[Decimal],
+        ebitda: Optional[Decimal],
+        generation_mwh: Optional[Decimal],
+    ) -> Dict[str, Optional[Decimal]]:
+        """Compute per-MWh ratios and EBITDA margin. Pure function, no DB access."""
+        revenue_per_mwh: Optional[Decimal] = None
+        opex_per_mwh: Optional[Decimal] = None
+        ebitda_margin_pct: Optional[Decimal] = None
+
+        has_generation = generation_mwh is not None and generation_mwh > 0
+
+        if total_revenue is not None and has_generation:
+            revenue_per_mwh = round(total_revenue / generation_mwh, 2)
+        if total_opex is not None and has_generation:
+            opex_per_mwh = round(total_opex / generation_mwh, 2)
+        if ebitda is not None and total_revenue is not None and total_revenue > 0:
+            ebitda_margin_pct = round((ebitda / total_revenue) * 100, 2)
+
+        return {
+            "revenue_per_mwh": revenue_per_mwh,
+            "opex_per_mwh": opex_per_mwh,
+            "ebitda_margin_pct": ebitda_margin_pct,
+        }
+
+    async def calculate_financial_ratios(
+        self, windfarm_id: int
+    ) -> List[FinancialRatiosResponse]:
+        """Calculate financial ratios for a windfarm by combining financial and generation data."""
+        # 1. Get financial entity IDs linked to this windfarm
+        link_result = await self.db.execute(
+            select(WindfarmFinancialEntity).where(
+                WindfarmFinancialEntity.windfarm_id == windfarm_id
+            )
+        )
+        links = list(link_result.scalars().all())
+        if not links:
+            return []
+
+        # Get the requested windfarm name
+        wf_result = await self.db.execute(
+            select(Windfarm).where(Windfarm.id == windfarm_id)
+        )
+        windfarm = wf_result.scalar_one_or_none()
+        if not windfarm:
+            return []
+
+        responses = []
+        for link in links:
+            entity_id = link.financial_entity_id
+
+            # 2a. Get the financial entity
+            entity_result = await self.db.execute(
+                select(FinancialEntity).where(FinancialEntity.id == entity_id)
+            )
+            entity = entity_result.scalar_one_or_none()
+            if not entity:
+                continue
+
+            # 2b. Get ALL windfarm_ids linked to this entity (handles holdcos)
+            all_links_result = await self.db.execute(
+                select(WindfarmFinancialEntity.windfarm_id).where(
+                    WindfarmFinancialEntity.financial_entity_id == entity_id
+                )
+            )
+            linked_wf_ids = [row[0] for row in all_links_result.all()]
+
+            # 2c. Get COD from each linked windfarm → effective COD = max(all CODs)
+            cod_result = await self.db.execute(
+                select(Windfarm.commercial_operational_date).where(
+                    Windfarm.id.in_(linked_wf_ids)
+                )
+            )
+            cod_dates = [row[0] for row in cod_result.all() if row[0] is not None]
+            effective_cod = max(cod_dates) if cod_dates else None
+
+            # Ramp-up cutoff
+            ramp_up_cutoff = None
+            if effective_cod is not None:
+                ramp_up_cutoff = effective_cod + timedelta(days=365)
+
+            # 2d. Get all FinancialData for this entity
+            fd_result = await self.db.execute(
+                select(FinancialData)
+                .where(FinancialData.financial_entity_id == entity_id)
+                .order_by(FinancialData.period_start)
+            )
+            financial_records = list(fd_result.scalars().all())
+
+            periods = []
+            for fd in financial_records:
+                # Check ramp-up exclusion
+                is_excluded = False
+                exclusion_reason = None
+                if ramp_up_cutoff is not None and fd.period_start < ramp_up_cutoff:
+                    is_excluded = True
+                    exclusion_reason = (
+                        f"Period starts before COD + 365 days "
+                        f"(COD: {effective_cod}, cutoff: {ramp_up_cutoff})"
+                    )
+
+                # Query generation data for this period
+                # period_end is inclusive, so go up to period_end + 1 day
+                period_start_dt = datetime(
+                    fd.period_start.year, fd.period_start.month, fd.period_start.day
+                )
+                period_end_dt = datetime(
+                    fd.period_end.year, fd.period_end.month, fd.period_end.day
+                ) + timedelta(days=1)
+
+                gen_result = await self.db.execute(
+                    select(
+                        func.sum(
+                            GenerationData.generation_mwh
+                            - func.coalesce(GenerationData.consumption_mwh, 0)
+                        ),
+                        func.count(GenerationData.id),
+                    ).where(
+                        GenerationData.windfarm_id.in_(linked_wf_ids),
+                        GenerationData.hour >= period_start_dt,
+                        GenerationData.hour < period_end_dt,
+                    )
+                )
+                row = gen_result.one()
+                total_gen_mwh = row[0]  # can be None if no data
+                if total_gen_mwh is not None:
+                    total_gen_mwh = round(total_gen_mwh, 1)
+                hours_count = row[1] or 0
+
+                # Compute expected hours for coverage
+                total_days = (fd.period_end - fd.period_start).days + 1
+                expected_hours = total_days * 24 * len(linked_wf_ids)
+                coverage_pct = None
+                if expected_hours > 0 and hours_count > 0:
+                    coverage_pct = round(
+                        Decimal(str(hours_count)) / Decimal(str(expected_hours)) * 100, 1
+                    )
+
+                gen_available = total_gen_mwh is not None and hours_count > 0
+
+                # Compute ratios (skip if ramp-up excluded)
+                ratios = {"revenue_per_mwh": None, "opex_per_mwh": None, "ebitda_margin_pct": None}
+                if not is_excluded and gen_available:
+                    ratios = self._compute_ratios(
+                        total_revenue=fd.total_revenue,
+                        total_opex=fd.total_operating_expenses,
+                        ebitda=fd.ebitda,
+                        generation_mwh=total_gen_mwh,
+                    )
+
+                periods.append(
+                    FinancialRatioPeriod(
+                        financial_data_id=fd.id,
+                        period_start=fd.period_start,
+                        period_end=fd.period_end,
+                        currency=fd.currency,
+                        total_revenue=round(fd.total_revenue, 0) if fd.total_revenue is not None else None,
+                        total_operating_expenses=round(fd.total_operating_expenses, 0) if fd.total_operating_expenses is not None else None,
+                        ebitda=round(fd.ebitda, 0) if fd.ebitda is not None else None,
+                        generation_mwh=total_gen_mwh,
+                        generation_hours_count=hours_count,
+                        revenue_per_mwh=ratios["revenue_per_mwh"],
+                        opex_per_mwh=ratios["opex_per_mwh"],
+                        ebitda_margin_pct=ratios["ebitda_margin_pct"],
+                        is_ramp_up_excluded=is_excluded,
+                        ramp_up_exclusion_reason=exclusion_reason,
+                        generation_data_available=gen_available,
+                        period_coverage_pct=coverage_pct,
+                    )
+                )
+
+            responses.append(
+                FinancialRatiosResponse(
+                    windfarm_id=windfarm_id,
+                    windfarm_name=windfarm.name,
+                    financial_entity_id=entity.id,
+                    financial_entity_name=entity.name,
+                    entity_type=entity.entity_type,
+                    cod=effective_cod,
+                    linked_windfarm_ids=linked_wf_ids,
+                    periods=periods,
+                )
+            )
+
+        return responses
 
     # --- Excel Import ---
 

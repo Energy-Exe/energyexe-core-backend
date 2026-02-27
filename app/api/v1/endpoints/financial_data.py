@@ -19,6 +19,7 @@ from app.schemas.financial_data import (
     FinancialDataSummary,
     FinancialDataUpdate,
     FinancialDataWithEntity,
+    FinancialRatiosResponse,
 )
 from app.services.financial_data_service import FinancialDataService
 
@@ -95,6 +96,16 @@ async def get_summary(
     """Get financial summary for a windfarm (most recent period per entity)."""
     service = FinancialDataService(db)
     return await service.get_windfarm_financial_summary(windfarm_id)
+
+
+@router.get("/ratios/{windfarm_id}", response_model=List[FinancialRatiosResponse])
+async def get_financial_ratios(
+    windfarm_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get computed financial ratios (revenue/MWh, opex/MWh, EBITDA margin) for a windfarm."""
+    service = FinancialDataService(db)
+    return await service.calculate_financial_ratios(windfarm_id)
 
 
 @router.get("/{data_id}", response_model=FinancialDataWithEntity)
