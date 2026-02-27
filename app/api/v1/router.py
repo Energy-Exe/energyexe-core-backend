@@ -15,6 +15,8 @@ from app.api.v1.endpoints import (
     data_anomalies,
     export,
     external_data_sources,
+    financial_data,
+    financial_entities,
     generation,
     generation_units,
     import_jobs,
@@ -65,6 +67,12 @@ api_router.include_router(substations.router, prefix="/substations", tags=["subs
 api_router.include_router(turbine_units.router, prefix="/turbine-units", tags=["turbine-units"])
 api_router.include_router(cables.router, prefix="/cables", tags=["cables"])
 api_router.include_router(ppas.router, prefix="/ppas", tags=["ppas"])
+api_router.include_router(
+    financial_entities.router, prefix="/financial-entities", tags=["financial-entities"]
+)
+api_router.include_router(
+    financial_data.router, prefix="/financial-data", tags=["financial-data"]
+)
 
 # New unified generation data endpoints
 api_router.include_router(generation.router, prefix="/generation", tags=["generation"])

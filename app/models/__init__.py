@@ -40,6 +40,10 @@ from .alert import (
 from .windfarm import Windfarm
 from .windfarm_owner import WindfarmOwner
 from .ppa import PPA
+from .import_job_execution import ImportJobExecution
+from .financial_entity import FinancialEntity
+from .windfarm_financial_entity import WindfarmFinancialEntity
+from .financial_data import FinancialData
 
 __all__ = [
     "AuditLog",
@@ -91,4 +95,8 @@ __all__ = [
     "Windfarm",
     "WindfarmOwner",
     "PPA",
+    "ImportJobExecution",
+    "FinancialEntity",
+    "WindfarmFinancialEntity",
+    "FinancialData",
 ]

@@ -101,3 +101,6 @@ class Windfarm(Base):
     price_data = relationship("PriceData", back_populates="windfarm")
     report_commentaries = relationship("ReportCommentary", back_populates="windfarm", cascade="all, delete-orphan")
     ppas = relationship("PPA", back_populates="windfarm", cascade="all, delete-orphan")
+    windfarm_financial_entities = relationship(
+        "WindfarmFinancialEntity", back_populates="windfarm", cascade="all, delete-orphan"
+    )
