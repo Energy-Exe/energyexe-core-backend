@@ -77,9 +77,9 @@ async def export_generation_csv(
     start_date: date = Query(..., description="Start date for export (inclusive)"),
     end_date: date = Query(..., description="End date for export (inclusive)"),
     # Granularity
-    granularity: Literal["daily", "monthly"] = Query(
+    granularity: Literal["hourly", "daily", "monthly"] = Query(
         "daily",
-        description="Aggregation granularity"
+        description="Aggregation granularity (hourly returns individual records)"
     ),
     # Options
     include_metadata: bool = Query(
