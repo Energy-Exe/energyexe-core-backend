@@ -30,13 +30,12 @@ class TestGetRateForPeriod:
         assert rate == Decimal("1")
 
     @pytest.mark.asyncio
-    async def test_non_eur_target_raises(self, service):
-        with pytest.raises(ValueError, match="Only conversion to EUR"):
-            await service.get_rate_for_period("NOK", "GBP", date(2023, 1, 1), date(2023, 12, 31))
+    async def test_same_non_eur_currency_returns_one(self, service):
+        rate = await service.get_rate_for_period("NOK", "NOK", date(2023, 1, 1), date(2023, 12, 31))
+        assert rate == Decimal("1")
 
     @pytest.mark.asyncio
-    async def test_single_month_period(self, service, mock_db):
-        # Mock the DB returning an average inverse rate
+    async def test_to_eur_uses_inverse_rate(self, service, mock_db):
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = Decimal("0.088700")
         mock_db.execute.return_value = mock_result
@@ -48,8 +47,32 @@ class TestGetRateForPeriod:
         mock_db.execute.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_from_eur_uses_rate(self, service, mock_db):
+        # 1 EUR = 11.28 NOK
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = Decimal("11.280000")
+        mock_db.execute.return_value = mock_result
+
+        rate = await service.get_rate_for_period("EUR", "NOK", date(2023, 6, 1), date(2023, 6, 30))
+
+        assert rate is not None
+        assert rate == Decimal("11.280000")
+
+    @pytest.mark.asyncio
+    async def test_cross_currency_nok_to_gbp(self, service, mock_db):
+        # Cross rate: NOK→EUR→GBP via joined daily rates
+        mock_result = MagicMock()
+        # AVG(nok_inverse * gbp_rate) ≈ 0.0887 * 0.86 ≈ 0.076282
+        mock_result.scalar_one_or_none.return_value = Decimal("0.076282")
+        mock_db.execute.return_value = mock_result
+
+        rate = await service.get_rate_for_period("NOK", "GBP", date(2023, 1, 1), date(2023, 12, 31))
+
+        assert rate is not None
+        assert rate == Decimal("0.076282")
+
+    @pytest.mark.asyncio
     async def test_multi_month_period(self, service, mock_db):
-        # Simulate average over a full year
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = Decimal("0.090123")
         mock_db.execute.return_value = mock_result
@@ -116,3 +139,29 @@ class TestConvertAmount:
         )
 
         assert converted == Decimal("5800000.00")
+
+    @pytest.mark.asyncio
+    async def test_convert_eur_to_nok(self, service, mock_db):
+        # 1 EUR = 11.28 NOK
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = Decimal("11.280000")
+        mock_db.execute.return_value = mock_result
+
+        converted = await service.convert_amount(
+            Decimal("100000"), "EUR", "NOK", date(2023, 1, 1), date(2023, 12, 31)
+        )
+
+        assert converted == Decimal("1128000.00")
+
+    @pytest.mark.asyncio
+    async def test_convert_nok_to_gbp_cross(self, service, mock_db):
+        # Cross: NOK→EUR→GBP, combined rate ≈ 0.076282
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = Decimal("0.076282")
+        mock_db.execute.return_value = mock_result
+
+        converted = await service.convert_amount(
+            Decimal("10000000"), "NOK", "GBP", date(2023, 1, 1), date(2023, 12, 31)
+        )
+
+        assert converted == Decimal("762820.00")

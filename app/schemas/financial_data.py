@@ -165,6 +165,7 @@ class FinancialRatioPeriod(BaseModel):
     total_revenue: Optional[Decimal] = None
     total_operating_expenses: Optional[Decimal] = None
     ebitda: Optional[Decimal] = None
+    net_income: Optional[Decimal] = None
     # Generation
     generation_mwh: Optional[Decimal] = None
     generation_hours_count: int = 0

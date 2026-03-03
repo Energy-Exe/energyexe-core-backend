@@ -432,6 +432,7 @@ class FinancialDataService:
                 effective_revenue = fd.total_revenue
                 effective_opex = fd.total_operating_expenses
                 effective_ebitda = fd.ebitda
+                effective_net_income = fd.net_income
                 period_display_ccy = fd.currency
                 period_exchange_rate = None
 
@@ -448,6 +449,8 @@ class FinancialDataService:
                             effective_opex = round(fd.total_operating_expenses * rate, 2)
                         if fd.ebitda is not None:
                             effective_ebitda = round(fd.ebitda * rate, 2)
+                        if fd.net_income is not None:
+                            effective_net_income = round(fd.net_income * rate, 2)
                 elif display_currency and display_currency == fd.currency:
                     period_display_ccy = display_currency
 
@@ -473,6 +476,7 @@ class FinancialDataService:
                         total_revenue=round(effective_revenue, 0) if effective_revenue is not None else None,
                         total_operating_expenses=round(effective_opex, 0) if effective_opex is not None else None,
                         ebitda=round(effective_ebitda, 0) if effective_ebitda is not None else None,
+                        net_income=round(effective_net_income, 0) if effective_net_income is not None else None,
                         generation_mwh=total_gen_mwh,
                         generation_hours_count=hours_count,
                         revenue_per_mwh=ratios["revenue_per_mwh"],
