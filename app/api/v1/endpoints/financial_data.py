@@ -101,11 +101,15 @@ async def get_summary(
 @router.get("/ratios/{windfarm_id}", response_model=List[FinancialRatiosResponse])
 async def get_financial_ratios(
     windfarm_id: int,
+    display_currency: Optional[str] = Query(None, pattern="^[A-Z]{3}$"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get computed financial ratios (revenue/MWh, opex/MWh, EBITDA margin) for a windfarm."""
+    """Get computed financial ratios (revenue/MWh, opex/MWh, EBITDA margin) for a windfarm.
+
+    Optionally pass display_currency=EUR to convert all values to EUR using ECB exchange rates.
+    """
     service = FinancialDataService(db)
-    return await service.calculate_financial_ratios(windfarm_id)
+    return await service.calculate_financial_ratios(windfarm_id, display_currency=display_currency)
 
 
 @router.get("/{data_id}", response_model=FinancialDataWithEntity)

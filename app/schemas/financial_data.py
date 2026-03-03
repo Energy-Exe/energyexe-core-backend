@@ -157,6 +157,10 @@ class FinancialRatioPeriod(BaseModel):
     period_start: date
     period_end: date
     currency: str
+    # Currency conversion metadata
+    display_currency: str = ""
+    original_currency: str = ""
+    exchange_rate_used: Optional[Decimal] = None
     # Source financials
     total_revenue: Optional[Decimal] = None
     total_operating_expenses: Optional[Decimal] = None
@@ -183,4 +187,5 @@ class FinancialRatiosResponse(BaseModel):
     entity_type: str
     cod: Optional[date] = None
     linked_windfarm_ids: List[int]
+    display_currency: Optional[str] = None
     periods: List[FinancialRatioPeriod]

@@ -253,6 +253,10 @@ async def trigger_scheduled_job(
             "source": "ELEXON_PRICES",
             "delay_days": 1,
         },
+        "ecb-rates-daily": {
+            "source": "ECB_RATES",
+            "delay_days": 0,
+        },
     }
 
     if job_name not in job_configs:

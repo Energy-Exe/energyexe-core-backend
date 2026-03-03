@@ -272,9 +272,12 @@ async def check_day_complete(date: datetime) -> bool:
         query = text("""
             SELECT COUNT(*)
             FROM weather_data
-            WHERE DATE(hour) = :date
+            WHERE hour >= :start AND hour < :end
         """)
-        result = await db.execute(query, {"date": date.date()})
+        from datetime import timedelta as td
+        day_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + td(days=1)
+        result = await db.execute(query, {"start": day_start, "end": day_end})
         count = result.scalar()
 
         expected = 38184  # 1,591 windfarms × 24 hours

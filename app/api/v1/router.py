@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     control_areas,
     countries,
     data_anomalies,
+    exchange_rates,
     export,
     external_data_sources,
     financial_data,
@@ -72,6 +73,9 @@ api_router.include_router(
 )
 api_router.include_router(
     financial_data.router, prefix="/financial-data", tags=["financial-data"]
+)
+api_router.include_router(
+    exchange_rates.router, prefix="/exchange-rates", tags=["exchange-rates"]
 )
 
 # New unified generation data endpoints

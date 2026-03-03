@@ -308,9 +308,15 @@ class FinancialDataService:
         }
 
     async def calculate_financial_ratios(
-        self, windfarm_id: int
+        self, windfarm_id: int, display_currency: Optional[str] = None
     ) -> List[FinancialRatiosResponse]:
         """Calculate financial ratios for a windfarm by combining financial and generation data."""
+        # Initialize exchange rate service if currency conversion requested
+        exchange_rate_svc = None
+        if display_currency:
+            from app.services.exchange_rate_service import ExchangeRateService
+            exchange_rate_svc = ExchangeRateService(self.db)
+
         # 1. Get financial entity IDs linked to this windfarm
         link_result = await self.db.execute(
             select(WindfarmFinancialEntity).where(
@@ -422,13 +428,36 @@ class FinancialDataService:
 
                 gen_available = total_gen_mwh is not None and hours_count > 0
 
+                # Apply currency conversion if requested
+                effective_revenue = fd.total_revenue
+                effective_opex = fd.total_operating_expenses
+                effective_ebitda = fd.ebitda
+                period_display_ccy = fd.currency
+                period_exchange_rate = None
+
+                if exchange_rate_svc and display_currency and display_currency != fd.currency:
+                    rate = await exchange_rate_svc.get_rate_for_period(
+                        fd.currency, display_currency, fd.period_start, fd.period_end
+                    )
+                    if rate is not None:
+                        period_exchange_rate = rate
+                        period_display_ccy = display_currency
+                        if fd.total_revenue is not None:
+                            effective_revenue = round(fd.total_revenue * rate, 2)
+                        if fd.total_operating_expenses is not None:
+                            effective_opex = round(fd.total_operating_expenses * rate, 2)
+                        if fd.ebitda is not None:
+                            effective_ebitda = round(fd.ebitda * rate, 2)
+                elif display_currency and display_currency == fd.currency:
+                    period_display_ccy = display_currency
+
                 # Compute ratios (skip if ramp-up excluded)
                 ratios = {"revenue_per_mwh": None, "opex_per_mwh": None, "ebitda_margin_pct": None}
                 if not is_excluded and gen_available:
                     ratios = self._compute_ratios(
-                        total_revenue=fd.total_revenue,
-                        total_opex=fd.total_operating_expenses,
-                        ebitda=fd.ebitda,
+                        total_revenue=effective_revenue,
+                        total_opex=effective_opex,
+                        ebitda=effective_ebitda,
                         generation_mwh=total_gen_mwh,
                     )
 
@@ -437,10 +466,13 @@ class FinancialDataService:
                         financial_data_id=fd.id,
                         period_start=fd.period_start,
                         period_end=fd.period_end,
-                        currency=fd.currency,
-                        total_revenue=round(fd.total_revenue, 0) if fd.total_revenue is not None else None,
-                        total_operating_expenses=round(fd.total_operating_expenses, 0) if fd.total_operating_expenses is not None else None,
-                        ebitda=round(fd.ebitda, 0) if fd.ebitda is not None else None,
+                        currency=period_display_ccy,
+                        display_currency=period_display_ccy,
+                        original_currency=fd.currency,
+                        exchange_rate_used=period_exchange_rate,
+                        total_revenue=round(effective_revenue, 0) if effective_revenue is not None else None,
+                        total_operating_expenses=round(effective_opex, 0) if effective_opex is not None else None,
+                        ebitda=round(effective_ebitda, 0) if effective_ebitda is not None else None,
                         generation_mwh=total_gen_mwh,
                         generation_hours_count=hours_count,
                         revenue_per_mwh=ratios["revenue_per_mwh"],
@@ -462,6 +494,7 @@ class FinancialDataService:
                     entity_type=entity.entity_type,
                     cod=effective_cod,
                     linked_windfarm_ids=linked_wf_ids,
+                    display_currency=display_currency,
                     periods=periods,
                 )
             )

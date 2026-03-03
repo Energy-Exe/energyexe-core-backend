@@ -430,6 +430,7 @@ class ImportJobService:
         base_path = Path(__file__).parent.parent.parent / "scripts/seeds/raw_generation_data"
         agg_path = Path(__file__).parent.parent.parent / "scripts/seeds/aggregate_generation_data"
         prices_path = Path(__file__).parent.parent.parent / "scripts/seeds/power_prices"
+        rates_path = Path(__file__).parent.parent.parent / "scripts/seeds/exchange_rates"
 
         start_date = job.import_start_date.strftime("%Y-%m-%d")
         end_date = job.import_end_date.strftime("%Y-%m-%d")
@@ -464,6 +465,9 @@ class ImportJobService:
             "ELEXON_PRICES": (
                 f"python {prices_path}/elexon/import_elexon_prices.py --start {start_date} --end {end_date} && "
                 f"python {prices_path}/process_to_hourly.py --source ELEXON --start-date {start_date} --end-date {end_date} --force"
+            ),
+            "ECB_RATES": (
+                f"python {rates_path}/import_ecb_rates.py --start {start_date} --end {end_date}"
             ),
         }
 

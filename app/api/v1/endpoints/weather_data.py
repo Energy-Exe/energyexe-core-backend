@@ -371,13 +371,117 @@ async def get_weather_summary(
 
 
 # ============================================================================
+# EXPORT ENDPOINTS
+# ============================================================================
+
+from fastapi.responses import StreamingResponse
+from app.core.deps import get_current_active_user
+from app.models.user import User
+from app.services.weather_export_service import WeatherExportService
+
+MAX_WINDFARMS_PER_EXPORT = 500
+
+
+@router.get("/export/csv")
+async def export_weather_csv(
+    windfarm_ids: Optional[List[int]] = Query(
+        None,
+        description="Specific windfarm IDs to export"
+    ),
+    country_id: Optional[int] = Query(
+        None,
+        description="Filter by country ID"
+    ),
+    start_date: date = Query(..., description="Start date for export (inclusive)"),
+    end_date: date = Query(..., description="End date for export (inclusive)"),
+    include_metadata: bool = Query(
+        True,
+        description="Include windfarm metadata columns in output"
+    ),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Export weather data as CSV file.
+
+    Supports filtering windfarms by:
+    - Specific windfarm IDs
+    - Country ID
+
+    Returns hourly ERA5 weather data as a streaming CSV download.
+    """
+
+    # Validate date range
+    if start_date > end_date:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date must be before or equal to end_date"
+        )
+
+    # Validate at least one filter is provided
+    has_filter = any([
+        windfarm_ids,
+        country_id,
+    ])
+
+    if not has_filter:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one filter parameter is required (e.g., country_id, windfarm_ids)"
+        )
+
+    service = WeatherExportService(db)
+
+    # Get filtered windfarm IDs
+    windfarm_ids_filtered = await service.get_filtered_windfarm_ids(
+        windfarm_ids=windfarm_ids,
+        country_id=country_id,
+    )
+
+    if not windfarm_ids_filtered:
+        raise HTTPException(
+            status_code=404,
+            detail="No windfarms found matching the filter criteria"
+        )
+
+    # Validate not too many windfarms
+    if len(windfarm_ids_filtered) > MAX_WINDFARMS_PER_EXPORT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many windfarms match your filter ({len(windfarm_ids_filtered)}). "
+                   f"Maximum is {MAX_WINDFARMS_PER_EXPORT}. Please narrow your filter criteria."
+        )
+
+    # Generate filename
+    filename = service.generate_filename(start_date, end_date)
+
+    # Create streaming response
+    async def csv_generator():
+        async for chunk in service.stream_csv_export(
+            windfarm_ids=windfarm_ids_filtered,
+            start_date=start_date,
+            end_date=end_date,
+            include_metadata=include_metadata,
+        ):
+            yield chunk
+
+    return StreamingResponse(
+        csv_generator(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-cache",
+        }
+    )
+
+
+# ============================================================================
 # PORTFOLIO-LEVEL WEATHER ENDPOINTS
 # ============================================================================
 
 from typing import Dict, Any, Literal
 from datetime import timedelta
 from app.core.deps import get_current_user
-from app.models.user import User
 
 
 @router.get("/portfolio/summary")

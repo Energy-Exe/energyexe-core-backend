@@ -44,6 +44,7 @@ from .import_job_execution import ImportJobExecution
 from .financial_entity import FinancialEntity
 from .windfarm_financial_entity import WindfarmFinancialEntity
 from .financial_data import FinancialData
+from .exchange_rate import ExchangeRate
 
 __all__ = [
     "AuditLog",
@@ -99,4 +100,5 @@ __all__ = [
     "FinancialEntity",
     "WindfarmFinancialEntity",
     "FinancialData",
+    "ExchangeRate",
 ]
