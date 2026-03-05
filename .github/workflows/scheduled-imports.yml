@@ -14,6 +14,9 @@ on:
     # EIA - Monthly on 1st at 2:00 AM UTC
     - cron: '0 2 1 * *'
 
+    # ECB Exchange Rates - Daily at 3:00 PM UTC (after ECB publishes at 2:15 PM CET)
+    - cron: '0 15 * * 1-5'
+
   # Allow manual triggering from GitHub UI
   workflow_dispatch:
     inputs:
@@ -26,6 +29,7 @@ on:
           - taipower-hourly
           - elexon-daily
           - eia-monthly
+          - ecb-rates-daily
 
 env:
   API_URL: https://energyexe-core-backend-production.up.railway.app
@@ -122,3 +126,26 @@ jobs:
           fi
 
           echo "✅ EIA import completed successfully"
+
+  # ECB Exchange Rates Daily (runs at 3 PM UTC, Mon-Fri)
+  ecb-rates-import:
+    if: github.event.schedule == '0 15 * * 1-5' || github.event.inputs.job_name == 'ecb-rates-daily'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ECB Rates Daily Import
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.API_URL }}/api/v1/import-jobs/trigger/ecb-rates-daily")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+
+          if [ "$http_code" -ne 200 ]; then
+            echo "❌ Import failed with status $http_code"
+            exit 1
+          fi
+
+          echo "✅ ECB rates import completed successfully"
