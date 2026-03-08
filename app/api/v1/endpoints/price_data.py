@@ -610,6 +610,31 @@ async def get_price_profile_by_bidzone(
     return PriceProfileResponse(**result)
 
 
+@router.get("/analytics/compare-capture-rates")
+async def compare_capture_rates_by_bidzone(
+    bidzone_id: int = Query(..., description="Bidzone ID to compare windfarms within"),
+    start_date: datetime = Query(..., description="Start date"),
+    end_date: datetime = Query(..., description="End date"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Compare capture rates across all windfarms in a bidzone.
+
+    Returns capture rates for each windfarm in the specified bidzone,
+    sorted by performance (highest capture rate first).
+    """
+    service = PriceAnalyticsService(db)
+    result = await service.compare_capture_rates_by_bidzone(
+        bidzone_id=bidzone_id,
+        start_date=start_date,
+        end_date=end_date,
+        exclude_ramp_up=exclude_ramp_up,
+    )
+    return result
+
+
 @router.get("/analytics/correlation/{windfarm_id}", response_model=CorrelationResponse)
 async def get_generation_price_correlation(
     windfarm_id: int,

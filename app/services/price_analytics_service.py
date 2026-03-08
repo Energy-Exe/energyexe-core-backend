@@ -531,6 +531,106 @@ class PriceAnalyticsService:
         else:
             return "Strong negative - generation is typically low when prices are high"
 
+    async def compare_capture_rates_by_bidzone(
+        self,
+        bidzone_id: int,
+        start_date: datetime,
+        end_date: datetime,
+        exclude_ramp_up: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Compare capture rates across all windfarms in a bidzone.
+
+        Args:
+            bidzone_id: Bidzone ID
+            start_date: Start date for analysis
+            end_date: End date for analysis
+            exclude_ramp_up: Whether to exclude ramp-up period records
+
+        Returns:
+            Dict with bidzone info and per-windfarm capture rates
+        """
+        bidzone = await self._get_bidzone(bidzone_id)
+
+        # Determine price source for this bidzone
+        bidzone_code = bidzone.code if bidzone else None
+        price_source = "ELEXON" if bidzone_code == "10YGB----------A" else "ENTSOE"
+
+        ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
+
+        query = text(f"""
+            WITH market_avg AS (
+                SELECT AVG(p.day_ahead_price) as market_average_price
+                FROM price_data p
+                WHERE p.bidzone_id = :bidzone_id
+                  AND p.hour >= :start_date
+                  AND p.hour < :end_date
+                  AND p.day_ahead_price IS NOT NULL
+                  AND p.source = :price_source
+            )
+            SELECT
+                g.windfarm_id,
+                w.name as windfarm_name,
+                w.nameplate_capacity_mw as capacity_mw,
+                SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation_mwh,
+                SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) as total_revenue_eur,
+                CASE
+                    WHEN SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+                    THEN SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price)
+                         / SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0))
+                    ELSE NULL
+                END as achieved_price,
+                ma.market_average_price,
+                CASE
+                    WHEN SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0 AND ma.market_average_price > 0
+                    THEN (SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price)
+                         / SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)))
+                         / ma.market_average_price
+                    ELSE NULL
+                END as capture_rate
+            FROM generation_data g
+            JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = :price_source
+            JOIN windfarms w ON g.windfarm_id = w.id
+            CROSS JOIN market_avg ma
+            WHERE w.bidzone_id = :bidzone_id
+              AND g.hour >= :start_date
+              AND g.hour < :end_date
+              AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+              AND p.day_ahead_price IS NOT NULL
+              {ramp_up_clause}
+            GROUP BY g.windfarm_id, w.name, w.nameplate_capacity_mw, ma.market_average_price
+            ORDER BY capture_rate DESC NULLS LAST
+        """)
+
+        result = await self.db.execute(query, {
+            "bidzone_id": bidzone_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "price_source": price_source,
+        })
+        rows = result.fetchall()
+
+        windfarms = []
+        for row in rows:
+            windfarms.append({
+                "windfarm_id": row.windfarm_id,
+                "windfarm_name": row.windfarm_name,
+                "capacity_mw": float(row.capacity_mw) if row.capacity_mw else None,
+                "capture_rate": float(row.capture_rate) if row.capture_rate else None,
+                "achieved_price": float(row.achieved_price) if row.achieved_price else None,
+                "market_average_price": float(row.market_average_price) if row.market_average_price else None,
+                "total_generation_mwh": float(row.total_generation_mwh) if row.total_generation_mwh else 0,
+                "total_revenue_eur": float(row.total_revenue_eur) if row.total_revenue_eur else 0,
+            })
+
+        return {
+            "bidzone_id": bidzone_id,
+            "bidzone_code": bidzone_code,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "windfarms": windfarms,
+        }
+
     async def _get_preferred_price_source(self, windfarm_id: int) -> str:
         """Resolve preferred price source: ELEXON for GB windfarms, ENTSOE for all others."""
         query = text("""
