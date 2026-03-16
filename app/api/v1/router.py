@@ -8,6 +8,8 @@ from app.api.v1.endpoints import (
     audit_logs,
     auth,
     bidzones,
+    brain,
+    brain_agent,
     cables,
     comparison,
     control_areas,
@@ -122,6 +124,12 @@ api_router.include_router(export.router, prefix="/export", tags=["export"])
 
 # Alerts and notifications endpoints
 api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
+
+# Brain (AI Chat Agent) endpoints
+api_router.include_router(brain.router, prefix="/brain", tags=["brain"])
+
+# Brain Agent (Claude Agent SDK) endpoints
+api_router.include_router(brain_agent.router, prefix="/brain-agent", tags=["brain-agent"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])

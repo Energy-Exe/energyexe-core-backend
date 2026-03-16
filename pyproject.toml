@@ -23,19 +23,19 @@ Issues = "https://github.com/yourusername/energyexe-core-backend/issues"
 [tool.poetry.dependencies]
 python = "^3.11"
 fastapi = {extras = ["all"], version = "^0.111.0"}
-uvicorn = {extras = ["standard"], version = "^0.30.0"}
+uvicorn = {extras = ["standard"], version = ">=0.30.0"}
 sqlalchemy = "^2.0.0"
 alembic = "^1.12.0"
 asyncpg = "^0.29.0"
 pydantic = "^2.5.0"
 pydantic-settings = "^2.1.0"
-python-multipart = "^0.0.7"
+python-multipart = ">=0.0.7"
 python-jose = {extras = ["cryptography"], version = "^3.3.0"}
 bcrypt = "^4.0.0"
 python-dotenv = "^1.0.0"
 structlog = "^23.2.0"
 rich = "^13.7.0"
-httpx = "^0.25.0"
+httpx = ">=0.25.0"
 greenlet = "^3.2.3"
 psycopg2-binary = "^2.9.10"
 entsoe-py = "^0.7.1"
@@ -52,6 +52,8 @@ jinja2 = "^3.1.6"
 openai = "^2.7.2"
 redis = "^7.1.0"
 resend = "^2.0.0"
+claude-agent-sdk = "^0.1.48"
+mcp = ">=1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
@@ -69,7 +71,7 @@ pyarrow = "^21.0.0"
 psutil = "^7.0.0"
 
 [tool.poetry.group.test.dependencies]
-httpx = "^0.25.0"
+httpx = ">=0.25.0"
 aiosqlite = "^0.19.0"
 
 [build-system]

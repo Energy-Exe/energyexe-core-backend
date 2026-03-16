@@ -118,6 +118,12 @@ class Settings(BaseSettings):
     LLM_CACHE_DURATION_HOURS: int = 24
     LLM_MAX_COST_PER_REPORT: float = 0.50  # USD
 
+    # Brain (AI Chat Agent) Configuration
+    BRAIN_PROVIDER: str = "claude"  # claude, openai
+    BRAIN_MODEL: str = "claude-sonnet-4-20250514"
+    BRAIN_MAX_TOKENS: int = 4096
+    BRAIN_TEMPERATURE: float = 0.3
+
     # Valkey/Redis settings for Celery
     VALKEY_PUBLIC_HOST: str = ""  # Set via environment variable
     VALKEY_PUBLIC_PORT: str = "6379"
