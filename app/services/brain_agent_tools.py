@@ -1,6 +1,8 @@
 """Brain Agent custom MCP tools — energy database tools for the Claude Agent SDK."""
 
 import json
+import re
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -31,33 +33,25 @@ def _parse_date(val: Optional[str], default: date) -> date:
 
 # ─── Database session holder ────────────────────────────────────────────
 # The MCP tools need access to the database session. Since @tool functions
-# are module-level, we use a holder that gets set per-request.
+# are module-level, we use ContextVar for per-asyncio-task isolation,
+# preventing concurrent requests from overwriting each other's sessions.
 
-_db_session_holder: dict[str, AsyncSession] = {}
-
-
-def set_db_session(session_id: str, db: AsyncSession):
-    """Set the database session for a given agent session."""
-    _db_session_holder[session_id] = db
+_db_session_var: ContextVar[Optional[AsyncSession]] = ContextVar("_db_session_var", default=None)
 
 
-def get_db_session(session_id: str) -> Optional[AsyncSession]:
-    """Get the database session for a given agent session."""
-    return _db_session_holder.get(session_id)
+def set_db_session(db: AsyncSession):
+    """Set the database session for the current async task."""
+    _db_session_var.set(db)
 
 
-def clear_db_session(session_id: str):
-    """Remove the database session reference."""
-    _db_session_holder.pop(session_id, None)
-
-
-# We use a default session key for simple request-scoped usage
-DEFAULT_SESSION = "__default__"
+def clear_db_session():
+    """Remove the database session reference for the current async task."""
+    _db_session_var.set(None)
 
 
 def _get_db() -> AsyncSession:
     """Get the current request's database session."""
-    db = _db_session_holder.get(DEFAULT_SESSION)
+    db = _db_session_var.get()
     if not db:
         raise RuntimeError("No database session available for brain agent tools")
     return db
@@ -66,22 +60,29 @@ def _get_db() -> AsyncSession:
 # ─── User context holder ────────────────────────────────────────────────
 # Some tools (alerts, portfolio) need the current user's ID.
 
-_user_id_holder: dict[str, Optional[int]] = {}
+_user_id_var: ContextVar[Optional[int]] = ContextVar("_user_id_var", default=None)
 
 
-def set_user_id(session_id: str, user_id: int):
-    """Set the user ID for a given agent session."""
-    _user_id_holder[session_id] = user_id
+def set_user_id(user_id: int):
+    """Set the user ID for the current async task."""
+    _user_id_var.set(user_id)
 
 
 def get_user_id() -> Optional[int]:
     """Get the current request's user ID."""
-    return _user_id_holder.get(DEFAULT_SESSION)
+    return _user_id_var.get()
 
 
-def clear_user_id(session_id: str):
-    """Remove the user ID reference."""
-    _user_id_holder.pop(session_id, None)
+def clear_user_id():
+    """Remove the user ID reference for the current async task."""
+    _user_id_var.set(None)
+
+
+# ─── LIKE wildcard escaping ─────────────────────────────────────────────
+
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE wildcards (%, _) in user input."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 # ─── Tool definitions ───────────────────────────────────────────────────
@@ -210,8 +211,9 @@ async def list_windfarms(args: dict[str, Any]) -> dict[str, Any]:
     country = args.get("country")
     if country:
         query = query.join(Windfarm.country)
+        escaped_country = _escape_like(country)
         conditions.append(
-            (Country.name.ilike(f"%{country}%")) | (Country.iso_code == country.upper())
+            (Country.name.ilike(f"%{escaped_country}%", escape="\\")) | (Country.iso_code == country.upper())
         )
 
     status = args.get("status")
@@ -276,11 +278,11 @@ async def query_prices(args: dict[str, Any]) -> dict[str, Any]:
     end_dt = datetime.combine(end, datetime.max.time()).replace(tzinfo=timezone.utc)
 
     summary_query = select(
-        func.avg(PriceData.price).label("avg_price"),
-        func.max(PriceData.price).label("max_price"),
-        func.min(PriceData.price).label("min_price"),
+        func.avg(PriceData.day_ahead_price).label("avg_price"),
+        func.max(PriceData.day_ahead_price).label("max_price"),
+        func.min(PriceData.day_ahead_price).label("min_price"),
         func.count(PriceData.id).label("total_hours"),
-        func.count(case((PriceData.price < 0, 1))).label("negative_hours"),
+        func.count(case((PriceData.day_ahead_price < 0, 1))).label("negative_hours"),
     ).where(
         and_(
             PriceData.windfarm_id == windfarm_id,
@@ -299,7 +301,7 @@ async def query_prices(args: dict[str, Any]) -> dict[str, Any]:
         }
 
     capture_query = select(
-        func.sum(PriceData.price * GenerationData.generation_mwh).label("weighted_sum"),
+        func.sum(PriceData.day_ahead_price * GenerationData.generation_mwh).label("weighted_sum"),
         func.sum(GenerationData.generation_mwh).label("total_gen"),
     ).join(
         GenerationData,
@@ -326,8 +328,8 @@ async def query_prices(args: dict[str, Any]) -> dict[str, Any]:
     monthly_query = (
         select(
             func.date_trunc("month", PriceData.hour).label("month"),
-            func.avg(PriceData.price).label("avg_price"),
-            func.count(case((PriceData.price < 0, 1))).label("neg_hours"),
+            func.avg(PriceData.day_ahead_price).label("avg_price"),
+            func.count(case((PriceData.day_ahead_price < 0, 1))).label("neg_hours"),
         )
         .where(
             and_(
@@ -499,7 +501,7 @@ async def query_financials(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     "run_sql_query",
-    "Run a read-only SQL SELECT query against the energy database. Only SELECT queries are allowed — no INSERT, UPDATE, DELETE, DROP, or ALTER. Use this for custom analysis that other tools can't handle. Key tables: windfarms, generation_data (hour, windfarm_id, generation_mwh, metered_mwh, capacity_factor, curtailed_mwh), price_data (hour, windfarm_id, price, source), weather_data (hour, windfarm_id, wind_speed_100m, temperature_2m, wind_direction_100m), countries, regions, bidzones, generation_units.",
+    "Run a read-only SQL SELECT query against the energy database. Only SELECT/WITH queries are allowed — no mutations. Auto-limited to 200 rows. See the Database Schema section in your system prompt for full table definitions and SQL tips.",
     {
         "sql": str,
     },
@@ -511,8 +513,20 @@ async def run_sql_query(args: dict[str, Any]) -> dict[str, Any]:
     if not sql_str:
         return {"content": [{"type": "text", "text": json.dumps({"error": "Empty SQL query"})}]}
 
+    # Block semicolons (prevents multi-statement attacks)
+    if ";" in sql_str:
+        return {
+            "content": [
+                {"type": "text", "text": json.dumps({"error": "Semicolons not allowed in queries"})}
+            ]
+        }
+
+    # Strip SQL comments before keyword checking
+    sql_cleaned = re.sub(r"--[^\n]*", " ", sql_str)  # single-line comments
+    sql_cleaned = re.sub(r"/\*.*?\*/", " ", sql_cleaned, flags=re.DOTALL)  # block comments
+    sql_upper = sql_cleaned.upper().strip()
+
     # Security: only allow SELECT queries
-    sql_upper = sql_str.upper().lstrip()
     if not sql_upper.startswith("SELECT") and not sql_upper.startswith("WITH"):
         return {
             "content": [
@@ -525,11 +539,13 @@ async def run_sql_query(args: dict[str, Any]) -> dict[str, Any]:
             ]
         }
 
-    # Block dangerous keywords
-    dangerous = ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE", "GRANT"]
+    # Block dangerous keywords using word-boundary regex
+    dangerous = [
+        "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
+        "CREATE", "GRANT", "REVOKE", "EXECUTE", "COPY", "VACUUM",
+    ]
     for keyword in dangerous:
-        # Check for the keyword as a standalone word (not part of a column name)
-        if f" {keyword} " in f" {sql_upper} ":
+        if re.search(rf"\b{keyword}\b", sql_upper):
             return {
                 "content": [
                     {
@@ -544,6 +560,9 @@ async def run_sql_query(args: dict[str, Any]) -> dict[str, Any]:
         if "LIMIT" not in sql_upper:
             sql_str = sql_str.rstrip(";") + " LIMIT 200"
 
+        # Execute within a read-only transaction with statement timeout
+        await db.execute(text("SET LOCAL statement_timeout = '30000'"))
+        await db.execute(text("SET TRANSACTION READ ONLY"))
         result = await db.execute(text(sql_str))
         rows = result.fetchall()
         columns = list(result.keys()) if rows else []
@@ -594,7 +613,8 @@ async def get_windfarm_info(args: dict[str, Any]) -> dict[str, Any]:
     if windfarm_id:
         query = query.where(Windfarm.id == windfarm_id)
     elif windfarm_name:
-        query = query.where(Windfarm.name.ilike(f"%{windfarm_name}%"))
+        escaped_name = _escape_like(windfarm_name)
+        query = query.where(Windfarm.name.ilike(f"%{escaped_name}%", escape="\\"))
     else:
         return {
             "content": [
@@ -653,7 +673,7 @@ async def search_by_country_or_region(args: dict[str, Any]) -> dict[str, Any]:
         select(Windfarm)
         .options(selectinload(Windfarm.country))
         .join(Windfarm.country)
-        .where((Country.name.ilike(f"%{query_str}%")) | (Country.iso_code == query_str.upper()))
+        .where((Country.name.ilike(f"%{_escape_like(query_str)}%", escape="\\")) | (Country.iso_code == query_str.upper()))
         .order_by(Windfarm.name)
         .limit(50)
     )
@@ -665,7 +685,7 @@ async def search_by_country_or_region(args: dict[str, Any]) -> dict[str, Any]:
             select(Windfarm)
             .options(selectinload(Windfarm.country), selectinload(Windfarm.region))
             .join(Windfarm.region)
-            .where(Region.name.ilike(f"%{query_str}%"))
+            .where(Region.name.ilike(f"%{_escape_like(query_str)}%", escape="\\"))
             .order_by(Windfarm.name)
             .limit(50)
         )

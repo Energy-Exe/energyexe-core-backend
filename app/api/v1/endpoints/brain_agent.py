@@ -1,6 +1,8 @@
 """Brain Agent (Claude Agent SDK) API endpoints."""
 
+import asyncio
 import json
+import time
 from typing import List
 
 import structlog
@@ -16,6 +18,9 @@ from app.services.brain_agent_service import BrainAgentService
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
+
+# SSE heartbeat interval in seconds — keeps connections alive through proxies
+HEARTBEAT_INTERVAL = 15
 
 
 @router.post("/chat")
@@ -38,14 +43,22 @@ async def agent_chat(
             user_name += f" {current_user.last_name}"
 
     async def event_generator():
+        last_event_time = time.monotonic()
         try:
-            async for event in service.chat(
-                user_id=current_user.id,
-                session_id=request.session_id,
-                prompt=request.prompt,
-                user_name=user_name,
+            async for event in _with_heartbeat(
+                service.chat(
+                    user_id=current_user.id,
+                    session_id=request.session_id,
+                    prompt=request.prompt,
+                    user_name=user_name,
+                ),
+                interval=HEARTBEAT_INTERVAL,
             ):
-                yield f"event: {event.event_type}\ndata: {json.dumps(event.data, default=str)}\n\n"
+                if event is None:
+                    # Heartbeat — SSE comment to keep connection alive
+                    yield ": heartbeat\n\n"
+                else:
+                    yield f"event: {event.event_type}\ndata: {json.dumps(event.data, default=str)}\n\n"
         except Exception as e:
             logger.error("brain_agent_stream_error", error=str(e))
             error_data = json.dumps(
@@ -62,6 +75,19 @@ async def agent_chat(
             "Connection": "keep-alive",
         },
     )
+
+
+async def _with_heartbeat(aiter, interval: float):
+    """Wrap an async generator to yield None (heartbeat) during inactivity."""
+    ait = aiter.__aiter__()
+    while True:
+        try:
+            event = await asyncio.wait_for(ait.__anext__(), timeout=interval)
+            yield event
+        except asyncio.TimeoutError:
+            yield None  # heartbeat
+        except StopAsyncIteration:
+            break
 
 
 @router.post("/interrupt")

@@ -3,9 +3,11 @@
 import asyncio
 import json
 import os
+import shutil
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
 
@@ -26,7 +28,6 @@ from claude_agent_sdk import (
 
 from app.core.config import get_settings
 from app.services.brain_agent_tools import (
-    DEFAULT_SESSION,
     ENERGYEXE_TOOL_NAMES,
     energyexe_mcp_server,
     set_db_session,
@@ -66,6 +67,7 @@ class BrainAgentService:
     """Manages ClaudeSDKClient sessions and streams responses as SSE events."""
 
     _sessions: Dict[str, AgentSession] = {}
+    _prompt_template: Optional[str] = None
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -84,9 +86,9 @@ class BrainAgentService:
         # Clean up stale sessions
         self._cleanup_stale_sessions()
 
-        # Set up DB session and user context for MCP tools
-        set_db_session(DEFAULT_SESSION, self.db)
-        set_user_id(DEFAULT_SESSION, user_id)
+        # Set up DB session and user context for MCP tools (ContextVar — per-task safe)
+        set_db_session(self.db)
+        set_user_id(user_id)
 
         try:
             session = await self._get_or_create_session(user_id, session_id, user_name)
@@ -120,8 +122,8 @@ class BrainAgentService:
         finally:
             if session_id in self._sessions:
                 self._sessions[session_id].is_busy = False
-            clear_db_session(DEFAULT_SESSION)
-            clear_user_id(DEFAULT_SESSION)
+            clear_db_session()
+            clear_user_id()
 
     async def interrupt(self, session_id: str, user_id: int) -> bool:
         """Interrupt the current agent task. Validates session ownership."""
@@ -139,6 +141,7 @@ class BrainAgentService:
         session = self._sessions.get(session_id)
         if session and session.user_id == user_id:
             self._sessions.pop(session_id, None)
+            await self._destroy_session(session)
             return True
         return False
 
@@ -244,13 +247,17 @@ class BrainAgentService:
                             for b in block.content
                         )
 
-                    # Truncate long tool results for frontend display
-                    summary = content_text[:500] + "..." if len(content_text) > 500 else content_text
+                    full_length = len(content_text)
+                    is_truncated = full_length > 2000
+                    summary = content_text[:2000] + "..." if is_truncated else content_text
                     yield SSEEvent(
                         event_type="tool_result",
                         data={
                             "tool_id": block.tool_use_id,
                             "summary": summary,
+                            "is_error": getattr(block, "is_error", False),
+                            "is_truncated": is_truncated,
+                            "full_length": full_length,
                         },
                     )
 
@@ -286,129 +293,40 @@ class BrainAgentService:
         ]
         for sid in stale:
             logger.info("brain_agent_session_expired", session_id=sid)
-            self._sessions.pop(sid, None)
+            session = self._sessions.pop(sid, None)
+            if session:
+                asyncio.create_task(self._destroy_session(session))
 
     @staticmethod
-    def _build_system_prompt(user_name: Optional[str] = None) -> str:
+    async def _destroy_session(session: AgentSession):
+        """Clean up a session's client and temp directory."""
+        try:
+            await session.client.__aexit__(None, None, None)
+        except Exception as e:
+            logger.warning("brain_agent_client_cleanup_error", error=str(e), session_id=session.session_id)
+        # Clean up temp working directory
+        work_dir = Path(f"/tmp/brain-agent/{session.user_id}/{session.session_id}")
+        if work_dir.exists():
+            try:
+                shutil.rmtree(work_dir)
+            except OSError as e:
+                logger.warning("brain_agent_tmpdir_cleanup_error", error=str(e), path=str(work_dir))
+
+    @classmethod
+    def _load_prompt_template(cls) -> str:
+        """Load and cache the system prompt template from the markdown file."""
+        if cls._prompt_template is None:
+            prompt_path = Path(__file__).parent.parent / "prompts" / "brain_agent_system.md"
+            cls._prompt_template = prompt_path.read_text(encoding="utf-8")
+        return cls._prompt_template
+
+    @classmethod
+    def _build_system_prompt(cls, user_name: Optional[str] = None) -> str:
         """Build the system prompt for the Brain Agent."""
-        parts = [
-            "You are EnergyExe Agent, an advanced energy data analyst for a wind energy portfolio platform.",
-            "",
-            "## Capabilities",
-            "- Query generation, price, weather, financial, PPA, anomaly, and alert data via MCP tools",
-            "- Run read-only SQL (SELECT/WITH) against the PostgreSQL energy database",
-            "- Execute Python scripts (via Bash) for statistics, charts, and data processing",
-            "- Search the web for energy market news and reference data",
-            "- Read/write files in your working directory for analysis artifacts",
-            "",
-            "## Domain Knowledge",
-            "",
-            "**Capacity Factor (CF)**: Actual generation / theoretical max (nameplate_capacity_mw × hours). Stored as 0–1 decimal; always display as percentage (e.g. 0.35 → 35%). Typical: 25–35% onshore, 35–50% offshore. Exclude rows where is_ramp_up=true from CF averages.",
-            "",
-            "**Curtailment**: Deliberate reduction in output due to grid constraints or negative prices. generation_mwh = metered_mwh + curtailed_mwh. metered_mwh is what reached the grid. UK curtailment from ELEXON BOAV data.",
-            "",
-            "**Capture Rate**: Revenue-weighted average price vs. market average. Formula: (SUM(price × generation_mwh) / SUM(generation_mwh)) / avg_market_price × 100%. >100% = generating when prices are high; <100% = generating when prices are low.",
-            "",
-            "**Negative Prices**: When renewables exceed demand, wholesale prices go negative. Windfarms pay to generate. Track with: COUNT(CASE WHEN price < 0 THEN 1 END).",
-            "",
-            "**Bidzone**: Geographic electricity market area with uniform wholesale prices. Codes like '10YGB----------A' (GB), '10YDE---------J' (DE). Each windfarm belongs to one bidzone.",
-            "",
-            "**PPA (Power Purchase Agreement)**: Long-term contract to sell electricity at agreed terms. Key fields: buyer, capacity (MW), duration, start/end dates, price terms.",
-            "",
-            "**Ramp-Up Period**: Initial phase after commissioning when a windfarm reaches full capacity. Flagged with is_ramp_up=true. Exclude from performance averages.",
-            "",
-            "**Data Sources**: ENTSOE (European generation/prices), ELEXON (UK metered/curtailment/prices in GBP), EIA (US), Taipower (Taiwan), NVE (Norway), ERA5/Copernicus (global weather). Data ingested daily via cron jobs into raw tables, then aggregated to hourly.",
-            "",
-            "## MCP Tools (energyexe)",
-            "- **query_generation_data**(windfarm_id, start_date, end_date, granularity): Generation MWh, metered, curtailed, avg CF%, hourly/monthly/yearly breakdown",
-            "- **list_windfarms**(country, status, location_type, min_capacity_mw, max_capacity_mw, limit): Filter windfarms. Status: operational/decommissioned/under_installation/expanded. Location: onshore/offshore. Max 100.",
-            "- **query_prices**(windfarm_id, start_date, end_date): Avg/min/max price, negative price hours/%, capture price, capture rate%, monthly breakdown",
-            "- **query_weather**(windfarm_id, start_date, end_date): Wind speed at 100m (m/s), temperature (°C), wind direction. Default: last 30 days.",
-            "- **query_financials**(windfarm_id, year): Revenue, EBITDA, net income, currency. Linked via financial entities (one windfarm may have multiple entities).",
-            "- **run_sql_query**(sql): Read-only SELECT/WITH queries. Auto-limited to 200 rows. Use for custom JOINs and aggregations.",
-            "- **get_windfarm_info**(windfarm_id or windfarm_name): Name, code, country, bidzone, capacity MW, location type, foundation type, status, dates, coordinates, turbine count, owners.",
-            "- **search_by_country_or_region**(query): Find windfarms by country name/ISO code or region name.",
-            "- **get_data_availability**(windfarm_id): Date ranges for generation, price, weather data (first/last date, total records).",
-            "- **compare_windfarms**(windfarm_ids, period_days): Side-by-side generation, CF, curtailment stats. 2–6 windfarms.",
-            "- **get_portfolio_info**(portfolio_id?): User's portfolio with windfarm list and aggregate capacity. Defaults to first portfolio if no ID.",
-            "- **get_anomalies**(windfarm_id, limit): Data quality issues — types: capacity_factor_over_limit, negative_generation, missing_data, data_spike, data_gap. Severity: low/medium/high/critical.",
-            "- **get_ppa_info**(windfarm_id): PPA contracts — buyer, capacity, duration, start/end dates, notes.",
-            "- **get_alerts**(limit): User's alert rules — metric (capacity_factor/generation/price/wind_speed/data_quality), condition, threshold, enabled status.",
-            "",
-            "## Database Schema (for run_sql_query)",
-            "",
-            "**windfarms**: id, name, code, nameplate_capacity_mw, location_type (onshore/offshore), foundation_type (fixed/floating), status, country_id, state_id, region_id, bidzone_id, lat, lng, commercial_operational_date, ramp_up_end_date",
-            "",
-            "**generation_data**: hour (timestamptz, hourly), windfarm_id, generation_unit_id, generation_mwh, metered_mwh, curtailed_mwh, capacity_mw, capacity_factor (0–1), consumption_mwh, is_ramp_up, source, quality_flag, completeness. Unique: (hour, generation_unit_id, source)",
-            "",
-            "**price_data**: hour (timestamptz), windfarm_id, bidzone_id, day_ahead_price (numeric 12,4), intraday_price, currency, source. Unique: (hour, windfarm_id, source)",
-            "",
-            "**weather_data**: hour (timestamptz), windfarm_id, wind_speed_100m, wind_direction_deg, temperature_2m_k, temperature_2m_c, source. Unique: (hour, windfarm_id, source)",
-            "",
-            "**financial_data**: financial_entity_id, period_start, period_end, currency, revenue, total_revenue, ebitda, depreciation, ebit, net_income, reported_generation_gwh. Linked to windfarms via windfarm_financial_entities(windfarm_id, financial_entity_id).",
-            "",
-            "**ppas**: windfarm_id, ppa_buyer, ppa_size_mw, ppa_duration_years, ppa_start_date, ppa_end_date, ppa_notes",
-            "",
-            "**data_anomalies**: windfarm_id, anomaly_type, severity, status (pending/investigating/resolved/ignored), period_start, period_end, description",
-            "",
-            "**alert_rules**: user_id, windfarm_id, metric, condition, threshold_value, severity, is_enabled. **alert_triggers**: alert_rule_id, triggered_value, message, status (active/acknowledged/resolved)",
-            "",
-            "**Geography**: countries(id, code, name), states, regions, bidzones(id, code, name, bidzone_type). generation_units(id, name, source, fuel_type, capacity_mw, windfarm_id). portfolios → portfolio_items → windfarms.",
-            "",
-            "**import_job_executions**: Tracks all data imports — job_name, source, status (pending/running/success/failed), records_imported, started_at, completed_at, error_message.",
-            "",
-            "### Raw Data Tables (for discrepancy investigation)",
-            "Raw tables store unprocessed source data before aggregation to hourly. Use these to cross-check processed data.",
-            "",
-            "**generation_data_raw**: id, source (ENTSOE/ELEXON/EIA/Taipower/NVE), source_type (default 'api'; 'api_consumption' for French consumption), identifier (source-specific unit ID), period_start, period_end, period_type, value_extracted, unit, data (JSONB — full raw response with settlement_date, settlement_period, etc.), generation_unit_id, windfarm_id. Unique: (source, source_type, identifier, period_start).",
-            "- ELEXON raw data has BST timezone bug: period_start stored as UK local time in UTC column. JSONB contains settlement_date (YYYYMMDD) + settlement_period for correct time reconstruction.",
-            "- French ENTSOE records include both generation and consumption — distinguished by source_type='api' vs 'api_consumption'.",
-            "",
-            "**price_data_raw**: id, source, source_type, identifier (bidzone code e.g. '10YGB----------A'), period_start, period_end, period_type, price_type ('day_ahead'/'intraday'), value_extracted, currency, unit. Unique: (source, identifier, period_start, price_type).",
-            "- ELEXON prices in GBP/MWh (half-hourly settlement periods aggregated to hourly). ENTSOE prices in EUR/MWh.",
-            "",
-            "**weather_data_raw**: id, source (default 'ERA5'), source_type, timestamp, latitude, longitude (ERA5 grid point), data (JSONB — all ERA5 parameters). Unique: (source, latitude, longitude, timestamp).",
-            "",
-            "**generation_unit_mappings**: Maps source identifiers to generation_units/windfarms. source, source_identifier → generation_unit_id, windfarm_id.",
-            "",
-            "### Raw vs Processed Cross-Check Patterns",
-            "- Compare raw record count vs processed: SELECT source, COUNT(*) FROM generation_data_raw WHERE windfarm_id=X AND period_start BETWEEN ... GROUP BY source",
-            "- Check raw values: SELECT period_start, value_extracted, data FROM generation_data_raw WHERE windfarm_id=X AND period_start BETWEEN ... ORDER BY period_start",
-            "- Discrepancy query: Compare SUM(value_extracted) from raw vs SUM(generation_mwh) from processed for same windfarm/period",
-            "- Check import status: SELECT * FROM import_job_executions WHERE source='ENTSOE' ORDER BY started_at DESC LIMIT 5",
-            "",
-            "## SQL Tips",
-            "- Time column is `hour` (not timestamp_utc). Source column is `source` (not data_source).",
-            "- Use date range filters: WHERE hour >= '2025-01-01' AND hour < '2026-01-01'",
-            "- Exclude ramp-up: WHERE is_ramp_up = false (or use CASE WHEN for averages)",
-            "- Join generation+price: ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour",
-            "- Financial data needs JOIN via windfarm_financial_entities junction table",
-            "- Country join: windfarms w JOIN countries c ON w.country_id = c.id",
-            "- Generation is per generation_unit — SUM and GROUP BY windfarm_id for windfarm totals",
-            "",
-            "## Guidelines",
-            "1. Always use tools to fetch data before making claims — never guess numbers",
-            "2. Start with get_data_availability or get_windfarm_info when a windfarm is first mentioned",
-            "3. Use the specific MCP tools first; fall back to run_sql_query for complex multi-table analysis",
-            "4. For trends over time, consider using Python (via Bash) to compute statistics or generate charts",
-            "5. Present numeric results in properly formatted markdown tables",
-            "6. Units: MWh for energy, MW for capacity, m/s for wind speed, °C for temperature, %% for CF and capture rate",
-            "7. When comparing windfarms, use compare_windfarms tool or present a table",
-            "8. Round numbers sensibly: CF to 1 decimal (e.g. 34.2%%), prices to 2 decimals, generation to integers",
-            "9. If a query returns no data, check data availability and inform the user of the available date range",
-            "10. For financial analysis, note the currency — different countries use EUR, GBP, NOK, DKK",
-            "",
-            "## IMPORTANT: Markdown Table Formatting",
-            "Every table MUST use proper syntax with a header separator row:",
-            "```",
-            "| Column 1 | Column 2 | Column 3 |",
-            "| --- | --- | --- |",
-            "| value 1 | value 2 | value 3 |",
-            "```",
-            "The `| --- | --- |` separator is REQUIRED. Never omit it. Each data item on its own row.",
-        ]
-
-        if user_name:
-            parts.insert(1, f"\nCurrently helping: {user_name}")
-
-        return "\n".join(parts)
+        prompt = cls._load_prompt_template()
+        prompt = prompt.replace("{{CURRENT_DATE}}", date.today().isoformat())
+        prompt = prompt.replace(
+            "{{USER_NAME}}",
+            f"Currently helping: {user_name}" if user_name else "",
+        )
+        return prompt
