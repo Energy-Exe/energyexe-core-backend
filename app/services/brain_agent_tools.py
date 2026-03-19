@@ -1,5 +1,6 @@
 """Brain Agent custom MCP tools — energy database tools for the Claude Agent SDK."""
 
+import functools
 import json
 import re
 from contextvars import ContextVar
@@ -31,30 +32,54 @@ def _parse_date(val: Optional[str], default: date) -> date:
         return default
 
 
-# ─── Database session holder ────────────────────────────────────────────
-# The MCP tools need access to the database session. Since @tool functions
-# are module-level, we use ContextVar for per-asyncio-task isolation,
-# preventing concurrent requests from overwriting each other's sessions.
+# ─── Database session management ────────────────────────────────────────
+# Each tool call creates a SHORT-LIVED session from the pool, uses it, and
+# closes it immediately. This prevents the Brain Agent from holding a
+# connection for the entire multi-turn conversation (which starves the
+# pool for regular API requests).
+#
+# We keep set_db_session/clear_db_session as no-ops for backwards compat
+# with BrainAgentService.chat().
 
 _db_session_var: ContextVar[Optional[AsyncSession]] = ContextVar("_db_session_var", default=None)
 
 
 def set_db_session(db: AsyncSession):
-    """Set the database session for the current async task."""
+    """Legacy — kept for backwards compatibility with BrainAgentService.chat()."""
     _db_session_var.set(db)
 
 
 def clear_db_session():
-    """Remove the database session reference for the current async task."""
+    """Legacy — kept for backwards compatibility."""
     _db_session_var.set(None)
 
 
+def _get_session_factory():
+    """Get the async session factory for creating short-lived sessions."""
+    from app.core.database import get_session_factory
+    return get_session_factory()
+
+
 def _get_db() -> AsyncSession:
-    """Get the current request's database session."""
+    """Get the current request's database session (legacy fallback)."""
     db = _db_session_var.get()
     if not db:
         raise RuntimeError("No database session available for brain agent tools")
     return db
+
+
+def with_db_session(fn):
+    """Decorator that creates a short-lived DB session for each tool call.
+
+    The session is created from the pool, passed as `db` in args, and
+    closed immediately after the tool returns — so the connection is only
+    held for the duration of a single tool call, not the entire agent turn.
+    """
+    @functools.wraps(fn)
+    async def wrapper(args: dict[str, Any]) -> dict[str, Any]:
+        async with _get_session_factory()() as db:
+            return await fn(args, db)
+    return wrapper
 
 
 # ─── User context holder ────────────────────────────────────────────────
@@ -98,8 +123,8 @@ def _escape_like(value: str) -> str:
         "granularity": str,
     },
 )
-async def query_generation_data(args: dict[str, Any]) -> dict[str, Any]:
-    db = _get_db()
+@with_db_session
+async def query_generation_data(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     windfarm_id = args["windfarm_id"]
     end = _parse_date(args.get("end_date"), date.today())
     start = _parse_date(args.get("start_date"), end - timedelta(days=365))
@@ -203,8 +228,8 @@ async def query_generation_data(args: dict[str, Any]) -> dict[str, Any]:
         "limit": int,
     },
 )
-async def list_windfarms(args: dict[str, Any]) -> dict[str, Any]:
-    db = _get_db()
+@with_db_session
+async def list_windfarms(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     query = select(Windfarm).options(selectinload(Windfarm.country))
     conditions = []
 
@@ -268,8 +293,8 @@ async def list_windfarms(args: dict[str, Any]) -> dict[str, Any]:
         "end_date": str,
     },
 )
-async def query_prices(args: dict[str, Any]) -> dict[str, Any]:
-    db = _get_db()
+@with_db_session
+async def query_prices(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     windfarm_id = args["windfarm_id"]
     end = _parse_date(args.get("end_date"), date.today())
     start = _parse_date(args.get("start_date"), end - timedelta(days=365))
@@ -375,10 +400,10 @@ async def query_prices(args: dict[str, Any]) -> dict[str, Any]:
         "end_date": str,
     },
 )
-async def query_weather(args: dict[str, Any]) -> dict[str, Any]:
+@with_db_session
+async def query_weather(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     from app.models.weather_data import WeatherData
 
-    db = _get_db()
     windfarm_id = args["windfarm_id"]
     end = _parse_date(args.get("end_date"), date.today())
     start = _parse_date(args.get("start_date"), end - timedelta(days=30))
@@ -431,12 +456,12 @@ async def query_weather(args: dict[str, Any]) -> dict[str, Any]:
         "year": int,
     },
 )
-async def query_financials(args: dict[str, Any]) -> dict[str, Any]:
+@with_db_session
+async def query_financials(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     from app.models.financial_data import FinancialData
     from app.models.financial_entity import FinancialEntity
     from app.models.windfarm_financial_entity import WindfarmFinancialEntity
 
-    db = _get_db()
     windfarm_id = args["windfarm_id"]
     year = args.get("year")
 
@@ -506,8 +531,8 @@ async def query_financials(args: dict[str, Any]) -> dict[str, Any]:
         "sql": str,
     },
 )
-async def run_sql_query(args: dict[str, Any]) -> dict[str, Any]:
-    db = _get_db()
+@with_db_session
+async def run_sql_query(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     sql_str = args.get("sql", "").strip()
 
     if not sql_str:
@@ -595,8 +620,8 @@ async def run_sql_query(args: dict[str, Any]) -> dict[str, Any]:
         "windfarm_name": str,
     },
 )
-async def get_windfarm_info(args: dict[str, Any]) -> dict[str, Any]:
-    db = _get_db()
+@with_db_session
+async def get_windfarm_info(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     windfarm_id = args.get("windfarm_id")
     windfarm_name = args.get("windfarm_name")
 
@@ -663,10 +688,10 @@ async def get_windfarm_info(args: dict[str, Any]) -> dict[str, Any]:
     "Find windfarms by country name, ISO code, or region name.",
     {"query": str},
 )
-async def search_by_country_or_region(args: dict[str, Any]) -> dict[str, Any]:
+@with_db_session
+async def search_by_country_or_region(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     from app.models.region import Region
 
-    db = _get_db()
     query_str = args["query"]
 
     country_query = (
@@ -717,10 +742,10 @@ async def search_by_country_or_region(args: dict[str, Any]) -> dict[str, Any]:
     "Check what data is available for a windfarm — date ranges for generation, price, and weather data.",
     {"windfarm_id": int},
 )
-async def get_data_availability(args: dict[str, Any]) -> dict[str, Any]:
+@with_db_session
+async def get_data_availability(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     from app.models.weather_data import WeatherData
 
-    db = _get_db()
     windfarm_id = args["windfarm_id"]
 
     gen_query = select(
@@ -774,10 +799,10 @@ async def get_data_availability(args: dict[str, Any]) -> dict[str, Any]:
         "period_days": int,
     },
 )
-async def compare_windfarms(args: dict[str, Any]) -> dict[str, Any]:
+@with_db_session
+async def compare_windfarms(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     from app.services.comparison_service import ComparisonService
 
-    db = _get_db()
     windfarm_ids = args["windfarm_ids"][:6]  # Max 6
     period_days = args.get("period_days", 365)
 
@@ -798,10 +823,10 @@ async def compare_windfarms(args: dict[str, Any]) -> dict[str, Any]:
         "portfolio_id": int,
     },
 )
-async def get_portfolio_info(args: dict[str, Any]) -> dict[str, Any]:
+@with_db_session
+async def get_portfolio_info(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     from app.models.portfolio import Portfolio, PortfolioItem
 
-    db = _get_db()
     user_id = get_user_id()
     portfolio_id = args.get("portfolio_id")
 
@@ -859,10 +884,10 @@ async def get_portfolio_info(args: dict[str, Any]) -> dict[str, Any]:
         "limit": int,
     },
 )
-async def get_anomalies(args: dict[str, Any]) -> dict[str, Any]:
+@with_db_session
+async def get_anomalies(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     from app.models.data_anomaly import DataAnomaly
 
-    db = _get_db()
     windfarm_id = args["windfarm_id"]
     limit = min(args.get("limit", 20) or 20, 50)
 
@@ -901,10 +926,10 @@ async def get_anomalies(args: dict[str, Any]) -> dict[str, Any]:
         "windfarm_id": int,
     },
 )
-async def get_ppa_info(args: dict[str, Any]) -> dict[str, Any]:
+@with_db_session
+async def get_ppa_info(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     from app.models.ppa import PPA
 
-    db = _get_db()
     windfarm_id = args["windfarm_id"]
 
     query = select(PPA).where(PPA.windfarm_id == windfarm_id).order_by(PPA.start_date.desc())
@@ -946,10 +971,10 @@ async def get_ppa_info(args: dict[str, Any]) -> dict[str, Any]:
         "limit": int,
     },
 )
-async def get_alerts(args: dict[str, Any]) -> dict[str, Any]:
+@with_db_session
+async def get_alerts(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
     from app.models.alert import AlertRule
 
-    db = _get_db()
     user_id = get_user_id()
     limit = min(args.get("limit", 20) or 20, 50)
 

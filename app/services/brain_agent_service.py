@@ -30,8 +30,6 @@ from app.core.config import get_settings
 from app.services.brain_agent_tools import (
     ENERGYEXE_TOOL_NAMES,
     energyexe_mcp_server,
-    set_db_session,
-    clear_db_session,
     set_user_id,
     clear_user_id,
 )
@@ -86,8 +84,9 @@ class BrainAgentService:
         # Clean up stale sessions
         self._cleanup_stale_sessions()
 
-        # Set up DB session and user context for MCP tools (ContextVar — per-task safe)
-        set_db_session(self.db)
+        # Set up user context for MCP tools (ContextVar — per-task safe)
+        # Note: DB sessions are now created per-tool-call (short-lived) to avoid
+        # holding connections for the entire agent conversation and exhausting the pool.
         set_user_id(user_id)
 
         try:
@@ -122,7 +121,6 @@ class BrainAgentService:
         finally:
             if session_id in self._sessions:
                 self._sessions[session_id].is_busy = False
-            clear_db_session()
             clear_user_id()
 
     async def interrupt(self, session_id: str, user_id: int) -> bool:
