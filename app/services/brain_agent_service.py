@@ -6,7 +6,7 @@ import os
 import shutil
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
@@ -59,6 +59,7 @@ class AgentSession:
     created_at: float
     last_activity: float
     is_busy: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class BrainAgentService:
@@ -91,26 +92,39 @@ class BrainAgentService:
 
         try:
             session = await self._get_or_create_session(user_id, session_id, user_name)
-            session.is_busy = True
-            session.last_activity = time.time()
 
-            # Yield session_id so frontend knows it
-            yield SSEEvent(
-                event_type="session",
-                data={"session_id": session_id},
-            )
+            async with session.lock:
+                # If a previous turn was abandoned (e.g. SSE disconnect), drain leftover messages
+                if session.is_busy:
+                    logger.warning("brain_agent_draining_previous_turn", session_id=session_id)
+                    await self._interrupt_and_drain(session)
 
-            # Send the query
-            await session.client.query(prompt)
+                session.is_busy = True
+                session.last_activity = time.time()
 
-            # Stream response messages
-            async for message in session.client.receive_messages():
-                async for event in self._process_message(message):
-                    yield event
+                # Yield session_id so frontend knows it
+                yield SSEEvent(
+                    event_type="session",
+                    data={"session_id": session_id},
+                )
 
-                # ResultMessage means the agent is done
-                if isinstance(message, ResultMessage):
-                    break
+                # Signal frontend: thinking phase
+                yield SSEEvent(
+                    event_type="status",
+                    data={"phase": "thinking"},
+                )
+
+                # Send the query
+                await session.client.query(prompt)
+
+                # Stream response messages
+                async for message in session.client.receive_messages():
+                    async for event in self._process_message(message):
+                        yield event
+
+                    # ResultMessage means the agent is done
+                    if isinstance(message, ResultMessage):
+                        break
 
         except Exception as e:
             logger.error("brain_agent_error", error=str(e), session_id=session_id)
@@ -122,6 +136,20 @@ class BrainAgentService:
             if session_id in self._sessions:
                 self._sessions[session_id].is_busy = False
             clear_user_id()
+
+    async def _interrupt_and_drain(self, session: AgentSession):
+        """Interrupt any in-flight agent work and consume remaining buffered messages."""
+        try:
+            await session.client.interrupt()
+        except Exception as e:
+            logger.warning("brain_agent_interrupt_during_drain", error=str(e))
+        try:
+            async with asyncio.timeout(10):
+                async for msg in session.client.receive_messages():
+                    if isinstance(msg, ResultMessage):
+                        break
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning("brain_agent_drain_timeout", error=str(e))
 
     async def interrupt(self, session_id: str, user_id: int) -> bool:
         """Interrupt the current agent task. Validates session ownership."""
@@ -219,10 +247,18 @@ class BrainAgentService:
             for block in message.content:
                 if isinstance(block, TextBlock):
                     yield SSEEvent(
+                        event_type="status",
+                        data={"phase": "responding"},
+                    )
+                    yield SSEEvent(
                         event_type="text_delta",
                         data={"text": block.text},
                     )
                 elif isinstance(block, ToolUseBlock):
+                    yield SSEEvent(
+                        event_type="status",
+                        data={"phase": "tool", "tool_name": block.name},
+                    )
                     yield SSEEvent(
                         event_type="tool_use",
                         data={
@@ -236,6 +272,11 @@ class BrainAgentService:
             # UserMessage content can include ToolResultBlocks
             for block in message.content:
                 if isinstance(block, ToolResultBlock):
+                    yield SSEEvent(
+                        event_type="status",
+                        data={"phase": "analyzing"},
+                    )
+
                     content_text = ""
                     if isinstance(block.content, str):
                         content_text = block.content
