@@ -120,7 +120,7 @@ class Settings(BaseSettings):
 
     # Brain (AI Chat Agent) Configuration
     BRAIN_PROVIDER: str = "claude"  # claude, openai
-    BRAIN_MODEL: str = "claude-sonnet-4-20250514"
+    BRAIN_MODEL: str = "claude-sonnet-4-6"
     BRAIN_MAX_TOKENS: int = 4096
     BRAIN_TEMPERATURE: float = 0.3
 

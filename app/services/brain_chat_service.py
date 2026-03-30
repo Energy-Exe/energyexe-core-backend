@@ -34,7 +34,7 @@ class BrainChatService:
         settings = get_settings()
         self.claude_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-        self.default_model = getattr(settings, "BRAIN_MODEL", "claude-sonnet-4-20250514")
+        self.default_model = getattr(settings, "BRAIN_MODEL", "claude-sonnet-4-6")
         self.max_tokens = getattr(settings, "BRAIN_MAX_TOKENS", 4096)
         self.temperature = getattr(settings, "BRAIN_TEMPERATURE", 0.3)
         self.tool_registry = BrainToolRegistry(db)

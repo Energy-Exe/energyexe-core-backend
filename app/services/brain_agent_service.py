@@ -27,6 +27,7 @@ from claude_agent_sdk import (
 )
 
 from app.core.config import get_settings
+from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_tools import (
     ENERGYEXE_TOOL_NAMES,
     energyexe_mcp_server,
@@ -77,6 +78,7 @@ class BrainAgentService:
         session_id: Optional[str],
         prompt: str,
         user_name: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Send a prompt to the agent and yield SSE events."""
         if not session_id:
@@ -91,7 +93,7 @@ class BrainAgentService:
         set_user_id(user_id)
 
         try:
-            session = await self._get_or_create_session(user_id, session_id, user_name)
+            session = await self._get_or_create_session(user_id, session_id, user_name, model)
 
             async with session.lock:
                 # If a previous turn was abandoned (e.g. SSE disconnect), drain leftover messages
@@ -185,7 +187,7 @@ class BrainAgentService:
         ]
 
     async def _get_or_create_session(
-        self, user_id: int, session_id: str, user_name: Optional[str] = None
+        self, user_id: int, session_id: str, user_name: Optional[str] = None, model: Optional[str] = None
     ) -> AgentSession:
         """Get existing session or create a new one."""
         if session_id in self._sessions:
@@ -224,7 +226,7 @@ class BrainAgentService:
             max_turns=20,
             max_budget_usd=2.0,
             permission_mode="bypassPermissions",
-            model=getattr(settings, "BRAIN_MODEL", "claude-sonnet-4-20250514"),
+            model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
         )
 
         client = ClaudeSDKClient(options=options)
