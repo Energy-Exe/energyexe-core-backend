@@ -255,7 +255,7 @@ class BrainAgentService:
             ],
             mcp_servers={"energyexe": energyexe_mcp_server},
             cwd=work_dir,
-            max_turns=30,
+            max_turns=60,
             max_budget_usd=3.0,
             permission_mode="bypassPermissions",
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
