@@ -46,8 +46,11 @@ MAX_CONCURRENT_SESSIONS = 20
 class SSEEvent:
     """A single SSE event to stream to the client."""
 
-    event_type: str  # text_delta, tool_use, tool_result, system, result, error
+    event_type: str  # text_delta, tool_use, tool_result, system, result, error, image
     data: Dict[str, Any]
+
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
 
 
 @dataclass
@@ -61,6 +64,7 @@ class AgentSession:
     last_activity: float
     is_busy: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    known_images: set = field(default_factory=set)
 
 
 class BrainAgentService:
@@ -120,13 +124,33 @@ class BrainAgentService:
                 await session.client.query(prompt)
 
                 # Stream response messages
+                got_result = False
                 async for message in session.client.receive_messages():
-                    async for event in self._process_message(message):
+                    async for event in self._process_message(message, session):
                         yield event
 
                     # ResultMessage means the agent is done
                     if isinstance(message, ResultMessage):
+                        got_result = True
                         break
+
+                # If the message stream ended without a ResultMessage, emit a
+                # synthetic result so the frontend knows the turn is over.
+                if not got_result:
+                    logger.warning(
+                        "brain_agent_stream_ended_without_result",
+                        session_id=session_id,
+                    )
+                    yield SSEEvent(
+                        event_type="result",
+                        data={
+                            "num_turns": 0,
+                            "duration_ms": 0,
+                            "cost_usd": None,
+                            "session_id": session_id,
+                            "incomplete": True,
+                        },
+                    )
 
         except Exception as e:
             logger.error("brain_agent_error", error=str(e), session_id=session_id)
@@ -146,7 +170,7 @@ class BrainAgentService:
         except Exception as e:
             logger.warning("brain_agent_interrupt_during_drain", error=str(e))
         try:
-            async with asyncio.timeout(10):
+            async with asyncio.timeout(30):
                 async for msg in session.client.receive_messages():
                     if isinstance(msg, ResultMessage):
                         break
@@ -223,8 +247,8 @@ class BrainAgentService:
             ],
             mcp_servers={"energyexe": energyexe_mcp_server},
             cwd=work_dir,
-            max_turns=20,
-            max_budget_usd=2.0,
+            max_turns=30,
+            max_budget_usd=3.0,
             permission_mode="bypassPermissions",
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
         )
@@ -243,7 +267,18 @@ class BrainAgentService:
         self._sessions[session_id] = session
         return session
 
-    async def _process_message(self, message) -> AsyncGenerator[SSEEvent, None]:
+    def _scan_for_new_images(self, session: AgentSession) -> list:
+        """Scan the session sandbox for new image files."""
+        work_dir = Path(f"/tmp/brain-agent/{session.user_id}/{session.session_id}")
+        new_images = []
+        if work_dir.exists():
+            for f in work_dir.iterdir():
+                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS and f.name not in session.known_images:
+                    session.known_images.add(f.name)
+                    new_images.append(f.name)
+        return new_images
+
+    async def _process_message(self, message, session: AgentSession = None) -> AsyncGenerator[SSEEvent, None]:
         """Convert an Agent SDK message into SSE events."""
         if isinstance(message, AssistantMessage):
             for block in message.content:
@@ -302,6 +337,17 @@ class BrainAgentService:
                         },
                     )
 
+                    # Scan for new images after tool execution
+                    if session:
+                        for img_name in self._scan_for_new_images(session):
+                            yield SSEEvent(
+                                event_type="image",
+                                data={
+                                    "url": f"/brain-agent/sessions/{session.session_id}/files/{img_name}",
+                                    "filename": img_name,
+                                },
+                            )
+
         elif isinstance(message, SystemMessage):
             yield SSEEvent(
                 event_type="system",
@@ -340,11 +386,14 @@ class BrainAgentService:
 
     @staticmethod
     async def _destroy_session(session: AgentSession):
-        """Clean up a session's client and temp directory."""
-        try:
-            await session.client.__aexit__(None, None, None)
-        except Exception as e:
-            logger.warning("brain_agent_client_cleanup_error", error=str(e), session_id=session.session_id)
+        """Clean up a session's client and temp directory.
+
+        Note: We intentionally do NOT call client.__aexit__() here because the
+        ClaudeSDKClient's cancel scope is task-bound — calling __aexit__ from a
+        different async task (e.g., stale cleanup or HTTP DELETE handler) raises
+        'Attempted to exit cancel scope in a different task'. Instead, we drop
+        the reference and let the client be garbage collected.
+        """
         # Clean up temp working directory
         work_dir = Path(f"/tmp/brain-agent/{session.user_id}/{session.session_id}")
         if work_dir.exists():

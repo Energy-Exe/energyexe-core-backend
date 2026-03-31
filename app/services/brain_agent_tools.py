@@ -145,7 +145,11 @@ async def query_generation_data(args: dict[str, Any], db: AsyncSession) -> dict[
         func.sum(func.coalesce(GenerationData.metered_mwh, GenerationData.generation_mwh)).label(
             "total_metered"
         ),
-        func.sum(func.coalesce(GenerationData.curtailed_mwh, 0)).label("total_curtailed"),
+        func.sum(GenerationData.curtailed_mwh).label("total_curtailed"),
+        func.count(case((GenerationData.curtailed_mwh > 0, 1))).label("nonzero_curtailment_count"),
+        func.count(
+            case((GenerationData.source == "ELEXON", 1))
+        ).label("elexon_count"),
         func.avg(
             case((GenerationData.is_ramp_up == True, None), else_=GenerationData.capacity_factor)
         ).label("avg_cf"),
@@ -201,6 +205,8 @@ async def query_generation_data(args: dict[str, Any], db: AsyncSession) -> dict[
         for row in bd_result.all()
     ]
 
+    # Curtailment data is only meaningful from ELEXON (UK). Other sources store 0 as default.
+    curtailment_available = (s.elexon_count or 0) > 0
     result = {
         "windfarm": wf.name,
         "windfarm_id": windfarm_id,
@@ -208,7 +214,8 @@ async def query_generation_data(args: dict[str, Any], db: AsyncSession) -> dict[
         "period": f"{start} to {end}",
         "total_generation_mwh": round(float(s.total_gen), 1) if s.total_gen else 0,
         "total_metered_mwh": round(float(s.total_metered), 1) if s.total_metered else 0,
-        "total_curtailed_mwh": round(float(s.total_curtailed), 1) if s.total_curtailed else 0,
+        "total_curtailed_mwh": round(float(s.total_curtailed), 1) if curtailment_available and s.total_curtailed else None,
+        "curtailment_data_available": curtailment_available,
         "avg_capacity_factor_pct": round(float(s.avg_cf) * 100, 1) if s.avg_cf else 0,
         "data_hours": s.data_points,
         "breakdown": breakdown,
@@ -238,7 +245,7 @@ async def list_windfarms(args: dict[str, Any], db: AsyncSession) -> dict[str, An
         query = query.join(Windfarm.country)
         escaped_country = _escape_like(country)
         conditions.append(
-            (Country.name.ilike(f"%{escaped_country}%", escape="\\")) | (Country.iso_code == country.upper())
+            (Country.name.ilike(f"%{escaped_country}%", escape="\\")) | (Country.code == country.upper())
         )
 
     status = args.get("status")
@@ -272,7 +279,6 @@ async def list_windfarms(args: dict[str, Any], db: AsyncSession) -> dict[str, An
             {
                 "id": wf.id,
                 "name": wf.name,
-                "code": wf.code,
                 "country": wf.country.name if wf.country else None,
                 "capacity_mw": float(wf.nameplate_capacity_mw) if wf.nameplate_capacity_mw else None,
                 "status": wf.status,
@@ -533,16 +539,16 @@ async def query_financials(args: dict[str, Any], db: AsyncSession) -> dict[str, 
 )
 @with_db_session
 async def run_sql_query(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
-    sql_str = args.get("sql", "").strip()
+    sql_str = args.get("sql", "").strip().rstrip(";").strip()
 
     if not sql_str:
         return {"content": [{"type": "text", "text": json.dumps({"error": "Empty SQL query"})}]}
 
-    # Block semicolons (prevents multi-statement attacks)
+    # Block embedded semicolons (prevents multi-statement attacks)
     if ";" in sql_str:
         return {
             "content": [
-                {"type": "text", "text": json.dumps({"error": "Semicolons not allowed in queries"})}
+                {"type": "text", "text": json.dumps({"error": "Semicolons not allowed in queries (multi-statement not permitted)"})}
             ]
         }
 
@@ -583,7 +589,7 @@ async def run_sql_query(args: dict[str, Any], db: AsyncSession) -> dict[str, Any
     try:
         # Add LIMIT if not present
         if "LIMIT" not in sql_upper:
-            sql_str = sql_str.rstrip(";") + " LIMIT 200"
+            sql_str = sql_str.rstrip(";") + " LIMIT 100"
 
         # Execute within a read-only transaction with statement timeout
         await db.execute(text("SET LOCAL statement_timeout = '30000'"))
@@ -592,17 +598,30 @@ async def run_sql_query(args: dict[str, Any], db: AsyncSession) -> dict[str, Any
         rows = result.fetchall()
         columns = list(result.keys()) if rows else []
 
+        total_rows = len(rows)
+        # Serialize rows incrementally and cap at ~6000 chars to avoid
+        # overwhelming the agent with data it can't format into a response.
+        MAX_RESULT_CHARS = 6000
+        serialized_rows = []
+        chars_used = 0
+        for row in rows:
+            row_dict = dict(zip(columns, [str(v) if v is not None else None for v in row]))
+            row_json = json.dumps(row_dict, default=str)
+            chars_used += len(row_json) + 2  # account for comma + space
+            if chars_used > MAX_RESULT_CHARS and serialized_rows:
+                break
+            serialized_rows.append(row_dict)
+
         data = {
             "columns": columns,
-            "row_count": len(rows),
-            "rows": [dict(zip(columns, [str(v) if v is not None else None for v in row])) for row in rows[:200]],
+            "row_count": total_rows,
+            "rows_returned": len(serialized_rows),
+            "rows": serialized_rows,
         }
+        if len(serialized_rows) < total_rows:
+            data["note"] = f"Showing {len(serialized_rows)} of {total_rows} rows. Add LIMIT or narrow filters for full control."
 
-        result_text = json.dumps(data, default=str)
-        if len(result_text) > 12000:
-            result_text = result_text[:12000] + '... [truncated]'
-
-        return {"content": [{"type": "text", "text": result_text}]}
+        return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
     except Exception as e:
         logger.error("brain_agent_sql_error", error=str(e), sql=sql_str[:200])
         return {
@@ -625,12 +644,14 @@ async def get_windfarm_info(args: dict[str, Any], db: AsyncSession) -> dict[str,
     windfarm_id = args.get("windfarm_id")
     windfarm_name = args.get("windfarm_name")
 
+    from app.models.windfarm_owner import WindfarmOwner
+
     query = select(Windfarm).options(
         selectinload(Windfarm.country),
         selectinload(Windfarm.state),
         selectinload(Windfarm.region),
         selectinload(Windfarm.bidzone),
-        selectinload(Windfarm.windfarm_owners),
+        selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
         selectinload(Windfarm.turbine_units),
         selectinload(Windfarm.project),
     )
@@ -660,7 +681,6 @@ async def get_windfarm_info(args: dict[str, Any], db: AsyncSession) -> dict[str,
     data = {
         "id": wf.id,
         "name": wf.name,
-        "code": wf.code,
         "country": wf.country.name if wf.country else None,
         "state": wf.state.name if wf.state else None,
         "region": wf.region.name if wf.region else None,
@@ -678,7 +698,15 @@ async def get_windfarm_info(args: dict[str, Any], db: AsyncSession) -> dict[str,
         "lng": wf.lng,
         "project": wf.project.name if wf.project else None,
         "turbine_count": len(wf.turbine_units),
-        "owner_count": len(wf.windfarm_owners),
+        "owners": [
+            {
+                "name": wo.owner.name,
+                "type": wo.owner.type,
+                "ownership_pct": float(wo.ownership_percentage) if wo.ownership_percentage else None,
+            }
+            for wo in wf.windfarm_owners
+            if wo.owner
+        ],
     }
     return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
 
@@ -698,7 +726,7 @@ async def search_by_country_or_region(args: dict[str, Any], db: AsyncSession) ->
         select(Windfarm)
         .options(selectinload(Windfarm.country))
         .join(Windfarm.country)
-        .where((Country.name.ilike(f"%{_escape_like(query_str)}%", escape="\\")) | (Country.iso_code == query_str.upper()))
+        .where((Country.name.ilike(f"%{_escape_like(query_str)}%", escape="\\")) | (Country.code == query_str.upper()))
         .order_by(Windfarm.name)
         .limit(50)
     )

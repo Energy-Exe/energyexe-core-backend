@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+import mimetypes
 import time
+from pathlib import Path
 from typing import List
 
 import structlog
-from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db
@@ -123,3 +125,34 @@ async def end_session(
     service = BrainAgentService(db)
     success = await service.end_session(session_id, current_user.id)
     return {"success": success, "session_id": session_id}
+
+
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
+
+
+@router.get("/sessions/{session_id}/files/{filename}")
+async def get_session_file(
+    session_id: str,
+    filename: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> FileResponse:
+    """Serve an image file from an agent session's sandbox directory."""
+    # Validate session ownership
+    service = BrainAgentService(db)
+    sessions = service.list_sessions(current_user.id)
+    if not any(s["session_id"] == session_id for s in sessions):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Security: only allow image files, prevent path traversal
+    safe_filename = Path(filename).name
+    ext = Path(safe_filename).suffix.lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Only image files are allowed")
+
+    file_path = Path(f"/tmp/brain-agent/{current_user.id}/{session_id}") / safe_filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    media_type = mimetypes.guess_type(safe_filename)[0] or "application/octet-stream"
+    return FileResponse(file_path, media_type=media_type)
