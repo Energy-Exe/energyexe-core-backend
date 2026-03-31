@@ -232,18 +232,26 @@ class BrainAgentService:
 
         system_prompt = self._build_system_prompt(user_name)
 
+        def _on_stderr(line: str):
+            logger.warning("brain_agent_stderr", session_id=session_id, line=line.rstrip())
+
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             allowed_tools=[
-                "Read",
-                "Write",
-                "Edit",
                 "Bash",
-                "Glob",
-                "Grep",
                 "WebSearch",
                 "WebFetch",
                 *ENERGYEXE_TOOL_NAMES,
+            ],
+            disallowed_tools=[
+                "ToolSearch",  # MCP tools are already allowed — no need to discover them
+                "TodoWrite",
+                "Agent",
+                "EnterPlanMode",
+                "ExitPlanMode",
+                "AskUserQuestion",
+                "Skill",
+                "NotebookEdit",
             ],
             mcp_servers={"energyexe": energyexe_mcp_server},
             cwd=work_dir,
@@ -251,6 +259,7 @@ class BrainAgentService:
             max_budget_usd=3.0,
             permission_mode="bypassPermissions",
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
+            stderr=_on_stderr,
         )
 
         client = ClaudeSDKClient(options=options)
