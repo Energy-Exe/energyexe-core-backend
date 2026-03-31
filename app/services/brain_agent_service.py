@@ -260,6 +260,8 @@ class BrainAgentService:
             permission_mode="bypassPermissions",
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
             stderr=_on_stderr,
+            max_buffer_size=10 * 1024 * 1024,  # 10MB — default 1MB is too small for large query results
+            env={"CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "300000"},  # 5 min — default 60s too aggressive for DB queries
         )
 
         client = ClaudeSDKClient(options=options)
