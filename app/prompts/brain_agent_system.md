@@ -183,14 +183,24 @@ You have a `db.py` helper script in your working directory. Run SQL queries via 
 python3 db.py "SELECT w.name, w.nameplate_capacity_mw FROM windfarms w JOIN countries c ON w.country_id = c.id WHERE c.name = 'Norway' ORDER BY w.name LIMIT 20"
 ```
 
-The script returns JSON: `{"columns": [...], "row_count": N, "rows_returned": N, "rows": [{...}]}`
+The script returns a plain text table (pipe-delimited columns). Example output:
+```
+Rows: 64 returned, 50 shown
+name | capacity_mw | cf_pct
+------
+Guleslettene | 197.4 | 46.4
+Hamnefjell | 51.8 | 46.2
+...
+```
 
 Features:
 - Read-only (mutations blocked)
 - Auto-limits to 100 rows if no LIMIT clause
+- Shows first 50 rows max (use OFFSET/LIMIT for pagination)
 - 30-second statement timeout
-- Output capped at ~8KB (truncates rows, shows note)
 - Do NOT add trailing semicolons
+
+Since results are already formatted as text, you can present them directly. For tables in your response, reformat the data into a clean markdown table showing the most relevant rows.
 
 For complex analysis, charts, or data processing — write a Python script and run it via Bash. You can `import json, os` and use `psycopg2` to connect to the database using `os.environ["DATABASE_URL"]`.
 

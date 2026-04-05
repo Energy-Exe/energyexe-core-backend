@@ -7,7 +7,7 @@ Usage: python3 db.py "SELECT * FROM windfarms LIMIT 10"
 """
 import json, os, re, sys
 
-MAX_ROWS = 30
+MAX_ROWS = 50
 DEFAULT_LIMIT = 100
 STATEMENT_TIMEOUT_MS = 30000
 
@@ -67,19 +67,27 @@ def run_query(sql: str) -> str:
         rows = cur.fetchall()
         total_rows = len(rows)
 
-        # Cap rows to MAX_ROWS to prevent agent output overflow
-        serialized = [
-            {col: (str(v) if v is not None else None) for col, v in zip(columns, row)}
-            for row in rows[:MAX_ROWS]
-        ]
+        # Format as compact text table (not JSON) to minimize context size
+        display_rows = rows[:MAX_ROWS]
 
-        data = {"columns": columns, "row_count": total_rows, "rows_returned": len(serialized), "rows": serialized}
+        # Build text table
+        lines = []
+        # Header
+        lines.append(" | ".join(columns))
+        lines.append("-" * min(len(lines[0]), 120))
+        # Rows
+        for row in display_rows:
+            vals = [(str(v) if v is not None else "NULL") for v in row]
+            lines.append(" | ".join(vals))
+
+        result_text = f"Rows: {total_rows} returned, {len(display_rows)} shown\\n"
+        result_text += "\\n".join(lines)
         if total_rows > MAX_ROWS:
-            data["note"] = f"Showing first {MAX_ROWS} of {total_rows} rows. Use OFFSET {MAX_ROWS} LIMIT {MAX_ROWS} for next page, or narrow your query."
+            result_text += f"\\n... ({total_rows - MAX_ROWS} more rows. Use OFFSET/LIMIT to paginate.)"
 
         cur.close()
         conn.close()
-        return json.dumps(data, default=str)
+        return result_text
 
     except Exception as e:
         return json.dumps({"error": str(e)})
