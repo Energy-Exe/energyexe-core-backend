@@ -7,7 +7,7 @@ Usage: python3 db.py "SELECT * FROM windfarms LIMIT 10"
 """
 import json, os, re, sys
 
-MAX_ROWS = 50
+MAX_DISPLAY_ROWS = 25
 DEFAULT_LIMIT = 100
 STATEMENT_TIMEOUT_MS = 30000
 
@@ -67,23 +67,34 @@ def run_query(sql: str) -> str:
         rows = cur.fetchall()
         total_rows = len(rows)
 
-        # Format as compact text table (not JSON) to minimize context size
-        display_rows = rows[:MAX_ROWS]
+        # Format as compact text table
+        display_rows = rows[:MAX_DISPLAY_ROWS]
 
-        # Build text table
         lines = []
-        # Header
         lines.append(" | ".join(columns))
         lines.append("-" * min(len(lines[0]), 120))
-        # Rows
         for row in display_rows:
             vals = [(str(v) if v is not None else "NULL") for v in row]
             lines.append(" | ".join(vals))
 
-        result_text = f"Rows: {total_rows} returned, {len(display_rows)} shown\\n"
-        result_text += "\\n".join(lines)
-        if total_rows > MAX_ROWS:
-            result_text += f"\\n... ({total_rows - MAX_ROWS} more rows. Use OFFSET/LIMIT to paginate.)"
+        header = f"Total: {total_rows} rows"
+        if total_rows > MAX_DISPLAY_ROWS:
+            header += f" (showing top {MAX_DISPLAY_ROWS})"
+        result_text = header + "\\n" + "\\n".join(lines)
+
+        # For large results, append statistical summary of numeric columns
+        if total_rows > MAX_DISPLAY_ROWS:
+            try:
+                num_cols = []
+                for i, col in enumerate(columns):
+                    vals = [row[i] for row in rows if row[i] is not None]
+                    if vals and all(isinstance(v, (int, float)) or (isinstance(v, str) and v.replace('.','',1).replace('-','',1).isdigit()) for v in vals[:5]):
+                        num_vals = [float(v) for v in vals]
+                        num_cols.append(f"{col}: min={min(num_vals):.1f}, max={max(num_vals):.1f}, avg={sum(num_vals)/len(num_vals):.1f}")
+                if num_cols:
+                    result_text += "\\nSummary (all rows): " + " | ".join(num_cols)
+            except Exception:
+                pass
 
         cur.close()
         conn.close()
