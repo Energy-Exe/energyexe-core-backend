@@ -7,7 +7,7 @@ Usage: python3 db.py "SELECT * FROM windfarms LIMIT 10"
 """
 import json, os, re, sys
 
-MAX_RESULT_CHARS = 8000
+MAX_RESULT_CHARS = 15000
 DEFAULT_LIMIT = 100
 STATEMENT_TIMEOUT_MS = 30000
 
