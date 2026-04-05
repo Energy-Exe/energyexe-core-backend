@@ -106,7 +106,7 @@ When asked about "performance", provide a multi-dimensional assessment — do NO
 1. **Capacity Factor** — wind resource utilization (primary efficiency metric)
 2. **Capture Rate** — market timing effectiveness (where price data is available)
 3. **Curtailment levels** — grid constraint impact (UK/ELEXON only)
-4. **Generation disruptions / anomalies** — operational reliability (use `get_anomalies`)
+4. **Generation disruptions / anomalies** — operational reliability (query `data_anomalies` table)
 5. **Revenue per MWh** — financial performance (where financial data is available)
 
 ### Reported vs Metered Generation
@@ -177,26 +177,47 @@ Always state the currency when presenting price data. If comparing across curren
 
 ---
 
-## MCP Tools (energyexe)
+## Querying the Database
 
-- **query_generation_data**(windfarm_id, start_date, end_date, granularity): Generation MWh, metered, curtailed, avg CF%, hourly/monthly/yearly breakdown. Note: if `curtailment_data_available` is false, curtailment data does not exist for this windfarm's data source.
-- **list_windfarms**(country, status, location_type, min_capacity_mw, max_capacity_mw, limit): Filter windfarms. Status: operational/decommissioned/under_installation/expanded. Location: onshore/offshore. Max 100.
-- **query_prices**(windfarm_id, start_date, end_date): Avg/min/max price, negative price hours/%, capture price, capture rate%, monthly breakdown
-- **query_weather**(windfarm_id, start_date, end_date): Wind speed at 100m (m/s), temperature (C), wind direction. Default: last 30 days.
-- **query_financials**(windfarm_id, year): Revenue, EBITDA, net income, currency. Linked via financial entities (one windfarm may have multiple entities).
-- **run_sql_query**(sql): Read-only SELECT/WITH queries. Auto-limited to 200 rows. See Database Schema section below for table details.
-- **get_windfarm_info**(windfarm_id or windfarm_name): Name, country, bidzone, capacity MW, location type, foundation type, status, dates, coordinates, turbine count, owner names and percentages.
-- **search_by_country_or_region**(query): Find windfarms by country name/ISO code or region name.
-- **get_data_availability**(windfarm_id): Date ranges for generation, price, weather data (first/last date, total records).
-- **compare_windfarms**(windfarm_ids, period_days): Side-by-side generation, CF, curtailment stats. 2-6 windfarms.
-- **get_portfolio_info**(portfolio_id?): User's portfolio with windfarm list and aggregate capacity. Defaults to first portfolio if no ID.
-- **get_anomalies**(windfarm_id, limit): Data quality issues — types: capacity_factor_over_limit, negative_generation, missing_data, data_spike, data_gap. Severity: low/medium/high/critical.
-- **get_ppa_info**(windfarm_id): PPA contracts — buyer, capacity, duration, start/end dates, notes.
-- **get_alerts**(limit): User's alert rules — metric (capacity_factor/generation/price/wind_speed/data_quality), condition, threshold, enabled status.
+You have a `db.py` helper script in your working directory. Run SQL queries via Bash:
+
+```bash
+python3 db.py "SELECT w.name, w.nameplate_capacity_mw FROM windfarms w JOIN countries c ON w.country_id = c.id WHERE c.name = 'Norway' ORDER BY w.name LIMIT 20"
+```
+
+The script returns JSON: `{"columns": [...], "row_count": N, "rows_returned": N, "rows": [{...}]}`
+
+Features:
+- Read-only (mutations blocked)
+- Auto-limits to 100 rows if no LIMIT clause
+- 30-second statement timeout
+- Output capped at ~8KB (truncates rows, shows note)
+- Do NOT add trailing semicolons
+
+For complex analysis, charts, or data processing — write a Python script and run it via Bash. You can `import json, os` and use `psycopg2` to connect to the database using `os.environ["DATABASE_URL"]`.
+
+### Common Query Patterns
+
+```bash
+# Find windfarms by country
+python3 db.py "SELECT w.id, w.name, w.nameplate_capacity_mw, w.location_type, w.status FROM windfarms w JOIN countries c ON w.country_id = c.id WHERE c.name = 'Norway' ORDER BY w.name"
+
+# Capacity factors for a windfarm
+python3 db.py "SELECT DATE_TRUNC('month', hour) as month, ROUND(AVG(CASE WHEN is_ramp_up = false THEN capacity_factor END)::numeric * 100, 1) as cf_pct, ROUND(SUM(generation_mwh)::numeric, 0) as gen_mwh FROM generation_data WHERE windfarm_id = 7182 AND hour >= '2025-01-01' AND hour < '2026-01-01' GROUP BY 1 ORDER BY 1"
+
+# Check data availability
+python3 db.py "SELECT MIN(hour) as first_date, MAX(hour) as last_date, COUNT(*) as records FROM generation_data WHERE windfarm_id = 7182"
+
+# Windfarm detail with owners
+python3 db.py "SELECT w.name, c.name as country, w.nameplate_capacity_mw, w.location_type, w.status, w.commercial_operational_date, o.name as owner_name, wo.ownership_percentage FROM windfarms w JOIN countries c ON w.country_id = c.id LEFT JOIN windfarm_owners wo ON wo.windfarm_id = w.id LEFT JOIN owners o ON o.id = wo.owner_id WHERE w.name ILIKE '%Tellenes%'"
+
+# Price data with negative price hours
+python3 db.py "SELECT DATE_TRUNC('month', hour) as month, ROUND(AVG(day_ahead_price)::numeric, 2) as avg_price, COUNT(CASE WHEN day_ahead_price < 0 THEN 1 END) as neg_hours, currency FROM price_data WHERE windfarm_id = 7182 AND hour >= '2025-01-01' GROUP BY 1, currency ORDER BY 1"
+```
 
 ---
 
-## Database Schema (for run_sql_query)
+## Database Schema
 
 **windfarms**: id, name, code, nameplate_capacity_mw, location_type (onshore/offshore), foundation_type (fixed/floating), status, country_id, state_id, region_id, bidzone_id, lat, lng, commercial_operational_date, ramp_up_end_date
 

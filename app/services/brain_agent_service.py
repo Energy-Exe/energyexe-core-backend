@@ -28,12 +28,7 @@ from claude_agent_sdk import (
 
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
-from app.services.brain_agent_tools import (
-    ENERGYEXE_TOOL_NAMES,
-    energyexe_mcp_server,
-    set_user_id,
-    clear_user_id,
-)
+from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
 
 logger = structlog.get_logger(__name__)
 
@@ -91,11 +86,6 @@ class BrainAgentService:
 
         # Clean up stale sessions
         self._cleanup_stale_sessions()
-
-        # Set up user context for MCP tools (ContextVar — per-task safe)
-        # Note: DB sessions are now created per-tool-call (short-lived) to avoid
-        # holding connections for the entire agent conversation and exhausting the pool.
-        set_user_id(user_id)
 
         try:
             session = await self._get_or_create_session(user_id, session_id, user_name, model)
@@ -163,7 +153,6 @@ class BrainAgentService:
         finally:
             if session_id in self._sessions:
                 self._sessions[session_id].is_busy = False
-            clear_user_id()
 
     async def _interrupt_and_drain(self, session: AgentSession):
         """Interrupt any in-flight agent work and consume remaining buffered messages."""
@@ -234,6 +223,10 @@ class BrainAgentService:
 
         system_prompt = self._build_system_prompt(user_name)
 
+        # Write db.py helper script to sandbox
+        db_script_path = work_dir / "db.py"
+        db_script_path.write_text(DB_HELPER_SCRIPT)
+
         def _on_stderr(line: str):
             logger.warning("brain_agent_stderr", session_id=session_id, line=line.rstrip())
 
@@ -243,10 +236,9 @@ class BrainAgentService:
                 "Bash",
                 "WebSearch",
                 "WebFetch",
-                *ENERGYEXE_TOOL_NAMES,
             ],
             disallowed_tools=[
-                "ToolSearch",  # MCP tools are already allowed — no need to discover them
+                "ToolSearch",
                 "TodoWrite",
                 "Agent",
                 "EnterPlanMode",
@@ -254,16 +246,23 @@ class BrainAgentService:
                 "AskUserQuestion",
                 "Skill",
                 "NotebookEdit",
+                "Read",
+                "Write",
+                "Edit",
+                "Glob",
+                "Grep",
             ],
-            mcp_servers={"energyexe": energyexe_mcp_server},
             cwd=work_dir,
             max_turns=None,
             max_budget_usd=None,
             permission_mode="bypassPermissions",
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
             stderr=_on_stderr,
-            max_buffer_size=10 * 1024 * 1024,  # 10MB — default 1MB is too small for large query results
-            env={"CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "600000"},  # 10 min — default 60s too aggressive for DB queries
+            max_buffer_size=10 * 1024 * 1024,
+            env={
+                "DATABASE_URL": settings.database_url,
+                "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "600000",
+            },
         )
 
         client = ClaudeSDKClient(options=options)
