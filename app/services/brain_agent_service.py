@@ -260,7 +260,7 @@ class BrainAgentService:
             stderr=_on_stderr,
             max_buffer_size=10 * 1024 * 1024,
             env={
-                "DATABASE_URL": settings.database_url,
+                "DATABASE_URL": settings.database_url_sync,
                 "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "600000",
             },
         )
