@@ -65,6 +65,7 @@ class AgentSession:
     is_busy: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     known_images: set = field(default_factory=set)
+    has_any_text: bool = False  # tracks if any text_delta was emitted this turn (for dedup)
 
 
 class BrainAgentService:
@@ -107,6 +108,7 @@ class BrainAgentService:
 
                 session.is_busy = True
                 session.last_activity = time.time()
+                session.has_any_text = False  # Reset text dedup for this turn
 
                 # Yield session_id so frontend knows it
                 yield SSEEvent(
@@ -302,6 +304,8 @@ class BrainAgentService:
                         event_type="text_delta",
                         data={"text": block.text},
                     )
+                    if session:
+                        session.has_any_text = True
                 elif isinstance(block, ToolUseBlock):
                     yield SSEEvent(
                         event_type="status",

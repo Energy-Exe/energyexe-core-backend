@@ -1,6 +1,8 @@
 """Schemas for Brain Agent endpoints."""
 
-from typing import Literal, Optional
+from datetime import datetime
+from decimal import Decimal
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -29,3 +31,46 @@ class AgentInterruptRequest(BaseModel):
     """Request body for interrupting a running agent."""
 
     session_id: str = Field(..., description="Session ID to interrupt")
+
+
+# --- Thread persistence schemas ---
+
+
+class ThreadUpsertRequest(BaseModel):
+    """Request body for creating or updating an agent thread."""
+
+    title: Optional[str] = Field(default=None, max_length=255, description="Thread title")
+    model: Optional[str] = Field(default=None, max_length=50, description="Model used for this thread")
+    messages: List[Any] = Field(default_factory=list, description="Full message history (JSON array)")
+    message_count: int = Field(default=0, ge=0, description="Number of messages")
+    total_cost_usd: Optional[Decimal] = Field(default=None, description="Cumulative cost in USD")
+    total_turns: int = Field(default=0, ge=0, description="Number of agent turns")
+
+
+class ThreadTitleUpdate(BaseModel):
+    """Request body for renaming a thread."""
+
+    title: str = Field(..., max_length=255, description="New thread title")
+
+
+class ThreadListItem(BaseModel):
+    """Lightweight thread summary (no messages)."""
+
+    id: str
+    title: Optional[str]
+    model: Optional[str]
+    message_count: int
+    total_cost_usd: Optional[Decimal]
+    total_turns: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ThreadDetail(ThreadListItem):
+    """Full thread including messages."""
+
+    messages: List[Any]
+
+    model_config = {"from_attributes": True}

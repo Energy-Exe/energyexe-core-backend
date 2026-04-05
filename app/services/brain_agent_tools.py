@@ -23,6 +23,27 @@ from app.models.country import Country
 logger = structlog.get_logger(__name__)
 
 
+MAX_TOOL_RESULT_CHARS = 8000
+
+
+def _cap_result(result_dict: dict) -> dict:
+    """Cap tool result JSON to MAX_TOOL_RESULT_CHARS. Returns valid MCP content."""
+    text = json.dumps(result_dict, default=str)
+    if len(text) <= MAX_TOOL_RESULT_CHARS:
+        return {"content": [{"type": "text", "text": text}]}
+    # Find the largest list field and trim it
+    for key, val in sorted(result_dict.items(), key=lambda x: len(json.dumps(x[1], default=str)) if isinstance(x[1], (list, dict)) else 0, reverse=True):
+        if isinstance(val, list) and len(val) > 5:
+            original_len = len(val)
+            result_dict[key] = val[:20]  # Keep first 20 items
+            result_dict["_truncated"] = True
+            result_dict["_note"] = f"Showing 20 of {original_len} items in '{key}'. Narrow your query for complete data."
+            text = json.dumps(result_dict, default=str)
+            if len(text) <= MAX_TOOL_RESULT_CHARS:
+                break
+    return {"content": [{"type": "text", "text": json.dumps(result_dict, default=str)[:MAX_TOOL_RESULT_CHARS]}]}
+
+
 def _parse_date(val: Optional[str], default: date) -> date:
     if not val:
         return default
@@ -220,7 +241,7 @@ async def query_generation_data(args: dict[str, Any], db: AsyncSession) -> dict[
         "data_hours": s.data_points,
         "breakdown": breakdown,
     }
-    return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}
+    return _cap_result(result)
 
 
 @tool(
@@ -287,7 +308,7 @@ async def list_windfarms(args: dict[str, Any], db: AsyncSession) -> dict[str, An
             for wf in windfarms
         ],
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -394,7 +415,7 @@ async def query_prices(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]
         "capture_rate_pct": round(capture_rate, 1) if capture_rate else None,
         "monthly_breakdown": monthly,
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -451,7 +472,7 @@ async def query_weather(args: dict[str, Any], db: AsyncSession) -> dict[str, Any
         "avg_wind_direction_deg": round(float(row.avg_direction), 0) if row.avg_direction else None,
         "data_points": row.data_points,
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -527,7 +548,7 @@ async def query_financials(args: dict[str, Any], db: AsyncSession) -> dict[str, 
         "financial_entities": [{"id": e.id, "name": e.name} for e in entities],
         "records": data_records,
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -621,7 +642,7 @@ async def run_sql_query(args: dict[str, Any], db: AsyncSession) -> dict[str, Any
         if len(serialized_rows) < total_rows:
             data["note"] = f"Showing {len(serialized_rows)} of {total_rows} rows. Add LIMIT or narrow filters for full control."
 
-        return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+        return _cap_result(data)
     except Exception as e:
         logger.error("brain_agent_sql_error", error=str(e), sql=sql_str[:200])
         return {
@@ -708,7 +729,7 @@ async def get_windfarm_info(args: dict[str, Any], db: AsyncSession) -> dict[str,
             if wo.owner
         ],
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -762,7 +783,7 @@ async def search_by_country_or_region(args: dict[str, Any], db: AsyncSession) ->
             for wf in windfarms
         ],
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -816,7 +837,7 @@ async def get_data_availability(args: dict[str, Any], db: AsyncSession) -> dict[
             "total_records": w.count,
         },
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -841,7 +862,7 @@ async def compare_windfarms(args: dict[str, Any], db: AsyncSession) -> dict[str,
         "period_days": period_days,
         "windfarms": stats,
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -901,7 +922,7 @@ async def get_portfolio_info(args: dict[str, Any], db: AsyncSession) -> dict[str
             float(wf.nameplate_capacity_mw) for _, wf in items if wf.nameplate_capacity_mw
         ),
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -944,7 +965,7 @@ async def get_anomalies(args: dict[str, Any], db: AsyncSession) -> dict[str, Any
             for a in anomalies
         ],
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -989,7 +1010,7 @@ async def get_ppa_info(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]
             for p in ppas
         ],
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 @tool(
@@ -1036,7 +1057,7 @@ async def get_alerts(args: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
             for r in rules
         ],
     }
-    return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
+    return _cap_result(data)
 
 
 # ─── MCP Server creation ────────────────────────────────────────────────

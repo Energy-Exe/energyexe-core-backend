@@ -10,11 +10,20 @@ from typing import List
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db
+from app.models.agent_thread import AgentThread
 from app.models.user import User
-from app.schemas.brain_agent import AgentChatRequest, AgentInterruptRequest
+from app.schemas.brain_agent import (
+    AgentChatRequest,
+    AgentInterruptRequest,
+    ThreadDetail,
+    ThreadListItem,
+    ThreadTitleUpdate,
+    ThreadUpsertRequest,
+)
 from app.services.brain_agent_service import BrainAgentService
 
 logger = structlog.get_logger(__name__)
@@ -156,3 +165,130 @@ async def get_session_file(
 
     media_type = mimetypes.guess_type(safe_filename)[0] or "application/octet-stream"
     return FileResponse(file_path, media_type=media_type)
+
+
+# ---------------------------------------------------------------------------
+# Thread persistence endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/threads", response_model=List[ThreadListItem])
+async def list_threads(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> List[ThreadListItem]:
+    """List the current user's chat threads (lightweight, no messages)."""
+    result = await db.execute(
+        select(AgentThread)
+        .where(AgentThread.user_id == current_user.id)
+        .order_by(AgentThread.updated_at.desc())
+        .limit(50)
+    )
+    threads = result.scalars().all()
+    return [ThreadListItem.model_validate(t) for t in threads]
+
+
+@router.get("/threads/{thread_id}", response_model=ThreadDetail)
+async def get_thread(
+    thread_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ThreadDetail:
+    """Get a full thread including messages. Validates user ownership."""
+    result = await db.execute(
+        select(AgentThread).where(
+            AgentThread.id == thread_id,
+            AgentThread.user_id == current_user.id,
+        )
+    )
+    thread = result.scalar_one_or_none()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return ThreadDetail.model_validate(thread)
+
+
+@router.put("/threads/{thread_id}", response_model=ThreadDetail)
+async def upsert_thread(
+    thread_id: str,
+    body: ThreadUpsertRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ThreadDetail:
+    """Create or update a chat thread."""
+    result = await db.execute(
+        select(AgentThread).where(AgentThread.id == thread_id)
+    )
+    thread = result.scalar_one_or_none()
+
+    if thread:
+        # Validate ownership before updating
+        if thread.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        thread.title = body.title
+        thread.model = body.model
+        thread.messages = body.messages
+        thread.message_count = body.message_count
+        thread.total_cost_usd = body.total_cost_usd
+        thread.total_turns = body.total_turns
+    else:
+        thread = AgentThread(
+            id=thread_id,
+            user_id=current_user.id,
+            title=body.title,
+            model=body.model,
+            messages=body.messages,
+            message_count=body.message_count,
+            total_cost_usd=body.total_cost_usd,
+            total_turns=body.total_turns,
+        )
+        db.add(thread)
+
+    await db.commit()
+    await db.refresh(thread)
+    return ThreadDetail.model_validate(thread)
+
+
+@router.delete("/threads/{thread_id}")
+async def delete_thread(
+    thread_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Delete a chat thread. Validates user ownership."""
+    result = await db.execute(
+        select(AgentThread).where(
+            AgentThread.id == thread_id,
+            AgentThread.user_id == current_user.id,
+        )
+    )
+    thread = result.scalar_one_or_none()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    await db.delete(thread)
+    await db.commit()
+    return {"success": True, "thread_id": thread_id}
+
+
+@router.patch("/threads/{thread_id}/title", response_model=ThreadDetail)
+async def rename_thread(
+    thread_id: str,
+    body: ThreadTitleUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ThreadDetail:
+    """Rename a chat thread. Validates user ownership."""
+    result = await db.execute(
+        select(AgentThread).where(
+            AgentThread.id == thread_id,
+            AgentThread.user_id == current_user.id,
+        )
+    )
+    thread = result.scalar_one_or_none()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    thread.title = body.title
+    await db.commit()
+    await db.refresh(thread)
+    return ThreadDetail.model_validate(thread)

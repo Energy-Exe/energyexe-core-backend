@@ -45,8 +45,10 @@ from .financial_entity import FinancialEntity
 from .windfarm_financial_entity import WindfarmFinancialEntity
 from .financial_data import FinancialData
 from .exchange_rate import ExchangeRate
+from .agent_thread import AgentThread
 
 __all__ = [
+    "AgentThread",
     "AuditLog",
     "Bidzone",
     "Cable",
