@@ -7,7 +7,7 @@ Usage: python3 db.py "SELECT * FROM windfarms LIMIT 10"
 """
 import json, os, re, sys
 
-MAX_RESULT_CHARS = 15000
+MAX_ROWS = 30
 DEFAULT_LIMIT = 100
 STATEMENT_TIMEOUT_MS = 30000
 
@@ -67,20 +67,15 @@ def run_query(sql: str) -> str:
         rows = cur.fetchall()
         total_rows = len(rows)
 
-        # Serialize with size cap
-        serialized = []
-        chars = 0
-        for row in rows:
-            row_dict = {col: (str(v) if v is not None else None) for col, v in zip(columns, row)}
-            row_json = json.dumps(row_dict, default=str)
-            chars += len(row_json) + 2
-            if chars > MAX_RESULT_CHARS and serialized:
-                break
-            serialized.append(row_dict)
+        # Cap rows to MAX_ROWS to prevent agent output overflow
+        serialized = [
+            {col: (str(v) if v is not None else None) for col, v in zip(columns, row)}
+            for row in rows[:MAX_ROWS]
+        ]
 
         data = {"columns": columns, "row_count": total_rows, "rows_returned": len(serialized), "rows": serialized}
-        if len(serialized) < total_rows:
-            data["note"] = f"Showing {len(serialized)} of {total_rows} rows. Add LIMIT or narrow your query."
+        if total_rows > MAX_ROWS:
+            data["note"] = f"Showing first {MAX_ROWS} of {total_rows} rows. Use OFFSET {MAX_ROWS} LIMIT {MAX_ROWS} for next page, or narrow your query."
 
         cur.close()
         conn.close()
