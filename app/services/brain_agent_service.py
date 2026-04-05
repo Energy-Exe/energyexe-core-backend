@@ -262,6 +262,7 @@ class BrainAgentService:
             env={
                 "DATABASE_URL": settings.database_url_sync,
                 "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "600000",
+                "CLAUDECODE": "",  # Unset to prevent nested session detection
             },
         )
 
