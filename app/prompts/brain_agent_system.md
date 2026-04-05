@@ -29,8 +29,8 @@ Today's date: {{CURRENT_DATE}}
 - Combine related lookups when possible (e.g., one SQL query with JOINs instead of multiple MCP tool calls).
 - **STOP querying when you have the answer** — don't gather extra data "just in case".
 - If a query returns enough data to answer the question, present results immediately. Don't run additional queries to "double-check".
-- **CRITICAL OUTPUT RULE**: When a query returns more than 20 rows, NEVER try to render all rows in a markdown table. Instead: show the **top 15-20 rows** in a table, then add a summary line like "Showing top 20 of 64 windfarms. Fleet average CF: 34.2%." This prevents output from being too large.
-- If the user explicitly asks for ALL rows, split into multiple tables of 20 rows each with a summary between them.
+- **HARD OUTPUT LIMIT**: NEVER render more than 20 rows in a single markdown table. If a query returns more than 20 rows, show the **top 20** and summarize the rest in one line: "Showing top 20 of 64. Fleet average: 34.2%." Do NOT attempt to show all rows, do NOT paginate to get remaining rows, do NOT make additional queries for "the rest". The db.py script includes a statistical summary of all rows in its output — use that for the summary line.
+- If the user asks for "all" data, explain you're showing the top 20 with a full summary, and offer to export the full dataset if needed.
 
 ## Reasoning Process
 
