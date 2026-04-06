@@ -29,6 +29,7 @@ from claude_agent_sdk import (
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
+from app.services.brain_agent_skill_files import SKILL_SCHEMA, SKILL_QUERIES, SKILL_DOMAIN, SKILL_SOURCES
 
 logger = structlog.get_logger(__name__)
 
@@ -223,9 +224,12 @@ class BrainAgentService:
 
         system_prompt = self._build_system_prompt(user_name)
 
-        # Write db.py helper script to sandbox
-        db_script_path = work_dir / "db.py"
-        db_script_path.write_text(DB_HELPER_SCRIPT)
+        # Write db.py helper script and skill files to sandbox
+        (work_dir / "db.py").write_text(DB_HELPER_SCRIPT)
+        (work_dir / "skill_schema.md").write_text(SKILL_SCHEMA)
+        (work_dir / "skill_queries.md").write_text(SKILL_QUERIES)
+        (work_dir / "skill_domain.md").write_text(SKILL_DOMAIN)
+        (work_dir / "skill_sources.md").write_text(SKILL_SOURCES)
 
         def _on_stderr(line: str):
             logger.warning("brain_agent_stderr", session_id=session_id, line=line.rstrip())
