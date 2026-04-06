@@ -1,9 +1,13 @@
 """DB helper script template — written to the agent sandbox at session creation."""
 
 DB_HELPER_SCRIPT = '''#!/usr/bin/env python3
-"""EnergyExe Database Query Helper. Read-only, auto-limited, JSON output.
+"""EnergyExe Database Query Helper. Read-only, auto-limited, text output.
 
 Usage: python3 db.py "SELECT * FROM windfarms LIMIT 10"
+
+Output is a text table with max 20 displayed rows.
+If more rows exist, a statistical summary of ALL rows is appended.
+OFFSET is stripped — pagination is not supported.
 """
 import json, os, re, sys
 
@@ -18,7 +22,7 @@ DANGEROUS_KEYWORDS = [
 
 
 def validate_sql(sql: str) -> str:
-    """Validate SQL is read-only and add LIMIT if missing."""
+    """Validate SQL is read-only. Strip OFFSET (no pagination). Add LIMIT if missing."""
     sql = sql.strip().rstrip(";").strip()
     if not sql:
         return json.dumps({"error": "Empty SQL query"})
@@ -35,6 +39,9 @@ def validate_sql(sql: str) -> str:
         if re.search(rf"\\b{kw}\\b", upper):
             return json.dumps({"error": f"Mutation keyword \\'{kw}\\' not allowed."})
 
+    # Strip OFFSET — pagination is not supported, all data comes in one query
+    sql = re.sub(r"\\bOFFSET\\s+\\d+", "", sql, flags=re.IGNORECASE)
+
     # Auto-add LIMIT if not present
     if "LIMIT" not in upper:
         sql += f" LIMIT {DEFAULT_LIMIT}"
@@ -43,7 +50,7 @@ def validate_sql(sql: str) -> str:
 
 
 def run_query(sql: str) -> str:
-    """Execute SQL and return JSON result."""
+    """Execute SQL and return text table result."""
     import psycopg2
 
     db_url = os.environ.get("DATABASE_URL")
@@ -67,9 +74,13 @@ def run_query(sql: str) -> str:
         rows = cur.fetchall()
         total_rows = len(rows)
 
-        # Format as compact text table
-        display_rows = rows[:MAX_DISPLAY_ROWS]
+        if total_rows == 0:
+            cur.close()
+            conn.close()
+            return "No rows returned."
 
+        # Build text table (top MAX_DISPLAY_ROWS only)
+        display_rows = rows[:MAX_DISPLAY_ROWS]
         lines = []
         lines.append(" | ".join(columns))
         lines.append("-" * min(len(lines[0]), 120))
@@ -82,19 +93,28 @@ def run_query(sql: str) -> str:
             header += f" (showing top {MAX_DISPLAY_ROWS})"
         result_text = header + "\\n" + "\\n".join(lines)
 
-        # For large results, append statistical summary of numeric columns
+        # For large results, build a comprehensive summary from ALL rows
         if total_rows > MAX_DISPLAY_ROWS:
-            try:
-                num_cols = []
-                for i, col in enumerate(columns):
-                    vals = [row[i] for row in rows if row[i] is not None]
-                    if vals and all(isinstance(v, (int, float)) or (isinstance(v, str) and v.replace('.','',1).replace('-','',1).isdigit()) for v in vals[:5]):
-                        num_vals = [float(v) for v in vals]
-                        num_cols.append(f"{col}: min={min(num_vals):.1f}, max={max(num_vals):.1f}, avg={sum(num_vals)/len(num_vals):.1f}")
-                if num_cols:
-                    result_text += "\\nSummary (all rows): " + " | ".join(num_cols)
-            except Exception:
-                pass
+            summary_parts = []
+            for i, col in enumerate(columns):
+                vals = [row[i] for row in rows if row[i] is not None]
+                if not vals:
+                    continue
+                # Check if numeric
+                try:
+                    num_vals = [float(v) for v in vals]
+                    summary_parts.append(
+                        f"{col}: min={min(num_vals):.1f}, max={max(num_vals):.1f}, "
+                        f"avg={sum(num_vals)/len(num_vals):.1f}, median={sorted(num_vals)[len(num_vals)//2]:.1f}"
+                    )
+                except (ValueError, TypeError):
+                    # Non-numeric: show unique count
+                    unique = len(set(str(v) for v in vals))
+                    summary_parts.append(f"{col}: {unique} unique values")
+
+            result_text += "\\n\\nSummary of ALL {0} rows:\\n".format(total_rows)
+            result_text += "\\n".join(summary_parts)
+            result_text += "\\n\\nNote: This is all the data. Do NOT make additional queries for remaining rows."
 
         cur.close()
         conn.close()
