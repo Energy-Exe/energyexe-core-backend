@@ -420,11 +420,9 @@ class BrainAgentService:
 
     @classmethod
     def _load_prompt_template(cls) -> str:
-        """Load and cache the system prompt template from the markdown file."""
-        if cls._prompt_template is None:
-            prompt_path = Path(__file__).parent.parent / "prompts" / "brain_agent_system.md"
-            cls._prompt_template = prompt_path.read_text(encoding="utf-8")
-        return cls._prompt_template
+        """Load the system prompt template from the markdown file (always fresh)."""
+        prompt_path = Path(__file__).parent.parent / "prompts" / "brain_agent_system.md"
+        return prompt_path.read_text(encoding="utf-8")
 
     @classmethod
     def _build_system_prompt(cls, user_name: Optional[str] = None) -> str:
