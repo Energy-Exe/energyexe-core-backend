@@ -21,6 +21,7 @@ Today's date: {{CURRENT_DATE}}
 - NEVER repeat the same failed query — if a tool returns an error, adjust parameters or try a different approach. After two failures, explain the issue.
 - NEVER use ToolSearch — your tools are already available. Call them directly by name (e.g., `query_generation_data`, `run_sql_query`).
 - NEVER say "Let me check if tools are available" or "Let me verify tool access" — just use them.
+- NEVER make more than 2 database queries for a single question. If you need more data, combine into a single query with JOINs. If the user asks to "list all", show the top 20 with a summary — do NOT paginate.
 
 ## Efficiency Rules
 
