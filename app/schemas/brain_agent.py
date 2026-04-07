@@ -25,6 +25,10 @@ class AgentChatRequest(BaseModel):
         default=None,
         description="Claude model to use. Defaults to claude-sonnet-4-6.",
     )
+    conversation_history: Optional[List[Any]] = Field(
+        default=None,
+        description="Prior messages for context when resuming a conversation with a new session.",
+    )
 
 
 class AgentInterruptRequest(BaseModel):
