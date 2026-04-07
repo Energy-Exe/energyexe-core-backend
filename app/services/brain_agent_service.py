@@ -229,7 +229,11 @@ class BrainAgentService:
 
         settings = get_settings()
 
-        system_prompt = self._build_system_prompt(user_name)
+        # Resolve source code repo paths (for read-only code access)
+        from app.services.brain_agent_repo_manager import get_repo_dirs
+        repo_dirs_str = get_repo_dirs()
+
+        system_prompt = self._build_system_prompt(user_name, repo_dirs=repo_dirs_str)
 
         # Write db.py helper script and skill files to sandbox
         (work_dir / "db.py").write_text(DB_HELPER_SCRIPT)
@@ -240,10 +244,6 @@ class BrainAgentService:
 
         def _on_stderr(line: str):
             logger.warning("brain_agent_stderr", session_id=session_id, line=line.rstrip())
-
-        # Grant read-only access to the source repositories
-        from app.services.brain_agent_repo_manager import get_repo_dirs
-        repo_dirs_str = get_repo_dirs()
 
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
@@ -500,7 +500,11 @@ class BrainAgentService:
         return prompt_path.read_text(encoding="utf-8")
 
     @classmethod
-    def _build_system_prompt(cls, user_name: Optional[str] = None) -> str:
+    def _build_system_prompt(
+        cls,
+        user_name: Optional[str] = None,
+        repo_dirs: Optional[list] = None,
+    ) -> str:
         """Build the system prompt for the Brain Agent."""
         prompt = cls._load_prompt_template()
         prompt = prompt.replace("{{CURRENT_DATE}}", date.today().isoformat())
@@ -508,4 +512,31 @@ class BrainAgentService:
             "{{USER_NAME}}",
             f"Currently helping: {user_name}" if user_name else "",
         )
+
+        # Inject the actual absolute repo paths so the agent knows where to look
+        if repo_dirs:
+            repo_lines = []
+            for d in repo_dirs:
+                name = Path(d).name
+                # In Docker the backend is at /app/ — label it clearly
+                if name == "app" or d.endswith("energyexe-core-backend"):
+                    repo_lines.append(
+                        f"- **Backend**: `{d}` — FastAPI backend (Python). "
+                        f"Key dirs: `{d}/app/api/`, `{d}/app/services/`, `{d}/app/models/`, `{d}/app/core/`"
+                    )
+                elif "admin-ui" in name:
+                    repo_lines.append(
+                        f"- **Admin UI**: `{d}` — Admin dashboard (React + TypeScript). "
+                        f"Key dirs: `{d}/src/routes/`, `{d}/src/components/`, `{d}/src/lib/`, `{d}/src/hooks/`"
+                    )
+                elif "client-ui" in name:
+                    repo_lines.append(
+                        f"- **Client UI**: `{d}` — Client-facing UI (React + TypeScript). "
+                        f"Key dirs: `{d}/src/routes/`, `{d}/src/components/`, `{d}/src/lib/`"
+                    )
+            repo_block = "\n".join(repo_lines) if repo_lines else "No repositories available."
+        else:
+            repo_block = "No repositories available — code exploration is not possible in this session."
+
+        prompt = prompt.replace("{{REPO_PATHS}}", repo_block)
         return prompt
