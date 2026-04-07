@@ -473,7 +473,7 @@ class BrainAgentService:
             ],
             cwd=work_dir,
             add_dirs=repo_dirs_str,
-            max_turns=50,  # Prevent infinite tool-call loops (20+ Reads with no answer)
+            max_turns=15,  # Enough for query + chart; prevents runaway retry loops
             max_budget_usd=None,
             permission_mode="bypassPermissions",
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
