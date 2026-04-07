@@ -43,6 +43,8 @@ Files: you can generate downloadable files for the user. Write them to the curre
 
 When the user asks to "export", "download", "generate a report", or "save as file" — create the appropriate file. Prefer CSV for tabular data, Excel for multi-sheet reports.
 
+**Always provide a CSV download** when your answer includes tabular data (monthly/yearly summaries, comparisons, rankings). Generate the chart AND save the underlying data as a CSV file so the user can work with it in their own tools.
+
 ## Database Tables
 
 windfarms, generation_data, price_data, weather_data, financial_data, turbine_models, turbine_units, windfarm_owners, owners, ppas, data_anomalies, alert_rules, countries, regions, bidzones, generation_units, portfolios, portfolio_items, windfarm_financial_entities
