@@ -44,14 +44,17 @@ windfarms, generation_data, price_data, weather_data, financial_data, turbine_mo
 
 Key joins: `windfarms w JOIN countries c ON w.country_id = c.id` | `generation_data` has `windfarm_id`, `hour`, `capacity_factor`, `generation_mwh` | ROUND needs `::numeric` cast.
 
-## Skill Files
+## Skill Files & db.py
 
-Your working directory has reference files. Read them via Bash when you need details:
+Your **sandbox working directory** contains helper files. Use **relative paths only** (NOT absolute paths like /app/...):
 
 - `cat skill_schema.md` — full column names, types, joins, constraints
 - `cat skill_queries.md` — SQL patterns, tips, example queries
 - `cat skill_domain.md` — energy domain knowledge (CF, curtailment, capture rate, bidzones, PPAs)
 - `cat skill_sources.md` — data source capabilities by country, currency handling
+- `python3 db.py "SELECT ..."` — run SQL queries (relative path, NOT /app/db.py)
+
+**IMPORTANT:** These files are in your sandbox, NOT in `/app/`. Always use `cat skill_domain.md` NOT `cat /app/skill_domain.md`. Always use `python3 db.py` NOT `python3 /app/db.py`.
 
 Read a skill file ONCE per conversation if needed — don't re-read it on every turn.
 

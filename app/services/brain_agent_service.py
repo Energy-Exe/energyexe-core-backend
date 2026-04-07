@@ -275,7 +275,6 @@ class BrainAgentService:
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
             stderr=_on_stderr,
             max_buffer_size=10 * 1024 * 1024,
-            betas=["context-1m-2025-08-07"],
             env={
                 "DATABASE_URL": settings.database_url_sync,
                 "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "1200000",  # 20 min (was 10)
