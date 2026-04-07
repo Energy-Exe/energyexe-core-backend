@@ -44,11 +44,14 @@ MAX_CONCURRENT_SESSIONS = 20
 class SSEEvent:
     """A single SSE event to stream to the client."""
 
-    event_type: str  # text_delta, tool_use, tool_result, system, result, error, image
+    event_type: str  # text_delta, tool_use, tool_result, system, result, error, image, file
     data: Dict[str, Any]
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
+
+# Files placed in the sandbox at session creation — skip when scanning for agent output
+SANDBOX_SEED_FILES = {"db.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md"}
 
 
 @dataclass
@@ -62,7 +65,7 @@ class AgentSession:
     last_activity: float
     is_busy: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    known_images: set = field(default_factory=set)
+    known_files: set = field(default_factory=set)
     has_any_text: bool = False  # tracks if any text_delta was emitted this turn (for dedup)
 
 
@@ -501,13 +504,13 @@ class BrainAgentService:
         # Enter the async context manager
         await client.__aenter__()
 
-        # Pre-populate known_images with existing files so old images
+        # Pre-populate known_files with existing files so old outputs
         # from prior turns aren't re-sent on a recreated session.
-        existing_images = set()
+        existing_files = set()
         if work_dir.exists():
             for f in work_dir.iterdir():
-                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
-                    existing_images.add(f.name)
+                if f.is_file() and f.name not in SANDBOX_SEED_FILES:
+                    existing_files.add(f.name)
 
         session = AgentSession(
             session_id=session_id,
@@ -515,21 +518,36 @@ class BrainAgentService:
             client=client,
             created_at=time.time(),
             last_activity=time.time(),
-            known_images=existing_images,
+            known_files=existing_files,
         )
         self._sessions[session_id] = session
         return session, True
 
-    def _scan_for_new_images(self, session: AgentSession) -> list:
-        """Scan the session sandbox for new image files."""
+    def _scan_for_new_files(self, session: AgentSession) -> list:
+        """Scan the session sandbox for new agent-generated files (images, CSVs, etc.)."""
         work_dir = Path(f"/tmp/brain-agent/{session.user_id}/{session.session_id}")
-        new_images = []
+        new_files = []
         if work_dir.exists():
             for f in work_dir.iterdir():
-                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS and f.name not in session.known_images:
-                    session.known_images.add(f.name)
-                    new_images.append(f.name)
-        return new_images
+                if (
+                    f.is_file()
+                    and f.name not in session.known_files
+                    and f.name not in SANDBOX_SEED_FILES
+                ):
+                    session.known_files.add(f.name)
+                    new_files.append(f.name)
+        return new_files
+
+    @staticmethod
+    async def _upload_file_to_s3(user_id: int, thread_id: str, filename: str, file_path: Path):
+        """Upload a file to S3 for permanent storage. Failures are logged, not raised."""
+        try:
+            from app.services.s3_service import upload_file
+
+            key = f"brain-agent/{user_id}/{thread_id}/{Path(filename).name}"
+            await upload_file(key, file_path)
+        except Exception as e:
+            logger.error("brain_agent_file_upload_failed", error=str(e), filename=filename)
 
     async def _process_message(self, message, session: AgentSession = None) -> AsyncGenerator[SSEEvent, None]:
         """Convert an Agent SDK message into SSE events."""
@@ -631,14 +649,21 @@ class BrainAgentService:
                         },
                     )
 
-                    # Scan for new images after tool execution
+                    # Scan for new files after tool execution (images, CSVs, etc.)
                     if session:
-                        for img_name in self._scan_for_new_images(session):
+                        for fname in self._scan_for_new_files(session):
+                            file_path = Path(f"/tmp/brain-agent/{session.user_id}/{session.session_id}") / fname
+                            await self._upload_file_to_s3(
+                                session.user_id, session.session_id, fname, file_path
+                            )
+                            # Emit as "image" for image files, "file" for others
+                            ext = Path(fname).suffix.lower()
+                            event_type = "image" if ext in IMAGE_EXTENSIONS else "file"
                             yield SSEEvent(
-                                event_type="image",
+                                event_type=event_type,
                                 data={
-                                    "url": f"/brain-agent/sessions/{session.session_id}/files/{img_name}",
-                                    "filename": img_name,
+                                    "url": f"/brain-agent/files/{session.user_id}/{session.session_id}/{fname}",
+                                    "filename": fname,
                                 },
                             )
 

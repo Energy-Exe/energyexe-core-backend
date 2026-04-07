@@ -128,6 +128,10 @@ class Settings(BaseSettings):
     CODE_REPOS_DIR: str = "/tmp/energyexe-repos"
     GITHUB_TOKEN: str = ""  # PAT for cloning private repos at startup
 
+    # AWS S3 for brain agent image persistence
+    S3_BUCKET_NAME: str = ""  # Empty = S3 disabled (local dev)
+    S3_REGION: str = "eu-north-1"  # Same region as RDS
+
     # Valkey/Redis settings for Celery
     VALKEY_PUBLIC_HOST: str = ""  # Set via environment variable
     VALKEY_PUBLIC_PORT: str = "6379"
@@ -137,6 +141,11 @@ class Settings(BaseSettings):
     # Celery settings
     CELERY_BROKER_URL: Optional[str] = None
     CELERY_RESULT_BACKEND: Optional[str] = None
+
+    @property
+    def s3_enabled(self) -> bool:
+        """Check if S3 image storage is configured."""
+        return bool(self.S3_BUCKET_NAME)
 
     @property
     def database_url_sync(self) -> str:
