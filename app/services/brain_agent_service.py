@@ -1,15 +1,13 @@
 """Brain Agent service — orchestrates Claude Agent SDK sessions with energy data tools."""
 
 import asyncio
-import json
-import os
 import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import structlog
 from sqlalchemy import select
@@ -20,12 +18,15 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     ResultMessage,
+    SessionMessage,
     SystemMessage,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
     UserMessage,
+    get_session_messages,
 )
+from claude_agent_sdk.types import StreamEvent
 
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
@@ -82,7 +83,6 @@ class BrainAgentService:
         user_name: Optional[str] = None,
         model: Optional[str] = None,
         conversation_history: Optional[list] = None,
-        thread_id: Optional[str] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Send a prompt to the agent and yield SSE events."""
         if not session_id:
@@ -90,39 +90,6 @@ class BrainAgentService:
 
         # Clean up stale sessions
         self._cleanup_stale_sessions()
-
-        # Progressive save state — build messages on the backend
-        # so the DB is the source of truth (frontend polls for state)
-        save_thread_id = thread_id
-        last_save_time = time.time()
-        SAVE_INTERVAL = 5  # Save to DB every 5 seconds
-
-        # Load existing messages from the thread (if any)
-        existing_messages: list = []
-        if save_thread_id:
-            existing_messages = await self._load_thread_messages(save_thread_id, user_id)
-
-        # The user message for this turn
-        user_msg = {
-            "id": str(uuid.uuid4()),
-            "type": "user",
-            "content": prompt if not conversation_history else prompt.split("</conversation_history>")[-1].strip(),
-            "timestamp": int(time.time() * 1000),
-        }
-        # Current assistant message being built
-        assistant_msg: Dict[str, Any] = {
-            "id": str(uuid.uuid4()),
-            "type": "assistant",
-            "content": "",
-            "toolCalls": [],
-            "timestamp": int(time.time() * 1000),
-            "isStreaming": True,
-        }
-        current_messages = existing_messages + [user_msg, assistant_msg]
-
-        # Mark thread as streaming
-        if save_thread_id:
-            await self._save_thread_state(save_thread_id, user_id, current_messages, is_streaming=True, model=model)
 
         try:
             session, is_new_session = await self._get_or_create_session(user_id, session_id, user_name, model)
@@ -160,29 +127,54 @@ class BrainAgentService:
 
                 # Stream response messages
                 got_result = False
+                result_message = None
                 async for message in session.client.receive_messages():
                     async for event in self._process_message(message, session):
-                        # Build message state from events for progressive DB save
-                        self._accumulate_event(event, assistant_msg)
                         yield event
-
-                    # Periodically save to DB
-                    now = time.time()
-                    if save_thread_id and (now - last_save_time) >= SAVE_INTERVAL:
-                        current_messages[-1] = assistant_msg  # Update assistant msg in place
-                        await self._save_thread_state(
-                            save_thread_id, user_id, current_messages, is_streaming=True, model=model,
-                        )
-                        last_save_time = now
 
                     # ResultMessage means the agent is done
                     if isinstance(message, ResultMessage):
+                        result_message = message
                         got_result = True
                         break
 
-                # If the message stream ended without a ResultMessage, emit a
-                # synthetic result so the frontend knows the turn is over.
-                if not got_result:
+                if got_result and result_message:
+                    # Read authoritative conversation from SDK transcript
+                    work_dir = Path(f"/tmp/brain-agent/{user_id}/{session_id}")
+                    try:
+                        sdk_messages = get_session_messages(
+                            session_id=session.client._session_id if hasattr(session.client, '_session_id') else session_id,
+                            directory=str(work_dir),
+                        )
+                        final_messages = self._convert_sdk_messages(sdk_messages)
+                    except Exception as e:
+                        logger.error("brain_agent_get_session_messages_error", error=str(e), session_id=session_id)
+                        final_messages = []
+
+                    # Save to DB
+                    if final_messages:
+                        await self._save_thread_to_db(
+                            session_id=session_id,
+                            user_id=user_id,
+                            messages=final_messages,
+                            model=model,
+                            cost_usd=result_message.total_cost_usd if hasattr(result_message, "total_cost_usd") else None,
+                            num_turns=result_message.num_turns if hasattr(result_message, "num_turns") else 0,
+                        )
+
+                    # Yield result with authoritative messages
+                    yield SSEEvent(
+                        event_type="result",
+                        data={
+                            "num_turns": result_message.num_turns if hasattr(result_message, "num_turns") else 0,
+                            "duration_ms": result_message.duration_ms if hasattr(result_message, "duration_ms") else 0,
+                            "cost_usd": result_message.total_cost_usd if hasattr(result_message, "total_cost_usd") else None,
+                            "session_id": session_id,
+                            "messages": final_messages,
+                        },
+                    )
+                else:
+                    # Stream ended without a ResultMessage — emit a synthetic result
                     logger.warning(
                         "brain_agent_stream_ended_without_result",
                         session_id=session_id,
@@ -207,111 +199,172 @@ class BrainAgentService:
         finally:
             if session_id in self._sessions:
                 self._sessions[session_id].is_busy = False
-            # Final save: mark streaming complete and persist final state
-            if save_thread_id:
-                assistant_msg["isStreaming"] = False
-                current_messages[-1] = assistant_msg
-                try:
-                    await self._save_thread_state(
-                        save_thread_id, user_id, current_messages, is_streaming=False, model=model,
-                    )
-                except Exception as e:
-                    logger.error("brain_agent_final_save_failed", error=str(e))
 
     @staticmethod
-    def _accumulate_event(event: SSEEvent, assistant_msg: Dict[str, Any]):
-        """Update the assistant message dict from an SSE event (for progressive save)."""
-        if event.event_type == "text_delta":
-            assistant_msg["content"] += event.data.get("text", "")
-        elif event.event_type == "tool_use":
-            assistant_msg.setdefault("toolCalls", []).append({
-                "tool_name": event.data.get("tool_name", ""),
-                "tool_id": event.data.get("tool_id", ""),
-                "input": event.data.get("input", {}),
-                "isLoading": True,
-            })
-        elif event.event_type == "tool_result":
-            tool_id = event.data.get("tool_id")
-            for tc in assistant_msg.get("toolCalls", []):
-                if tc.get("tool_id") == tool_id:
-                    tc["result"] = event.data.get("summary", "")
-                    tc["isLoading"] = False
-                    tc["isError"] = event.data.get("is_error", False)
-                    break
-        elif event.event_type == "image":
-            assistant_msg.setdefault("images", []).append({
-                "url": event.data.get("url", ""),
-                "filename": event.data.get("filename", ""),
-            })
-        elif event.event_type == "status":
-            assistant_msg["statusPhase"] = event.data.get("phase")
+    def _convert_sdk_messages(sdk_messages: List[SessionMessage]) -> List[Dict[str, Any]]:
+        """Convert SDK SessionMessage list to our AgentMessage format.
 
-    async def _save_thread_state(
+        Each SessionMessage has:
+        - type: "user" or "assistant"
+        - uuid: unique message ID
+        - session_id: session ID
+        - message: raw Anthropic API message dict with role and content blocks
+        """
+        messages: List[Dict[str, Any]] = []
+
+        for sm in sdk_messages:
+            raw_msg = sm.message
+            if not raw_msg:
+                continue
+
+            content_blocks = raw_msg.get("content", []) if isinstance(raw_msg, dict) else []
+
+            if sm.type == "user":
+                # Extract text content from user message
+                text_parts = []
+                for block in content_blocks:
+                    if isinstance(block, str):
+                        text_parts.append(block)
+                    elif isinstance(block, dict):
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "tool_result":
+                            # Tool results are part of user messages in Anthropic API format;
+                            # we attach them to the preceding assistant message's toolCalls below.
+                            pass
+
+                content = "\n".join(text_parts).strip()
+                if content:
+                    messages.append({
+                        "id": sm.uuid,
+                        "type": "user",
+                        "content": content,
+                        "timestamp": int(time.time() * 1000),
+                    })
+
+            elif sm.type == "assistant":
+                # Extract text and tool calls from assistant message
+                text_parts = []
+                tool_calls = []
+
+                for block in content_blocks:
+                    if isinstance(block, dict):
+                        block_type = block.get("type", "")
+                        if block_type == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block_type == "tool_use":
+                            tool_calls.append({
+                                "tool_name": block.get("name", ""),
+                                "tool_id": block.get("id", ""),
+                                "input": block.get("input", {}),
+                                "isLoading": False,
+                            })
+
+                content = "\n".join(text_parts).strip()
+
+                msg: Dict[str, Any] = {
+                    "id": sm.uuid,
+                    "type": "assistant",
+                    "content": content,
+                    "timestamp": int(time.time() * 1000),
+                }
+                if tool_calls:
+                    msg["toolCalls"] = tool_calls
+
+                messages.append(msg)
+
+        # Second pass: attach tool results from user messages to the corresponding
+        # assistant tool calls.
+        for i, sm in enumerate(sdk_messages):
+            if sm.type != "user":
+                continue
+            raw_msg = sm.message
+            if not raw_msg or not isinstance(raw_msg, dict):
+                continue
+            content_blocks = raw_msg.get("content", [])
+            for block in content_blocks:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    tool_use_id = block.get("tool_use_id", "")
+                    result_content = block.get("content", "")
+                    if isinstance(result_content, list):
+                        result_content = " ".join(
+                            b.get("text", "") if isinstance(b, dict) else str(b)
+                            for b in result_content
+                        )
+                    is_error = block.get("is_error", False)
+                    # Find the matching tool call in a preceding assistant message
+                    for msg in messages:
+                        if msg.get("type") == "assistant":
+                            for tc in msg.get("toolCalls", []):
+                                if tc.get("tool_id") == tool_use_id:
+                                    full_length = len(str(result_content))
+                                    is_truncated = full_length > 2000
+                                    tc["result"] = (str(result_content)[:2000] + "...") if is_truncated else str(result_content)
+                                    tc["isError"] = is_error
+                                    tc["isLoading"] = False
+
+        return messages
+
+    async def _save_thread_to_db(
         self,
-        thread_id: str,
+        session_id: str,
         user_id: int,
-        messages: list,
-        is_streaming: bool = False,
+        messages: List[Dict[str, Any]],
         model: Optional[str] = None,
+        cost_usd: Any = None,
+        num_turns: int = 0,
     ):
-        """Save current message state to the thread in DB."""
+        """Save authoritative messages to the agent thread in DB (create or update)."""
         from app.models.agent_thread import AgentThread
 
         try:
             result = await self.db.execute(
-                select(AgentThread).where(AgentThread.id == thread_id)
+                select(AgentThread).where(AgentThread.id == session_id)
             )
             thread = result.scalar_one_or_none()
+
+            # Derive title from first user message
+            title = None
+            first_user = next((m for m in messages if m.get("type") == "user"), None)
+            if first_user:
+                title = first_user.get("content", "")[:80]
 
             if thread:
                 thread.messages = messages
                 thread.message_count = len(messages)
-                thread.is_streaming = is_streaming
-                if not thread.title and messages:
-                    first_user = next((m for m in messages if m.get("type") == "user"), None)
-                    if first_user:
-                        thread.title = first_user.get("content", "")[:80]
+                thread.is_streaming = False
+                if not thread.title and title:
+                    thread.title = title
+                if cost_usd is not None:
+                    thread.total_cost_usd = cost_usd
+                if num_turns:
+                    thread.total_turns = (thread.total_turns or 0) + num_turns
             else:
-                title = None
-                first_user = next((m for m in messages if m.get("type") == "user"), None)
-                if first_user:
-                    title = first_user.get("content", "")[:80]
                 thread = AgentThread(
-                    id=thread_id,
+                    id=session_id,
                     user_id=user_id,
                     title=title,
                     model=model,
                     messages=messages,
                     message_count=len(messages),
-                    is_streaming=is_streaming,
+                    is_streaming=False,
+                    total_cost_usd=cost_usd,
+                    total_turns=num_turns or 0,
                 )
                 self.db.add(thread)
 
             await self.db.commit()
+            logger.info(
+                "brain_agent_thread_saved",
+                thread_id=session_id,
+                message_count=len(messages),
+            )
         except Exception as e:
-            logger.error("brain_agent_save_thread_error", error=str(e), thread_id=thread_id)
+            logger.error("brain_agent_save_thread_error", error=str(e), thread_id=session_id)
             try:
                 await self.db.rollback()
             except Exception:
                 pass
-
-    async def _load_thread_messages(self, thread_id: str, user_id: int) -> list:
-        """Load existing messages from a thread."""
-        from app.models.agent_thread import AgentThread
-
-        try:
-            result = await self.db.execute(
-                select(AgentThread).where(
-                    AgentThread.id == thread_id,
-                    AgentThread.user_id == user_id,
-                )
-            )
-            thread = result.scalar_one_or_none()
-            if thread and thread.messages:
-                return list(thread.messages)
-        except Exception as e:
-            logger.error("brain_agent_load_thread_error", error=str(e), thread_id=thread_id)
-        return []
 
     async def _interrupt_and_drain(self, session: AgentSession):
         """Interrupt any in-flight agent work and consume remaining buffered messages."""
@@ -426,6 +479,7 @@ class BrainAgentService:
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
             stderr=_on_stderr,
             max_buffer_size=10 * 1024 * 1024,
+            include_partial_messages=True,
             env={
                 "DATABASE_URL": settings.database_url_sync,
                 "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "1200000",  # 20 min (was 10)
@@ -460,32 +514,71 @@ class BrainAgentService:
 
     async def _process_message(self, message, session: AgentSession = None) -> AsyncGenerator[SSEEvent, None]:
         """Convert an Agent SDK message into SSE events."""
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    yield SSEEvent(
-                        event_type="status",
-                        data={"phase": "responding"},
-                    )
+
+        # Handle StreamEvent for partial message streaming (character-by-character)
+        if isinstance(message, StreamEvent):
+            event = message.event
+            event_type = event.get("type", "")
+
+            if event_type == "content_block_delta":
+                delta = event.get("delta", {})
+                delta_type = delta.get("type", "")
+                if delta_type == "text_delta":
                     yield SSEEvent(
                         event_type="text_delta",
-                        data={"text": block.text},
+                        data={"text": delta.get("text", "")},
                     )
                     if session:
                         session.has_any_text = True
-                elif isinstance(block, ToolUseBlock):
+                # input_json_delta for tool input streaming — skip for now
+
+            elif event_type == "content_block_start":
+                content_block = event.get("content_block", {})
+                if content_block.get("type") == "tool_use":
                     yield SSEEvent(
                         event_type="status",
-                        data={"phase": "tool", "tool_name": block.name},
+                        data={"phase": "tool", "tool_name": content_block.get("name")},
                     )
                     yield SSEEvent(
                         event_type="tool_use",
                         data={
-                            "tool_name": block.name,
-                            "tool_id": block.id,
-                            "input": block.input if isinstance(block.input, dict) else {},
+                            "tool_name": content_block.get("name", ""),
+                            "tool_id": content_block.get("id", ""),
+                            "input": {},
                         },
                     )
+                elif content_block.get("type") == "text":
+                    yield SSEEvent(
+                        event_type="status",
+                        data={"phase": "responding"},
+                    )
+
+            elif event_type == "content_block_stop":
+                # If a tool block just stopped, signal analyzing phase
+                # (the SDK will follow up with a UserMessage containing tool results)
+                pass
+
+            return  # StreamEvent handled — don't fall through to other handlers
+
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    # With include_partial_messages=True, we get text via StreamEvent deltas.
+                    # Only emit here if we somehow missed the deltas (fallback).
+                    if session and not session.has_any_text:
+                        yield SSEEvent(
+                            event_type="status",
+                            data={"phase": "responding"},
+                        )
+                        yield SSEEvent(
+                            event_type="text_delta",
+                            data={"text": block.text},
+                        )
+                        session.has_any_text = True
+                elif isinstance(block, ToolUseBlock):
+                    # Tool use blocks are already emitted via StreamEvent content_block_start.
+                    # Only emit here as fallback if StreamEvent didn't fire.
+                    pass
 
         elif isinstance(message, UserMessage):
             # UserMessage content can include ToolResultBlocks
@@ -540,17 +633,10 @@ class BrainAgentService:
             )
 
         elif isinstance(message, ResultMessage):
-            yield SSEEvent(
-                event_type="result",
-                data={
-                    "num_turns": message.num_turns if hasattr(message, "num_turns") else 0,
-                    "duration_ms": message.duration_ms if hasattr(message, "duration_ms") else 0,
-                    "cost_usd": message.total_cost_usd
-                    if hasattr(message, "total_cost_usd")
-                    else None,
-                    "session_id": None,  # Will be set by the caller
-                },
-            )
+            # ResultMessage is handled in chat() after the streaming loop.
+            # We don't yield the result event here — chat() builds it with
+            # authoritative messages from get_session_messages().
+            pass
 
     def _cleanup_stale_sessions(self):
         """Remove sessions that have been idle beyond TTL."""
