@@ -53,6 +53,9 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
 # Files placed in the sandbox at session creation — skip when scanning for agent output
 SANDBOX_SEED_FILES = {"db.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md"}
 
+# Working file extensions — scripts the agent writes to execute, not user-facing output
+WORKING_FILE_EXTENSIONS = {".py", ".sh", ".bash", ".sql"}
+
 
 @dataclass
 class AgentSession:
@@ -524,7 +527,7 @@ class BrainAgentService:
         return session, True
 
     def _scan_for_new_files(self, session: AgentSession) -> list:
-        """Scan the session sandbox for new agent-generated files (images, CSVs, etc.)."""
+        """Scan the session sandbox for new agent-generated output files (images, CSVs, etc.)."""
         work_dir = Path(f"/tmp/brain-agent/{session.user_id}/{session.session_id}")
         new_files = []
         if work_dir.exists():
@@ -533,6 +536,7 @@ class BrainAgentService:
                     f.is_file()
                     and f.name not in session.known_files
                     and f.name not in SANDBOX_SEED_FILES
+                    and f.suffix.lower() not in WORKING_FILE_EXTENSIONS
                 ):
                     session.known_files.add(f.name)
                     new_files.append(f.name)
