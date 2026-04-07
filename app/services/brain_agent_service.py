@@ -501,12 +501,21 @@ class BrainAgentService:
         # Enter the async context manager
         await client.__aenter__()
 
+        # Pre-populate known_images with existing files so old images
+        # from prior turns aren't re-sent on a recreated session.
+        existing_images = set()
+        if work_dir.exists():
+            for f in work_dir.iterdir():
+                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
+                    existing_images.add(f.name)
+
         session = AgentSession(
             session_id=session_id,
             user_id=user_id,
             client=client,
             created_at=time.time(),
             last_activity=time.time(),
+            known_images=existing_images,
         )
         self._sessions[session_id] = session
         return session, True
