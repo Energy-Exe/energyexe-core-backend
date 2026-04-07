@@ -80,6 +80,7 @@ class BrainAgentService:
         prompt: str,
         user_name: Optional[str] = None,
         model: Optional[str] = None,
+        conversation_history: Optional[list] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Send a prompt to the agent and yield SSE events."""
         if not session_id:
@@ -89,7 +90,13 @@ class BrainAgentService:
         self._cleanup_stale_sessions()
 
         try:
-            session = await self._get_or_create_session(user_id, session_id, user_name, model)
+            session, is_new_session = await self._get_or_create_session(user_id, session_id, user_name, model)
+
+            # When resuming a conversation in a freshly created session,
+            # prepend the prior conversation as context so the agent
+            # remembers everything that was discussed.
+            if is_new_session and conversation_history:
+                prompt = self._build_prompt_with_history(prompt, conversation_history)
 
             async with session.lock:
                 # If a previous turn was abandoned (e.g. SSE disconnect), drain leftover messages
@@ -204,10 +211,10 @@ class BrainAgentService:
 
     async def _get_or_create_session(
         self, user_id: int, session_id: str, user_name: Optional[str] = None, model: Optional[str] = None
-    ) -> AgentSession:
-        """Get existing session or create a new one."""
+    ) -> tuple[AgentSession, bool]:
+        """Get existing session or create a new one. Returns (session, is_new)."""
         if session_id in self._sessions:
-            return self._sessions[session_id]
+            return self._sessions[session_id], False
 
         # Enforce session limit
         user_sessions = [s for s in self._sessions.values() if s.user_id == user_id]
@@ -283,7 +290,7 @@ class BrainAgentService:
             last_activity=time.time(),
         )
         self._sessions[session_id] = session
-        return session
+        return session, True
 
     def _scan_for_new_images(self, session: AgentSession) -> list:
         """Scan the session sandbox for new image files."""
@@ -421,6 +428,65 @@ class BrainAgentService:
                 shutil.rmtree(work_dir)
             except OSError as e:
                 logger.warning("brain_agent_tmpdir_cleanup_error", error=str(e), path=str(work_dir))
+
+    @staticmethod
+    def _build_prompt_with_history(current_prompt: str, history: list) -> str:
+        """Prepend conversation history to the prompt for session continuity.
+
+        When a backend session is recreated (expiry, page reload, thread load),
+        the Claude SDK client has no memory of prior turns.  This injects the
+        previous conversation so the agent can continue seamlessly.
+        """
+        MAX_HISTORY_MESSAGES = 50
+        MAX_HISTORY_CHARS = 100_000
+
+        trimmed = history[-MAX_HISTORY_MESSAGES:] if len(history) > MAX_HISTORY_MESSAGES else history
+
+        parts: list[str] = [
+            "<conversation_history>",
+            "This is a continuation of an existing conversation. "
+            "The following messages were exchanged previously — treat them as full context "
+            "and remember everything discussed.",
+            "",
+        ]
+
+        total_chars = 0
+        for msg in trimmed:
+            msg_type = msg.get("type", "")
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+
+            if msg_type == "user":
+                line = f"Human: {content}"
+            elif msg_type == "assistant":
+                line = f"Assistant: {content}"
+            else:
+                continue
+
+            total_chars += len(line)
+            if total_chars > MAX_HISTORY_CHARS:
+                parts.append("[... earlier messages truncated for length ...]")
+                break
+
+            parts.append(line)
+
+            # Summarise tool usage (assistant messages only)
+            if msg_type == "assistant":
+                for tc in msg.get("toolCalls") or []:
+                    tool_name = tc.get("tool_name", "")
+                    result = tc.get("result", "")
+                    if tool_name and result:
+                        result_preview = (result[:500] + "...") if len(result) > 500 else result
+                        parts.append(f"  [Tool: {tool_name} → {result_preview}]")
+
+            parts.append("")
+
+        parts.append("</conversation_history>")
+        parts.append("")
+        parts.append(current_prompt)
+
+        return "\n".join(parts)
 
     @classmethod
     def _load_prompt_template(cls) -> str:
