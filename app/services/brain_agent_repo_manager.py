@@ -5,6 +5,7 @@ In production, the backend code is already in the container (/app/) and the two
 frontend repos are shallow-cloned from GitHub on startup.
 """
 
+import fcntl
 import shutil
 import subprocess
 from pathlib import Path
@@ -51,7 +52,11 @@ def _is_dev_mode() -> bool:
 
 
 def ensure_repos() -> None:
-    """Clone frontend repos if running in production. Called once at startup."""
+    """Clone frontend repos if running in production. Called once at startup.
+
+    Uses a file lock to prevent multiple Uvicorn workers from cloning
+    concurrently (production runs 4 workers).
+    """
     if _is_dev_mode():
         logger.info("brain_agent_repos_dev_mode", msg="Using local sibling directories")
         return
@@ -69,50 +74,63 @@ def ensure_repos() -> None:
         )
         return
 
-    for repo_slug, dir_name in _FRONTEND_REPOS:
-        dest = repos_dir / dir_name
-        if dest.exists():
-            # Verify checkout is healthy (src/ should exist for frontend repos)
-            if not (dest / "src").exists():
-                logger.warning("brain_agent_repo_broken", repo=dir_name, msg="Missing src/ — removing and re-cloning")
-                shutil.rmtree(dest, ignore_errors=True)
-            else:
-                logger.info("brain_agent_repo_exists", repo=dir_name, path=str(dest))
-                # Pull latest
-                try:
-                    subprocess.run(
-                        ["git", "-C", str(dest), "pull", "--ff-only"],
-                        capture_output=True,
-                        timeout=30,
-                    )
-                except Exception as e:
-                    logger.warning("brain_agent_repo_pull_failed", repo=dir_name, error=str(e))
-                continue
+    # Acquire an exclusive file lock so only one worker clones at a time.
+    lock_path = repos_dir / ".clone.lock"
+    try:
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, OSError):
+        logger.info("brain_agent_repos_skip", msg="Another worker is already cloning repos")
+        return
 
-        clone_url = f"https://x-access-token:{token}@github.com/{repo_slug}.git"
-        logger.info("brain_agent_cloning_repo", repo=dir_name)
-        try:
-            subprocess.run(
-                [
-                    "git", "clone",
-                    "--depth", "1",
-                    "--single-branch",
-                    clone_url,
-                    str(dest),
-                ],
-                capture_output=True,
-                timeout=60,
-                check=True,
-            )
-            logger.info("brain_agent_repo_cloned", repo=dir_name, path=str(dest))
-        except subprocess.CalledProcessError as e:
-            logger.error(
-                "brain_agent_repo_clone_failed",
-                repo=dir_name,
-                stderr=e.stderr.decode(errors="replace")[:500] if e.stderr else "",
-            )
-        except Exception as e:
-            logger.error("brain_agent_repo_clone_error", repo=dir_name, error=str(e))
+    try:
+        for repo_slug, dir_name in _FRONTEND_REPOS:
+            dest = repos_dir / dir_name
+            if dest.exists():
+                # Verify checkout is healthy (src/ should exist for frontend repos)
+                if not (dest / "src").exists():
+                    logger.warning("brain_agent_repo_broken", repo=dir_name, msg="Missing src/ — removing and re-cloning")
+                    shutil.rmtree(dest, ignore_errors=True)
+                else:
+                    logger.info("brain_agent_repo_exists", repo=dir_name, path=str(dest))
+                    # Pull latest
+                    try:
+                        subprocess.run(
+                            ["git", "-C", str(dest), "pull", "--ff-only"],
+                            capture_output=True,
+                            timeout=30,
+                        )
+                    except Exception as e:
+                        logger.warning("brain_agent_repo_pull_failed", repo=dir_name, error=str(e))
+                    continue
+
+            clone_url = f"https://x-access-token:{token}@github.com/{repo_slug}.git"
+            logger.info("brain_agent_cloning_repo", repo=dir_name)
+            try:
+                subprocess.run(
+                    [
+                        "git", "clone",
+                        "--depth", "1",
+                        "--single-branch",
+                        clone_url,
+                        str(dest),
+                    ],
+                    capture_output=True,
+                    timeout=60,
+                    check=True,
+                )
+                logger.info("brain_agent_repo_cloned", repo=dir_name, path=str(dest))
+            except subprocess.CalledProcessError as e:
+                logger.error(
+                    "brain_agent_repo_clone_failed",
+                    repo=dir_name,
+                    stderr=e.stderr.decode(errors="replace")[:500] if e.stderr else "",
+                )
+            except Exception as e:
+                logger.error("brain_agent_repo_clone_error", repo=dir_name, error=str(e))
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
 
 
 def get_repo_dirs() -> List[str]:
