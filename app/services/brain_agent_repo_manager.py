@@ -5,6 +5,7 @@ In production, the backend code is already in the container (/app/) and the two
 frontend repos are shallow-cloned from GitHub on startup.
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 from typing import List
@@ -71,17 +72,22 @@ def ensure_repos() -> None:
     for repo_slug, dir_name in _FRONTEND_REPOS:
         dest = repos_dir / dir_name
         if dest.exists():
-            logger.info("brain_agent_repo_exists", repo=dir_name, path=str(dest))
-            # Pull latest
-            try:
-                subprocess.run(
-                    ["git", "-C", str(dest), "pull", "--ff-only"],
-                    capture_output=True,
-                    timeout=30,
-                )
-            except Exception as e:
-                logger.warning("brain_agent_repo_pull_failed", repo=dir_name, error=str(e))
-            continue
+            # Verify checkout is healthy (src/ should exist for frontend repos)
+            if not (dest / "src").exists():
+                logger.warning("brain_agent_repo_broken", repo=dir_name, msg="Missing src/ — removing and re-cloning")
+                shutil.rmtree(dest, ignore_errors=True)
+            else:
+                logger.info("brain_agent_repo_exists", repo=dir_name, path=str(dest))
+                # Pull latest
+                try:
+                    subprocess.run(
+                        ["git", "-C", str(dest), "pull", "--ff-only"],
+                        capture_output=True,
+                        timeout=30,
+                    )
+                except Exception as e:
+                    logger.warning("brain_agent_repo_pull_failed", repo=dir_name, error=str(e))
+                continue
 
         clone_url = f"https://x-access-token:{token}@github.com/{repo_slug}.git"
         logger.info("brain_agent_cloning_repo", repo=dir_name)
