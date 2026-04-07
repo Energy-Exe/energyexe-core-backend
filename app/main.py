@@ -27,6 +27,13 @@ async def lifespan(app: FastAPI):
         # Initialize database
         await init_db()
 
+    # Clone frontend repos for Brain Agent code access (non-blocking)
+    try:
+        from app.services.brain_agent_repo_manager import ensure_repos
+        ensure_repos()
+    except Exception as e:
+        logger.warning("brain_agent_repo_setup_failed", error=str(e))
+
     yield
 
     logger.info("Shutting down application")

@@ -124,6 +124,10 @@ class Settings(BaseSettings):
     BRAIN_MAX_TOKENS: int = 4096
     BRAIN_TEMPERATURE: float = 0.3
 
+    # Brain Agent — source code access for codebase exploration
+    CODE_REPOS_DIR: str = "/tmp/energyexe-repos"
+    GITHUB_TOKEN: str = ""  # PAT for cloning private repos at startup
+
     # Valkey/Redis settings for Celery
     VALKEY_PUBLIC_HOST: str = ""  # Set via environment variable
     VALKEY_PUBLIC_PORT: str = "6379"
