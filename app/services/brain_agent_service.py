@@ -139,11 +139,14 @@ class BrainAgentService:
                         break
 
                 if got_result and result_message:
-                    # Read authoritative conversation from SDK transcript
+                    # Read authoritative conversation from SDK transcript.
+                    # Use the SDK's internal session_id (from ResultMessage),
+                    # NOT our session_id — they are different.
+                    sdk_session_id = result_message.session_id if hasattr(result_message, "session_id") else session_id
                     work_dir = Path(f"/tmp/brain-agent/{user_id}/{session_id}")
                     try:
                         sdk_messages = get_session_messages(
-                            session_id=session.client._session_id if hasattr(session.client, '_session_id') else session_id,
+                            session_id=sdk_session_id,
                             directory=str(work_dir),
                         )
                         final_messages = self._convert_sdk_messages(sdk_messages)
@@ -217,7 +220,12 @@ class BrainAgentService:
             if not raw_msg:
                 continue
 
-            content_blocks = raw_msg.get("content", []) if isinstance(raw_msg, dict) else []
+            raw_content = raw_msg.get("content", []) if isinstance(raw_msg, dict) else []
+            # Content can be a plain string or a list of blocks
+            if isinstance(raw_content, str):
+                content_blocks = [{"type": "text", "text": raw_content}]
+            else:
+                content_blocks = raw_content if isinstance(raw_content, list) else []
 
             if sm.type == "user":
                 # Extract text content from user message
@@ -479,6 +487,8 @@ class BrainAgentService:
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
             stderr=_on_stderr,
             max_buffer_size=10 * 1024 * 1024,
+            setting_sources=[],  # Don't inherit global MCP servers (Gmail, Slack, etc.)
+            mcp_servers={},  # No MCP servers needed for brain agent
             include_partial_messages=True,
             env={
                 "DATABASE_URL": settings.database_url_sync,
