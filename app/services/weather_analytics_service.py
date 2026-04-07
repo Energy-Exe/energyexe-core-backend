@@ -487,7 +487,8 @@ class WeatherAnalyticsService:
                 cf = 1.0  # Rated power
             cf_values.append(cf)
 
-        capacity_factor_estimate = np.mean(cf_values) * 100 if cf_values else 0
+        # Return as decimal 0-1 (frontend handles % formatting)
+        capacity_factor_estimate = float(np.mean(cf_values)) if cf_values else 0
 
         return WindStatistics(
             mean_speed=round(mean_speed, 2),
