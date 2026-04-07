@@ -1,6 +1,6 @@
 """Agent chat thread persistence model."""
 
-from sqlalchemy import Column, DateTime, Integer, Numeric, String, ForeignKey
+from sqlalchemy import Boolean, Column, DateTime, Integer, Numeric, String, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
@@ -18,5 +18,6 @@ class AgentThread(Base):
     message_count = Column(Integer, default=0)
     total_cost_usd = Column(Numeric(10, 4), nullable=True)
     total_turns = Column(Integer, default=0)
+    is_streaming = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
