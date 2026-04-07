@@ -29,6 +29,10 @@ class AgentChatRequest(BaseModel):
         default=None,
         description="Prior messages for context when resuming a conversation with a new session.",
     )
+    thread_id: Optional[str] = Field(
+        default=None,
+        description="Thread ID for progressive DB saves. Frontend should send this so backend can update the thread during processing.",
+    )
 
 
 class AgentInterruptRequest(BaseModel):
@@ -66,6 +70,7 @@ class ThreadListItem(BaseModel):
     message_count: int
     total_cost_usd: Optional[Decimal]
     total_turns: int
+    is_streaming: bool = False
     created_at: datetime
     updated_at: datetime
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from claude_agent_sdk import (
@@ -81,6 +82,7 @@ class BrainAgentService:
         user_name: Optional[str] = None,
         model: Optional[str] = None,
         conversation_history: Optional[list] = None,
+        thread_id: Optional[str] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Send a prompt to the agent and yield SSE events."""
         if not session_id:
@@ -88,6 +90,39 @@ class BrainAgentService:
 
         # Clean up stale sessions
         self._cleanup_stale_sessions()
+
+        # Progressive save state — build messages on the backend
+        # so the DB is the source of truth (frontend polls for state)
+        save_thread_id = thread_id
+        last_save_time = time.time()
+        SAVE_INTERVAL = 5  # Save to DB every 5 seconds
+
+        # Load existing messages from the thread (if any)
+        existing_messages: list = []
+        if save_thread_id:
+            existing_messages = await self._load_thread_messages(save_thread_id, user_id)
+
+        # The user message for this turn
+        user_msg = {
+            "id": str(uuid.uuid4()),
+            "type": "user",
+            "content": prompt if not conversation_history else prompt.split("</conversation_history>")[-1].strip(),
+            "timestamp": int(time.time() * 1000),
+        }
+        # Current assistant message being built
+        assistant_msg: Dict[str, Any] = {
+            "id": str(uuid.uuid4()),
+            "type": "assistant",
+            "content": "",
+            "toolCalls": [],
+            "timestamp": int(time.time() * 1000),
+            "isStreaming": True,
+        }
+        current_messages = existing_messages + [user_msg, assistant_msg]
+
+        # Mark thread as streaming
+        if save_thread_id:
+            await self._save_thread_state(save_thread_id, user_id, current_messages, is_streaming=True, model=model)
 
         try:
             session, is_new_session = await self._get_or_create_session(user_id, session_id, user_name, model)
@@ -127,7 +162,18 @@ class BrainAgentService:
                 got_result = False
                 async for message in session.client.receive_messages():
                     async for event in self._process_message(message, session):
+                        # Build message state from events for progressive DB save
+                        self._accumulate_event(event, assistant_msg)
                         yield event
+
+                    # Periodically save to DB
+                    now = time.time()
+                    if save_thread_id and (now - last_save_time) >= SAVE_INTERVAL:
+                        current_messages[-1] = assistant_msg  # Update assistant msg in place
+                        await self._save_thread_state(
+                            save_thread_id, user_id, current_messages, is_streaming=True, model=model,
+                        )
+                        last_save_time = now
 
                     # ResultMessage means the agent is done
                     if isinstance(message, ResultMessage):
@@ -161,6 +207,111 @@ class BrainAgentService:
         finally:
             if session_id in self._sessions:
                 self._sessions[session_id].is_busy = False
+            # Final save: mark streaming complete and persist final state
+            if save_thread_id:
+                assistant_msg["isStreaming"] = False
+                current_messages[-1] = assistant_msg
+                try:
+                    await self._save_thread_state(
+                        save_thread_id, user_id, current_messages, is_streaming=False, model=model,
+                    )
+                except Exception as e:
+                    logger.error("brain_agent_final_save_failed", error=str(e))
+
+    @staticmethod
+    def _accumulate_event(event: SSEEvent, assistant_msg: Dict[str, Any]):
+        """Update the assistant message dict from an SSE event (for progressive save)."""
+        if event.event_type == "text_delta":
+            assistant_msg["content"] += event.data.get("text", "")
+        elif event.event_type == "tool_use":
+            assistant_msg.setdefault("toolCalls", []).append({
+                "tool_name": event.data.get("tool_name", ""),
+                "tool_id": event.data.get("tool_id", ""),
+                "input": event.data.get("input", {}),
+                "isLoading": True,
+            })
+        elif event.event_type == "tool_result":
+            tool_id = event.data.get("tool_id")
+            for tc in assistant_msg.get("toolCalls", []):
+                if tc.get("tool_id") == tool_id:
+                    tc["result"] = event.data.get("summary", "")
+                    tc["isLoading"] = False
+                    tc["isError"] = event.data.get("is_error", False)
+                    break
+        elif event.event_type == "image":
+            assistant_msg.setdefault("images", []).append({
+                "url": event.data.get("url", ""),
+                "filename": event.data.get("filename", ""),
+            })
+        elif event.event_type == "status":
+            assistant_msg["statusPhase"] = event.data.get("phase")
+
+    async def _save_thread_state(
+        self,
+        thread_id: str,
+        user_id: int,
+        messages: list,
+        is_streaming: bool = False,
+        model: Optional[str] = None,
+    ):
+        """Save current message state to the thread in DB."""
+        from app.models.agent_thread import AgentThread
+
+        try:
+            result = await self.db.execute(
+                select(AgentThread).where(AgentThread.id == thread_id)
+            )
+            thread = result.scalar_one_or_none()
+
+            if thread:
+                thread.messages = messages
+                thread.message_count = len(messages)
+                thread.is_streaming = is_streaming
+                if not thread.title and messages:
+                    first_user = next((m for m in messages if m.get("type") == "user"), None)
+                    if first_user:
+                        thread.title = first_user.get("content", "")[:80]
+            else:
+                title = None
+                first_user = next((m for m in messages if m.get("type") == "user"), None)
+                if first_user:
+                    title = first_user.get("content", "")[:80]
+                thread = AgentThread(
+                    id=thread_id,
+                    user_id=user_id,
+                    title=title,
+                    model=model,
+                    messages=messages,
+                    message_count=len(messages),
+                    is_streaming=is_streaming,
+                )
+                self.db.add(thread)
+
+            await self.db.commit()
+        except Exception as e:
+            logger.error("brain_agent_save_thread_error", error=str(e), thread_id=thread_id)
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+
+    async def _load_thread_messages(self, thread_id: str, user_id: int) -> list:
+        """Load existing messages from a thread."""
+        from app.models.agent_thread import AgentThread
+
+        try:
+            result = await self.db.execute(
+                select(AgentThread).where(
+                    AgentThread.id == thread_id,
+                    AgentThread.user_id == user_id,
+                )
+            )
+            thread = result.scalar_one_or_none()
+            if thread and thread.messages:
+                return list(thread.messages)
+        except Exception as e:
+            logger.error("brain_agent_load_thread_error", error=str(e), thread_id=thread_id)
+        return []
 
     async def _interrupt_and_drain(self, session: AgentSession):
         """Interrupt any in-flight agent work and consume remaining buffered messages."""

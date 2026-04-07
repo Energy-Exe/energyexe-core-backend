@@ -65,6 +65,7 @@ async def agent_chat(
                     user_name=user_name,
                     model=request.model,
                     conversation_history=request.conversation_history,
+                    thread_id=request.thread_id,
                 ),
                 interval=HEARTBEAT_INTERVAL,
             ):
