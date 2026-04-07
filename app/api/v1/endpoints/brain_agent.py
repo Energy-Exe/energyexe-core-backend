@@ -74,7 +74,8 @@ async def agent_chat(
                 else:
                     yield f"event: {event.event_type}\ndata: {json.dumps(event.data, default=str)}\n\n"
         except Exception as e:
-            logger.error("brain_agent_stream_error", error=str(e))
+            import traceback
+            logger.error("brain_agent_stream_error", error=str(e), traceback=traceback.format_exc())
             error_data = json.dumps(
                 {"message": "Internal server error", "code": "internal_error"}
             )
@@ -92,16 +93,36 @@ async def agent_chat(
 
 
 async def _with_heartbeat(aiter, interval: float):
-    """Wrap an async generator to yield None (heartbeat) during inactivity."""
+    """Wrap an async generator to yield None (heartbeat) during inactivity.
+
+    Uses asyncio.wait() instead of asyncio.wait_for() to avoid cancelling
+    the generator's coroutine on timeout (which would kill the SDK subprocess).
+    """
     ait = aiter.__aiter__()
-    while True:
-        try:
-            event = await asyncio.wait_for(ait.__anext__(), timeout=interval)
-            yield event
-        except asyncio.TimeoutError:
-            yield None  # heartbeat
-        except StopAsyncIteration:
-            break
+    pending_next: asyncio.Task | None = None
+    try:
+        while True:
+            if pending_next is None:
+                pending_next = asyncio.ensure_future(ait.__anext__())
+
+            done, _ = await asyncio.wait({pending_next}, timeout=interval)
+            if done:
+                try:
+                    event = pending_next.result()
+                    yield event
+                except StopAsyncIteration:
+                    break
+                pending_next = None
+            else:
+                # Timeout — yield heartbeat but DON'T cancel the pending task
+                yield None
+    finally:
+        if pending_next is not None and not pending_next.done():
+            pending_next.cancel()
+            try:
+                await pending_next
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
 
 
 @router.post("/interrupt")
