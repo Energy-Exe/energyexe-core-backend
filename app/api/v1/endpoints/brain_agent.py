@@ -30,8 +30,9 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
-# SSE heartbeat interval in seconds — keeps connections alive through proxies
-HEARTBEAT_INTERVAL = 15
+# SSE heartbeat interval in seconds — keeps connections alive through proxies.
+# Shorter interval (5s) ensures Railway/proxy doesn't buffer or drop the connection.
+HEARTBEAT_INTERVAL = 5
 
 
 @router.post("/chat")
@@ -68,8 +69,8 @@ async def agent_chat(
                 interval=HEARTBEAT_INTERVAL,
             ):
                 if event is None:
-                    # Heartbeat — SSE comment to keep connection alive
-                    yield ": heartbeat\n\n"
+                    # Heartbeat — real SSE event (not a comment) so proxies don't drop it
+                    yield f"event: heartbeat\ndata: {{}}\n\n"
                 else:
                     yield f"event: {event.event_type}\ndata: {json.dumps(event.data, default=str)}\n\n"
         except Exception as e:
