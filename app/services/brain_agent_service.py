@@ -269,7 +269,7 @@ class BrainAgentService:
             ],
             cwd=work_dir,
             add_dirs=repo_dirs_str,
-            max_turns=None,
+            max_turns=50,  # Prevent infinite tool-call loops (20+ Reads with no answer)
             max_budget_usd=None,
             permission_mode="bypassPermissions",
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
@@ -278,7 +278,7 @@ class BrainAgentService:
             betas=["context-1m-2025-08-07"],
             env={
                 "DATABASE_URL": settings.database_url_sync,
-                "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "600000",
+                "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "1200000",  # 20 min (was 10)
                 "CLAUDECODE": "",  # Unset to prevent nested session detection
             },
         )
