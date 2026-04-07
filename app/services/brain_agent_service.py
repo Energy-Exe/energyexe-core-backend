@@ -241,12 +241,19 @@ class BrainAgentService:
         def _on_stderr(line: str):
             logger.warning("brain_agent_stderr", session_id=session_id, line=line.rstrip())
 
+        # Grant read-only access to the source repositories
+        from app.services.brain_agent_repo_manager import get_repo_dirs
+        repo_dirs_str = get_repo_dirs()
+
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             allowed_tools=[
                 "Bash",
                 "WebSearch",
                 "WebFetch",
+                "Read",
+                "Glob",
+                "Grep",
             ],
             disallowed_tools=[
                 "ToolSearch",
@@ -257,13 +264,11 @@ class BrainAgentService:
                 "AskUserQuestion",
                 "Skill",
                 "NotebookEdit",
-                "Read",
                 "Write",
                 "Edit",
-                "Glob",
-                "Grep",
             ],
             cwd=work_dir,
+            add_dirs=repo_dirs_str,
             max_turns=None,
             max_budget_usd=None,
             permission_mode="bypassPermissions",
