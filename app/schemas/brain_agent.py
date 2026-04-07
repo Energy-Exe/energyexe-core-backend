@@ -29,10 +29,6 @@ class AgentChatRequest(BaseModel):
         default=None,
         description="Prior messages for context when resuming a conversation with a new session.",
     )
-    thread_id: Optional[str] = Field(
-        default=None,
-        description="Thread ID for progressive DB saves. Frontend should send this so backend can update the thread during processing.",
-    )
 
 
 class AgentInterruptRequest(BaseModel):
