@@ -9,7 +9,7 @@ from typing import List
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -190,6 +190,41 @@ async def get_session_file(
     return FileResponse(file_path, media_type=media_type)
 
 
+@router.get("/files/{user_id}/{thread_id}/{filename}")
+async def get_agent_file(
+    user_id: int,
+    thread_id: str,
+    filename: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Serve a brain agent file (image, CSV, etc.) — local first, then S3."""
+    if current_user.id != user_id:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    safe_filename = Path(filename).name
+
+    # Try local filesystem first (active session, fast path)
+    local_path = Path(f"/tmp/brain-agent/{user_id}/{thread_id}") / safe_filename
+    if local_path.exists() and local_path.is_file():
+        media_type = mimetypes.guess_type(safe_filename)[0] or "application/octet-stream"
+        return FileResponse(local_path, media_type=media_type)
+
+    # Fallback to S3
+    from app.services.s3_service import download_file
+
+    s3_key = f"brain-agent/{user_id}/{thread_id}/{safe_filename}"
+    file_bytes = await download_file(s3_key)
+    if file_bytes is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    media_type = mimetypes.guess_type(safe_filename)[0] or "application/octet-stream"
+    return Response(
+        content=file_bytes,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Thread persistence endpoints
 # ---------------------------------------------------------------------------
@@ -290,6 +325,15 @@ async def delete_thread(
 
     await db.delete(thread)
     await db.commit()
+
+    # Clean up S3 files (best-effort, don't fail the delete)
+    try:
+        from app.services.s3_service import delete_by_prefix
+
+        await delete_by_prefix(f"brain-agent/{current_user.id}/{thread_id}/")
+    except Exception as e:
+        logger.warning("brain_agent_s3_cleanup_failed", thread_id=thread_id, error=str(e))
+
     return {"success": True, "thread_id": thread_id}
 
 
