@@ -28,12 +28,8 @@ from claude_agent_sdk import (
 
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
-from app.services.brain_agent_tools import (
-    ENERGYEXE_TOOL_NAMES,
-    energyexe_mcp_server,
-    set_user_id,
-    clear_user_id,
-)
+from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
+from app.services.brain_agent_skill_files import SKILL_SCHEMA, SKILL_QUERIES, SKILL_DOMAIN, SKILL_SOURCES
 
 logger = structlog.get_logger(__name__)
 
@@ -65,6 +61,7 @@ class AgentSession:
     is_busy: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     known_images: set = field(default_factory=set)
+    has_any_text: bool = False  # tracks if any text_delta was emitted this turn (for dedup)
 
 
 class BrainAgentService:
@@ -91,11 +88,6 @@ class BrainAgentService:
         # Clean up stale sessions
         self._cleanup_stale_sessions()
 
-        # Set up user context for MCP tools (ContextVar — per-task safe)
-        # Note: DB sessions are now created per-tool-call (short-lived) to avoid
-        # holding connections for the entire agent conversation and exhausting the pool.
-        set_user_id(user_id)
-
         try:
             session = await self._get_or_create_session(user_id, session_id, user_name, model)
 
@@ -107,6 +99,7 @@ class BrainAgentService:
 
                 session.is_busy = True
                 session.last_activity = time.time()
+                session.has_any_text = False  # Reset text dedup for this turn
 
                 # Yield session_id so frontend knows it
                 yield SSEEvent(
@@ -161,7 +154,6 @@ class BrainAgentService:
         finally:
             if session_id in self._sessions:
                 self._sessions[session_id].is_busy = False
-            clear_user_id()
 
     async def _interrupt_and_drain(self, session: AgentSession):
         """Interrupt any in-flight agent work and consume remaining buffered messages."""
@@ -232,6 +224,13 @@ class BrainAgentService:
 
         system_prompt = self._build_system_prompt(user_name)
 
+        # Write db.py helper script and skill files to sandbox
+        (work_dir / "db.py").write_text(DB_HELPER_SCRIPT)
+        (work_dir / "skill_schema.md").write_text(SKILL_SCHEMA)
+        (work_dir / "skill_queries.md").write_text(SKILL_QUERIES)
+        (work_dir / "skill_domain.md").write_text(SKILL_DOMAIN)
+        (work_dir / "skill_sources.md").write_text(SKILL_SOURCES)
+
         def _on_stderr(line: str):
             logger.warning("brain_agent_stderr", session_id=session_id, line=line.rstrip())
 
@@ -241,10 +240,9 @@ class BrainAgentService:
                 "Bash",
                 "WebSearch",
                 "WebFetch",
-                *ENERGYEXE_TOOL_NAMES,
             ],
             disallowed_tools=[
-                "ToolSearch",  # MCP tools are already allowed — no need to discover them
+                "ToolSearch",
                 "TodoWrite",
                 "Agent",
                 "EnterPlanMode",
@@ -252,16 +250,25 @@ class BrainAgentService:
                 "AskUserQuestion",
                 "Skill",
                 "NotebookEdit",
+                "Read",
+                "Write",
+                "Edit",
+                "Glob",
+                "Grep",
             ],
-            mcp_servers={"energyexe": energyexe_mcp_server},
             cwd=work_dir,
             max_turns=None,
             max_budget_usd=None,
             permission_mode="bypassPermissions",
             model=model or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
             stderr=_on_stderr,
-            max_buffer_size=10 * 1024 * 1024,  # 10MB — default 1MB is too small for large query results
-            env={"CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "600000"},  # 10 min — default 60s too aggressive for DB queries
+            max_buffer_size=10 * 1024 * 1024,
+            betas=["context-1m-2025-08-07"],
+            env={
+                "DATABASE_URL": settings.database_url_sync,
+                "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "600000",
+                "CLAUDECODE": "",  # Unset to prevent nested session detection
+            },
         )
 
         client = ClaudeSDKClient(options=options)
@@ -302,6 +309,8 @@ class BrainAgentService:
                         event_type="text_delta",
                         data={"text": block.text},
                     )
+                    if session:
+                        session.has_any_text = True
                 elif isinstance(block, ToolUseBlock):
                     yield SSEEvent(
                         event_type="status",
@@ -415,11 +424,9 @@ class BrainAgentService:
 
     @classmethod
     def _load_prompt_template(cls) -> str:
-        """Load and cache the system prompt template from the markdown file."""
-        if cls._prompt_template is None:
-            prompt_path = Path(__file__).parent.parent / "prompts" / "brain_agent_system.md"
-            cls._prompt_template = prompt_path.read_text(encoding="utf-8")
-        return cls._prompt_template
+        """Load the system prompt template from the markdown file (always fresh)."""
+        prompt_path = Path(__file__).parent.parent / "prompts" / "brain_agent_system.md"
+        return prompt_path.read_text(encoding="utf-8")
 
     @classmethod
     def _build_system_prompt(cls, user_name: Optional[str] = None) -> str:
