@@ -42,6 +42,7 @@ from app.api.v1.endpoints import (
     windfarms,
     windfarm_timeline,
     windfarm_reports,
+    p50_targets,
 )
 
 api_router = APIRouter()
@@ -115,6 +116,9 @@ api_router.include_router(weather_imports.router, prefix="/weather-imports", tag
 
 # Windfarm performance reports endpoints
 api_router.include_router(windfarm_reports.router, tags=["windfarm-reports"])
+
+# P50 target management and analysis endpoints
+api_router.include_router(p50_targets.router, tags=["p50-targets"])
 
 # Report commentary (LLM-generated) endpoints
 api_router.include_router(report_commentary.router, prefix="/report-commentary", tags=["report-commentary"])

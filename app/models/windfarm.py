@@ -104,3 +104,7 @@ class Windfarm(Base):
     windfarm_financial_entities = relationship(
         "WindfarmFinancialEntity", back_populates="windfarm", cascade="all, delete-orphan"
     )
+    p50_targets = relationship(
+        "P50Target", back_populates="windfarm", cascade="all, delete-orphan",
+        order_by="P50Target.p50_target_start_date",
+    )
