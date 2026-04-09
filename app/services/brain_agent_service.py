@@ -432,7 +432,15 @@ class BrainAgentService:
     ) -> tuple[AgentSession, bool]:
         """Get existing session or create a new one. Returns (session, is_new)."""
         if session_id in self._sessions:
-            return self._sessions[session_id], False
+            # Verify the sandbox directory still exists (could be lost to
+            # container restart, tmpwatch, or manual cleanup).  If it's gone,
+            # discard the stale in-memory session and recreate below.
+            existing = self._sessions[session_id]
+            work_dir_check = Path(f"/tmp/brain-agent/{existing.user_id}/{existing.session_id}")
+            if work_dir_check.exists():
+                return existing, False
+            logger.warning("brain_agent_session_workdir_missing", session_id=session_id)
+            self._sessions.pop(session_id, None)
 
         # Enforce session limit
         user_sessions = [s for s in self._sessions.values() if s.user_id == user_id]
