@@ -9,11 +9,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, select, func, extract
+from sqlalchemy import and_, select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.generation_data import GenerationData
-from app.models.generation_unit import GenerationUnit
 from app.models.p50_target import P50Target
 from app.models.windfarm import Windfarm
 from app.schemas.p50_target import (
@@ -245,38 +244,29 @@ class P50TargetService:
     ) -> List[tuple]:
         """Get monthly net generation in GWh from start_date, excluding ramp-up hours.
 
+        Uses raw SQL for performance — aggregating years of hourly data can be
+        slow with the ORM. Uses the idx_gen_windfarm_hour index directly.
+
         Returns list of (month_str, actual_gwh) tuples.
         """
-        month_trunc = func.date_trunc("month", GenerationData.hour)
+        # Set a generous statement timeout for this heavy aggregation
+        await self.db.execute(text("SET LOCAL statement_timeout = '120s'"))
 
-        stmt = (
-            select(
-                month_trunc.label("month_dt"),
-                (
-                    func.sum(
-                        GenerationData.generation_mwh
-                        - func.coalesce(GenerationData.consumption_mwh, 0)
-                    )
-                    / 1000.0
-                ).label("actual_gwh"),
-            )
-            .join(GenerationUnit, GenerationData.generation_unit_id == GenerationUnit.id)
-            .where(
-                and_(
-                    GenerationUnit.windfarm_id == windfarm_id,
-                    GenerationData.hour >= start_date,
-                    GenerationData.is_ramp_up == False,
-                )
-            )
-            .group_by(month_trunc)
-            .order_by(month_trunc)
+        result = await self.db.execute(
+            text("""
+                SELECT TO_CHAR(DATE_TRUNC('month', hour), 'YYYY-MM') AS month,
+                       SUM(generation_mwh - COALESCE(consumption_mwh, 0)) / 1000.0 AS actual_gwh
+                FROM generation_data
+                WHERE windfarm_id = :windfarm_id
+                  AND DATE_TRUNC('month', hour) >= DATE_TRUNC('month', CAST(:start_date AS timestamp))
+                  AND is_ramp_up = false
+                GROUP BY DATE_TRUNC('month', hour)
+                ORDER BY DATE_TRUNC('month', hour)
+            """),
+            {"windfarm_id": windfarm_id, "start_date": start_date},
         )
 
-        result = await self.db.execute(stmt)
-        return [
-            (row.month_dt.strftime("%Y-%m"), float(row.actual_gwh or 0))
-            for row in result.all()
-        ]
+        return [(row.month, float(row.actual_gwh or 0)) for row in result.all()]
 
     @staticmethod
     def _build_yearly_gaps(
