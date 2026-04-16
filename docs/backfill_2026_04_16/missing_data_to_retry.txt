@@ -1,0 +1,121 @@
+7224|Valsneset|Norway
+7243|A'Chruach 1|United Kingdom
+7244|Afton|United Kingdom
+7245|Aikengall II & IIa|United Kingdom
+7246|Airies|United Kingdom
+7247|An Suidhe|United Kingdom
+7248|Andershaw|United Kingdom
+7249|Arecleoch|United Kingdom
+7250|Assel Valley|United Kingdom
+7252|Bad A Cheo|United Kingdom
+7253|Baillie|United Kingdom
+7254|Beinn An Tuirc 2+3|United Kingdom
+7255|Beinn Tharsuinn|United Kingdom
+7256|Beinneun|United Kingdom
+7257|Berry Burn|United Kingdom
+7258|Bhlaraidh|United Kingdom
+7259|Black Law + Black Law Extension|United Kingdom
+7260|Blackcraig|United Kingdom
+7262|Braes of Doune|United Kingdom
+7263|Brockloch Rig Windfarm|United Kingdom
+7265|Brownieleys|United Kingdom
+7266|Burn of Whilk|United Kingdom
+7267|Camster|United Kingdom
+7268|Carraig Gheal|United Kingdom
+7270|Clachan Flats|United Kingdom
+7271|Clashindarroch (Vattenfall)|United Kingdom
+7272|Clyde|United Kingdom
+7273|Coire Na Cloiche|United Kingdom
+7274|Corriegarth|United Kingdom
+7275|Corriemoillie|United Kingdom
+7276|Cour|United Kingdom
+7277|Craig II|United Kingdom
+7279|Crossdykes 1 & 2|United Kingdom
+7280|Crystal Rig 2|United Kingdom
+7282|Dalry|United Kingdom
+7284|Dalswinton|United Kingdom
+7285|Dersalloch|United Kingdom
+7286|Dorenell 1&2|United Kingdom
+7288|Dun Law 2|United Kingdom
+7289|Dunmaglass|United Kingdom
+7290|Edinbane|United Kingdom
+7291|Ewe Hill 2|United Kingdom
+7292|Fallago Rig|United Kingdom
+7293|Farr 1&2|United Kingdom
+7294|Freasdail|United Kingdom
+7295|Galawhistle|United Kingdom
+7296|Glen App|United Kingdom
+7298|Goole Fields|United Kingdom
+7299|Gordonbush + Extension|United Kingdom
+7300|Gordonstown Hill|United Kingdom
+7303|Hadyard Hill|United Kingdom
+7305|Harburnhead|United Kingdom
+7306|Hare Hill Extension|United Kingdom
+7307|Harestanes|United Kingdom
+7308|Hill Of Glaschyle|United Kingdom
+7309|Hill Of Towie|United Kingdom
+7310|Keith Hill|United Kingdom
+7313|Kilgallioch|United Kingdom
+7316|Kype Muir|United Kingdom
+7318|Lochluichart 1+2|United Kingdom
+7319|Mark Hill|United Kingdom
+7320|Mid Hill|United Kingdom
+7321|Middle Muir|United Kingdom
+7323|Minnygap|United Kingdom
+7324|Minsca|United Kingdom
+7325|Moy|United Kingdom
+7327|Pen Y Cymoedd|United Kingdom
+7329|Pogbie|United Kingdom
+7333|Sanquhar Community|United Kingdom
+7336|Strathy North|United Kingdom
+7337|Stronelairg|United Kingdom
+7338|Toddleburn|United Kingdom
+7339|Tom Nan Clach|United Kingdom
+7340|Tralorg|United Kingdom
+7341|Tullo|United Kingdom
+7342|Tullymurdoch|United Kingdom
+7344|Viking|United Kingdom
+7345|Whitelee|United Kingdom
+7346|Whiteside Hill|United Kingdom
+7348|Glenchamber|United Kingdom
+7349|Glens Of Foudland|United Kingdom
+7350|Aberdeen|United Kingdom
+7358|Barrow|United Kingdom
+7359|Beatrice|United Kingdom
+7365|Burbo Bank|United Kingdom
+7366|Burbo Bank Extension|United Kingdom
+7370|Dudgeon|United Kingdom
+7371|East Anglia One|United Kingdom
+7372|Fécamp|France
+7373|Galloper|United Kingdom
+7374|Gode Wind 1&2|Germany
+7376|Greater Gabbard|United Kingdom
+7377|Gunfleet Sands 1 & 2|United Kingdom
+7378|Gwynt Y Mor|United Kingdom
+7384|Hornsea 1|United Kingdom
+7385|Hornsea 2|United Kingdom
+7386|Humber Gateway|United Kingdom
+7387|Hywind Scotland|United Kingdom
+7391|Lincs|United Kingdom
+7392|London Array|United Kingdom
+7394|Moray East|United Kingdom
+7395|Moray West|United Kingdom
+7396|Neart na Gaoithe (NnG)|United Kingdom
+7404|Ormonde|United Kingdom
+7405|Race Bank|United Kingdom
+7406|Rampion|United Kingdom
+7407|Rentel|Belgium
+7408|Robin Rigg|United Kingdom
+7410|Saint Brieuc|France
+7411|Saint-Nazaire|France
+7412|Seagreen|United Kingdom
+7413|SeaMade|Belgium
+7414|Sheringham Shoal|United Kingdom
+7416|Thanet|United Kingdom
+7417|Thornton Bank|Belgium
+7419|Triton Knoll|United Kingdom
+7420|Vesterhav Syd & Nord|Denmark
+7421|Walney 1&2|United Kingdom
+7422|Walney Extension|United Kingdom
+7423|West of Duddon Sands|United Kingdom
+7424|Westermost Rough|United Kingdom

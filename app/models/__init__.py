@@ -47,6 +47,11 @@ from .windfarm_financial_entity import WindfarmFinancialEntity
 from .financial_data import FinancialData
 from .exchange_rate import ExchangeRate
 from .agent_thread import AgentThread
+from .opportunity import Opportunity, SchemaCode, Severity, Branch, OpportunityStatus
+from .power_curve_bin import PowerCurveBin
+from .performance_anomaly import PerformanceAnomaly
+from .performance_summary import PerformanceSummary
+from .degradation_result import DegradationResult
 
 __all__ = [
     "AgentThread",
@@ -105,4 +110,13 @@ __all__ = [
     "WindfarmFinancialEntity",
     "FinancialData",
     "ExchangeRate",
+    "Opportunity",
+    "SchemaCode",
+    "Severity",
+    "Branch",
+    "OpportunityStatus",
+    "PowerCurveBin",
+    "PerformanceAnomaly",
+    "PerformanceSummary",
+    "DegradationResult",
 ]
