@@ -25,7 +25,12 @@ SKILL_SCHEMA = """# Database Schema Reference
 **turbine_units**: windfarm_id, turbine_model_id, lat, lng, hub_height_m, status, start_date, end_date
 **windfarm_owners**: windfarm_id, owner_id, ownership_percentage
 **owners**: id, code, name, type (energy/institutional_investor/community_investors/municipality/private_individual/supply_chain_oem/other/unknown)
-**ppas**: windfarm_id, ppa_buyer, ppa_size_mw, ppa_duration_years, ppa_start_date, ppa_end_date, ppa_notes
+**ppas**: windfarm_id, ppa_buyer, ppa_size_mw, ppa_duration_years, ppa_start_date, ppa_end_date, ppa_notes, contract_type (fixed_price/indexed/hybrid/merchant), ppa_status (active/expired/renegotiating), ppa_price_eur_mwh, has_availability_penalties (bool)
+**opportunities**: windfarm_id, schema_code (OPS_01/OPS_02/OPS_03/MKT_01/MKT_02/MKT_03), severity (CONFIRMED/INDICATIVE/WATCH), branch (A/B/C), status (ACTIVE/ACKNOWLEDGED/RESOLVED/SUPERSEDED), data_slots (JSONB), missing_slots (JSONB list), triggered_by_id, detection_period_start, detection_period_end
+**power_curve_bins**: windfarm_id, year (NULL=overall_clean), curve_type (raw/capability/overall_clean), wind_bin (Numeric 2.0-25.0 in 1.0 steps), q50_pu (median P50), q90_pu (90th pct P10), mean_pu, mad_pu, sample_count. Unique: (windfarm_id, year, curve_type, wind_bin)
+**performance_anomalies**: windfarm_id, hour, anomaly_type (underperformance/overperformance), actual_p_pu, expected_p_pu, wind_speed, wind_bin, lost_mwh, lost_eur, market_price, run_id. Unique: (windfarm_id, hour)
+**performance_summaries**: windfarm_id, period_type (month/year), year, month. ODI: odi_pct_underperf, lost_mwh, expected_mwh, odi_pct_loss_mwh, lost_eur, odi_pct_loss_eur, long_run_count, max_run_hours. Norm: norm_ratio_p50, norm_index_p50, norm_ratio_p10, norm_index_p10. Commercial: constraint_proxy_mwh, lost_value_eur
+**degradation_results**: windfarm_id, reference_curve (q50=P50/q90=P10), slope_pu_per_year, slope_pct_per_year, intercept, r_squared, p_value, ci_lower_95, ci_upper_95, baseline_cap_pu, data_points
 **data_anomalies**: windfarm_id, anomaly_type, severity, status, period_start, period_end, description
 **alert_rules**: user_id, windfarm_id, metric, condition, threshold_value, severity, is_enabled
 **countries**: id, code (ISO alpha-3: NOR, GBR, USA, DNK), name
@@ -97,6 +102,25 @@ AND hour >= '2023-01-01' AND hour < '2026-01-01'
 GROUP BY 1 ORDER BY 1
 ```
 
+## Opportunity Queries
+
+```sql
+-- Active opportunities for a windfarm
+SELECT o.schema_code, o.severity, o.branch, o.data_slots, o.missing_slots
+FROM opportunities o WHERE o.windfarm_id = :id AND o.status = 'ACTIVE'
+ORDER BY CASE o.severity WHEN 'CONFIRMED' THEN 1 WHEN 'INDICATIVE' THEN 2 ELSE 3 END
+
+-- Opportunity summary across all windfarms
+SELECT o.schema_code, o.severity, COUNT(*), w.name
+FROM opportunities o JOIN windfarms w ON o.windfarm_id = w.id
+WHERE o.status = 'ACTIVE' GROUP BY o.schema_code, o.severity, w.name
+
+-- Capture rate gap from opportunity data
+SELECT w.name, o.data_slots->>'gap_pp' as gap_pp, o.data_slots->>'cannibalisation_index' as ci
+FROM opportunities o JOIN windfarms w ON o.windfarm_id = w.id
+WHERE o.schema_code = 'MKT_01' AND o.status = 'ACTIVE'
+```
+
 ## SQL Tips
 - ROUND requires numeric cast: `ROUND(col::numeric, 2)`
 - No trailing semicolons
@@ -131,6 +155,41 @@ Each windfarm belongs to one bidzone.
 Don't default to CF alone.
 
 **Reported vs Metered**: `generation_mwh` (hourly metered) may differ from `reported_generation_gwh` (annual financial) by 2-5%.
+
+## Opportunity Schemas
+
+The platform detects 6 opportunity types for wind farms. When presenting opportunity findings, calibrate tone by severity:
+- **CONFIRMED**: Be direct — name specifics, quantify impact where data allows.
+- **INDICATIVE**: Be conditional — "pattern warrants investigation", "estimated at...".
+- **WATCH**: Be tentative — "early signal", "recommend monitoring over next 2 quarters".
+
+**OPS-01 Volatile Disruption Periods**: Low availability months (ODI proxy). Branch A = event-driven (concentrated in 1-2 months), B = structural/recurring across years, C = spot exposure amplifies cost.
+
+**OPS-02 Performance Seasonality**: High-wind season capacity factor worse than low-wind season. Indicates mechanical stress, maintenance timing, or cannibalisation. Branch A = mechanical stress, B = maintenance timing, C = data-limited.
+
+**OPS-03 Misaligned Contracting**: OEM/AM contract doesn't incentivize uptime. Only fires when OPS-01 exists. Branch A = incentive misalignment (no penalties), B = geographic friction (remote teams), C = contract details unknown.
+
+**MKT-01 Low Capture Rates**: Capture rate gap vs zone average. >10pp = CONFIRMED, 5-10pp = INDICATIVE, 2-5pp = WATCH. Branch A = profile mismatch (high cannibalisation index), B = PPA structure (expiry within 24mo), C = zone dynamics.
+
+**MKT-02 Storage Opportunity**: Downstream of MKT-01. Evaluates BESS potential for energy shifting or MFRR revenue. Currently data-limited for most assets.
+
+**MKT-03 High Cannibalisation**: CI = 1/capture_rate. CI >1.20 for 2+ years = CONFIRMED. Prices depressed when asset generates. Branch A = zone structural (penetration rising), B = portfolio concentration, C = asset-level anomaly.
+
+When `missing_slots` is populated, acknowledge the data gaps explicitly. Never present uncertain findings as definitive.
+
+## Performance Pipeline
+
+The performance pipeline builds empirical power curves and detects operational issues:
+
+**Power Curves**: Built from wind speed + generation data. P50 (q50_pu) = median output at each wind speed. P10 (q90_pu) = upper capability (90th percentile). Stored in `power_curve_bins` with curve_type 'overall_clean' (all years) or 'capability' (per year).
+
+**ODI (Operational Disruption Index)**: Measures underperformance vs the power curve. `odi_pct_underperf` = % of hours where actual output is statistically below expected (p_pu < q50 - 2.5*MAD). `odi_pct_loss_mwh` = lost energy as % of expected. `odi_pct_loss_eur` = lost revenue as % of expected (price-weighted).
+
+**Wind Normalisation**: `norm_index_p50` measures operational performance independent of wind. 100 = historical average. >100 = better than average. <100 = worse. Removes the effect of how windy each period was.
+
+**Degradation**: `slope_pct_per_year` in `degradation_results` shows the long-run performance trend. Negative = degrading (e.g. -0.5%/yr). Check `p_value` < 0.05 and `r_squared` for statistical significance before reporting.
+
+**Lost MWh/EUR**: In `performance_anomalies`, `lost_mwh = max(0, expected - actual)` per underperforming hour. `lost_eur = lost_mwh * market_price`. Summed in `performance_summaries` by month/year.
 """
 
 SKILL_SOURCES = """# Data Source Capabilities

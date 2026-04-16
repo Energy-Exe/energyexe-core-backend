@@ -24,7 +24,9 @@ from app.api.v1.endpoints import (
     generation_units,
     import_jobs,
     market_balance_areas,
+    opportunities,
     owners,
+    performance_pipeline,
     portfolio,
     ppas,
     price_data,
@@ -125,6 +127,14 @@ api_router.include_router(report_commentary.router, prefix="/report-commentary",
 
 # Data export endpoints
 api_router.include_router(export.router, prefix="/export", tags=["export"])
+
+# Opportunity detection endpoints
+api_router.include_router(opportunities.router, prefix="/opportunities", tags=["opportunities"])
+
+# Performance analysis pipeline endpoints
+api_router.include_router(
+    performance_pipeline.router, prefix="/performance-pipeline", tags=["performance-pipeline"]
+)
 
 # Alerts and notifications endpoints
 api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])

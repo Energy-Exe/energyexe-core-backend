@@ -47,9 +47,54 @@ When the user asks to "export", "download", "generate a report", or "save as fil
 
 ## Database Tables
 
-windfarms, generation_data, price_data, weather_data, financial_data, turbine_models, turbine_units, windfarm_owners, owners, ppas, data_anomalies, alert_rules, countries, regions, bidzones, generation_units, portfolios, portfolio_items, windfarm_financial_entities
+windfarms, generation_data, price_data, weather_data, financial_data, turbine_models, turbine_units, windfarm_owners, owners, ppas, data_anomalies, alert_rules, countries, regions, bidzones, generation_units, portfolios, portfolio_items, windfarm_financial_entities, opportunities, power_curve_bins, performance_anomalies, performance_summaries, degradation_results
 
 Key joins: `windfarms w JOIN countries c ON w.country_id = c.id` | `generation_data` has `windfarm_id`, `hour`, `capacity_factor`, `generation_mwh` | ROUND needs `::numeric` cast.
+
+## Opportunities Table
+
+The `opportunities` table stores automated findings from 6 analytical schemas that detect operational and market issues for wind farms. Each opportunity has a severity (CONFIRMED, INDICATIVE, WATCH) and a root cause branch (A, B, C).
+
+Schema codes:
+- **OPS_01** — Volatile disruption periods (low availability months)
+- **OPS_02** — Performance seasonality (high-wind season underperformance)
+- **OPS_03** — Misaligned contracting (OEM contract doesn't incentivize uptime). Only fires if OPS_01 exists.
+- **MKT_01** — Low capture rates (price capture gap vs zone average in pp)
+- **MKT_02** — Storage opportunity (BESS potential). Only fires if MKT_01 exists.
+- **MKT_03** — High cannibalisation (CI = 1/capture_rate; CI >1.20 = CONFIRMED)
+
+Key columns: `schema_code`, `severity`, `branch`, `status` (ACTIVE/ACKNOWLEDGED/RESOLVED/SUPERSEDED), `data_slots` (JSONB with all computed metrics), `missing_slots` (data gaps).
+
+Query examples:
+```sql
+SELECT o.schema_code, o.severity, o.branch, w.name, o.data_slots
+FROM opportunities o JOIN windfarms w ON o.windfarm_id = w.id
+WHERE o.status = 'ACTIVE' ORDER BY o.severity, o.schema_code
+```
+```sql
+SELECT o.schema_code, o.severity, o.data_slots->>'gap_pp' as gap_pp, o.data_slots->>'cannibalisation_index' as ci
+FROM opportunities o WHERE o.windfarm_id = :id AND o.status = 'ACTIVE'
+```
+
+## Performance Pipeline Tables
+
+The performance pipeline stores empirical power curves, anomaly detection results, and degradation analysis for each windfarm.
+
+**power_curve_bins**: windfarm_id, year (NULL=overall), curve_type (raw/capability/overall_clean), wind_bin (2.0-25.0), q50_pu (P50 median), q90_pu (P10 upper), mad_pu, sample_count
+**performance_anomalies**: windfarm_id, hour, anomaly_type (underperformance/overperformance), actual_p_pu, expected_p_pu, lost_mwh, lost_eur, run_id
+**performance_summaries**: windfarm_id, period_type (month/year), year, month, odi_pct_underperf, lost_mwh, lost_eur, norm_index_p50, norm_index_p10, constraint_proxy_mwh, lost_value_eur
+**degradation_results**: windfarm_id, reference_curve (q50/q90), slope_pct_per_year, r_squared, p_value, ci_lower_95, ci_upper_95
+
+Query examples:
+```sql
+SELECT wind_bin, q50_pu, q90_pu FROM power_curve_bins WHERE windfarm_id = :id AND curve_type = 'overall_clean' ORDER BY wind_bin
+```
+```sql
+SELECT year, odi_pct_underperf, lost_mwh, norm_index_p50 FROM performance_summaries WHERE windfarm_id = :id AND period_type = 'year'
+```
+```sql
+SELECT reference_curve, slope_pct_per_year, r_squared, p_value FROM degradation_results WHERE windfarm_id = :id
+```
 
 ## Skill Files & db.py
 
