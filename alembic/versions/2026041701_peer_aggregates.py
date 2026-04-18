@@ -47,7 +47,7 @@ def upgrade() -> None:
             ) THEN
                 ALTER TABLE peer_group_aggregates
                 ADD CONSTRAINT uq_peer_group_aggregate
-                UNIQUE (group_type, group_id, metric_key, period_type, year, month);
+                UNIQUE NULLS NOT DISTINCT (group_type, group_id, metric_key, period_type, year, month);
             END IF;
         END $$
     """)
