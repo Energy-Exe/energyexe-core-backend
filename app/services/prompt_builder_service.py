@@ -140,7 +140,36 @@ class PromptBuilderService:
             ],
             "ownership_history": [
                 "windfarm_name", "current_owners"
-            ]
+            ],
+            # Spec items 3-6: pipeline modules
+            "generation_concentration": [
+                "windfarm_name", "country_name", "year",
+                "capture_ratio", "weighted_avg_capture_price_eur",
+                "time_weighted_avg_price_eur",
+                "total_mwh", "total_hours",
+                "top_decile_share_pct", "top_quartile_share_pct",
+                "bottom_decile_share_pct", "bottom_quartile_share_pct",
+            ],
+            "degradation": [
+                "windfarm_name", "country_name", "reference_curve_label",
+                "slope_pct_per_year", "ci_lower_95_pct", "ci_upper_95_pct",
+                "r_squared", "baseline_cap_pu",
+                "analysis_start", "analysis_end", "data_points",
+            ],
+            "disruption_detection": [
+                "windfarm_name", "country_name", "year",
+                "total_hours", "underperf_hours", "overperf_hours",
+                "long_run_count", "max_run_hours",
+                "lost_mwh", "lost_eur",
+                "odi_pct_underperf", "odi_pct_loss_mwh", "odi_pct_loss_eur",
+                "pricing_basis",
+            ],
+            "wind_normalisation": [
+                "windfarm_name", "country_name", "year",
+                "reference_curve_label", "yearly_index",
+                "yearly_avg_norm_ratio", "yearly_hours_used",
+                "norm_wind_min_mps", "monthly_breakdown",
+            ],
         }
 
         required = required_fields.get(section_type, [])

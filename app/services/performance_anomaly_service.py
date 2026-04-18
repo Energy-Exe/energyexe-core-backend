@@ -5,8 +5,9 @@ the empirical power curve, quantifies lost energy (MWh) and revenue (EUR),
 computes ODI metrics, and groups consecutive underperformance into runs.
 """
 
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+import os
+from datetime import date, datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,14 @@ from app.models.power_curve_bin import PowerCurveBin
 from app.models.windfarm import Windfarm
 from app.models.ppa import PPA
 
+# IsolationForest is optional (sklearn import) — keeps test env light.
+try:
+    from sklearn.ensemble import IsolationForest
+    HAS_SKLEARN = True
+except ImportError:  # pragma: no cover
+    IsolationForest = None  # type: ignore
+    HAS_SKLEARN = False
+
 logger = structlog.get_logger(__name__)
 
 # ─── Thresholds from PDF spec ─────────────────────────────────
@@ -27,6 +36,11 @@ UNDERPERF_MAD_K = 2.5
 OVERPERF_MAD_K = 1.5
 CEILING_PU = 1.02
 LONG_RUN_HOURS = 24
+
+# Optional secondary anomaly detector (Module 3b). Disabled by default — the
+# spec marks it as optional and notes it does NOT contribute to loss calcs.
+USE_ISOLATION_FOREST = os.getenv("PIPELINE_USE_ISOLATION_FOREST", "false").lower() == "true"
+ISOLATION_CONTAMINATION = float(os.getenv("PIPELINE_ISOLATION_CONTAMINATION", "0.03"))
 
 
 class PerformanceAnomalyService:
@@ -52,7 +66,7 @@ class PerformanceAnomalyService:
         if not rated_mw:
             return {"error": "No rated capacity"}
 
-        ppa_price = await self._get_ppa_price(windfarm_id)
+        ppa_price, pricing_basis = await self._get_ppa_price(windfarm_id, year)
 
         # Load capability curve for this year
         capability = await self._load_capability_stats(windfarm_id, year)
@@ -64,8 +78,14 @@ class PerformanceAnomalyService:
         if df.empty:
             return {"error": "No hourly data"}
 
-        # Classify hours
+        # Classify hours (statistical MAD layer)
         df_flagged = self.classify_hours(df, capability, float(rated_mw), ppa_price)
+
+        # Optional Module 3b — IsolationForest secondary anomaly flag (informational only)
+        if USE_ISOLATION_FOREST:
+            df_flagged["flag_isolation_forest"] = self.detect_isolation_forest_anomalies(
+                df_flagged, ISOLATION_CONTAMINATION
+            )
 
         # Assign run IDs to underperformance
         df_flagged = self.assign_run_ids(df_flagged)
@@ -85,6 +105,11 @@ class PerformanceAnomalyService:
             "overperf_hours": int((df_flagged["anomaly_type"] == "overperformance").sum()),
             "lost_mwh": float(df_flagged["lost_mwh"].sum()),
             "lost_eur": float(df_flagged["lost_eur"].sum()),
+            "pricing_basis": pricing_basis,
+            "isolation_forest_flagged": (
+                int(df_flagged["flag_isolation_forest"].sum())
+                if "flag_isolation_forest" in df_flagged.columns else 0
+            ),
         }
 
     # ─── Classification (pure, testable) ───────────────────────
@@ -296,16 +321,83 @@ class PerformanceAnomalyService:
             })
         return pd.DataFrame(records)
 
-    async def _get_ppa_price(self, windfarm_id: int) -> Optional[float]:
-        """Get PPA price for loss calculations."""
-        result = await self.db.execute(
-            select(PPA.ppa_price_eur_mwh).where(
-                PPA.windfarm_id == windfarm_id,
-                PPA.ppa_status == "active",
-            ).order_by(PPA.ppa_end_date.desc().nullslast()).limit(1)
+    async def _get_ppa_price(
+        self, windfarm_id: int, year: Optional[int] = None
+    ) -> Tuple[Optional[float], str]:
+        """Get PPA price applicable for `year` and the pricing basis label.
+
+        Spec item 5.4: "If a fixed PPA price is configured, that is used
+        instead of the hourly spot price." We respect the contract date range
+        — a PPA that expired before the analysis year is NOT applied to that
+        year's loss calculations.
+
+        Returns:
+            (price, basis) where basis is one of:
+                'PPA contract' — fixed PPA price applies for the whole year
+                'hourly market_price' — fall back to hourly spot price
+        """
+        query = select(PPA).where(
+            PPA.windfarm_id == windfarm_id,
+            PPA.ppa_status == "active",
+            PPA.ppa_price_eur_mwh.isnot(None),
         )
-        val = result.scalar_one_or_none()
-        return float(val) if val else None
+        if year is not None:
+            year_start = date(year, 1, 1)
+            year_end = date(year, 12, 31)
+            # Contract overlaps the analysis year (NULL bounds = open-ended)
+            query = query.where(
+                (PPA.ppa_start_date.is_(None)) | (PPA.ppa_start_date <= year_end),
+                (PPA.ppa_end_date.is_(None)) | (PPA.ppa_end_date >= year_start),
+            )
+        query = query.order_by(PPA.ppa_end_date.desc().nullslast()).limit(1)
+
+        result = await self.db.execute(query)
+        ppa = result.scalar_one_or_none()
+        if ppa is None or ppa.ppa_price_eur_mwh is None:
+            return None, "hourly market_price"
+        return float(ppa.ppa_price_eur_mwh), "PPA contract"
+
+    @staticmethod
+    def detect_isolation_forest_anomalies(
+        df: pd.DataFrame,
+        contamination: float = ISOLATION_CONTAMINATION,
+    ) -> pd.Series:
+        """Spec Module 3b — secondary anomaly layer using IsolationForest.
+
+        Trains on (wind_speed, p_pu) features and returns a boolean Series
+        aligned with `df.index` where True indicates a point flagged by the
+        forest. Per spec, this flag is INFORMATIONAL only — it does NOT
+        affect loss calculations (those remain MAD-statistical).
+
+        Returns an all-False Series if sklearn is not installed or the
+        feature has fewer than 50 valid rows (insufficient for a stable
+        contamination=0.03 fit).
+        """
+        if not HAS_SKLEARN:
+            logger.info("isolation_forest_skipped_no_sklearn")
+            return pd.Series(False, index=df.index)
+
+        feats = df[["wind_speed", "p_pu"]].dropna()
+        if len(feats) < 50:
+            logger.info("isolation_forest_skipped_too_few_rows", n=len(feats))
+            return pd.Series(False, index=df.index)
+
+        clf = IsolationForest(
+            contamination=contamination,
+            random_state=42,
+            n_jobs=-1,
+        )
+        preds = clf.fit_predict(feats.to_numpy(dtype=float))
+        flag = pd.Series(False, index=df.index)
+        flag.loc[feats.index] = preds == -1
+        logger.info(
+            "isolation_forest_complete",
+            n_total=len(df),
+            n_features=len(feats),
+            n_flagged=int(flag.sum()),
+            contamination=contamination,
+        )
+        return flag
 
     # ─── Storage ───────────────────────────────────────────────
 
@@ -453,13 +545,19 @@ class PerformanceAnomalyService:
         rated_mw: float, pipeline_run_id: Optional[int] = None,
     ) -> dict:
         """Detect anomalies using pre-loaded hourly DataFrame (avoids redundant SQL)."""
-        ppa_price = await self._get_ppa_price(windfarm_id)
+        ppa_price, pricing_basis = await self._get_ppa_price(windfarm_id, year)
 
         capability = await self._load_capability_stats(windfarm_id, year)
         if capability.empty:
             return {"error": f"No capability curve for year {year}"}
 
         df_flagged = self.classify_hours(df, capability, rated_mw, ppa_price)
+
+        if USE_ISOLATION_FOREST:
+            df_flagged["flag_isolation_forest"] = self.detect_isolation_forest_anomalies(
+                df_flagged, ISOLATION_CONTAMINATION
+            )
+
         df_flagged = self.assign_run_ids(df_flagged)
 
         anomalies = df_flagged[df_flagged["is_anomaly"]].copy()
@@ -475,6 +573,11 @@ class PerformanceAnomalyService:
             "overperf_hours": int((df_flagged["anomaly_type"] == "overperformance").sum()),
             "lost_mwh": float(df_flagged["lost_mwh"].sum()),
             "lost_eur": float(df_flagged["lost_eur"].sum()),
+            "pricing_basis": pricing_basis,
+            "isolation_forest_flagged": (
+                int(df_flagged["flag_isolation_forest"].sum())
+                if "flag_isolation_forest" in df_flagged.columns else 0
+            ),
         }
 
     async def _store_anomalies_bulk(self, windfarm_id: int, year: int, anomalies: pd.DataFrame) -> None:
@@ -493,6 +596,7 @@ class PerformanceAnomalyService:
             return
 
         # Build values for bulk insert
+        has_iforest_col = "flag_isolation_forest" in anomalies.columns
         rows = []
         for _, row in anomalies.iterrows():
             rows.append({
@@ -507,19 +611,28 @@ class PerformanceAnomalyService:
                 "lost_eur": float(row["lost_eur"]) if pd.notna(row.get("lost_eur")) else None,
                 "market_price": float(row["market_price"]) if pd.notna(row.get("market_price")) else None,
                 "run_id": int(row["run_id"]) if pd.notna(row.get("run_id")) else None,
+                "flag_isolation_forest": (
+                    bool(row["flag_isolation_forest"])
+                    if has_iforest_col and pd.notna(row.get("flag_isolation_forest"))
+                    else None
+                ),
             })
 
-        # Batch insert in chunks of 1000
+        # Batch insert in chunks of 1000. flag_isolation_forest is included
+        # only when the migration adding the column has been applied; the
+        # column accepts NULL otherwise.
         for i in range(0, len(rows), 1000):
             chunk = rows[i:i + 1000]
             await self.db.execute(
                 text("""
                     INSERT INTO performance_anomalies
                     (windfarm_id, hour, anomaly_type, actual_p_pu, expected_p_pu,
-                     wind_speed, wind_bin, lost_mwh, lost_eur, market_price, run_id)
+                     wind_speed, wind_bin, lost_mwh, lost_eur, market_price, run_id,
+                     flag_isolation_forest)
                     VALUES
                     (:windfarm_id, :hour, :anomaly_type, :actual_p_pu, :expected_p_pu,
-                     :wind_speed, :wind_bin, :lost_mwh, :lost_eur, :market_price, :run_id)
+                     :wind_speed, :wind_bin, :lost_mwh, :lost_eur, :market_price, :run_id,
+                     :flag_isolation_forest)
                 """),
                 chunk,
             )

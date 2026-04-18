@@ -1,0 +1,58 @@
+You are an energy markets analyst writing a short commercial-impact note on
+generation-vs-price concentration for {{ windfarm_name }} ({{ country_name }})
+in {{ year }}.
+
+## Capture metrics
+
+- **Capture ratio:** {{ "%.3f"|format(capture_ratio) }}
+  ({{ "above" if capture_ratio > 1 else "below" }} 1.0 — windfarm
+  {{ "captures more value than time-average price" if capture_ratio > 1 else "captures less value than time-average price" }})
+- **Volume-weighted capture price:** EUR {{ "%.2f"|format(weighted_avg_capture_price_eur) }}/MWh
+- **Time-weighted average price:** EUR {{ "%.2f"|format(time_weighted_avg_price_eur) }}/MWh
+- **Total generation:** {{ "%.0f"|format(total_mwh) }} MWh over
+  {{ total_hours }} hours
+
+## Decile breakdown (share of total MWh in each price decile)
+
+- **Top decile (D10, highest 10% of prices):** {{ "%.2f"|format(top_decile_share_pct) }}%
+  (neutral = 10%)
+- **Top quartile (D8-D10):** {{ "%.2f"|format(top_quartile_share_pct) }}%
+  (neutral ≈ 30%)
+- **Bottom decile (D1, lowest 10% of prices):** {{ "%.2f"|format(bottom_decile_share_pct) }}%
+- **Bottom quartile (D1-D3):** {{ "%.2f"|format(bottom_quartile_share_pct) }}%
+
+{% if vs_zone_capture_ratio_diff is not none %}
+## Vs bidzone average
+
+- **Capture ratio diff vs zone:**
+  {{ "+" if vs_zone_capture_ratio_diff >= 0 else "" }}{{ "%.3f"|format(vs_zone_capture_ratio_diff) }}
+  ({{ "outperforming" if vs_zone_capture_ratio_diff > 0 else "underperforming" }} the zone average)
+{% if vs_zone_top_decile_diff is not none %}
+- **Top-decile share diff vs zone:**
+  {{ "+" if vs_zone_top_decile_diff >= 0 else "" }}{{ "%.2f"|format(vs_zone_top_decile_diff) }} pp
+{% endif %}
+{% endif %}
+
+## Task
+
+Write 2-3 short paragraphs covering:
+
+1. **What this windfarm's price-correlation tells us commercially** — does it
+   benefit from generating in higher-price hours, or is it exposed to
+   lower-price periods? Be concrete about the EUR/MWh gap between captured
+   and time-average price.
+
+2. **Peer context** — how does the capture ratio compare to the bidzone
+   average{% if vs_zone_capture_ratio_diff is none %} (peer aggregate not
+   available for this period — note this){% endif %}, and what does that
+   imply about wind/price correlation specific to this windfarm vs. the
+   broader bidzone?
+
+3. **Recommended action** — if capture ratio is poor, suggest one or two
+   concrete next steps: PPA renegotiation, hedging, dispatch optimisation,
+   battery storage feasibility study, etc. If capture ratio is strong, note
+   that the asset's price exposure is favourable and PPA terms can be more
+   aggressive.
+
+Tone: factual, board-level, no hedging language. Avoid the words "could",
+"might", or "potentially" unless quantifying uncertainty. Maximum 250 words.

@@ -16,6 +16,7 @@ from app.models.performance_summary import PerformanceSummary
 from app.models.power_curve_bin import PowerCurveBin
 from app.models.windfarm import Windfarm
 from app.services.degradation_service import DegradationService
+from app.services.generation_concentration_service import GenerationConcentrationService
 from app.services.performance_anomaly_service import PerformanceAnomalyService
 from app.services.power_curve_service import PowerCurveService
 from app.services.wind_normalisation_service import WindNormalisationService
@@ -188,6 +189,42 @@ class PerformancePipelineService:
                 logger.error("pipeline_commercial_error", windfarm_id=windfarm_id, year=year, error=str(e))
         result["commercial"] = {"years_computed": commercial_ok}
 
+        # Spec item 3: Generation Concentration — runs after commercial because
+        # it reuses the same hourly (gen, price) join. Each year in its own
+        # SAVEPOINT so a single bad year doesn't poison the rest.
+        concentration_svc = GenerationConcentrationService(self.db)
+        concentration_results: Dict[int, Any] = {}
+        for year in years:
+            try:
+                async with self.db.begin_nested():
+                    cr = await concentration_svc.compute_for_windfarm(
+                        windfarm_id, year, df_preloaded=df_all,
+                        pipeline_run_id=pipeline_run_id,
+                    )
+                    concentration_results[year] = cr
+            except Exception as e:
+                logger.error(
+                    "pipeline_concentration_error",
+                    windfarm_id=windfarm_id, year=year, error=str(e),
+                )
+                concentration_results[year] = {"error": str(e)}
+        result["generation_concentration"] = concentration_results
+
+        # Refresh peer aggregates that include this windfarm so downstream
+        # vs-zone API responses reflect the latest values. Best-effort —
+        # crashes here would mask the per-windfarm pipeline result.
+        try:
+            from app.services.peer_aggregate_service import PeerAggregateService
+
+            agg_svc = PeerAggregateService(self.db)
+            async with self.db.begin_nested():
+                await agg_svc.refresh_for_windfarm(windfarm_id, years)
+        except Exception as e:
+            logger.warning(
+                "pipeline_peer_aggregate_refresh_failed",
+                windfarm_id=windfarm_id, error=str(e),
+            )
+
         # Final flush — surfaces any remaining issues loudly instead of silently rolling back at commit.
         await self.db.flush()
         return result
@@ -325,12 +362,35 @@ class PerformancePipelineService:
         row = result.fetchone()
         actual_mwh = float(row.total_mwh) if row and row.total_mwh else 0
 
-        # Get P50 target
+        # Get P50 target — pick the most-recent target whose date range covers
+        # `year` (or the most recent regardless if none cover the year).
+        from datetime import date as _date
+
         from app.models.p50_target import P50Target
+
+        year_start = _date(year, 1, 1)
+        year_end = _date(year, 12, 31)
         p50_result = await self.db.execute(
-            select(P50Target.p50_target_gwh).where(P50Target.windfarm_id == windfarm_id).limit(1)
+            select(P50Target.p50_target_volume_gwh)
+            .where(
+                P50Target.windfarm_id == windfarm_id,
+                P50Target.p50_target_start_date <= year_end,
+                (P50Target.p50_target_end_date.is_(None))
+                | (P50Target.p50_target_end_date >= year_start),
+            )
+            .order_by(P50Target.p50_target_start_date.desc())
+            .limit(1)
         )
         p50_gwh = p50_result.scalar_one_or_none()
+        if p50_gwh is None:
+            # Fall back to most recent target regardless of date range
+            p50_result = await self.db.execute(
+                select(P50Target.p50_target_volume_gwh)
+                .where(P50Target.windfarm_id == windfarm_id)
+                .order_by(P50Target.p50_target_start_date.desc())
+                .limit(1)
+            )
+            p50_gwh = p50_result.scalar_one_or_none()
         p50_mwh = float(p50_gwh) * 1000 if p50_gwh else actual_mwh
 
         scenarios = []

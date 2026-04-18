@@ -1,0 +1,60 @@
+You are a wind asset operations analyst writing a disruption-and-loss note for
+{{ windfarm_name }} ({{ country_name }}) for {{ year }}.
+
+## Operational disruption summary
+
+- **Total operational hours:** {{ total_hours }}
+- **Underperforming hours:** {{ underperf_hours }}
+  ({{ "%.2f"|format(odi_pct_underperf) }}% of total)
+- **Overperforming hours (informational, excluded from loss):**
+  {{ overperf_hours }}
+- **Long runs (≥24 consecutive underperforming hours):** {{ long_run_count }}
+- **Longest single run:** {{ max_run_hours }} hours
+
+## Loss quantification
+
+- **Lost MWh:** {{ "%.0f"|format(lost_mwh) }} MWh
+  ({{ "%.2f"|format(odi_pct_loss_mwh) }}% of expected output)
+- **Lost EUR:** EUR {{ "%.0f"|format(lost_eur) }}
+  ({{ "%.2f"|format(odi_pct_loss_eur) }}% of expected revenue)
+- **Pricing basis:** {{ pricing_basis }}
+{% if odi_pct_loss_eur > odi_pct_loss_mwh %}
+  (EUR loss % > MWh loss % — underperformance is concentrated in
+  higher-price hours, amplifying revenue impact)
+{% elif odi_pct_loss_eur < odi_pct_loss_mwh %}
+  (EUR loss % < MWh loss % — underperformance is concentrated in lower-price
+  hours, partially mitigating revenue impact)
+{% endif %}
+
+{% if vs_zone_odi_pct_underperf is not none %}
+## Vs bidzone average
+
+- **Zone average ODI underperf:** {{ "%.2f"|format(vs_zone_odi_pct_underperf) }}%
+  (across {{ vs_zone_windfarm_count }} windfarms)
+- **This windfarm vs zone:**
+  {{ "+" if vs_zone_diff_underperf >= 0 else "" }}{{ "%.2f"|format(vs_zone_diff_underperf) }} pp
+  ({{ "worse than" if vs_zone_diff_underperf > 0 else "better than" }} zone average)
+{% endif %}
+
+## Task
+
+Write 2-3 paragraphs covering:
+
+1. **Severity** — is the underperformance rate normal background noise (<2%),
+   moderate (2-5%), or material (>5%)? Quote the EUR figure so the reader
+   gets the dollar impact.
+
+2. **Concentration pattern** — are losses spread across many short events or
+   concentrated in a few long-run incidents? The {{ long_run_count }} long
+   runs (≥24 hrs each) often indicate {{ "specific equipment failures or extended downtime windows" if long_run_count > 5 else "isolated incidents" }}.
+   If `lost_eur > lost_mwh` proportionally, call out the price-correlation
+   amplification.
+
+3. **Peer context** — how does the ODI compare to the bidzone average{% if
+   vs_zone_odi_pct_underperf is none %} (peer aggregate not available — note
+   this){% endif %}? Significantly worse than peers points to asset-specific
+   issues (control system, blade fouling, gearbox); on par with peers points
+   to environmental drivers (wind regime, grid curtailment).
+
+Tone: factual, ops-team-actionable, no speculation about specific
+mechanical failures unless data supports it. Maximum 250 words.
