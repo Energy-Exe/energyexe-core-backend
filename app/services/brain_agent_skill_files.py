@@ -31,6 +31,12 @@ SKILL_SCHEMA = """# Database Schema Reference
 **performance_anomalies**: windfarm_id, hour, anomaly_type (underperformance/overperformance), actual_p_pu, expected_p_pu, wind_speed, wind_bin, lost_mwh, lost_eur, market_price, run_id. Unique: (windfarm_id, hour)
 **performance_summaries**: windfarm_id, period_type (month/year), year, month. ODI: odi_pct_underperf, lost_mwh, expected_mwh, odi_pct_loss_mwh, lost_eur, odi_pct_loss_eur, long_run_count, max_run_hours. Norm: norm_ratio_p50, norm_index_p50, norm_ratio_p10, norm_index_p10. Commercial: constraint_proxy_mwh, lost_value_eur
 **degradation_results**: windfarm_id, reference_curve (q50=P50/q90=P10), slope_pu_per_year, slope_pct_per_year, intercept, r_squared, p_value, ci_lower_95, ci_upper_95, baseline_cap_pu, data_points
+**generation_concentration_summaries**: windfarm_id, period_type (year/month), year, month, total_mwh, total_hours, weighted_avg_capture_price_eur, time_weighted_avg_price_eur, capture_ratio, top_decile_share_pct, top_quartile_share_pct, bottom_decile_share_pct, bottom_quartile_share_pct, decile_shares (JSONB: {"d1":..,"d2":..,...,"d10":..} — % of generation in each price decile, D1=lowest-price hours, D10=highest), vs_zone_capture_ratio_diff, vs_zone_top_decile_diff, pipeline_run_id, computed_at
+  - Unique: (windfarm_id, period_type, year, month)
+**peer_group_aggregates**: group_type ('bidzone'/'country'/'owner'/'turbine_model'), group_id, metric_key (see list below), period_type (year/month), year, month, windfarm_count, avg_value, p10_value, p50_value, p90_value, computed_at
+  - Unique: (group_type, group_id, metric_key, period_type, year, month)
+  - **metric_key values:** 'odi_pct_underperf', 'odi_pct_loss_mwh', 'odi_pct_loss_eur', 'wind_norm_index_p50', 'wind_norm_index_p10', 'degradation_slope_pct_per_year_q50', 'degradation_slope_pct_per_year_q90', 'concentration_capture_ratio', 'concentration_top_decile_share_pct', 'concentration_bottom_decile_share_pct'
+  - For a windfarm's bidzone peers: `group_type='bidzone' AND group_id = windfarms.bidzone_id`. Fall back to `group_type='country'` if bidzone row missing.
 **data_anomalies**: windfarm_id, anomaly_type, severity, status, period_start, period_end, description
 **alert_rules**: user_id, windfarm_id, metric, condition, threshold_value, severity, is_enabled
 **countries**: id, code (ISO alpha-3: NOR, GBR, USA, DNK), name
@@ -121,6 +127,67 @@ FROM opportunities o JOIN windfarms w ON o.windfarm_id = w.id
 WHERE o.schema_code = 'MKT_01' AND o.status = 'ACTIVE'
 ```
 
+## Performance Pipeline Queries
+
+### Generation concentration (capture ratio, deciles) by year
+```sql
+SELECT year, capture_ratio, weighted_avg_capture_price_eur,
+       time_weighted_avg_price_eur, top_decile_share_pct,
+       bottom_decile_share_pct, decile_shares,
+       vs_zone_capture_ratio_diff
+FROM generation_concentration_summaries
+WHERE windfarm_id = 7361 AND period_type = 'year'
+ORDER BY year
+```
+
+### ODI underperformance vs bidzone peers (monthly)
+```sql
+SELECT ps.year, ps.month,
+       ps.odi_pct_underperf AS windfarm_odi,
+       pa.avg_value AS zone_avg_odi,
+       pa.windfarm_count AS peer_n,
+       ps.odi_pct_underperf - pa.avg_value AS diff_pp
+FROM performance_summaries ps
+JOIN windfarms w ON w.id = ps.windfarm_id
+LEFT JOIN peer_group_aggregates pa
+  ON pa.group_type = 'bidzone'
+  AND pa.group_id = w.bidzone_id
+  AND pa.metric_key = 'odi_pct_underperf'
+  AND pa.period_type = ps.period_type
+  AND pa.year = ps.year
+  AND pa.month IS NOT DISTINCT FROM ps.month
+WHERE ps.windfarm_id = 7361 AND ps.period_type = 'month'
+ORDER BY ps.year, ps.month
+```
+
+### Monthly wind-normalised performance index (P50 and P10 references)
+```sql
+SELECT year, month, norm_index_p50, norm_index_p10,
+       norm_ratio_p50, norm_ratio_p10
+FROM performance_summaries
+WHERE windfarm_id = 7361 AND period_type = 'month'
+ORDER BY year, month
+```
+
+### Power curve comparison (raw vs capability for one year)
+```sql
+SELECT wind_bin, curve_type, q50_pu, q90_pu, sample_count
+FROM power_curve_bins
+WHERE windfarm_id = 7361 AND year = 2024
+  AND curve_type IN ('raw', 'capability')
+ORDER BY wind_bin, curve_type
+```
+For an all-years reference curve use `year IS NULL AND curve_type = 'overall_clean'`.
+
+### Degradation trend with confidence interval
+```sql
+SELECT reference_curve, slope_pu_per_year, slope_pct_per_year,
+       ci_lower_95, ci_upper_95, r_squared, p_value,
+       baseline_cap_pu, data_points
+FROM degradation_results WHERE windfarm_id = 7361
+```
+See the Performance Pipeline domain section for `baseline_cap_pu` caveat before quoting `slope_pct_per_year`.
+
 ## SQL Tips
 - ROUND requires numeric cast: `ROUND(col::numeric, 2)`
 - No trailing semicolons
@@ -128,6 +195,7 @@ WHERE o.schema_code = 'MKT_01' AND o.status = 'ACTIVE'
 - Use `c.name = 'Norway'` not code for readability
 - Exclude ramp-up: `WHERE is_ramp_up = false` or `CASE WHEN`
 - Data may lag 1-3 months — check availability first
+- `peer_group_aggregates.month IS NOT DISTINCT FROM ps.month` joins NULL-to-NULL (yearly rows) correctly
 """
 
 SKILL_DOMAIN = """# Energy Domain Knowledge
@@ -183,13 +251,43 @@ The performance pipeline builds empirical power curves and detects operational i
 
 **Power Curves**: Built from wind speed + generation data. P50 (q50_pu) = median output at each wind speed. P10 (q90_pu) = upper capability (90th percentile). Stored in `power_curve_bins` with curve_type 'overall_clean' (all years) or 'capability' (per year).
 
-**ODI (Operational Disruption Index)**: Measures underperformance vs the power curve. `odi_pct_underperf` = % of hours where actual output is statistically below expected (p_pu < q50 - 2.5*MAD). `odi_pct_loss_mwh` = lost energy as % of expected. `odi_pct_loss_eur` = lost revenue as % of expected (price-weighted).
+**ODI (Operational Disruption Index)**: Measures underperformance vs the power curve. `odi_pct_underperf` = % of hours where actual output is statistically below expected (p_pu < q50 - 2.5*MAD). `odi_pct_loss_mwh` = lost energy as % of expected. `odi_pct_loss_eur` = lost revenue as % of expected (see EUR caveat below for the exact denominator).
 
-**Wind Normalisation**: `norm_index_p50` measures operational performance independent of wind. 100 = historical average. >100 = better than average. <100 = worse. Removes the effect of how windy each period was.
+**Wind Normalisation**: `norm_index_p50` measures operational performance independent of wind. 100 = historical average. >100 = better than average. <100 = worse. Removes the effect of how windy each period was. `norm_index_p10` is the same ratio computed against the P10 upper-capability curve — naturally lower numbers (output rarely reaches P10), useful for spotting ceiling drift.
 
-**Degradation**: `slope_pct_per_year` in `degradation_results` shows the long-run performance trend. Negative = degrading (e.g. -0.5%/yr). Check `p_value` < 0.05 and `r_squared` for statistical significance before reporting.
+**Degradation**: `slope_pct_per_year` in `degradation_results` shows the long-run performance trend. Negative = degrading (e.g. -0.5%/yr). Check `p_value` < 0.05 and `r_squared` for statistical significance before reporting. See the degradation caveat below for an important subtlety about the % denominator.
 
-**Lost MWh/EUR**: In `performance_anomalies`, `lost_mwh = max(0, expected - actual)` per underperforming hour. `lost_eur = lost_mwh * market_price`. Summed in `performance_summaries` by month/year.
+**Lost MWh/EUR**: In `performance_anomalies`, `lost_mwh = max(0, expected - actual)` per underperforming hour. `lost_eur = lost_mwh * market_price` (or PPA price if the windfarm has an active PPA with `ppa_price_eur_mwh` set). Summed in `performance_summaries` by month/year.
+
+### Known metric caveats — read before answering
+
+**ODI EUR % denominator.** `odi_pct_loss_eur` is computed as `SUM(lost_eur) / (SUM(expected_mwh) × AVG(market_price))` per period — the denominator uses the **period-average** market price, not an hourly price-weighted sum. When underperformance concentrates in high-price hours the reported EUR % **understates** true revenue impact; when it concentrates in low-price hours it overstates. When a user asks about EUR loss %, surface this caveat. For an hourly-weighted number, sum `lost_eur` from `performance_anomalies` directly and divide by `SUM((actual_mwh + lost_mwh) × market_price)` computed at the hourly grain.
+
+**Degradation baseline & seasonality.** Two things to caveat:
+1. `baseline_cap_pu` in `degradation_results` is currently a placeholder of **0.35** for every windfarm (not the per-windfarm first-year operational capability the spec called for). That means `slope_pct_per_year ≡ slope_pu_per_year / 0.35 × 100`. Treat `slope_pct_per_year` as **indicative**; when precision matters, quote `slope_pu_per_year` in p.u./year directly.
+2. The OLS trend fit is applied to monthly-mean residuals — there is **no explicit seasonal decomposition** (spec called for `statsmodels.seasonal_decompose(period=8760)`; not yet wired in). Strong seasonal patterns (summer maintenance windows, winter icing) can bias the slope. Always quote `r_squared` and `p_value` next to the slope; if `p_value > 0.05` the trend is not statistically distinguishable from zero — say so.
+
+## Generation Concentration
+
+Measures how a windfarm's generation is distributed across hourly market prices. Stored in `generation_concentration_summaries` at month and year grain (populated for windfarms with ELEXON/ENTSOE/NVE price coverage).
+
+- **`capture_ratio`** = `weighted_avg_capture_price_eur / time_weighted_avg_price_eur`. 1.0 means the asset captures exactly the zone's time-average price. <0.9 = generating when prices are low (classic wind cannibalisation). >1.0 = generating when prices are high (rare for unhedged onshore wind; possible for hedged or battery-augmented assets).
+- **`weighted_avg_capture_price_eur`** — generation-weighted average of hourly price (numerator of capture ratio).
+- **`time_weighted_avg_price_eur`** — simple hourly average over the same hours (denominator; treat as the zone reference).
+- **`top_decile_share_pct` / `bottom_decile_share_pct`** — % of generation in the 10% of hours with highest / lowest prices. A healthy asset shows top-decile share above 10% and bottom-decile share below 10%.
+- **`decile_shares`** (JSONB `{"d1":8.5,...,"d10":12.3}`) — full D1-D10 breakdown; D1 = lowest-price 10% of hours, D10 = highest. If `d1 + d2 > 30%`, the asset concentrates in the bottom quintile of pricing — typical of saturated onshore wind zones.
+- **`vs_zone_capture_ratio_diff`** / **`vs_zone_top_decile_diff`** — pre-computed deltas against the windfarm's bidzone peer average. Use these for quick peer commentary.
+
+Use `peer_group_aggregates` (metric keys `concentration_capture_ratio`, `concentration_top_decile_share_pct`, `concentration_bottom_decile_share_pct`) for full peer distributions (avg/p10/p50/p90) rather than re-aggregating raw data.
+
+## Peer Group Aggregates
+
+`peer_group_aggregates` stores pre-computed zone / country / owner / turbine-model averages of key performance metrics. Refreshed by the daily pipeline cron after each module run. **Prefer joining this table to re-aggregating from raw data** — it's consistent with the published module reports and avoids multi-windfarm scans.
+
+- `group_type` ∈ {`bidzone`, `country`, `owner`, `turbine_model`}; `group_id` points at the corresponding table's primary key.
+- `metric_key` values listed in `SKILL_SCHEMA` — covers ODI, wind-norm indices, degradation slopes, and concentration metrics.
+- Columns: `avg_value`, `p10_value`, `p50_value`, `p90_value`, `windfarm_count`. Quote `p50_value` if the user asks for "typical peer"; quote `avg_value` with `windfarm_count` for "average".
+- Join pattern: `ON pa.group_type = 'bidzone' AND pa.group_id = w.bidzone_id AND pa.metric_key = :metric AND pa.period_type = ps.period_type AND pa.year = ps.year AND pa.month IS NOT DISTINCT FROM ps.month`. Fall back to `group_type = 'country'` if the bidzone row is missing.
 """
 
 SKILL_SOURCES = """# Data Source Capabilities
