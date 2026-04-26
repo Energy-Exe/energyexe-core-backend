@@ -11,7 +11,6 @@ from app.schemas.windfarm import (
     WindfarmCreateWithOwners,
     WindfarmListItem,
     WindfarmUpdate,
-    WindfarmWithOwners,
 )
 from app.schemas.windfarm_owner import (
     WindfarmOwner,

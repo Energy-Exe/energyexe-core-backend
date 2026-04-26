@@ -1,7 +1,5 @@
 """Dependency injection utilities."""
 
-from typing import Generator
-
 import structlog
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
