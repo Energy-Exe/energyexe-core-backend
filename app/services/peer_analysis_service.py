@@ -1,6 +1,6 @@
 """Service for identifying and analyzing peer groups."""
 
-from typing import List, Optional, Dict, Set
+from typing import List, Optional, Dict
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload

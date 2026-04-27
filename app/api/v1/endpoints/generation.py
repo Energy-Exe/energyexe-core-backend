@@ -9,12 +9,6 @@ from sqlalchemy import Integer
 from app.core.deps import get_current_active_user, get_db
 from app.models.user import User
 from app.services.unified_generation_service import UnifiedGenerationService
-from app.schemas.generation import (
-    GenerationDataResponse,
-    ProcessingRequest,
-    ProcessingResponse,
-    ManualOverrideRequest
-)
 
 router = APIRouter()
 

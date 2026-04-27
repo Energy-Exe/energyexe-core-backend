@@ -12,7 +12,6 @@ from app.schemas.weather_data import (
     CorrelationData,
     PowerCurveData,
     CapacityFactorData,
-    CapacityFactorBin,
     EnergyRoseData,
     TemperatureImpactData,
     HeatmapData,
