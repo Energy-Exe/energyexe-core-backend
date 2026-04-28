@@ -522,6 +522,11 @@ async def main(start_date: str, end_date: str, zones: Optional[List[str]] = None
         print(f"   poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py \\")
         print(f"     --source ENTSOE --start {start_date} --end {end_date}")
 
+    if total_records == 0 and not dry_run:
+        # Fail loudly so the orchestrating job is marked failed instead of silently "success"
+        print("\n❌ ERROR: 0 records imported — failing job", file=sys.stderr)
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Import ENTSOE data from API')
