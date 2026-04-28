@@ -1,6 +1,6 @@
 """API endpoints for scheduled import job management."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 import structlog
@@ -209,6 +209,8 @@ async def get_system_health(
 @router.post("/trigger/{job_name}", response_model=ImportJobResponse)
 async def trigger_scheduled_job(
     job_name: str,
+    start: Optional[date] = Query(None, description="Override start date (YYYY-MM-DD) for backfill"),
+    end: Optional[date] = Query(None, description="Override end date (YYYY-MM-DD) for backfill"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -218,15 +220,28 @@ async def trigger_scheduled_job(
     - GitHub Actions scheduled workflows
     - External cron services
     - Automated triggers
+    - Manual backfills (pass `start` and `end` to override the default date window)
 
     WARNING: This endpoint has no authentication. Only use for scheduled jobs.
 
     Args:
         job_name: Name of job to trigger (entsoe-daily, taipower-hourly, etc.)
+        start: Optional explicit start date — overrides the default delay-based window
+        end: Optional explicit end date — overrides the default delay-based window
 
     Returns:
         Created and executed job details
     """
+    if (start is None) != (end is None):
+        raise HTTPException(
+            status_code=400,
+            detail="Both `start` and `end` must be provided together",
+        )
+    if start is not None and end is not None and start > end:
+        raise HTTPException(
+            status_code=400,
+            detail="`start` must be on or before `end`",
+        )
     # Job configurations with appropriate delays
     job_configs = {
         "entsoe-daily": {
@@ -272,7 +287,11 @@ async def trigger_scheduled_job(
         # Calculate import date range based on delay
         today = datetime.now(timezone.utc)
 
-        if "delay_days" in config:
+        if start is not None and end is not None:
+            # Explicit override (manual backfill)
+            import_start = datetime.combine(start, datetime.min.time())
+            import_end = datetime.combine(end, datetime.max.time()).replace(microsecond=0)
+        elif "delay_days" in config:
             import_date = today - timedelta(days=config["delay_days"])
             import_start = import_date.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
             import_end = import_date.replace(hour=23, minute=59, second=59, microsecond=0, tzinfo=None)
@@ -297,11 +316,14 @@ async def trigger_scheduled_job(
             import_end = today.replace(tzinfo=None)
 
         # Create job
+        metadata = {"job_config": job_name, "trigger": "external"}
+        if start is not None and end is not None:
+            metadata["backfill"] = True
         job_request = ImportJobCreate(
             source=config["source"],
             import_start_date=import_start,
             import_end_date=import_end,
-            job_metadata={"job_config": job_name, "trigger": "external"},
+            job_metadata=metadata,
         )
 
         job = await service.create_job(
