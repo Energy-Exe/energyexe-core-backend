@@ -8,7 +8,6 @@ from app.api.v1.endpoints import (
     audit_logs,
     auth,
     bidzones,
-    brain,
     brain_agent,
     cables,
     comparison,
@@ -138,9 +137,6 @@ api_router.include_router(
 
 # Alerts and notifications endpoints
 api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
-
-# Brain (AI Chat Agent) endpoints
-api_router.include_router(brain.router, prefix="/brain", tags=["brain"])
 
 # Brain Agent (Claude Agent SDK) endpoints
 api_router.include_router(brain_agent.router, prefix="/brain-agent", tags=["brain-agent"])
