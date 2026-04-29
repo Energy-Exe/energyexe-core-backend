@@ -120,6 +120,13 @@ class Settings(BaseSettings):
     # Brain Agent default model (used as fallback when caller omits one)
     BRAIN_MODEL: str = "claude-sonnet-4-6"
 
+    # Brain Agent — Postgres read-only role.
+    # When the password is set, the agent's bash env uses these credentials so
+    # every DB connection it spawns is grant-restricted to SELECT only. See
+    # alembic migration a1b2c3d4e5f6_add_brain_agent_ro_role.py.
+    BRAIN_AGENT_RO_USER: str = "brain_agent_ro"
+    BRAIN_AGENT_RO_PASSWORD: str = ""
+
     # Brain Agent — source code access for codebase exploration
     CODE_REPOS_DIR: str = "/tmp/energyexe-repos"
     GITHUB_TOKEN: str = ""  # PAT for cloning private repos at startup
@@ -157,6 +164,31 @@ class Settings(BaseSettings):
         if url.startswith("postgresql+asyncpg://"):
             return url.replace("postgresql+asyncpg://", "postgresql://")
         return url
+
+    @property
+    def database_url_agent_ro(self) -> Optional[str]:
+        """Sync Postgres URL using the brain-agent read-only role.
+
+        Returns ``None`` when ``BRAIN_AGENT_RO_PASSWORD`` is not configured —
+        the caller falls back to the regular URL with a session-level read-only
+        guard. Once the password is set, the agent always connects with
+        ``BRAIN_AGENT_RO_USER`` so the database itself enforces SELECT-only.
+        """
+        if not self.BRAIN_AGENT_RO_PASSWORD:
+            return None
+        if not self.DATABASE_URL:
+            return None
+
+        from urllib.parse import quote, urlparse, urlunparse
+
+        base = self.database_url_sync  # already in sync form
+        parsed = urlparse(base)
+        host = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port else ""
+        user = quote(self.BRAIN_AGENT_RO_USER, safe="")
+        pw = quote(self.BRAIN_AGENT_RO_PASSWORD, safe="")
+        netloc = f"{user}:{pw}@{host}{port}"
+        return urlunparse(parsed._replace(netloc=netloc))
 
     @property
     def database_url_async(self) -> str:
