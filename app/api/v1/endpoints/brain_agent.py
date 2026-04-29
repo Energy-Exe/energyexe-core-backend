@@ -5,10 +5,10 @@ import json
 import mimetypes
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +40,7 @@ async def agent_chat(
     request: AgentChatRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    x_agent_source: Optional[str] = Header(default=None, alias="X-Agent-Source"),
 ) -> StreamingResponse:
     """Stream a Brain Agent response via Server-Sent Events.
 
@@ -47,6 +48,16 @@ async def agent_chat(
     plus custom energy data MCP tools. Maintains session across messages.
     """
     service = BrainAgentService(db)
+
+    # Resolve effective source from body, header, and role.
+    # Clients are always forced to "client" regardless of what they send.
+    # Admins default to "admin" but may opt into "client" for testing.
+    # Brain agent is currently open to every authenticated user — no feature gate.
+    requested_source = request.source or x_agent_source
+    if current_user.role == "client":
+        effective_source = "client"
+    else:
+        effective_source = requested_source if requested_source in ("admin", "client") else "admin"
 
     user_name = None
     if current_user.first_name:
@@ -63,8 +74,11 @@ async def agent_chat(
                     session_id=request.session_id,
                     prompt=request.prompt,
                     user_name=user_name,
+                    user_first_name=current_user.first_name,
+                    user_company_name=current_user.company_name,
                     model=request.model,
                     conversation_history=request.conversation_history,
+                    source=effective_source,
                 ),
                 interval=HEARTBEAT_INTERVAL,
             ):
