@@ -101,6 +101,41 @@ class TestPriceStatisticsAPI:
         assert response.status_code in [200, 404]
 
 
+class TestPriceStatisticsNegativeHours:
+    """#round2-5 — /statistics must return negative_hours_count + negative_hours_pct.
+
+    Bug history: the FE Negative Hours % tile divided by 24 (priceProfile is by
+    hour-of-day, not real hours), so any zone with intra-day negative spikes
+    showed 100%. Solution: BE computes the percentage from real hours.
+    """
+
+    def test_negative_hours_fields_present_and_in_range(
+        self, api_client, auth_headers, test_windfarm_id, date_range
+    ):
+        response = api_client.get(
+            f"/prices/windfarms/{test_windfarm_id}/statistics",
+            params=date_range,
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "negative_hours_count" in data, "negative_hours_count missing"
+        assert "negative_hours_pct" in data, "negative_hours_pct missing"
+
+        count = data["negative_hours_count"]
+        pct = data["negative_hours_pct"]
+        assert isinstance(count, int)
+        assert isinstance(pct, (int, float))
+
+        assert count >= 0
+        assert 0.0 <= pct <= 100.0, f"negative_hours_pct={pct} out of [0,100]"
+        assert count <= data["hours_with_data"], (
+            f"negative_hours_count={count} cannot exceed hours_with_data="
+            f"{data['hours_with_data']}"
+        )
+
+
 class TestPriceCoverageAPI:
     """Test suite for price coverage endpoints."""
 

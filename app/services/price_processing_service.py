@@ -407,7 +407,9 @@ class PriceProcessingService:
                 MAX(day_ahead_price) as max_day_ahead,
                 AVG(intraday_price) as avg_intraday,
                 MIN(intraday_price) as min_intraday,
-                MAX(intraday_price) as max_intraday
+                MAX(intraday_price) as max_intraday,
+                SUM(CASE WHEN day_ahead_price < 0 THEN 1 ELSE 0 END) as negative_hours_count,
+                COUNT(day_ahead_price) as hours_with_day_ahead
             FROM price_data
             WHERE windfarm_id = :windfarm_id
               AND hour >= :start_date
@@ -427,6 +429,14 @@ class PriceProcessingService:
         if not row:
             return {}
 
+        negative_hours_count = int(row.negative_hours_count or 0)
+        hours_with_day_ahead = int(row.hours_with_day_ahead or 0)
+        negative_hours_pct = (
+            (negative_hours_count / hours_with_day_ahead) * 100
+            if hours_with_day_ahead > 0
+            else 0.0
+        )
+
         return {
             "hours_with_data": row.hours_with_data,
             "day_ahead": {
@@ -439,6 +449,8 @@ class PriceProcessingService:
                 "min": float(row.min_intraday) if row.min_intraday else None,
                 "max": float(row.max_intraday) if row.max_intraday else None,
             },
+            "negative_hours_count": negative_hours_count,
+            "negative_hours_pct": round(negative_hours_pct, 2),
         }
 
     async def get_windfarm_coverage(

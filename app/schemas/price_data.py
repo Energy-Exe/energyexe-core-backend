@@ -190,6 +190,8 @@ class PriceStatisticsResponse(BaseModel):
     hours_with_data: int
     day_ahead: Dict[str, Optional[float]]
     intraday: Dict[str, Optional[float]]
+    negative_hours_count: int = 0
+    negative_hours_pct: float = 0.0
 
 
 class PriceCoverageResponse(BaseModel):

@@ -91,7 +91,7 @@ class WindRoseData(BaseModel):
     speed_bins: List[dict] = Field(description="Speed ranges")
     frequency: List[List[float]] = Field(description="2D array [direction][speed]")
     total_hours: int
-    calm_percentage: float = Field(description="% of time with wind < 0.5 m/s")
+    calm_percentage: float = Field(description="% of time with wind < 3 m/s (turbine cut-in)")
 
 
 # ============================================================================

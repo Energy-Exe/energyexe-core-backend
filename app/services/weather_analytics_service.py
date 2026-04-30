@@ -180,7 +180,7 @@ class WeatherAnalyticsService:
         total_query = text("""
             SELECT
                 COUNT(*) as total_hours,
-                COUNT(*) FILTER (WHERE wind_speed_100m < 0.5) as calm_hours
+                COUNT(*) FILTER (WHERE wind_speed_100m < 3.0) as calm_hours
             FROM weather_data
             WHERE windfarm_id = :windfarm_id
               AND hour >= :start_date

@@ -147,6 +147,46 @@ class TestWindRoseAPI:
         assert "totalHours" in data
         assert "calmPercentage" in data
 
+    def test_calm_pct_consistent_between_endpoints(
+        self, api_client, auth_headers, test_windfarm_id
+    ):
+        """#round2-4 — /statistics and /wind-rose must agree on % calm.
+
+        Bug history: /wind-rose used `wind_speed_100m < 0.5`; /statistics used
+        `< 3.0`. With identical inputs, the two cards on the Weather tab
+        rendered wildly different "% calm" values (5.5% vs 0.1%). Aligned both
+        on 3.0 m/s (turbine cut-in convention).
+        """
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=365)
+        params = {
+            "start_date": start_date.strftime("%Y-%m-%d"),
+            "end_date": end_date.strftime("%Y-%m-%d"),
+        }
+
+        stat_resp = api_client.get(
+            f"/weather-data/windfarms/{test_windfarm_id}/statistics",
+            params=params,
+            headers=auth_headers,
+        )
+        rose_resp = api_client.get(
+            f"/weather-data/windfarms/{test_windfarm_id}/wind-rose",
+            params=params,
+            headers=auth_headers,
+        )
+        if stat_resp.status_code == 404 or rose_resp.status_code == 404:
+            pytest.skip("No weather data available for this windfarm")
+        assert stat_resp.status_code == 200
+        assert rose_resp.status_code == 200
+
+        stat_calm = stat_resp.json().get("calmPercentage")
+        rose_calm = rose_resp.json().get("calmPercentage")
+        assert stat_calm is not None and rose_calm is not None
+        assert abs(stat_calm - rose_calm) <= 0.5, (
+            f"calmPercentage diverged: statistics={stat_calm}, "
+            f"wind-rose={rose_calm}. Both endpoints must use the same cut-off."
+        )
+
 
 class TestWindDistributionAPI:
     """Test suite for wind speed distribution endpoints."""
