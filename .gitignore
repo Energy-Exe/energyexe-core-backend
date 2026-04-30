@@ -184,7 +184,8 @@ Desktop.ini
 
 # Logs
 logs/
-*.log 
+*.log
+nohup.out
 
 .env
 file::*

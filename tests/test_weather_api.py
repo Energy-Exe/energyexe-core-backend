@@ -21,10 +21,9 @@ def api_client():
 @pytest.fixture
 def auth_headers(api_client):
     """Get authentication headers for protected endpoints."""
-    # Login to get auth token
     response = api_client.post("/auth/login", json={
-        "email": os.getenv("TEST_USER_EMAIL", "admin@energyexe.com"),
-        "password": os.getenv("TEST_USER_PASSWORD", "admin123")
+        "username": os.getenv("TEST_USER_USERNAME", "admin"),
+        "password": os.getenv("TEST_USER_PASSWORD", "adminenergyexe"),
     })
 
     if response.status_code != 200:
@@ -77,6 +76,43 @@ class TestWeatherStatisticsAPI:
         ]
         for field in expected_fields:
             assert field in data, f"Missing field: {field}"
+
+    def test_estimated_capacity_factor_in_decimal_range(
+        self, api_client, auth_headers, test_windfarm_id
+    ):
+        """#17 — capacityFactorEstimate must be a decimal in [0, 1].
+
+        Bug history: an earlier version of the FE multiplied the BE value by 100
+        for display, and the BE was returning percentages. With the fix, the BE
+        returns a decimal and the FE multiplies — so the wire value must stay in
+        [0, 1] so the rendered % stays in [0, 100].
+        """
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=365)
+
+        response = api_client.get(
+            f"/weather-data/windfarms/{test_windfarm_id}/statistics",
+            params={
+                "start_date": start_date.strftime("%Y-%m-%d"),
+                "end_date": end_date.strftime("%Y-%m-%d"),
+            },
+            headers=auth_headers,
+        )
+        if response.status_code == 404:
+            pytest.skip("No weather data available for this windfarm")
+        assert response.status_code == 200
+
+        data = response.json()
+        ecf = data.get("capacityFactorEstimate")
+        assert ecf is not None, "capacityFactorEstimate field missing from response"
+        assert isinstance(ecf, (int, float)), (
+            f"capacityFactorEstimate must be numeric, got {type(ecf).__name__}"
+        )
+        assert 0 <= ecf <= 1, (
+            f"capacityFactorEstimate={ecf} out of [0, 1] decimal range. "
+            "BE is likely returning a percentage, which would render as up to "
+            "100x too high on the FE."
+        )
 
 
 class TestWindRoseAPI:

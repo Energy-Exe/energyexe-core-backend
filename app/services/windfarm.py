@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -18,6 +18,7 @@ class WindfarmService:
             .options(
                 selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
                 selectinload(Windfarm.country),
+                selectinload(Windfarm.bidzone),
             )
             .offset(skip)
             .limit(limit)
@@ -76,13 +77,29 @@ class WindfarmService:
         db: AsyncSession, query: str, skip: int = 0, limit: int = 100
     ) -> List[Windfarm]:
         search_pattern = f"%{query}%"
+        # Item #4 — search across name, country, and owner names (not just name).
+        from app.models.country import Country
+        from app.models.owner import Owner
+
         result = await db.execute(
             select(Windfarm)
             .options(
                 selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
                 selectinload(Windfarm.country),
+                selectinload(Windfarm.bidzone),
             )
-            .where(and_(Windfarm.name.ilike(search_pattern)))
+            .outerjoin(Windfarm.country)
+            .outerjoin(Windfarm.windfarm_owners)
+            .outerjoin(WindfarmOwner.owner)
+            .where(
+                or_(
+                    Windfarm.name.ilike(search_pattern),
+                    Windfarm.code.ilike(search_pattern),
+                    Country.name.ilike(search_pattern),
+                    Owner.name.ilike(search_pattern),
+                )
+            )
+            .distinct()
             .offset(skip)
             .limit(limit)
             .order_by(Windfarm.created_at.desc())
