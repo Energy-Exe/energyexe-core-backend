@@ -635,6 +635,28 @@ async def compare_capture_rates_by_bidzone(
     return result
 
 
+@router.get("/analytics/zone-capture-rate")
+async def zone_capture_rate_by_month(
+    bidzone_id: int = Query(..., description="Bidzone ID"),
+    start_date: datetime = Query(..., description="Start date"),
+    end_date: datetime = Query(..., description="End date"),
+    exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Bidzone-level capture rate aggregated month-by-month — one axis per month
+    in the requested window. Powers the capture-rate spider/radar chart (#31).
+    """
+    service = PriceAnalyticsService(db)
+    return await service.zone_capture_rate_by_month(
+        bidzone_id=bidzone_id,
+        start_date=start_date,
+        end_date=end_date,
+        exclude_ramp_up=exclude_ramp_up,
+    )
+
+
 @router.get("/analytics/correlation/{windfarm_id}", response_model=CorrelationResponse)
 async def get_generation_price_correlation(
     windfarm_id: int,

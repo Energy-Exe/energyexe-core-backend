@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     DB_POOL_PRE_PING: bool = True  # Test connections before use
     DB_POOL_RECYCLE: int = 300  # Recycle connections after 5 minutes
     DB_POOL_TIMEOUT: int = 30  # Wait max 30s for connection from pool
-    DB_COMMAND_TIMEOUT: int = 60  # Query timeout: 60 seconds
+    DB_COMMAND_TIMEOUT: int = 180  # Query timeout: 3 minutes (large analytics queries on big zones can run 60–120s)
 
     # Redis (optional)
     REDIS_URL: Optional[str] = None

@@ -206,6 +206,123 @@ class TestWindfarmsAPI:
                 # ownership_percentage may be null
 
 
+class TestWindfarmsSearchAcrossFields:
+    """#4 — Search must match against name, code, country.name and owner.name (not just name)."""
+
+    def test_search_returns_country_matches(self, api_client):
+        """Searching for a country name should return windfarms in that country, even if 'germany' is not in any windfarm name."""
+        response = api_client.get("/windfarms/search", params={"q": "Germany"})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+
+        # If the DB has any German windfarms (it does in our seed), we should get matches.
+        if not data:
+            pytest.skip("No German windfarms in DB — seed not populated; cannot validate #4.")
+
+        # Every result should either have country.name == Germany OR have 'germany' in
+        # name/code (the BE OR-clause). We check that at least one row matches by country
+        # exclusively (name doesn't contain 'germany') — the new behavior we're verifying.
+        country_only_matches = [
+            wf for wf in data
+            if (wf.get("country") or {}).get("name", "").lower() == "germany"
+            and "germany" not in wf.get("name", "").lower()
+            and "germany" not in wf.get("code", "").lower()
+        ]
+        assert len(country_only_matches) > 0, (
+            "Expected at least one windfarm matched purely by country.name=Germany "
+            "(name/code not containing 'germany'). The OR-search across country was not applied."
+        )
+
+    def test_search_returns_owner_matches(self, api_client):
+        """Searching for an owner name should return windfarms owned by that company, even if the owner name is not in the windfarm name."""
+        # Pull an owner name from a real windfarm in the DB to use as a search term.
+        seed = api_client.get("/windfarms", params={"limit": 100}).json()
+        owner_name = None
+        owner_windfarm_name = None
+        owner_windfarm_code = None
+        for wf in seed:
+            owners = wf.get("owners") or []
+            if owners:
+                # Find an owner whose name doesn't appear in the windfarm name/code so we
+                # can prove the search matched purely on owner.
+                for o in owners:
+                    name = (o.get("name") or "").strip()
+                    if not name:
+                        continue
+                    wf_name = (wf.get("name") or "").lower()
+                    wf_code = (wf.get("code") or "").lower()
+                    if name.lower() not in wf_name and name.lower() not in wf_code:
+                        owner_name = name
+                        owner_windfarm_name = wf.get("name")
+                        owner_windfarm_code = wf.get("code")
+                        break
+            if owner_name:
+                break
+
+        if not owner_name:
+            pytest.skip("Could not find a windfarm whose owner name is distinct from its own name.")
+
+        # Use just the first word of the owner name to keep the ILIKE pattern simple.
+        search_term = owner_name.split()[0]
+        response = api_client.get("/windfarms/search", params={"q": search_term})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list), "Expected a list response."
+        assert len(data) > 0, f"Expected at least one match for owner-name search '{search_term}'."
+
+        # The seed windfarm should appear (either by owner-match or directly).
+        match_codes = {wf.get("code") for wf in data}
+        assert owner_windfarm_code in match_codes, (
+            f"Windfarm '{owner_windfarm_name}' (code={owner_windfarm_code}) should appear "
+            f"in search results for owner-name term '{search_term}'."
+        )
+
+    def test_search_still_matches_name_substring(self, api_client):
+        """Backward-compat: name-substring search must still work after the OR refactor."""
+        seed = api_client.get("/windfarms", params={"limit": 1}).json()
+        if not seed:
+            pytest.skip("No windfarms available.")
+
+        seed_name = seed[0]["name"]
+        # Use the first 4 characters as a search term to keep the match broad.
+        term = seed_name[:4]
+
+        response = api_client.get("/windfarms/search", params={"q": term})
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert any(wf["id"] == seed[0]["id"] for wf in data), (
+            f"Expected to find seed windfarm '{seed_name}' when searching for substring '{term}'."
+        )
+
+
+class TestWindfarmsListIncludesBidzone:
+    """#6 — Card view shows bidzone, so the list endpoint must serialize bidzone relation."""
+
+    def test_list_response_includes_bidzone_field(self, api_client):
+        response = api_client.get("/windfarms", params={"limit": 100})
+        assert response.status_code == 200
+        data = response.json()
+
+        # Every windfarm row should have a 'bidzone' key (may be None).
+        for wf in data:
+            assert "bidzone" in wf, f"Windfarm {wf.get('id')} missing 'bidzone' field."
+
+        # At least one windfarm in our DB should have a populated bidzone.
+        with_bidzone = [wf for wf in data if wf.get("bidzone")]
+        if not with_bidzone:
+            pytest.skip("No windfarms with bidzone in this slice — adjust limit to verify.")
+
+        # When bidzone is populated, it must have id/code/name.
+        sample = with_bidzone[0]["bidzone"]
+        assert "id" in sample
+        assert "code" in sample
+        assert "name" in sample
+
+
 class TestWindfarmsAPIPerformance:
     """Performance tests for windfarms API."""
 

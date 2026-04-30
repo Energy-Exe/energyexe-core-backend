@@ -111,8 +111,17 @@ class CountrySummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class BidzoneSummary(BaseModel):
+    id: int
+    code: str
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class WindfarmListItem(Windfarm):
     country: Optional[CountrySummary] = None
+    bidzone: Optional[BidzoneSummary] = None
     owners: List[OwnerSummary] = []
 
     model_config = ConfigDict(from_attributes=True)

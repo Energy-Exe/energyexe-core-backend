@@ -47,6 +47,12 @@ async def get_windfarms(
             "name": wf.country.name
         } if wf.country else None
 
+        wf_dict["bidzone"] = {
+            "id": wf.bidzone.id,
+            "code": wf.bidzone.code,
+            "name": wf.bidzone.name,
+        } if wf.bidzone else None
+
         wf_dict["owners"] = [
             {
                 "id": wo.owner.id,
@@ -83,6 +89,12 @@ async def search_windfarms(
             "code": wf.country.code,
             "name": wf.country.name
         } if wf.country else None
+
+        wf_dict["bidzone"] = {
+            "id": wf.bidzone.id,
+            "code": wf.bidzone.code,
+            "name": wf.bidzone.name,
+        } if wf.bidzone else None
 
         wf_dict["owners"] = [
             {
