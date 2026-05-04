@@ -35,8 +35,11 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "https://dashboard.energyexe.com",
+        "https://app.energyexe.com",
         "http://localhost:5173",  # Vite dev server
         "http://localhost:3000",  # Alternative dev server
+        "http://localhost:3005",  # Admin UI dev
+        "http://localhost:3006",  # Client UI dev
     ]
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
@@ -80,7 +83,7 @@ class Settings(BaseSettings):
 
     # Client Portal settings
     CLIENT_PORTAL_URL: str = "http://localhost:3000"
-    ADMIN_PORTAL_URL: str = "http://localhost:5173"
+    ADMIN_PORTAL_URL: str = "http://localhost:3005"
     EMAIL_VERIFICATION_EXPIRE_HOURS: int = 24
     PASSWORD_RESET_EXPIRE_HOURS: int = 1
     INVITATION_EXPIRE_DAYS: int = 7

@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import resend
 from jinja2 import Environment, FileSystemLoader
@@ -228,12 +228,19 @@ class EmailService:
             html_content=html_content,
         )
 
-    async def send_password_reset_email(self, user: User, token: str) -> bool:
+    async def send_password_reset_email(
+        self,
+        user: User,
+        token: str,
+        portal: Literal["client", "admin"] = "client",
+    ) -> bool:
         """Send password reset email.
 
         Args:
             user: User object
             token: Password reset token
+            portal: Which portal originated the request ("client" or "admin");
+                determines the base URL of the reset link.
 
         Returns:
             True if email was sent successfully
@@ -242,7 +249,12 @@ class EmailService:
         user_email = user.email
         user_name = user.first_name or user.username
 
-        reset_url = f"{self.settings.CLIENT_PORTAL_URL}/reset-password?token={token}"
+        portal_base = (
+            self.settings.ADMIN_PORTAL_URL
+            if portal == "admin"
+            else self.settings.CLIENT_PORTAL_URL
+        )
+        reset_url = f"{portal_base}/reset-password?token={token}"
 
         html_content = self._render_template(
             "password_reset.html",
