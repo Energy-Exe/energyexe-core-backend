@@ -282,7 +282,7 @@ async def forgot_password(
 
     if result:
         user, reset_token = result
-        await email_service.send_password_reset_email(user, reset_token)
+        await email_service.send_password_reset_email(user, reset_token, portal=data.portal)
 
     # Always return success to not reveal if user exists
     return {"message": "If an account exists, a password reset email has been sent"}

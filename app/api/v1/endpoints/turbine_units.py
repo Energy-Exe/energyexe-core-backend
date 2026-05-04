@@ -108,12 +108,16 @@ async def get_turbine_unit_with_relations(turbine_unit_id: int, db: AsyncSession
     if not turbine_unit:
         raise HTTPException(status_code=404, detail="Turbine unit not found")
 
-    # Get generation units for the same windfarm
+    # Get active generation units for the same windfarm. Inactive (decommissioned/
+    # expanded) units are historical and shouldn't appear in turbine relations.
     generation_units = []
     if turbine_unit.windfarm_id:
         result = await db.execute(
             select(GenerationUnit)
-            .where(GenerationUnit.windfarm_id == turbine_unit.windfarm_id)
+            .where(
+                GenerationUnit.windfarm_id == turbine_unit.windfarm_id,
+                GenerationUnit.is_active == True,
+            )
         )
         generation_units = result.scalars().all()
 

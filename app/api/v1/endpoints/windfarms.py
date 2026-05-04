@@ -252,19 +252,31 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
 
 
 @router.get("/{windfarm_id}/generation-units")
-async def get_windfarm_generation_units(windfarm_id: int, db: AsyncSession = Depends(get_db)):
-    """Get generation units for a specific windfarm"""
+async def get_windfarm_generation_units(
+    windfarm_id: int,
+    include_inactive: bool = Query(False, description="Include decommissioned/expanded units"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get generation units for a specific windfarm.
+
+    By default returns only active units. Pass include_inactive=true to also
+    return decommissioned/expanded historical units (e.g., Raggovidda's 11
+    phase units from its 2014–2022 ramp-up).
+    """
     from app.models.generation_unit import GenerationUnit
     from sqlalchemy import select
-    
+
+    conditions = [GenerationUnit.windfarm_id == windfarm_id]
+    if not include_inactive:
+        conditions.append(GenerationUnit.is_active == True)
+
     result = await db.execute(
-        select(GenerationUnit).where(
-            GenerationUnit.windfarm_id == windfarm_id,
-            GenerationUnit.is_active == True,
-        )
+        select(GenerationUnit)
+        .where(*conditions)
+        .order_by(GenerationUnit.is_active.desc(), GenerationUnit.start_date, GenerationUnit.id)
     )
     units = result.scalars().all()
-    
+
     return [
         {
             "id": unit.id,
@@ -274,13 +286,20 @@ async def get_windfarm_generation_units(windfarm_id: int, db: AsyncSession = Dep
             "capacity_mw": float(unit.capacity_mw) if unit.capacity_mw else None,
             "source": unit.source,
             "is_active": unit.is_active,
+            "status": unit.status,
+            "start_date": unit.start_date.isoformat() if unit.start_date else None,
+            "end_date": unit.end_date.isoformat() if unit.end_date else None,
         }
         for unit in units
     ]
 
 
 @router.get("/{windfarm_id}/with-generation-units")
-async def get_windfarm_with_generation_units(windfarm_id: int, db: AsyncSession = Depends(get_db)):
+async def get_windfarm_with_generation_units(
+    windfarm_id: int,
+    include_inactive: bool = Query(False, description="Include decommissioned/expanded units"),
+    db: AsyncSession = Depends(get_db),
+):
     """Get a specific windfarm by ID with generation units"""
     windfarm = await WindfarmService.get_windfarm_with_generation_units(db, windfarm_id)
     if not windfarm:
@@ -382,11 +401,15 @@ async def get_windfarm_with_generation_units(windfarm_id: int, db: AsyncSession 
                 "capacity_mw": float(unit.capacity_mw) if unit.capacity_mw else None,
                 "source": unit.source,
                 "is_active": unit.is_active,
+                "status": unit.status,
+                "start_date": unit.start_date.isoformat() if unit.start_date else None,
+                "end_date": unit.end_date.isoformat() if unit.end_date else None,
                 "commissioned_date": unit.commissioned_date.isoformat()
                 if unit.commissioned_date
                 else None,
             }
-            for unit in windfarm.generation_units if unit.is_active
+            for unit in windfarm.generation_units
+            if include_inactive or unit.is_active
         ] if hasattr(windfarm, 'generation_units') else [],
     }
 

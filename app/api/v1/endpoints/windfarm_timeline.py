@@ -34,9 +34,16 @@ async def get_windfarm_timeline(
     - Current capacity breakdown
     """
 
-    # Get all generation units for this windfarm
+    # Get active generation units for this windfarm. Inactive units are
+    # historical/duplicate phase rows that would distort the capacity timeline
+    # (Raggovidda has 1 active unit + 11 inactive phase units, all coded "46";
+    # without filtering, "removal" events for the phase units would zero out
+    # the active unit's capacity too).
     gen_units_query = await db.execute(
-        select(GenerationUnit).where(GenerationUnit.windfarm_id == windfarm_id)
+        select(GenerationUnit).where(
+            GenerationUnit.windfarm_id == windfarm_id,
+            GenerationUnit.is_active == True,
+        )
     )
     gen_units = gen_units_query.scalars().all()
 
@@ -113,44 +120,34 @@ async def get_windfarm_timeline(
     # Sort events by date
     events.sort(key=lambda x: x["date"])
 
-    # Calculate capacity snapshots over time
-    # Track active units by their code to handle replacements correctly
-    # Key insight: Same code = replacement, different code = addition/removal
+    # Calculate capacity snapshots over time.
+    # Track currently-active units by unit_id (unique). Sequential phases (e.g.,
+    # Hundhammerfjellet's series of OTHER:7 active units, where unit A's end_date
+    # equals unit B's start_date) are handled correctly because each event is
+    # keyed on the unit's own id, not its code.
     capacity_by_date = {}
-    active_gen_units = {}  # Maps unit_code -> capacity_mw
-    active_turbine_units = {}  # Maps unit_code -> capacity_mw
+    active_gen_units = {}      # unit_id -> capacity_mw
+    active_turbine_units = {}  # unit_id -> capacity_mw
 
     for event in events:
         event_date = event["date"]
-        unit_code = event["unit_code"]
+        unit_id = event["unit_id"]
+        bucket = active_gen_units if event["unit_type"] == "generation_unit" else active_turbine_units
 
         if event["type"] == "addition":
-            # If unit with same code exists, this is a replacement (not an addition)
-            # Remove old capacity first, then add new capacity
-            if event["unit_type"] == "generation_unit":
-                if unit_code in active_gen_units:
-                    # This is a replacement - remove old capacity first
-                    pass  # Old capacity will be overwritten below
-                active_gen_units[unit_code] = event["capacity_mw"]
-            else:  # turbine_unit
-                if unit_code in active_turbine_units:
-                    # This is a replacement - remove old capacity first
-                    pass  # Old capacity will be overwritten below
-                active_turbine_units[unit_code] = event["capacity_mw"]
+            bucket[unit_id] = event["capacity_mw"]
         else:  # removal
-            # Remove the unit from active tracking
-            if event["unit_type"] == "generation_unit":
-                active_gen_units.pop(unit_code, None)
-            else:  # turbine_unit
-                active_turbine_units.pop(unit_code, None)
+            bucket.pop(unit_id, None)
 
-        # Calculate total capacity from active units
-        # Use MAX instead of SUM since gen units and turbines often represent the same physical capacity
+        # MAX rather than SUM: gen units and turbines often describe the same
+        # physical capacity from different data sources, so summing both would
+        # double-count.
         gen_unit_capacity = sum(active_gen_units.values())
         turbine_capacity = sum(active_turbine_units.values())
         current_capacity = max(gen_unit_capacity, turbine_capacity)
 
-        # Store the final capacity for this date (will overwrite if multiple events on same day)
+        # Multiple events on the same day collapse into one snapshot (last write wins
+        # within the same date string).
         capacity_by_date[event_date] = {
             "date": event_date,
             "total_capacity_mw": round(current_capacity, 2),
