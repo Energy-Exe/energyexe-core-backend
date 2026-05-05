@@ -247,35 +247,47 @@ class GenerationExportService:
                 yield output.getvalue()
 
         else:
-            # Daily or monthly: aggregate
-            if granularity == "daily":
-                period_column = func.date_trunc('day', GenerationData.hour)
-            else:  # monthly
-                period_column = func.date_trunc('month', GenerationData.hour)
+            # Daily or monthly: aggregate.
+            #
+            # CF for multi-unit windfarms must aggregate per hour first, then
+            # average. Otherwise AVG(per-row CF) under-weights the larger unit
+            # because each row's CF uses its own unit capacity as the
+            # denominator (e.g. Raggovidda: 45 MW unit and 51.6 MW unit average
+            # to a CF that doesn't reflect the 96.6 MW windfarm).
+            trunc_unit = 'day' if granularity == "daily" else 'month'
 
-            # When excluding ramp-up, null out capacity factor but keep generation rows.
+            net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
+            hourly_subq = (
+                select(
+                    GenerationData.hour.label('h'),
+                    GenerationData.windfarm_id.label('wf'),
+                    GenerationData.source.label('src'),
+                    func.sum(net_gen).label('h_gen'),
+                    func.sum(GenerationData.capacity_mw).label('h_cap'),
+                    func.bool_or(GenerationData.is_ramp_up == True).label('h_ramp_up'),
+                )
+                .where(and_(*conditions))
+                .group_by(GenerationData.hour, GenerationData.windfarm_id, GenerationData.source)
+                .subquery()
+            )
+
+            h_cf = hourly_subq.c.h_gen / func.nullif(hourly_subq.c.h_cap, 0)
             if exclude_ramp_up:
-                cf_expr = case((GenerationData.is_ramp_up == True, None), else_=GenerationData.capacity_factor)
-            else:
-                cf_expr = GenerationData.capacity_factor
+                h_cf = case((hourly_subq.c.h_ramp_up == True, None), else_=h_cf)
 
-            # Build aggregation query
-            query = select(
-                period_column.label('period'),
-                GenerationData.windfarm_id,
-                GenerationData.source,
-                func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_generation_mwh'),
-                func.avg(cf_expr).label('avg_capacity_factor'),
-                func.count(GenerationData.id).label('data_points'),
-            ).where(
-                and_(*conditions)
-            ).group_by(
-                period_column,
-                GenerationData.windfarm_id,
-                GenerationData.source,
-            ).order_by(
-                period_column,
-                GenerationData.windfarm_id,
+            period_column = func.date_trunc(trunc_unit, hourly_subq.c.h)
+
+            query = (
+                select(
+                    period_column.label('period'),
+                    hourly_subq.c.wf.label('windfarm_id'),
+                    hourly_subq.c.src.label('source'),
+                    func.sum(hourly_subq.c.h_gen).label('total_generation_mwh'),
+                    func.avg(h_cf).label('avg_capacity_factor'),
+                    func.count().label('data_points'),
+                )
+                .group_by(period_column, hourly_subq.c.wf, hourly_subq.c.src)
+                .order_by(period_column, hourly_subq.c.wf)
             )
 
             # Build CSV header

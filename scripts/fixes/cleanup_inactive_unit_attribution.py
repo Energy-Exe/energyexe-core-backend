@@ -61,25 +61,43 @@ DAILY_SOURCES = {'NVE', 'ENTSOE', 'ELEXON', 'TAIPOWER'}
 
 
 async def find_corrupt_groups(db, windfarm_id: Optional[int] = None):
-    """Return list of (windfarm_id, source, min_hour, max_hour, n_rows) tuples
-    for rows attributed to inactive units."""
-    where = "gu.is_active = false"
+    """Find generation_data rows that are mis-attributed in any of three ways:
+
+    1. Attached to an inactive unit (e.g., Raggovidda's 11 historical phase
+       units, or the 12707 "Raggovidda 2 - Do not use" stub).
+    2. Attached to an orphan unit whose gu.windfarm_id is NULL but the row
+       itself is stamped with a windfarm_id (12707 holds 29K rows stamped 7206).
+    3. Cross-windfarm: gu.windfarm_id != gd.windfarm_id, both set (e.g.,
+       12805's rows stamped windfarm_id=8772 even though gu.windfarm_id=7206).
+
+    The "repair windfarm" is COALESCE(gu.windfarm_id, gd.windfarm_id) — prefer
+    the unit's assignment, fall back to the row's stamp when the unit is orphan.
+    Returns one (repair_wf, source, min_hour, max_hour, n_rows) per group.
+    """
+    extra_where = ""
     params = {}
     if windfarm_id is not None:
-        where += " AND gu.windfarm_id = :wf_id"
+        extra_where = "AND COALESCE(gu.windfarm_id, gd.windfarm_id) = :wf_id"
         params['wf_id'] = windfarm_id
 
     sql = f"""
         SELECT
-          gu.windfarm_id,
+          COALESCE(gu.windfarm_id, gd.windfarm_id) AS repair_wf,
           gd.source,
           MIN(gd.hour) AS min_hour,
           MAX(gd.hour) AS max_hour,
           COUNT(*) AS n_rows
         FROM generation_data gd
         JOIN generation_units gu ON gd.generation_unit_id = gu.id
-        WHERE {where}
-        GROUP BY gu.windfarm_id, gd.source
+        WHERE (
+            gu.is_active = false
+            OR gu.windfarm_id IS NULL
+            OR (gu.windfarm_id IS NOT NULL AND gd.windfarm_id IS NOT NULL
+                AND gu.windfarm_id != gd.windfarm_id)
+          )
+          AND COALESCE(gu.windfarm_id, gd.windfarm_id) IS NOT NULL
+          {extra_where}
+        GROUP BY COALESCE(gu.windfarm_id, gd.windfarm_id), gd.source
         ORDER BY n_rows DESC
     """
     result = await db.execute(text(sql), params)
@@ -87,19 +105,28 @@ async def find_corrupt_groups(db, windfarm_id: Optional[int] = None):
 
 
 async def stats_for_windfarm(db, windfarm_id: int):
-    """Capture per-windfarm CF/orphan stats so we can compare before/after."""
+    """Capture per-windfarm misattribution stats covering all three patterns
+    (inactive-unit, orphan-unit, cross-windfarm) so we can compare before/after.
+    """
     sql = """
         SELECT
           (SELECT COUNT(*) FROM generation_data gd
             JOIN generation_units gu ON gd.generation_unit_id = gu.id
-            WHERE gu.is_active = false AND gu.windfarm_id = :wf_id) AS rows_on_inactive,
+            WHERE COALESCE(gu.windfarm_id, gd.windfarm_id) = :wf_id
+              AND (
+                gu.is_active = false
+                OR gu.windfarm_id IS NULL
+                OR (gu.windfarm_id IS NOT NULL AND gd.windfarm_id IS NOT NULL
+                    AND gu.windfarm_id != gd.windfarm_id)
+              )
+          ) AS misattributed_rows,
           (SELECT MAX(capacity_factor) FROM generation_data WHERE windfarm_id = :wf_id) AS max_cf,
           (SELECT COUNT(*) FROM generation_data WHERE windfarm_id = :wf_id AND capacity_factor > 1.05) AS rows_cf_over_1
     """
     result = await db.execute(text(sql), {'wf_id': windfarm_id})
     row = result.fetchone()
     return {
-        'rows_on_inactive': row[0],
+        'rows_on_inactive': row[0],  # kept name for printf-compat; means "misattributed"
         'max_cf': float(row[1]) if row[1] else None,
         'rows_cf_over_1': row[2],
     }
@@ -208,19 +235,13 @@ async def main(execute: bool, only_windfarm: Optional[int]):
             print("No generation_data rows attributed to inactive units. Nothing to repair.")
             return
 
-        # Filter: keep only daily sources WITH a windfarm_id; surface excluded.
-        daily_groups = [g for g in groups if g[1] in DAILY_SOURCES and g[0] is not None]
+        # Filter to daily-source groups; non-daily (EIA monthly) is out of scope.
+        daily_groups = [g for g in groups if g[1] in DAILY_SOURCES]
         excluded_source = [g for g in groups if g[1] not in DAILY_SOURCES]
-        excluded_orphan = [g for g in groups if g[1] in DAILY_SOURCES and g[0] is None]
         if excluded_source:
             print(f"\n[skipped] {len(excluded_source)} groups with non-daily sources (audit manually):")
             for wf, src, min_h, max_h, n in excluded_source:
-                print(f"  windfarm_id={wf} source={src} rows={n} ({min_h} -> {max_h})")
-        if excluded_orphan:
-            print(f"\n[skipped] {len(excluded_orphan)} groups with NULL windfarm_id "
-                  f"(unit detached from windfarm — can't re-aggregate, delete manually):")
-            for _, src, min_h, max_h, n in excluded_orphan:
-                print(f"  source={src} rows={n} ({min_h} -> {max_h})")
+                print(f"  repair_wf={wf} source={src} rows={n} ({min_h} -> {max_h})")
 
         print(f"\n{'DRY RUN ' if not execute else ''}Repairing {len(daily_groups)} (windfarm, source) groups")
         print(f"{'-' * 78}")
