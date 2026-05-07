@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     # Server settings
     HOST: str = "0.0.0.0"
-    PORT: int = 8001
+    PORT: int = 8002
     RELOAD: bool = False
 
     # Security
