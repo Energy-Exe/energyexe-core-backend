@@ -1,6 +1,6 @@
 """API endpoints for the performance analysis pipeline."""
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,6 +13,7 @@ from app.models.performance_anomaly import PerformanceAnomaly
 from app.models.performance_summary import PerformanceSummary
 from app.models.power_curve_bin import PowerCurveBin
 from app.models.user import User
+from app.models.windfarm import Windfarm
 from app.schemas.performance_pipeline import (
     DegradationResponse,
     NormalisationResponse,
@@ -152,6 +153,48 @@ async def get_degradation(
     if not results:
         raise HTTPException(status_code=404, detail="No degradation results found")
     return [DegradationResponse.model_validate(r) for r in results]
+
+
+@router.get("/anomalies/recent", response_model=List[Dict[str, Any]])
+async def get_recent_anomalies(
+    limit: int = Query(10, le=100),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Most-recent flagged hours across all windfarms (for dashboard widgets)."""
+    query = (
+        select(
+            PerformanceAnomaly.id,
+            PerformanceAnomaly.windfarm_id,
+            PerformanceAnomaly.hour,
+            PerformanceAnomaly.anomaly_type,
+            PerformanceAnomaly.actual_p_pu,
+            PerformanceAnomaly.expected_p_pu,
+            PerformanceAnomaly.lost_mwh,
+            PerformanceAnomaly.lost_eur,
+            PerformanceAnomaly.run_id,
+            Windfarm.name.label("windfarm_name"),
+        )
+        .join(Windfarm, PerformanceAnomaly.windfarm_id == Windfarm.id)
+        .order_by(PerformanceAnomaly.hour.desc())
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    return [
+        {
+            "id": r.id,
+            "windfarm_id": r.windfarm_id,
+            "windfarm_name": r.windfarm_name,
+            "hour": r.hour.isoformat() if r.hour else None,
+            "anomaly_type": r.anomaly_type,
+            "actual_p_pu": float(r.actual_p_pu) if r.actual_p_pu else None,
+            "expected_p_pu": float(r.expected_p_pu) if r.expected_p_pu else None,
+            "lost_mwh": float(r.lost_mwh) if r.lost_mwh else None,
+            "lost_eur": float(r.lost_eur) if r.lost_eur else None,
+            "run_id": r.run_id,
+        }
+        for r in result.fetchall()
+    ]
 
 
 @router.get("/anomalies/{windfarm_id}", response_model=List[PerformanceAnomalyResponse])

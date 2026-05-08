@@ -55,10 +55,31 @@ PROJECT_DIR=/Users/mohammadfaisal/Documents/energyexe/energyexe-core-backend
 0 2 1 * * cd $PROJECT_DIR && poetry run python scripts/jobs/run_import_with_tracking.py eia-monthly >> /tmp/eia-monthly.log 2>&1
 
 # ============================================================================
+# Performance Pipeline (anomaly detection + power curves) - Daily at 5:00 AM
+# ============================================================================
+# MAD-based outliers vs q50 power curve, lost MWh / lost EUR per windfarm
+# Persists to performance_anomalies and performance_summary tables
+0 5 * * * cd $PROJECT_DIR && poetry run python scripts/jobs/run_detection_jobs.py performance-pipeline >> /tmp/performance-pipeline.log 2>&1
+
+# ============================================================================
+# Opportunity Detection (OPS/MKT schemas) - Daily at 6:00 AM
+# ============================================================================
+# Scans 24-month rolling window for OPS-01..MKT-03 patterns
+# Persists to opportunities table; supersedes prior runs
+0 6 * * * cd $PROJECT_DIR && poetry run python scripts/jobs/run_detection_jobs.py opportunity-detection >> /tmp/opportunity-detection.log 2>&1
+
+# Note: data-anomaly-detection (capacity-factor / gap / spike) is NOT yet
+# scheduled — DataAnomalyService.detect_anomalies() is read-only today and
+# needs a save_anomalies() helper before automation. Run on-demand via
+# POST /api/v1/data-anomalies/detect (admin only) until then.
+
+# ============================================================================
 # Optional: Clean up old logs monthly
 # ============================================================================
 # Remove logs older than 30 days
 0 3 1 * * find /tmp -name "*-import*.log" -mtime +30 -delete
+0 3 1 * * find /tmp -name "performance-pipeline.log" -mtime +30 -delete
+0 3 1 * * find /tmp -name "opportunity-detection.log" -mtime +30 -delete
 
 # ============================================================================
 # NOTES
