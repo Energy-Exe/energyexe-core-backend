@@ -9,6 +9,7 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.alert import AlertTriggerStatus, NotificationStatus
 from app.services.alert_service import AlertService
+from app.services.portfolio_service import PortfolioService
 from app.schemas.alert import (
     AlertRuleCreate,
     AlertRuleUpdate,
@@ -36,12 +37,23 @@ router = APIRouter()
 @router.get("/rules", response_model=AlertRuleListResponse)
 async def list_alert_rules(
     is_enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
+    portfolio_id: Optional[int] = Query(None, description="Filter to rules scoped to this portfolio"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """List all alert rules for the current user."""
+    if portfolio_id is not None:
+        portfolio = await PortfolioService(db).get_portfolio(portfolio_id, current_user.id)
+        if not portfolio:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Portfolio {portfolio_id} not found",
+            )
+
     service = AlertService(db)
-    rules = await service.list_alert_rules(current_user.id, is_enabled=is_enabled)
+    rules = await service.list_alert_rules(
+        current_user.id, is_enabled=is_enabled, portfolio_id=portfolio_id
+    )
     return {
         "rules": rules,
         "total": len(rules),
