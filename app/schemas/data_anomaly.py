@@ -147,6 +147,7 @@ class AnomalyListFilters(BaseModel):
     """Schema for filtering anomaly list."""
 
     windfarm_id: Optional[int] = None
+    portfolio_id: Optional[int] = None
     generation_unit_id: Optional[int] = None
     anomaly_type: Optional[str] = None
     status: Optional[str] = None

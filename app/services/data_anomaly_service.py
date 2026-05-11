@@ -13,6 +13,7 @@ from sqlalchemy.orm import joinedload
 from app.models.data_anomaly import DataAnomaly, AnomalyType, AnomalyStatus, AnomalySeverity
 from app.models.generation_data import GenerationData, GenerationDataRaw
 from app.models.generation_unit import GenerationUnit
+from app.models.portfolio import PortfolioItem
 from app.models.windfarm import Windfarm
 from app.schemas.data_anomaly import (
     DataAnomalyCreate,
@@ -539,6 +540,13 @@ class DataAnomalyService:
 
         if filters.windfarm_id is not None:
             conditions.append(DataAnomaly.windfarm_id == filters.windfarm_id)
+
+        if filters.portfolio_id is not None:
+            portfolio_windfarms = (
+                select(PortfolioItem.windfarm_id)
+                .where(PortfolioItem.portfolio_id == filters.portfolio_id)
+            )
+            conditions.append(DataAnomaly.windfarm_id.in_(portfolio_windfarms))
 
         if filters.generation_unit_id is not None:
             conditions.append(DataAnomaly.generation_unit_id == filters.generation_unit_id)

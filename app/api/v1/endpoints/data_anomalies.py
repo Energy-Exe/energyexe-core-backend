@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_active_user, get_db
 from app.models.user import User
 from app.services.data_anomaly_service import DataAnomalyService
+from app.services.portfolio_service import PortfolioService
 from app.schemas.data_anomaly import (
     DataAnomalyResponse,
     DataAnomalyUpdate,
@@ -71,6 +72,7 @@ async def detect_anomalies(
 @router.get("", response_model=AnomalyListResponse)
 async def list_anomalies(
     windfarm_id: int | None = Query(None, description="Filter by windfarm ID"),
+    portfolio_id: int | None = Query(None, description="Filter by portfolio ID (only anomalies for windfarms in this portfolio)"),
     generation_unit_id: int | None = Query(None, description="Filter by generation unit ID"),
     anomaly_type: str | None = Query(None, description="Filter by anomaly type"),
     status: str | None = Query(None, description="Filter by status"),
@@ -96,9 +98,18 @@ async def list_anomalies(
     """
     from datetime import datetime
 
+    if portfolio_id is not None:
+        portfolio = await PortfolioService(db).get_portfolio(portfolio_id, current_user.id)
+        if not portfolio:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Portfolio {portfolio_id} not found",
+            )
+
     # Build filters object
     filters = AnomalyListFilters(
         windfarm_id=windfarm_id,
+        portfolio_id=portfolio_id,
         generation_unit_id=generation_unit_id,
         anomaly_type=anomaly_type,
         status=status,

@@ -1,5 +1,6 @@
 """API endpoints for unified generation data management."""
 
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
@@ -730,7 +731,7 @@ async def get_portfolio_generation_timeseries(
     from app.models.generation_data import GenerationData
     from app.models.windfarm import Windfarm
     from app.models.portfolio import PortfolioItem
-    from sqlalchemy import select, func, and_, text
+    from sqlalchemy import select, func, and_, literal, text
 
     # Build base conditions
     conditions = [
@@ -765,17 +766,22 @@ async def get_portfolio_generation_timeseries(
     }
     trunc_period = agg_map.get(aggregation, 'day')
 
-    # Get total timeseries (net = generation - consumption)
+    # Get total timeseries (net = generation - consumption).
+    # NOTE: pass trunc_period as a SQL literal (not a bound parameter), otherwise
+    # SQLAlchemy emits two distinct $-params for the SELECT and GROUP BY copies
+    # of date_trunc(), which Postgres treats as different expressions and rejects
+    # with "column hour must appear in the GROUP BY clause".
     net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
+    period_expr = func.date_trunc(literal(trunc_period), GenerationData.hour)
     total_query = select(
-        func.date_trunc(trunc_period, GenerationData.hour).label('period'),
+        period_expr.label('period'),
         func.sum(net_gen).label('total_mwh'),
         func.avg(GenerationData.quality_score).label('avg_quality'),
         func.count(func.distinct(GenerationData.windfarm_id)).label('farm_count'),
     ).where(
         and_(*conditions)
     ).group_by(
-        func.date_trunc(trunc_period, GenerationData.hour)
+        period_expr
     ).order_by('period')
 
     total_result = await db.execute(total_query)
@@ -783,13 +789,13 @@ async def get_portfolio_generation_timeseries(
 
     # Get per-farm breakdown
     farm_query = select(
-        func.date_trunc(trunc_period, GenerationData.hour).label('period'),
+        period_expr.label('period'),
         GenerationData.windfarm_id,
         func.sum(net_gen).label('total_mwh'),
     ).where(
         and_(*conditions)
     ).group_by(
-        func.date_trunc(trunc_period, GenerationData.hour),
+        period_expr,
         GenerationData.windfarm_id,
     ).order_by('period', GenerationData.windfarm_id)
 
@@ -841,6 +847,62 @@ async def get_portfolio_generation_timeseries(
     }
 
 
+@router.get("/portfolio/availability")
+async def get_portfolio_generation_availability(
+    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """
+    Return the date range over which generation data exists for the accessible
+    windfarms. Used by the client to anchor analytics windows at a range that
+    actually contains data.
+    """
+    from app.models.portfolio import PortfolioItem
+    from app.models.windfarm import Windfarm
+    from sqlalchemy import select, text
+
+    windfarm_ids: Optional[List[int]] = None
+    if portfolio_id:
+        result = await db.execute(
+            select(PortfolioItem.windfarm_id).where(PortfolioItem.portfolio_id == portfolio_id)
+        )
+        windfarm_ids = [row[0] for row in result.fetchall()]
+        if not windfarm_ids:
+            return {"min_hour": None, "max_hour": None, "farm_count": 0}
+
+    if country_id:
+        result = await db.execute(select(Windfarm.id).where(Windfarm.country_id == country_id))
+        country_ids = [row[0] for row in result.fetchall()]
+        windfarm_ids = (
+            [wf_id for wf_id in windfarm_ids if wf_id in country_ids]
+            if windfarm_ids is not None
+            else country_ids
+        )
+        if not windfarm_ids:
+            return {"min_hour": None, "max_hour": None, "farm_count": 0}
+
+    params: Dict[str, Any] = {}
+    where_clause = ""
+    if windfarm_ids is not None:
+        where_clause = "WHERE windfarm_id = ANY(:windfarm_ids)"
+        params["windfarm_ids"] = windfarm_ids
+
+    min_query = text(f"SELECT hour FROM generation_data {where_clause} ORDER BY hour ASC LIMIT 1")
+    max_query = text(f"SELECT hour FROM generation_data {where_clause} ORDER BY hour DESC LIMIT 1")
+    min_row = (await db.execute(min_query, params)).fetchone()
+    max_row = (await db.execute(max_query, params)).fetchone()
+
+    farm_count = len(windfarm_ids) if windfarm_ids is not None else None
+
+    return {
+        "min_hour": min_row.hour.isoformat() if min_row and min_row.hour else None,
+        "max_hour": max_row.hour.isoformat() if max_row and max_row.hour else None,
+        "farm_count": farm_count,
+    }
+
+
 @router.get("/portfolio/performance")
 async def get_portfolio_performance(
     start_date: datetime = Query(..., description="Start date"),
@@ -864,7 +926,7 @@ async def get_portfolio_performance(
     from app.models.turbine_unit import TurbineUnit
     from app.models.turbine_model import TurbineModel
     from app.models.portfolio import PortfolioItem
-    from app.models.geography import Country
+    from app.models.country import Country  # noqa: F401  # referenced via SQL JOIN
     from sqlalchemy import select, func, and_, text
 
     # Calculate hours in period
@@ -936,7 +998,18 @@ async def get_portfolio_performance(
     if country_id:
         params['country_id'] = country_id
 
-    farm_cf_result = await db.execute(farm_cf_query, params)
+    try:
+        farm_cf_result = await asyncio.wait_for(
+            db.execute(farm_cf_query, params), timeout=60
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Performance ranking query exceeded 60s — narrow the date "
+                "range or filter by portfolio."
+            ),
+        )
     farm_cf_rows = farm_cf_result.fetchall()
 
     # Build performance ranking
@@ -996,8 +1069,15 @@ async def get_portfolio_performance(
         ORDER BY period
     """)
 
-    trend_result = await db.execute(trend_query, params)
-    trend_rows = trend_result.fetchall()
+    try:
+        trend_result = await asyncio.wait_for(
+            db.execute(trend_query, params), timeout=60
+        )
+        trend_rows = trend_result.fetchall()
+    except asyncio.TimeoutError:
+        # Trend chart is secondary — return empty rather than fail the whole
+        # request when the join times out on long unfiltered windows.
+        trend_rows = []
 
     performance_trend = []
     for row in trend_rows:
@@ -1018,37 +1098,87 @@ async def get_portfolio_performance(
         })
 
     # Technology comparison (by turbine model)
+    #
+    # Three things were broken here:
+    #   1. tm.manufacturer / tm.model_name don't exist — the columns are
+    #      tm.supplier / tm.model
+    #   2. turbine_units has no rated_power_kw — power lives on turbine_models
+    #   3. JOIN generation_data × turbine_units inflates rows by the turbine
+    #      count of each farm, so SUM(generation_mwh) was multiplied by N.
+    #
+    # Fixed via CTEs: pre-aggregate windfarm generation once, build a
+    # (model, farm) → capacity map separately, then attribute generation to
+    # each model proportionally to its share of the farm's capacity (covers
+    # the mixed-model farm case correctly).
     tech_query = text("""
-        SELECT
-            tm.id as model_id,
-            tm.manufacturer,
-            tm.model_name,
-            tm.rated_power_kw,
-            COUNT(DISTINCT tu.windfarm_id) as farm_count,
-            COUNT(DISTINCT tu.id) as turbine_count,
-            SUM(tu.rated_power_kw) / 1000 as total_capacity_mw,
-            SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_mwh,
-            CASE
-                WHEN SUM(tu.rated_power_kw) > 0 AND :hours > 0
-                THEN (SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) / (SUM(tu.rated_power_kw) / 1000 * :hours)) * 100
-                ELSE 0
-            END as capacity_factor
-        FROM generation_data g
-        JOIN turbine_units tu ON g.windfarm_id = tu.windfarm_id
-        JOIN turbine_models tm ON tu.turbine_model_id = tm.id
-        JOIN windfarms wf ON g.windfarm_id = wf.id
-        WHERE g.hour >= :start_date
-          AND g.hour < :end_date
-          AND g.generation_mwh IS NOT NULL
+        WITH wf_gen AS (
+            SELECT
+                g.windfarm_id,
+                SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) AS gen_mwh
+            FROM generation_data g
+            JOIN windfarms wf ON g.windfarm_id = wf.id
+            WHERE g.hour >= :start_date
+              AND g.hour < :end_date
+              AND g.generation_mwh IS NOT NULL
     """ + (" AND g.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
     (" AND wf.country_id = :country_id" if country_id else "") + """
-        GROUP BY tm.id, tm.manufacturer, tm.model_name, tm.rated_power_kw
-        HAVING SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
-        ORDER BY capacity_factor DESC
+            GROUP BY g.windfarm_id
+        ),
+        model_per_farm AS (
+            SELECT
+                tu.turbine_model_id,
+                tu.windfarm_id,
+                COUNT(*) AS turbine_count,
+                SUM(COALESCE(tm.rated_power_kw, 0)) AS model_capacity_kw
+            FROM turbine_units tu
+            JOIN turbine_models tm ON tu.turbine_model_id = tm.id
+            GROUP BY tu.turbine_model_id, tu.windfarm_id
+        ),
+        farm_total_capacity AS (
+            SELECT windfarm_id, SUM(model_capacity_kw) AS total_capacity_kw
+            FROM model_per_farm
+            GROUP BY windfarm_id
+        )
+        SELECT
+            tm.id AS model_id,
+            tm.supplier AS manufacturer,
+            tm.model AS model_name,
+            tm.rated_power_kw,
+            SUM(mpf.turbine_count) AS turbine_count,
+            COUNT(DISTINCT mpf.windfarm_id) AS farm_count,
+            SUM(mpf.model_capacity_kw) / 1000.0 AS total_capacity_mw,
+            SUM(
+                CASE WHEN ftc.total_capacity_kw > 0 THEN
+                    COALESCE(wg.gen_mwh, 0) * (mpf.model_capacity_kw::float / ftc.total_capacity_kw)
+                ELSE 0 END
+            ) AS total_mwh,
+            CASE
+                WHEN SUM(mpf.model_capacity_kw) > 0 AND :hours > 0
+                THEN (
+                    SUM(
+                        CASE WHEN ftc.total_capacity_kw > 0 THEN
+                            COALESCE(wg.gen_mwh, 0) * (mpf.model_capacity_kw::float / ftc.total_capacity_kw)
+                        ELSE 0 END
+                    ) / (SUM(mpf.model_capacity_kw) / 1000.0 * :hours)
+                ) * 100
+                ELSE 0
+            END AS capacity_factor
+        FROM turbine_models tm
+        JOIN model_per_farm mpf ON mpf.turbine_model_id = tm.id
+        JOIN farm_total_capacity ftc ON ftc.windfarm_id = mpf.windfarm_id
+        JOIN wf_gen wg ON wg.windfarm_id = mpf.windfarm_id
+        GROUP BY tm.id, tm.supplier, tm.model, tm.rated_power_kw
+        HAVING SUM(mpf.model_capacity_kw) > 0
+        ORDER BY capacity_factor DESC NULLS LAST
     """)
 
-    tech_result = await db.execute(tech_query, params)
-    tech_rows = tech_result.fetchall()
+    try:
+        tech_result = await asyncio.wait_for(
+            db.execute(tech_query, params), timeout=60
+        )
+        tech_rows = tech_result.fetchall()
+    except asyncio.TimeoutError:
+        tech_rows = []
 
     by_technology = []
     for row in tech_rows:

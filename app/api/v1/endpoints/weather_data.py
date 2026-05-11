@@ -1,6 +1,7 @@
 """Weather data API endpoints."""
+import asyncio
 from datetime import datetime, date
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -484,6 +485,64 @@ from datetime import timedelta
 from app.core.deps import get_current_user
 
 
+@router.get("/portfolio/availability")
+async def get_portfolio_weather_availability(
+    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Return the date range over which weather data exists for the accessible
+    windfarms. Used by the client to anchor analytics windows at a range that
+    actually contains data.
+    """
+    from app.models.portfolio import PortfolioItem
+    from app.models.windfarm import Windfarm
+    from sqlalchemy import select, text
+
+    windfarm_ids: Optional[List[int]] = None
+    if portfolio_id:
+        result = await db.execute(
+            select(PortfolioItem.windfarm_id).where(PortfolioItem.portfolio_id == portfolio_id)
+        )
+        windfarm_ids = [row[0] for row in result.fetchall()]
+        if not windfarm_ids:
+            return {"min_hour": None, "max_hour": None, "farm_count": 0}
+
+    if country_id:
+        result = await db.execute(select(Windfarm.id).where(Windfarm.country_id == country_id))
+        country_ids = [row[0] for row in result.fetchall()]
+        windfarm_ids = (
+            [wf_id for wf_id in windfarm_ids if wf_id in country_ids]
+            if windfarm_ids is not None
+            else country_ids
+        )
+        if not windfarm_ids:
+            return {"min_hour": None, "max_hour": None, "farm_count": 0}
+
+    # Index-friendly ORDER BY ... LIMIT 1 — see price_data availability
+    # endpoint for rationale (MIN/MAX + COUNT DISTINCT does full scan).
+    params: Dict[str, Any] = {}
+    where_clause = ""
+    if windfarm_ids is not None:
+        where_clause = "WHERE windfarm_id = ANY(:windfarm_ids)"
+        params["windfarm_ids"] = windfarm_ids
+
+    min_query = text(f"SELECT hour FROM weather_data {where_clause} ORDER BY hour ASC LIMIT 1")
+    max_query = text(f"SELECT hour FROM weather_data {where_clause} ORDER BY hour DESC LIMIT 1")
+    min_row = (await db.execute(min_query, params)).fetchone()
+    max_row = (await db.execute(max_query, params)).fetchone()
+
+    farm_count = len(windfarm_ids) if windfarm_ids is not None else None
+
+    return {
+        "min_hour": min_row.hour.isoformat() if min_row and min_row.hour else None,
+        "max_hour": max_row.hour.isoformat() if max_row and max_row.hour else None,
+        "farm_count": farm_count,
+    }
+
+
 @router.get("/portfolio/summary")
 async def get_portfolio_weather_summary(
     start_date: datetime = Query(..., description="Start date for analysis"),
@@ -507,7 +566,7 @@ async def get_portfolio_weather_summary(
     from app.models.weather_data import WeatherData
     from app.models.generation_data import GenerationData
     from app.models.windfarm import Windfarm
-    from app.models.geography import Country
+    from app.models.country import Country  # noqa: F401  # referenced via SQL JOIN
     from app.models.portfolio import PortfolioItem
 
     # Build windfarm filter based on portfolio or country
@@ -533,22 +592,39 @@ async def get_portfolio_weather_summary(
                 "seasonal_patterns": [],
             }
 
-    # Portfolio-wide weather statistics
-    portfolio_stats_query = text("""
+    # ONE pass over weather_data — bucket per (country, month, windfarm) lets
+    # us roll up portfolio totals + by_country + seasonal_patterns in Python
+    # without rescanning the table three times.
+    bucket_filter = (
+        (" AND w.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "")
+        + (" AND wf.country_id = :country_id" if country_id else "")
+    )
+
+    bucket_query = text(
+        """
         SELECT
-            AVG(w.wind_speed_100m) as avg_wind_speed,
-            MIN(w.wind_speed_100m) as min_wind_speed,
-            MAX(w.wind_speed_100m) as max_wind_speed,
-            AVG(w.temperature_2m_c) as avg_temperature,
-            COUNT(DISTINCT w.windfarm_id) as farm_count,
-            COUNT(*) as total_hours
+            c.id AS country_id,
+            c.name AS country_name,
+            c.code AS country_code,
+            EXTRACT(MONTH FROM w.hour)::int AS month,
+            w.windfarm_id,
+            SUM(w.wind_speed_100m) AS wind_sum,
+            MIN(w.wind_speed_100m) AS wind_min,
+            MAX(w.wind_speed_100m) AS wind_max,
+            SUM(w.temperature_2m_c) AS temp_sum,
+            COUNT(*) AS hour_count
         FROM weather_data w
         JOIN windfarms wf ON w.windfarm_id = wf.id
+        JOIN countries c ON wf.country_id = c.id
         WHERE w.hour >= :start_date
           AND w.hour < :end_date
           AND w.wind_speed_100m IS NOT NULL
-    """ + (" AND w.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
-    (" AND wf.country_id = :country_id" if country_id else ""))
+        """
+        + bucket_filter
+        + """
+        GROUP BY c.id, c.name, c.code, EXTRACT(MONTH FROM w.hour), w.windfarm_id
+        """
+    )
 
     params = {
         'start_date': start_date,
@@ -559,46 +635,104 @@ async def get_portfolio_weather_summary(
     if country_id:
         params['country_id'] = country_id
 
-    stats_result = await db.execute(portfolio_stats_query, params)
-    stats_row = stats_result.fetchone()
+    try:
+        bucket_result = await asyncio.wait_for(
+            db.execute(bucket_query, params), timeout=60
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Weather summary exceeded 60s — narrow the date range or "
+                "filter by portfolio."
+            ),
+        )
+    bucket_rows = bucket_result.fetchall()
 
-    # Weather by country breakdown
-    by_country_query = text("""
-        SELECT
-            c.id as country_id,
-            c.name as country_name,
-            c.code as country_code,
-            AVG(w.wind_speed_100m) as avg_wind_speed,
-            AVG(w.temperature_2m_c) as avg_temperature,
-            COUNT(DISTINCT w.windfarm_id) as farm_count,
-            COUNT(*) as data_points
-        FROM weather_data w
-        JOIN windfarms wf ON w.windfarm_id = wf.id
-        JOIN countries c ON wf.country_id = c.id
-        WHERE w.hour >= :start_date
-          AND w.hour < :end_date
-          AND w.wind_speed_100m IS NOT NULL
-    """ + (" AND w.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
-    (" AND wf.country_id = :country_id" if country_id else "") + """
-        GROUP BY c.id, c.name, c.code
-        ORDER BY avg_wind_speed DESC
-    """)
+    # Aggregate to (portfolio total, by_country, seasonal)
+    total_wind_sum = 0.0
+    total_temp_sum = 0.0
+    total_hours = 0
+    total_wind_min: Optional[float] = None
+    total_wind_max: Optional[float] = None
+    total_farms: set = set()
 
-    by_country_result = await db.execute(by_country_query, params)
-    by_country_rows = by_country_result.fetchall()
+    country_acc: Dict[int, Dict[str, Any]] = {}
+    month_acc: Dict[int, Dict[str, Any]] = {}
 
-    by_country = [
-        {
-            "country_id": row.country_id,
-            "country_name": row.country_name,
-            "country_code": row.country_code,
-            "avg_wind_speed": round(float(row.avg_wind_speed or 0), 2),
-            "avg_temperature": round(float(row.avg_temperature or 0), 1),
-            "farm_count": row.farm_count,
-            "data_points": row.data_points,
-        }
-        for row in by_country_rows
-    ]
+    for r in bucket_rows:
+        wsum = float(r.wind_sum or 0)
+        wmin = float(r.wind_min) if r.wind_min is not None else None
+        wmax = float(r.wind_max) if r.wind_max is not None else None
+        tsum = float(r.temp_sum or 0)
+        hours = int(r.hour_count or 0)
+
+        total_wind_sum += wsum
+        total_temp_sum += tsum
+        total_hours += hours
+        total_farms.add(r.windfarm_id)
+        if wmin is not None:
+            total_wind_min = wmin if total_wind_min is None else min(total_wind_min, wmin)
+        if wmax is not None:
+            total_wind_max = wmax if total_wind_max is None else max(total_wind_max, wmax)
+
+        cb = country_acc.setdefault(
+            r.country_id,
+            {
+                "country_id": r.country_id,
+                "country_name": r.country_name,
+                "country_code": r.country_code,
+                "wind_sum": 0.0,
+                "temp_sum": 0.0,
+                "hours": 0,
+                "farms": set(),
+            },
+        )
+        cb["wind_sum"] += wsum
+        cb["temp_sum"] += tsum
+        cb["hours"] += hours
+        cb["farms"].add(r.windfarm_id)
+
+        mb = month_acc.setdefault(
+            int(r.month),
+            {"month": int(r.month), "wind_sum": 0.0, "temp_sum": 0.0, "hours": 0, "farms": set()},
+        )
+        mb["wind_sum"] += wsum
+        mb["temp_sum"] += tsum
+        mb["hours"] += hours
+        mb["farms"].add(r.windfarm_id)
+
+    # Build stats_row equivalent
+    class _Stats:
+        pass
+    stats_row = _Stats()
+    stats_row.avg_wind_speed = (total_wind_sum / total_hours) if total_hours > 0 else 0
+    stats_row.min_wind_speed = total_wind_min if total_wind_min is not None else 0
+    stats_row.max_wind_speed = total_wind_max if total_wind_max is not None else 0
+    stats_row.avg_temperature = (total_temp_sum / total_hours) if total_hours > 0 else 0
+    stats_row.farm_count = len(total_farms)
+    stats_row.total_hours = total_hours
+
+    by_country = sorted(
+        (
+            {
+                "country_id": cb["country_id"],
+                "country_name": cb["country_name"],
+                "country_code": cb["country_code"],
+                "avg_wind_speed": round(
+                    (cb["wind_sum"] / cb["hours"]) if cb["hours"] > 0 else 0, 2
+                ),
+                "avg_temperature": round(
+                    (cb["temp_sum"] / cb["hours"]) if cb["hours"] > 0 else 0, 1
+                ),
+                "farm_count": len(cb["farms"]),
+                "data_points": cb["hours"],
+            }
+            for cb in country_acc.values()
+        ),
+        key=lambda x: x["avg_wind_speed"],
+        reverse=True,
+    )
 
     # Correlation summary - best and worst performers (wind-generation correlation)
     ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
@@ -637,8 +771,17 @@ async def get_portfolio_weather_summary(
         ORDER BY wind_gen_correlation DESC NULLS LAST
     """)
 
-    correlation_result = await db.execute(correlation_query, params)
-    correlation_rows = correlation_result.fetchall()
+    try:
+        correlation_result = await asyncio.wait_for(
+            db.execute(correlation_query, params), timeout=60
+        )
+    except asyncio.TimeoutError:
+        # Correlation is the heaviest scan (joins weather × generation) — when
+        # it times out we still return everything else; correlation just shows
+        # as empty in the UI.
+        correlation_result = None
+
+    correlation_rows = correlation_result.fetchall() if correlation_result is not None else []
 
     correlation_summary = [
         {
@@ -655,43 +798,25 @@ async def get_portfolio_weather_summary(
         for row in correlation_rows
     ]
 
-    # Seasonal patterns (monthly averages across portfolio)
-    seasonal_query = text("""
-        SELECT
-            EXTRACT(MONTH FROM w.hour) as month,
-            AVG(w.wind_speed_100m) as avg_wind_speed,
-            AVG(w.temperature_2m_c) as avg_temperature,
-            COUNT(DISTINCT w.windfarm_id) as farm_count,
-            COUNT(*) as data_points
-        FROM weather_data w
-        JOIN windfarms wf ON w.windfarm_id = wf.id
-        WHERE w.hour >= :start_date
-          AND w.hour < :end_date
-          AND w.wind_speed_100m IS NOT NULL
-    """ + (" AND w.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
-    (" AND wf.country_id = :country_id" if country_id else "") + """
-        GROUP BY EXTRACT(MONTH FROM w.hour)
-        ORDER BY month
-    """)
-
-    seasonal_result = await db.execute(seasonal_query, params)
-    seasonal_rows = seasonal_result.fetchall()
-
+    # Seasonal patterns — derived from the bucket query above; no extra scan.
     month_names = [
         "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December"
     ]
-
     seasonal_patterns = [
         {
-            "month": int(row.month),
-            "month_name": month_names[int(row.month) - 1],
-            "avg_wind_speed": round(float(row.avg_wind_speed or 0), 2),
-            "avg_temperature": round(float(row.avg_temperature or 0), 1),
-            "farm_count": row.farm_count,
-            "data_points": row.data_points,
+            "month": mb["month"],
+            "month_name": month_names[mb["month"] - 1],
+            "avg_wind_speed": round(
+                (mb["wind_sum"] / mb["hours"]) if mb["hours"] > 0 else 0, 2
+            ),
+            "avg_temperature": round(
+                (mb["temp_sum"] / mb["hours"]) if mb["hours"] > 0 else 0, 1
+            ),
+            "farm_count": len(mb["farms"]),
+            "data_points": mb["hours"],
         }
-        for row in seasonal_rows
+        for mb in sorted(month_acc.values(), key=lambda x: x["month"])
     ]
 
     return {
