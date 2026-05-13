@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     admin,
+    agent_question_templates,
     alerts,
     audit_logs,
     auth,
@@ -140,6 +141,13 @@ api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
 
 # Brain Agent (Claude Agent SDK) endpoints
 api_router.include_router(brain_agent.router, prefix="/brain-agent", tags=["brain-agent"])
+
+# Agent question templates (per-route suggested questions for client portal)
+api_router.include_router(
+    agent_question_templates.router,
+    prefix="/agent-question-templates",
+    tags=["agent-question-templates"],
+)
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])
