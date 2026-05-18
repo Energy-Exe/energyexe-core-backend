@@ -39,10 +39,12 @@ class EmailService:
     def from_email(self) -> str:
         """Get the from email address.
 
-        Uses Resend's test email in development if domain is not verified.
+        Falls back to Resend's sandbox sender only when no API key is configured.
+        Resend's sandbox can only deliver to the account owner, so any environment
+        that needs to email real recipients must set RESEND_API_KEY and
+        EMAILS_FROM_EMAIL to a verified-domain address.
         """
-        # Use Resend's onboarding email for testing when domain not verified
-        if self.settings.DEBUG or not self.settings.RESEND_API_KEY:
+        if not self.settings.RESEND_API_KEY:
             return "onboarding@resend.dev"
         return self.settings.EMAILS_FROM_EMAIL
 
