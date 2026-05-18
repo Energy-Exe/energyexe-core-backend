@@ -53,6 +53,8 @@ from .power_curve_bin import PowerCurveBin
 from .performance_anomaly import PerformanceAnomaly
 from .performance_summary import PerformanceSummary
 from .degradation_result import DegradationResult
+from .peer_group_aggregate import PeerGroupAggregate
+from .generation_concentration_summary import GenerationConcentrationSummary
 
 __all__ = [
     "AgentQuestionTemplate",
@@ -121,4 +123,6 @@ __all__ = [
     "PerformanceAnomaly",
     "PerformanceSummary",
     "DegradationResult",
+    "PeerGroupAggregate",
+    "GenerationConcentrationSummary",
 ]

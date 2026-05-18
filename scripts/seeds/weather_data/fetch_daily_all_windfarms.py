@@ -78,18 +78,10 @@ async def fetch_era5_for_day(date: datetime):
     """
     logger.info(f"Fetching ERA5 for all windfarms", date=date.strftime('%Y-%m-%d'))
 
-    # Get windfarm bounds
-    windfarms = await get_all_windfarms()
-    lats = [float(wf.lat) for wf in windfarms]
-    lons = [float(wf.lng) for wf in windfarms]
-
-    # Create bounding box covering all windfarms
-    bbox = [
-        max(lats) + 0.5,  # North (add buffer for interpolation)
-        min(lons) - 0.5,  # West
-        min(lats) - 0.5,  # South
-        max(lons) + 0.5   # East
-    ]
+    # Use the canonical bbox helper from WeatherImportCore so this script and
+    # the API/job-driven import path stay in sync.
+    from app.core.weather_import import WeatherImportCore
+    bbox = await WeatherImportCore()._compute_windfarm_bbox()
 
     logger.info(f"Bounding box: N={bbox[0]:.1f}, W={bbox[1]:.1f}, S={bbox[2]:.1f}, E={bbox[3]:.1f}")
 
@@ -190,6 +182,21 @@ def extract_windfarm_data_with_interpolation(ds, windfarms):
                     u100 = float(u100_all_times[time_idx])
                     v100 = float(v100_all_times[time_idx])
                     t2m = float(t2m_all_times[time_idx])
+
+                    # Skip rows where ERA5 returned NaN (out-of-bbox cell, masked
+                    # ocean grid point, etc.). Without this guard NaN floats
+                    # silently propagate into weather_data and block the
+                    # downstream performance pipeline.
+                    if math.isnan(u100) or math.isnan(v100) or math.isnan(t2m):
+                        logger.warning(
+                            "era5_nan_skipped",
+                            windfarm_id=wf.id,
+                            hour=timestamp.isoformat(),
+                            u100=u100,
+                            v100=v100,
+                            t2m=t2m,
+                        )
+                        continue
 
                     # Calculate wind metrics
                     wind_speed, wind_direction = calculate_wind_metrics(u100, v100)

@@ -220,6 +220,40 @@ class WeatherImportCore:
 
         return stats
 
+    async def _compute_windfarm_bbox(self, buffer_deg: float = 0.5) -> List[float]:
+        """Return [N, W, S, E] bbox covering all windfarms with coords + buffer.
+
+        Replaces the previous hardcoded Europe bbox (which silently produced NaN
+        wind speeds for any windfarm outside it via xarray.interp). If no windfarms
+        have coordinates, returns a global default rather than crashing.
+        """
+        from sqlalchemy import select
+
+        from app.core.database import get_session_factory
+        from app.models.windfarm import Windfarm
+
+        AsyncSessionLocal = get_session_factory()
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Windfarm.lat, Windfarm.lng).where(
+                    Windfarm.lat.isnot(None),
+                    Windfarm.lng.isnot(None),
+                )
+            )
+            coords = result.fetchall()
+
+        if not coords:
+            return [85.0, -180.0, -85.0, 180.0]
+
+        lats = [float(c.lat) for c in coords]
+        lngs = [float(c.lng) for c in coords]
+        return [
+            max(lats) + buffer_deg,
+            min(lngs) - buffer_deg,
+            min(lats) - buffer_deg,
+            max(lngs) + buffer_deg,
+        ]
+
     async def _download_era5_grib(self, target_date: date, output_path: Path):
         """Download ERA5 GRIB file from CDS API."""
         import cdsapi
@@ -227,6 +261,10 @@ class WeatherImportCore:
         # Configure client with explicit credentials for production reliability
         # cdsapi.Client() can read from env vars, but explicit is more reliable
         c = cdsapi.Client(url=self.cdsapi_url, key=self.cdsapi_key)
+
+        # Compute bbox dynamically from windfarm coordinates so we cover non-EU
+        # assets (USA, Taiwan, etc.). Previously hardcoded Europe-only.
+        bbox = await self._compute_windfarm_bbox()
 
         # ERA5 request parameters
         # Using 100m wind components and 2m temperature (standard single-levels)
@@ -246,7 +284,7 @@ class WeatherImportCore:
             'month': f'{target_date.month:02d}',
             'day': f'{target_date.day:02d}',
             'time': [f'{h:02d}:00' for h in range(24)],
-            'area': [71, -11, 35, 32],  # N, W, S, E - covers Europe
+            'area': bbox,  # N, W, S, E covering all active windfarms
         }
 
         logger.info("Submitting CDS API request", date=str(target_date))
@@ -308,6 +346,21 @@ class WeatherImportCore:
                     u100 = float(u100_all[time_idx])
                     v100 = float(v100_all[time_idx])
                     t2m = float(t2m_all[time_idx])
+
+                    # Skip rows where ERA5 returned NaN (out-of-bbox cell, masked
+                    # ocean grid point, etc.). float(NaN) does not raise, and PG
+                    # numeric accepts NaN, so without this guard we silently
+                    # insert NaN rows that block all downstream pipeline modules.
+                    if math.isnan(u100) or math.isnan(v100) or math.isnan(t2m):
+                        logger.warning(
+                            "era5_nan_skipped",
+                            windfarm_id=wf.id,
+                            hour=timestamp.isoformat(),
+                            u100=u100,
+                            v100=v100,
+                            t2m=t2m,
+                        )
+                        continue
 
                     # Calculate wind speed and direction
                     wind_speed = math.sqrt(u100**2 + v100**2)

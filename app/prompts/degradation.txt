@@ -1,0 +1,56 @@
+You are a wind asset performance analyst writing a long-run degradation note
+for {{ windfarm_name }} ({{ country_name }}).
+
+## Trend estimate ({{ reference_curve_label }} reference curve)
+
+- **Slope:** {{ "%.4f"|format(slope_pct_per_year) }}%/year
+  ({{ "improving" if slope_pct_per_year > 0 else "degrading" }})
+- **95% CI:** [{{ "%.4f"|format(ci_lower_95_pct) }}%, {{ "%.4f"|format(ci_upper_95_pct) }}%] / year
+- **R²:** {{ "%.3f"|format(r_squared) }}
+- **Baseline first-year capability:** {{ "%.3f"|format(baseline_cap_pu) }} p.u.
+- **Period:** {{ analysis_start }} → {{ analysis_end }}
+- **Hours used in fit:** {{ data_points }}
+- **Reference:** {{ reference_curve_label }} (clean capability curve, wind 4-14 m/s)
+
+## Statistical significance
+
+{% if ci_lower_95_pct > 0 or ci_upper_95_pct < 0 %}
+The 95% confidence interval **excludes zero** — the trend is statistically
+significant at p<0.05. The asset is reliably {{ "improving" if slope_pct_per_year > 0 else "degrading" }}.
+{% else %}
+The 95% confidence interval **straddles zero** — no statistically significant
+long-run trend has been detected. Apparent slope of
+{{ "%.4f"|format(slope_pct_per_year) }}%/year is consistent with random
+year-to-year variation.
+{% endif %}
+
+{% if vs_zone_avg_slope_pct_per_year is not none %}
+## Peer comparison (bidzone average)
+
+- **Bidzone average slope:** {{ "%.4f"|format(vs_zone_avg_slope_pct_per_year) }}%/year
+  (across {{ vs_zone_windfarm_count }} windfarms)
+- **This windfarm vs zone:**
+  {{ "+" if vs_zone_diff_pct >= 0 else "" }}{{ "%.4f"|format(vs_zone_diff_pct) }} pp/year
+  ({{ "outperforming" if vs_zone_diff_pct > 0 else "underperforming" }} peers)
+{% endif %}
+
+## Task
+
+Write 2-3 paragraphs covering:
+
+1. **Headline finding** — degrading or stable, magnitude, statistical
+   significance. Reference the reference-curve type ({{ reference_curve_label }})
+   so a reader knows whether this is vs median or vs upper-capability.
+
+2. **Operational implication** — translate %/year into practical impact: what
+   does this slope imply for expected MWh output 5 years from now (rated
+   capacity × baseline × 5 × slope)? Is intervention warranted?
+
+3. **Peer context** — how does this rate of change compare to the bidzone
+   average{% if vs_zone_avg_slope_pct_per_year is none %} (peer aggregate not
+   available — note this){% endif %}? Is this windfarm-specific (suggesting
+   asset issue) or zone-wide (suggesting environmental driver, e.g. wake
+   shadowing from new neighbour developments)?
+
+Tone: factual, technically precise, no hand-waving on confidence intervals.
+Maximum 250 words.

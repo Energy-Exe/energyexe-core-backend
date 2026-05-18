@@ -5,6 +5,7 @@ from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -45,6 +46,12 @@ class PerformanceAnomaly(Base):
 
     # Consecutive run grouping
     run_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Module 3b — IsolationForest secondary flag (spec item 5.2). Informational
+    # only; does NOT contribute to lost_mwh / lost_eur. NULL = not evaluated.
+    flag_isolation_forest: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False

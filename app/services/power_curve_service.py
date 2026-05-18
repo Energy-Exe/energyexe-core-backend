@@ -148,7 +148,7 @@ class PowerCurveService:
             GROUP BY hour
         """)
         wx_rows = (await self.db.execute(wx_q, gen_params)).fetchall()
-        df_wx = pd.DataFrame(wx_rows, columns=["hour", "wind_speed"]) if wx_rows else pd.DataFrame(columns=["hour", "wind_speed"])
+        df_wx = pd.DataFrame(wx_rows, columns=["hour", "wind_speed"]) if wx_rows else pd.DataFrame({"hour": pd.Series([], dtype="datetime64[ns, UTC]"), "wind_speed": pd.Series([], dtype="float64")})
         if not df_wx.empty:
             df_wx["wind_speed"] = df_wx["wind_speed"].astype(float)
 
@@ -162,7 +162,7 @@ class PowerCurveService:
             GROUP BY hour
         """)
         px_rows = (await self.db.execute(px_q, gen_params)).fetchall()
-        df_px = pd.DataFrame(px_rows, columns=["hour", "market_price"]) if px_rows else pd.DataFrame(columns=["hour", "market_price"])
+        df_px = pd.DataFrame(px_rows, columns=["hour", "market_price"]) if px_rows else pd.DataFrame({"hour": pd.Series([], dtype="datetime64[ns, UTC]"), "market_price": pd.Series([], dtype="float64")})
         if not df_px.empty:
             df_px["market_price"] = pd.to_numeric(df_px["market_price"], errors="coerce")
 
