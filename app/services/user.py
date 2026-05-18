@@ -9,7 +9,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.exceptions import NotFoundException, ValidationException
+from app.core.exceptions import AuthorizationException, NotFoundException, ValidationException
 from app.core.security import get_password_hash, verify_password
 from app.models.user import User
 from app.models.user_feature import DEFAULT_FEATURES, UserFeature
@@ -159,6 +159,21 @@ class UserService:
             await self.db.commit()
             await self.db.refresh(user)
             logger.info("Password rehashed for user", user_id=user.id, username=user.username)
+
+        # Gate client logins behind email verification and admin approval.
+        # Admins/superusers bypass these checks since they're provisioned
+        # through a separate flow (DB seed / invitations / superuser create).
+        if user.role == "client" and not user.is_superuser:
+            if not user.email_verified:
+                raise AuthorizationException(
+                    "Please verify your email address before logging in. "
+                    "Check your inbox for the verification link."
+                )
+            if not user.is_approved:
+                raise AuthorizationException(
+                    "Your account is awaiting admin approval. "
+                    "You'll receive an email once your account is approved."
+                )
 
         return user
 
@@ -318,13 +333,17 @@ class UserService:
     # Admin Methods
 
     async def get_pending_users(self) -> List[User]:
-        """Get all users pending approval."""
+        """Get all users pending admin approval.
+
+        Includes both verified and unverified registrants so admins have
+        visibility into every signup. The UI shows the verification status
+        as a badge so admins can prioritize verified accounts.
+        """
         result = await self.db.execute(
             select(User).where(
                 and_(
                     User.role == "client",
                     User.is_approved == False,
-                    User.email_verified == True,
                 )
             ).order_by(User.created_at.desc())
         )

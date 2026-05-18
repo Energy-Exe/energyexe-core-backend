@@ -217,14 +217,23 @@ async def register_client(
         }
         user_email = user.email
 
-        # Send verification email (can fail silently - user is already registered)
-        await email_service.send_verification_email(user, verification_token)
+        # Send verification email. Failure must not block registration since
+        # the user row already exists, but it MUST be surfaced — otherwise the
+        # account silently strands with no way to verify.
+        email_sent = await email_service.send_verification_email(user, verification_token)
 
-        logger.info(
-            "Client registered, verification email sent",
-            user_id=user_data["id"],
-            email=user_email,
-        )
+        if email_sent:
+            logger.info(
+                "Client registered, verification email sent",
+                user_id=user_data["id"],
+                email=user_email,
+            )
+        else:
+            logger.error(
+                "Client registered but verification email FAILED to send",
+                user_id=user_data["id"],
+                email=user_email,
+            )
         return user_data
     except ValidationException as e:
         logger.warning("Client registration failed", error=e.message)
