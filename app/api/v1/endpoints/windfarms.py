@@ -33,38 +33,10 @@ async def get_windfarms(
 ):
     """Get all windfarms with pagination and owner information"""
     windfarms = await WindfarmService.get_windfarms(db, skip=skip, limit=limit)
-
-    # Transform the data to include owner summaries and country
-    result = []
-    for wf in windfarms:
-        # Get base dict and remove relationship keys
-        wf_dict = {k: v for k, v in wf.__dict__.items() if not k.startswith('_')}
-
-        # Add country and owners
-        wf_dict["country"] = {
-            "id": wf.country.id,
-            "code": wf.country.code,
-            "name": wf.country.name
-        } if wf.country else None
-
-        wf_dict["bidzone"] = {
-            "id": wf.bidzone.id,
-            "code": wf.bidzone.code,
-            "name": wf.bidzone.name,
-        } if wf.bidzone else None
-
-        wf_dict["owners"] = [
-            {
-                "id": wo.owner.id,
-                "name": wo.owner.name,
-                "ownership_percentage": float(wo.ownership_percentage) if wo.ownership_percentage else None
-            }
-            for wo in wf.windfarm_owners
-        ]
-
-        result.append(wf_dict)
-
-    return result
+    latest_by_id = await WindfarmService.get_latest_generation_per_windfarm(
+        db, (wf.id for wf in windfarms)
+    )
+    return [_to_list_item(wf, latest_by_id.get(wf.id)) for wf in windfarms]
 
 
 @router.get("/search", response_model=List[WindfarmListItem])
@@ -76,38 +48,41 @@ async def search_windfarms(
 ):
     """Search windfarms by name with owner information"""
     windfarms = await WindfarmService.search_windfarms(db, query=q, skip=skip, limit=limit)
+    latest_by_id = await WindfarmService.get_latest_generation_per_windfarm(
+        db, (wf.id for wf in windfarms)
+    )
+    return [_to_list_item(wf, latest_by_id.get(wf.id)) for wf in windfarms]
 
-    # Transform the data to include owner summaries and country
-    result = []
-    for wf in windfarms:
-        # Get base dict and remove relationship keys
-        wf_dict = {k: v for k, v in wf.__dict__.items() if not k.startswith('_')}
 
-        # Add country and owners
-        wf_dict["country"] = {
-            "id": wf.country.id,
-            "code": wf.country.code,
-            "name": wf.country.name
-        } if wf.country else None
+def _to_list_item(wf, latest_generation_data_at):
+    """Build a WindfarmListItem dict from a Windfarm ORM row."""
+    wf_dict = {k: v for k, v in wf.__dict__.items() if not k.startswith('_')}
 
-        wf_dict["bidzone"] = {
-            "id": wf.bidzone.id,
-            "code": wf.bidzone.code,
-            "name": wf.bidzone.name,
-        } if wf.bidzone else None
+    wf_dict["country"] = {
+        "id": wf.country.id,
+        "code": wf.country.code,
+        "name": wf.country.name,
+    } if wf.country else None
 
-        wf_dict["owners"] = [
-            {
-                "id": wo.owner.id,
-                "name": wo.owner.name,
-                "ownership_percentage": float(wo.ownership_percentage) if wo.ownership_percentage else None
-            }
-            for wo in wf.windfarm_owners
-        ]
+    wf_dict["bidzone"] = {
+        "id": wf.bidzone.id,
+        "code": wf.bidzone.code,
+        "name": wf.bidzone.name,
+    } if wf.bidzone else None
 
-        result.append(wf_dict)
+    wf_dict["owners"] = [
+        {
+            "id": wo.owner.id,
+            "name": wo.owner.name,
+            "ownership_percentage": float(wo.ownership_percentage)
+            if wo.ownership_percentage
+            else None,
+        }
+        for wo in wf.windfarm_owners
+    ]
 
-    return result
+    wf_dict["latest_generation_data_at"] = latest_generation_data_at
+    return wf_dict
 
 
 @router.get("/names")
@@ -247,6 +222,17 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
             for wo in windfarm.windfarm_owners
         ],
     }
+
+    # #18 — surface the most recent generation-data timestamp so the
+    # Overview tab can show a data-availability hint for monthly-source
+    # windfarms (USA/Denmark) whose default-window metrics often show 0.
+    latest_by_id = await WindfarmService.get_latest_generation_per_windfarm(
+        db, [windfarm.id]
+    )
+    latest = latest_by_id.get(windfarm.id)
+    windfarm_dict["latest_generation_data_at"] = (
+        latest.isoformat() if latest else None
+    )
 
     return windfarm_dict
 
