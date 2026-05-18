@@ -63,13 +63,26 @@ WHERE c.name = 'Norway' ORDER BY w.name
 ```
 
 ## Capacity Factors (monthly)
+DO NOT use `AVG(capacity_factor)` — Postgres silently excludes NULL rows
+from AVG, so windfarms with downtime hours where `capacity_factor` is NULL
+but `generation_mwh = 0` produce inflated CFs. Always compute CF from raw
+sums against nameplate × hours instead. For multi-unit windfarms, sum
+generation AND capacity per hour first, then aggregate — averaging per-unit
+CFs across units double-counts hours and gives wrong results.
+
 ```sql
-SELECT DATE_TRUNC('month', hour) as month,
-       ROUND(AVG(CASE WHEN is_ramp_up = false THEN capacity_factor END)::numeric * 100, 1) as cf_pct,
-       ROUND(SUM(generation_mwh)::numeric, 0) as gen_mwh
-FROM generation_data WHERE windfarm_id = 7182
-AND hour >= '2025-01-01' AND hour < '2026-01-01'
-GROUP BY 1 ORDER BY 1
+-- Single-unit OR multi-unit windfarm — both correct
+SELECT DATE_TRUNC('month', g.hour) as month,
+       ROUND(
+         SUM(g.generation_mwh)::numeric
+         / NULLIF(w.nameplate_capacity_mw * COUNT(DISTINCT g.hour), 0)
+         * 100, 1) as cf_pct,
+       ROUND(SUM(g.generation_mwh)::numeric, 0) as gen_mwh
+FROM generation_data g JOIN windfarms w ON g.windfarm_id = w.id
+WHERE g.windfarm_id = 7182
+  AND g.hour >= '2025-01-01' AND g.hour < '2026-01-01'
+  AND g.is_ramp_up = false
+GROUP BY 1, w.nameplate_capacity_mw ORDER BY 1
 ```
 
 ## Data Availability
@@ -200,7 +213,28 @@ See the Performance Pipeline domain section for `baseline_cap_pu` caveat before 
 
 SKILL_DOMAIN = """# Energy Domain Knowledge
 
-**Capacity Factor (CF)**: generation / (nameplate_capacity × hours). Stored 0-1; display as %.
+**Capacity Factor (CF)**: SUM(generation_mwh) / (nameplate_capacity × hours_in_period). Stored 0-1; display as %.
+
+⚠️ CRITICAL — DO NOT compute CF via `AVG(capacity_factor)`:
+- Postgres `AVG()` silently drops NULL rows. Downtime hours typically have
+  NULL `capacity_factor` but `generation_mwh = 0`, so the average excludes
+  them and produces inflated CFs (e.g., Hamnefjell: AVG → 48.88%, correct
+  nameplate-based CF → 44.25% over 7,023 NULL-CF hours).
+- For multi-unit windfarms (windfarms with multiple `generation_units`),
+  averaging per-unit CFs is BOTH a mathematical error (different
+  denominators) AND double-counts hours (`COUNT(hour)` = 17,520 for a
+  2-unit year instead of 8,760).
+- Correct pattern: `SUM(generation_mwh) / (nameplate × COUNT(DISTINCT hour))`,
+  GROUP BY 1, nameplate_capacity_mw. Always pull nameplate from `windfarms`,
+  not from the per-row `capacity_mw` which can vary across units.
+
+**Financial reporting periods are NOT always 12 months.** The
+`financial_data` table can contain transition-year rows of 6 or 9 months
+when an entity changes its fiscal year end. Always read `period_start`
+and `period_end` and qualify your answer (e.g. "9-month period ending
+2024-09-30") rather than implying a full year. When comparing periods
+of different durations, annualise OR call out the mismatch — do NOT
+declare a record "incomplete" just because it spans less than 12 months.
 Typical: 25-35% onshore, 35-50% offshore. Exclude is_ramp_up=true from averages.
 
 **Curtailment**: Deliberate output reduction. generation_mwh = metered_mwh + curtailed_mwh.

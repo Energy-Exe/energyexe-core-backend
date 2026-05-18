@@ -98,6 +98,45 @@ class TestWindfarmStatsAPI:
         assert isinstance(data["operating_hours"], int)
         assert isinstance(data["total_hours"], int)
 
+    def test_capacity_factor_matches_nameplate_based_calculation(
+        self, api_client, auth_headers, sample_windfarm_id
+    ):
+        """Regression: capacity_factor_percent must equal
+        total_generation_mwh / (nameplate × total_hours) × 100. The previous
+        implementation overrode this with AVG(capacity_factor) * 100, which
+        silently excluded NULL rows and inflated CFs (round-3 issue #49).
+        """
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=30)
+
+        response = api_client.get(
+            "/generation/windfarm-stats",
+            params={
+                "windfarm_id": sample_windfarm_id,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        cf = data.get("capacity_factor_percent")
+        nameplate = data.get("nameplate_capacity_mw")
+        total_gen = data.get("total_generation_mwh") or 0
+        total_hours = data.get("total_hours") or 0
+
+        # Either CF is None (no data) or it matches the nameplate formula.
+        if cf is None or not nameplate or not total_hours:
+            return
+        expected = (total_gen / (nameplate * total_hours)) * 100
+        # Allow 0.5pp slack for floating-point/rounding.
+        assert abs(cf - expected) < 0.5, (
+            f"capacity_factor_percent={cf:.4f} drifted from nameplate-based "
+            f"{expected:.4f} (delta {abs(cf - expected):.4f}pp). The AVG-based "
+            f"override must NOT be reintroduced — see issue #49."
+        )
+
     def test_get_windfarm_stats_not_found(self, api_client, auth_headers):
         """Test GET /generation/windfarm-stats returns 404 for non-existent windfarm."""
         end_date = datetime.now()
