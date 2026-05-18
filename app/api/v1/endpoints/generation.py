@@ -327,14 +327,17 @@ async def get_windfarm_stats(
 
     # Calculate statistics
     # Net generation = generation_mwh - COALESCE(consumption_mwh, 0)
+    # For multi-unit windfarms (>1 row in `generation_units`), each calendar
+    # hour appears once per unit — so we use DISTINCT on `hour` for time-
+    # based counts to avoid double-counting hours. Without this, the CF
+    # denominator (nameplate × hours) is N× too large for N-unit windfarms
+    # and the reported CF is N× too small. (Round-3 issue #50.)
     net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
     stats_query = select(
         func.sum(net_gen).label('total_generation'),
-        func.avg(net_gen).label('avg_generation'),
         func.max(net_gen).label('max_generation'),
-        func.avg(GenerationData.capacity_factor).label('avg_capacity_factor'),
         func.avg(GenerationData.quality_score).label('avg_quality_score'),
-        func.count(GenerationData.id).label('total_hours'),
+        func.count(func.distinct(GenerationData.hour)).label('total_hours'),
         func.count(case((GenerationData.generation_mwh > 0, 1))).label('operating_hours')
     ).where(
         and_(
@@ -362,21 +365,34 @@ async def get_windfarm_stats(
     peak_result = await db.execute(peak_query)
     peak_row = peak_result.first()
 
-    # Calculate capacity factor if we have nameplate capacity and total generation
+    # Capacity factor = actual generation / (nameplate capacity × hours in
+    # period). This is the correct calculation and the only one we use.
+    #
+    # Round-3 fix (#49 in client-ui repo / #49 in this repo): the previous
+    # implementation overrode this value with `AVG(capacity_factor) * 100`,
+    # but Postgres's `AVG()` silently excludes NULL rows. For windfarms with
+    # downtime hours where `capacity_factor` is NULL but `generation_mwh` is
+    # 0 (which is the common case for the import pipeline), that override
+    # produced inflated CFs (Hamnefjell: 48.88% reported vs 44.25% actual
+    # over 7,023 NULL-CF hours). The nameplate-based formula uses the full
+    # hour count in the denominator and handles NULLs naturally.
     capacity_factor_percent = None
     if windfarm.nameplate_capacity_mw and stats.total_generation and stats.total_hours:
-        # Capacity factor = actual generation / (capacity * hours)
         max_possible_generation = float(windfarm.nameplate_capacity_mw) * float(stats.total_hours)
         if max_possible_generation > 0:
             capacity_factor_percent = (float(stats.total_generation) / max_possible_generation) * 100
 
-    # If we have capacity factor from the data, use that instead
-    if stats.avg_capacity_factor:
-        capacity_factor_percent = float(stats.avg_capacity_factor) * 100
+    # Compute avg-hourly from total/hours so multi-unit windfarms aren't
+    # halved by AVG(net_gen) running across (windfarm × unit) rows.
+    avg_hourly = (
+        float(stats.total_generation) / float(stats.total_hours)
+        if stats.total_generation and stats.total_hours
+        else 0
+    )
 
     return {
         'total_generation_mwh': float(stats.total_generation) if stats.total_generation else 0,
-        'avg_hourly_generation_mwh': float(stats.avg_generation) if stats.avg_generation else 0,
+        'avg_hourly_generation_mwh': avg_hourly,
         'max_hourly_generation_mwh': float(stats.max_generation) if stats.max_generation else 0,
         'peak_hour': peak_row.hour.isoformat() if peak_row else None,
         'capacity_factor_percent': capacity_factor_percent,
