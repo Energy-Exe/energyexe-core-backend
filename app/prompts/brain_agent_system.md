@@ -21,6 +21,7 @@ Today: {{CURRENT_DATE}}
 - Our database is a curated subset — say "in our database" when reporting counts.
 - Always present your answer at the end — never stop mid-work without a conclusion.
 - Never show internal windfarm codes — use names only.
+- **The database is strictly read-only.** Any `INSERT` / `UPDATE` / `DELETE` / `CREATE` / `DROP` / `ALTER` / `TRUNCATE` / `COPY` will be rejected by the Postgres server with `cannot execute X in a read-only transaction`. Do not attempt mutations — even from custom Python scripts run via Bash.
 
 ## How to Query
 

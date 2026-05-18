@@ -558,15 +558,24 @@ class PriceAnalyticsService:
 
         ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
+        # ELEXON stores one price row per (hour, windfarm) — averaging
+        # without DISTINCT ON would weight each hour by the number of
+        # windfarms in the zone (155x for GB), making the AVG slow on
+        # large zones.  ENTSOE prices already have a single row per hour
+        # so DISTINCT ON is a no-op there.
         query = text(f"""
             WITH market_avg AS (
-                SELECT AVG(p.day_ahead_price) as market_average_price
-                FROM price_data p
-                WHERE p.bidzone_id = :bidzone_id
-                  AND p.hour >= :start_date
-                  AND p.hour < :end_date
-                  AND p.day_ahead_price IS NOT NULL
-                  AND p.source = :price_source
+                SELECT AVG(day_ahead_price) as market_average_price
+                FROM (
+                    SELECT DISTINCT ON (hour) day_ahead_price
+                    FROM price_data
+                    WHERE bidzone_id = :bidzone_id
+                      AND hour >= :start_date
+                      AND hour < :end_date
+                      AND day_ahead_price IS NOT NULL
+                      AND source = :price_source
+                    ORDER BY hour, day_ahead_price
+                ) x
             )
             SELECT
                 g.windfarm_id,
@@ -629,6 +638,123 @@ class PriceAnalyticsService:
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "windfarms": windfarms,
+        }
+
+    async def zone_capture_rate_by_month(
+        self,
+        bidzone_id: int,
+        start_date: datetime,
+        end_date: datetime,
+        exclude_ramp_up: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Aggregate the bidzone-level capture rate one bucket per calendar month
+        in [start_date, end_date]. Powers the radar/spider chart on the FE (#31).
+
+        Returns a payload with 12 axes (one per month in window) — each axis is
+        the MWh-weighted capture rate across all windfarms in the zone.
+        """
+        bidzone = await self._get_bidzone(bidzone_id)
+        bidzone_code = bidzone.code if bidzone else None
+        price_source = "ELEXON" if bidzone_code == "10YGB----------A" else "ENTSOE"
+
+        ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
+
+        # Per-month market average (DISTINCT ON hour to avoid 155x overcounting on
+        # ELEXON where price_data has one row per (hour, windfarm)).
+        query = text(f"""
+            WITH market_avg AS (
+                SELECT
+                    date_trunc('month', hour)::date AS month,
+                    AVG(day_ahead_price) AS market_average_price
+                FROM (
+                    SELECT DISTINCT ON (hour) hour, day_ahead_price
+                    FROM price_data
+                    WHERE bidzone_id = :bidzone_id
+                      AND hour >= :start_date
+                      AND hour < :end_date
+                      AND day_ahead_price IS NOT NULL
+                      AND source = :price_source
+                    ORDER BY hour, day_ahead_price
+                ) x
+                GROUP BY date_trunc('month', hour)
+            ),
+            zone_revenue AS (
+                SELECT
+                    date_trunc('month', g.hour)::date AS month,
+                    SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) AS total_generation_mwh,
+                    SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price)
+                        AS total_revenue,
+                    COUNT(DISTINCT g.windfarm_id) AS windfarm_count
+                FROM generation_data g
+                JOIN price_data p
+                    ON g.windfarm_id = p.windfarm_id
+                   AND g.hour = p.hour
+                   AND p.source = :price_source
+                JOIN windfarms w ON g.windfarm_id = w.id
+                WHERE w.bidzone_id = :bidzone_id
+                  AND g.hour >= :start_date
+                  AND g.hour < :end_date
+                  AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+                  AND p.day_ahead_price IS NOT NULL
+                  {ramp_up_clause}
+                GROUP BY date_trunc('month', g.hour)
+            )
+            SELECT
+                ma.month,
+                ma.market_average_price,
+                COALESCE(zr.total_generation_mwh, 0) AS total_generation_mwh,
+                COALESCE(zr.total_revenue, 0) AS total_revenue,
+                COALESCE(zr.windfarm_count, 0) AS windfarm_count,
+                CASE
+                    WHEN COALESCE(zr.total_generation_mwh, 0) > 0
+                     AND ma.market_average_price > 0
+                    THEN (zr.total_revenue / zr.total_generation_mwh) / ma.market_average_price
+                    ELSE NULL
+                END AS capture_rate,
+                CASE
+                    WHEN COALESCE(zr.total_generation_mwh, 0) > 0
+                    THEN zr.total_revenue / zr.total_generation_mwh
+                    ELSE NULL
+                END AS achieved_price
+            FROM market_avg ma
+            LEFT JOIN zone_revenue zr ON zr.month = ma.month
+            ORDER BY ma.month
+        """)
+
+        result = await self.db.execute(query, {
+            "bidzone_id": bidzone_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "price_source": price_source,
+        })
+
+        month_labels = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ]
+        axes = []
+        for row in result.fetchall():
+            month_dt = row.month
+            axes.append({
+                "month": month_dt.month,
+                "year": month_dt.year,
+                "label": month_labels[month_dt.month - 1],
+                "capture_rate": float(row.capture_rate) if row.capture_rate is not None else None,
+                "achieved_price": float(row.achieved_price) if row.achieved_price is not None else None,
+                "market_average_price": float(row.market_average_price)
+                    if row.market_average_price is not None else None,
+                "total_generation_mwh": float(row.total_generation_mwh or 0),
+                "total_revenue": float(row.total_revenue or 0),
+                "windfarm_count": int(row.windfarm_count or 0),
+            })
+
+        return {
+            "bidzone_id": bidzone_id,
+            "bidzone_code": bidzone_code,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "axes": axes,
         }
 
     async def _get_preferred_price_source(self, windfarm_id: int) -> str:

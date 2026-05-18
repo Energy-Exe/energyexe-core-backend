@@ -8,12 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_active_user, get_db
-from app.core.redis import get_cached_report, cache_report, invalidate_report_cache
+from app.core.redis import get_cached_report, cache_report
 from app.models.user import User
 from app.services.windfarm_report_service import WindfarmReportService
 from app.schemas.windfarm_report import (
     WindfarmReportData,
-    ReportGenerationRequest,
     PeerComparisonRequest,
     PeerComparisonData,
     CapacityFactorDistributionRequest,

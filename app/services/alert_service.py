@@ -72,7 +72,10 @@ class AlertService:
         return result.unique().scalar_one_or_none()
 
     async def list_alert_rules(
-        self, user_id: int, is_enabled: Optional[bool] = None
+        self,
+        user_id: int,
+        is_enabled: Optional[bool] = None,
+        portfolio_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """List all alert rules for a user."""
         query = (
@@ -91,6 +94,9 @@ class AlertService:
 
         if is_enabled is not None:
             query = query.where(AlertRule.is_enabled == is_enabled)
+
+        if portfolio_id is not None:
+            query = query.where(AlertRule.portfolio_id == portfolio_id)
 
         result = await self.db.execute(query)
         rules = []

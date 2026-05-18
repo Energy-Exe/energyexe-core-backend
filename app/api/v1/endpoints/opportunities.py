@@ -10,8 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_active_user, get_db
 from app.models.opportunity import Opportunity, OpportunityStatus
+from app.models.portfolio import PortfolioItem
 from app.models.user import User
 from app.models.windfarm import Windfarm
+from app.services.portfolio_service import PortfolioService
 from app.schemas.opportunity import (
     OpportunityDetectRequest,
     OpportunityListResponse,
@@ -50,6 +52,7 @@ def _to_response(opp: Opportunity, windfarm_name: Optional[str] = None) -> Oppor
 @router.get("/", response_model=OpportunityListResponse)
 async def list_opportunities(
     windfarm_id: Optional[int] = Query(None),
+    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID (only opportunities for windfarms in this portfolio)"),
     schema_code: Optional[str] = Query(None),
     severity: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="Filter by status. Default: ACTIVE"),
@@ -59,9 +62,20 @@ async def list_opportunities(
     db: AsyncSession = Depends(get_db),
 ):
     """List opportunities with filters."""
+    if portfolio_id is not None:
+        portfolio = await PortfolioService(db).get_portfolio(portfolio_id, current_user.id)
+        if not portfolio:
+            raise HTTPException(status_code=404, detail=f"Portfolio {portfolio_id} not found")
+
     conditions = []
     if windfarm_id:
         conditions.append(Opportunity.windfarm_id == windfarm_id)
+    if portfolio_id is not None:
+        portfolio_windfarms = (
+            select(PortfolioItem.windfarm_id)
+            .where(PortfolioItem.portfolio_id == portfolio_id)
+        )
+        conditions.append(Opportunity.windfarm_id.in_(portfolio_windfarms))
     if schema_code:
         conditions.append(Opportunity.schema_code == schema_code)
     if severity:
@@ -98,6 +112,12 @@ async def list_opportunities(
     )
     if windfarm_id:
         summary_q = summary_q.where(Opportunity.windfarm_id == windfarm_id)
+    if portfolio_id is not None:
+        summary_q = summary_q.where(
+            Opportunity.windfarm_id.in_(
+                select(PortfolioItem.windfarm_id).where(PortfolioItem.portfolio_id == portfolio_id)
+            )
+        )
     summary_q = summary_q.group_by(Opportunity.severity)
     summary_result = await db.execute(summary_q)
     summary = {r[0]: r[1] for r in summary_result.fetchall()}

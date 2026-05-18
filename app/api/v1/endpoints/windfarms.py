@@ -11,7 +11,6 @@ from app.schemas.windfarm import (
     WindfarmCreateWithOwners,
     WindfarmListItem,
     WindfarmUpdate,
-    WindfarmWithOwners,
 )
 from app.schemas.windfarm_owner import (
     WindfarmOwner,
@@ -34,32 +33,10 @@ async def get_windfarms(
 ):
     """Get all windfarms with pagination and owner information"""
     windfarms = await WindfarmService.get_windfarms(db, skip=skip, limit=limit)
-
-    # Transform the data to include owner summaries and country
-    result = []
-    for wf in windfarms:
-        # Get base dict and remove relationship keys
-        wf_dict = {k: v for k, v in wf.__dict__.items() if not k.startswith('_')}
-
-        # Add country and owners
-        wf_dict["country"] = {
-            "id": wf.country.id,
-            "code": wf.country.code,
-            "name": wf.country.name
-        } if wf.country else None
-
-        wf_dict["owners"] = [
-            {
-                "id": wo.owner.id,
-                "name": wo.owner.name,
-                "ownership_percentage": float(wo.ownership_percentage) if wo.ownership_percentage else None
-            }
-            for wo in wf.windfarm_owners
-        ]
-
-        result.append(wf_dict)
-
-    return result
+    latest_by_id = await WindfarmService.get_latest_generation_per_windfarm(
+        db, (wf.id for wf in windfarms)
+    )
+    return [_to_list_item(wf, latest_by_id.get(wf.id)) for wf in windfarms]
 
 
 @router.get("/search", response_model=List[WindfarmListItem])
@@ -71,32 +48,41 @@ async def search_windfarms(
 ):
     """Search windfarms by name with owner information"""
     windfarms = await WindfarmService.search_windfarms(db, query=q, skip=skip, limit=limit)
+    latest_by_id = await WindfarmService.get_latest_generation_per_windfarm(
+        db, (wf.id for wf in windfarms)
+    )
+    return [_to_list_item(wf, latest_by_id.get(wf.id)) for wf in windfarms]
 
-    # Transform the data to include owner summaries and country
-    result = []
-    for wf in windfarms:
-        # Get base dict and remove relationship keys
-        wf_dict = {k: v for k, v in wf.__dict__.items() if not k.startswith('_')}
 
-        # Add country and owners
-        wf_dict["country"] = {
-            "id": wf.country.id,
-            "code": wf.country.code,
-            "name": wf.country.name
-        } if wf.country else None
+def _to_list_item(wf, latest_generation_data_at):
+    """Build a WindfarmListItem dict from a Windfarm ORM row."""
+    wf_dict = {k: v for k, v in wf.__dict__.items() if not k.startswith('_')}
 
-        wf_dict["owners"] = [
-            {
-                "id": wo.owner.id,
-                "name": wo.owner.name,
-                "ownership_percentage": float(wo.ownership_percentage) if wo.ownership_percentage else None
-            }
-            for wo in wf.windfarm_owners
-        ]
+    wf_dict["country"] = {
+        "id": wf.country.id,
+        "code": wf.country.code,
+        "name": wf.country.name,
+    } if wf.country else None
 
-        result.append(wf_dict)
+    wf_dict["bidzone"] = {
+        "id": wf.bidzone.id,
+        "code": wf.bidzone.code,
+        "name": wf.bidzone.name,
+    } if wf.bidzone else None
 
-    return result
+    wf_dict["owners"] = [
+        {
+            "id": wo.owner.id,
+            "name": wo.owner.name,
+            "ownership_percentage": float(wo.ownership_percentage)
+            if wo.ownership_percentage
+            else None,
+        }
+        for wo in wf.windfarm_owners
+    ]
+
+    wf_dict["latest_generation_data_at"] = latest_generation_data_at
+    return wf_dict
 
 
 @router.get("/names")
@@ -237,23 +223,46 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
         ],
     }
 
+    # #18 — surface the most recent generation-data timestamp so the
+    # Overview tab can show a data-availability hint for monthly-source
+    # windfarms (USA/Denmark) whose default-window metrics often show 0.
+    latest_by_id = await WindfarmService.get_latest_generation_per_windfarm(
+        db, [windfarm.id]
+    )
+    latest = latest_by_id.get(windfarm.id)
+    windfarm_dict["latest_generation_data_at"] = (
+        latest.isoformat() if latest else None
+    )
+
     return windfarm_dict
 
 
 @router.get("/{windfarm_id}/generation-units")
-async def get_windfarm_generation_units(windfarm_id: int, db: AsyncSession = Depends(get_db)):
-    """Get generation units for a specific windfarm"""
+async def get_windfarm_generation_units(
+    windfarm_id: int,
+    include_inactive: bool = Query(False, description="Include decommissioned/expanded units"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get generation units for a specific windfarm.
+
+    By default returns only active units. Pass include_inactive=true to also
+    return decommissioned/expanded historical units (e.g., Raggovidda's 11
+    phase units from its 2014–2022 ramp-up).
+    """
     from app.models.generation_unit import GenerationUnit
     from sqlalchemy import select
-    
+
+    conditions = [GenerationUnit.windfarm_id == windfarm_id]
+    if not include_inactive:
+        conditions.append(GenerationUnit.is_active == True)
+
     result = await db.execute(
-        select(GenerationUnit).where(
-            GenerationUnit.windfarm_id == windfarm_id,
-            GenerationUnit.is_active == True,
-        )
+        select(GenerationUnit)
+        .where(*conditions)
+        .order_by(GenerationUnit.is_active.desc(), GenerationUnit.start_date, GenerationUnit.id)
     )
     units = result.scalars().all()
-    
+
     return [
         {
             "id": unit.id,
@@ -263,13 +272,20 @@ async def get_windfarm_generation_units(windfarm_id: int, db: AsyncSession = Dep
             "capacity_mw": float(unit.capacity_mw) if unit.capacity_mw else None,
             "source": unit.source,
             "is_active": unit.is_active,
+            "status": unit.status,
+            "start_date": unit.start_date.isoformat() if unit.start_date else None,
+            "end_date": unit.end_date.isoformat() if unit.end_date else None,
         }
         for unit in units
     ]
 
 
 @router.get("/{windfarm_id}/with-generation-units")
-async def get_windfarm_with_generation_units(windfarm_id: int, db: AsyncSession = Depends(get_db)):
+async def get_windfarm_with_generation_units(
+    windfarm_id: int,
+    include_inactive: bool = Query(False, description="Include decommissioned/expanded units"),
+    db: AsyncSession = Depends(get_db),
+):
     """Get a specific windfarm by ID with generation units"""
     windfarm = await WindfarmService.get_windfarm_with_generation_units(db, windfarm_id)
     if not windfarm:
@@ -371,11 +387,15 @@ async def get_windfarm_with_generation_units(windfarm_id: int, db: AsyncSession 
                 "capacity_mw": float(unit.capacity_mw) if unit.capacity_mw else None,
                 "source": unit.source,
                 "is_active": unit.is_active,
+                "status": unit.status,
+                "start_date": unit.start_date.isoformat() if unit.start_date else None,
+                "end_date": unit.end_date.isoformat() if unit.end_date else None,
                 "commissioned_date": unit.commissioned_date.isoformat()
                 if unit.commissioned_date
                 else None,
             }
-            for unit in windfarm.generation_units if unit.is_active
+            for unit in windfarm.generation_units
+            if include_inactive or unit.is_active
         ] if hasattr(windfarm, 'generation_units') else [],
     }
 

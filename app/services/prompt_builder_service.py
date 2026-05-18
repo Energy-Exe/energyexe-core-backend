@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from typing import Dict, Any
-from jinja2 import Template, Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 import structlog
 
 logger = structlog.get_logger(__name__)

@@ -1,7 +1,7 @@
 """User schemas for request/response validation."""
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -110,6 +110,7 @@ class ForgotPassword(BaseModel):
     """Schema for forgot password request."""
 
     email: EmailStr
+    portal: Literal["client", "admin"] = "client"
 
 
 class ResetPassword(BaseModel):

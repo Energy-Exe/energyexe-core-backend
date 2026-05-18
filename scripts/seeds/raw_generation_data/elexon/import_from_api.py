@@ -388,6 +388,11 @@ async def main(start_date: str, end_date: str, dry_run: bool = False, chunk_days
         print(f"   poetry run python scripts/seeds/aggregate_generation_data/process_generation_data_robust.py \\")
         print(f"     --source ELEXON --start {start_date} --end {end_date}")
 
+    if total_records == 0 and not dry_run:
+        # Fail loudly so the orchestrating job is marked failed instead of silently "success"
+        print("\n❌ ERROR: 0 records imported — failing job", file=sys.stderr)
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Import ELEXON data from API')

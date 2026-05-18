@@ -21,10 +21,9 @@ def api_client():
 @pytest.fixture
 def auth_headers(api_client):
     """Get authentication headers for protected endpoints."""
-    # Login to get auth token
     response = api_client.post("/auth/login", json={
-        "email": os.getenv("TEST_USER_EMAIL", "admin@energyexe.com"),
-        "password": os.getenv("TEST_USER_PASSWORD", "admin123")
+        "username": os.getenv("TEST_USER_USERNAME", "admin"),
+        "password": os.getenv("TEST_USER_PASSWORD", "adminenergyexe"),
     })
 
     if response.status_code != 200:
@@ -78,6 +77,43 @@ class TestWeatherStatisticsAPI:
         for field in expected_fields:
             assert field in data, f"Missing field: {field}"
 
+    def test_estimated_capacity_factor_in_decimal_range(
+        self, api_client, auth_headers, test_windfarm_id
+    ):
+        """#17 — capacityFactorEstimate must be a decimal in [0, 1].
+
+        Bug history: an earlier version of the FE multiplied the BE value by 100
+        for display, and the BE was returning percentages. With the fix, the BE
+        returns a decimal and the FE multiplies — so the wire value must stay in
+        [0, 1] so the rendered % stays in [0, 100].
+        """
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=365)
+
+        response = api_client.get(
+            f"/weather-data/windfarms/{test_windfarm_id}/statistics",
+            params={
+                "start_date": start_date.strftime("%Y-%m-%d"),
+                "end_date": end_date.strftime("%Y-%m-%d"),
+            },
+            headers=auth_headers,
+        )
+        if response.status_code == 404:
+            pytest.skip("No weather data available for this windfarm")
+        assert response.status_code == 200
+
+        data = response.json()
+        ecf = data.get("capacityFactorEstimate")
+        assert ecf is not None, "capacityFactorEstimate field missing from response"
+        assert isinstance(ecf, (int, float)), (
+            f"capacityFactorEstimate must be numeric, got {type(ecf).__name__}"
+        )
+        assert 0 <= ecf <= 1, (
+            f"capacityFactorEstimate={ecf} out of [0, 1] decimal range. "
+            "BE is likely returning a percentage, which would render as up to "
+            "100x too high on the FE."
+        )
+
 
 class TestWindRoseAPI:
     """Test suite for wind rose endpoints."""
@@ -110,6 +146,46 @@ class TestWindRoseAPI:
         assert "frequency" in data
         assert "totalHours" in data
         assert "calmPercentage" in data
+
+    def test_calm_pct_consistent_between_endpoints(
+        self, api_client, auth_headers, test_windfarm_id
+    ):
+        """#round2-4 — /statistics and /wind-rose must agree on % calm.
+
+        Bug history: /wind-rose used `wind_speed_100m < 0.5`; /statistics used
+        `< 3.0`. With identical inputs, the two cards on the Weather tab
+        rendered wildly different "% calm" values (5.5% vs 0.1%). Aligned both
+        on 3.0 m/s (turbine cut-in convention).
+        """
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=365)
+        params = {
+            "start_date": start_date.strftime("%Y-%m-%d"),
+            "end_date": end_date.strftime("%Y-%m-%d"),
+        }
+
+        stat_resp = api_client.get(
+            f"/weather-data/windfarms/{test_windfarm_id}/statistics",
+            params=params,
+            headers=auth_headers,
+        )
+        rose_resp = api_client.get(
+            f"/weather-data/windfarms/{test_windfarm_id}/wind-rose",
+            params=params,
+            headers=auth_headers,
+        )
+        if stat_resp.status_code == 404 or rose_resp.status_code == 404:
+            pytest.skip("No weather data available for this windfarm")
+        assert stat_resp.status_code == 200
+        assert rose_resp.status_code == 200
+
+        stat_calm = stat_resp.json().get("calmPercentage")
+        rose_calm = rose_resp.json().get("calmPercentage")
+        assert stat_calm is not None and rose_calm is not None
+        assert abs(stat_calm - rose_calm) <= 0.5, (
+            f"calmPercentage diverged: statistics={stat_calm}, "
+            f"wind-rose={rose_calm}. Both endpoints must use the same cut-off."
+        )
 
 
 class TestWindDistributionAPI:

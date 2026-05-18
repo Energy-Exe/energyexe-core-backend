@@ -1,10 +1,12 @@
-from typing import List, Optional
+from datetime import datetime
+from typing import Dict, Iterable, List, Optional
 
-from sqlalchemy import and_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
+from app.models.generation_data import GenerationData
 from app.models.windfarm import Windfarm
 from app.models.windfarm_owner import WindfarmOwner
 from app.schemas.windfarm import WindfarmCreate, WindfarmUpdate
@@ -18,12 +20,35 @@ class WindfarmService:
             .options(
                 selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
                 selectinload(Windfarm.country),
+                selectinload(Windfarm.bidzone),
             )
             .offset(skip)
             .limit(limit)
             .order_by(Windfarm.created_at.desc())
         )
         return result.scalars().all()
+
+    @staticmethod
+    async def get_latest_generation_per_windfarm(
+        db: AsyncSession, windfarm_ids: Iterable[int]
+    ) -> Dict[int, datetime]:
+        """Return {windfarm_id: max(generation_data.hour)} for the given IDs.
+
+        Single aggregate query — avoids N+1 round-trips when populating the
+        wind farms list (#18).
+        """
+        ids = [i for i in windfarm_ids if i is not None]
+        if not ids:
+            return {}
+        result = await db.execute(
+            select(
+                GenerationData.windfarm_id,
+                func.max(GenerationData.hour),
+            )
+            .where(GenerationData.windfarm_id.in_(ids))
+            .group_by(GenerationData.windfarm_id)
+        )
+        return {row[0]: row[1] for row in result.all() if row[0] is not None}
 
     @staticmethod
     async def get_windfarm(db: AsyncSession, windfarm_id: int) -> Optional[Windfarm]:
@@ -76,13 +101,29 @@ class WindfarmService:
         db: AsyncSession, query: str, skip: int = 0, limit: int = 100
     ) -> List[Windfarm]:
         search_pattern = f"%{query}%"
+        # Item #4 — search across name, country, and owner names (not just name).
+        from app.models.country import Country
+        from app.models.owner import Owner
+
         result = await db.execute(
             select(Windfarm)
             .options(
                 selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
                 selectinload(Windfarm.country),
+                selectinload(Windfarm.bidzone),
             )
-            .where(and_(Windfarm.name.ilike(search_pattern)))
+            .outerjoin(Windfarm.country)
+            .outerjoin(Windfarm.windfarm_owners)
+            .outerjoin(WindfarmOwner.owner)
+            .where(
+                or_(
+                    Windfarm.name.ilike(search_pattern),
+                    Windfarm.code.ilike(search_pattern),
+                    Country.name.ilike(search_pattern),
+                    Owner.name.ilike(search_pattern),
+                )
+            )
+            .distinct()
             .offset(skip)
             .limit(limit)
             .order_by(Windfarm.created_at.desc())

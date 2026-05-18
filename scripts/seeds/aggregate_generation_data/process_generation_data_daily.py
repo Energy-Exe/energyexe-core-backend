@@ -43,6 +43,8 @@ from app.models.generation_data import GenerationDataRaw, GenerationData
 from app.models.generation_unit import GenerationUnit
 from app.models.windfarm import Windfarm
 from app.utils.ramp_up import is_in_ramp_up_period
+from app.utils.unit_resolver import is_unit_operational as _resolver_is_unit_operational
+from app.utils.unit_resolver import resolve_operational_unit
 
 # Configure logging
 logging.basicConfig(
@@ -68,6 +70,9 @@ class HourlyRecord:
     # Curtailment tracking (ELEXON BOAV integration)
     metered_mwh: Optional[float] = None  # What was delivered to grid (B1610)
     curtailed_mwh: Optional[float] = None  # What was curtailed (BOAV bids)
+    # Pre-tagged unit hint from raw record (NVE ingest sets this; preserves correct
+    # attribution when multiple active units share a source:code).
+    preferred_unit_id: Optional[int] = None
 
 
 class DailyGenerationProcessor:
@@ -79,6 +84,9 @@ class DailyGenerationProcessor:
         self.db = db_session
         self.dry_run = dry_run
         self.generation_units_cache = {}
+        # Tracks (windfarm_id, source, code) keys we've already warned about
+        # for multi-active-unit ambiguity, so we don't spam logs.
+        self._ambiguous_keys_warned: set = set()
         self.stats = {
             'raw_records_processed': 0,
             'hourly_records_created': 0,
@@ -152,15 +160,37 @@ class DailyGenerationProcessor:
     async def load_generation_units(self):
         """Load generation units into memory for faster lookups.
 
-        For sources like NVE with multiple phases per code, stores lists of units.
-        Also loads commercial_operational_date from windfarms for capacity factor calculation.
+        Only ACTIVE units are loaded — inactive (decommissioned/expanded) units
+        must never be used for live attribution. For sources like EIA or NVE
+        with multiple active units sharing a code, stores lists of units and
+        disambiguates per-record via get_operational_unit().
         """
 
-        # Join with windfarms to get commercial_operational_date
+        # Filter is_active=True to prevent decommissioned/expanded "phase" units
+        # from polluting the cache (see Raggovidda: 1 active + 11 inactive, all code=46).
+        # Select only the columns we use — selecting full ORM objects (especially
+        # the Windfarm row with its geometry/polygon columns) makes this query
+        # 30s+ over remote RDS for ~2K rows.
         result = await self.db.execute(
-            select(GenerationUnit, Windfarm)
+            select(
+                GenerationUnit.id,
+                GenerationUnit.windfarm_id,
+                GenerationUnit.capacity_mw,
+                GenerationUnit.name,
+                GenerationUnit.code,
+                GenerationUnit.source,
+                GenerationUnit.start_date,
+                GenerationUnit.end_date,
+                GenerationUnit.first_power_date,
+                GenerationUnit.commercial_operational_date,
+                GenerationUnit.ramp_up_end_date,
+                Windfarm.first_power_date.label('wf_first_power_date'),
+                Windfarm.commercial_operational_date.label('wf_commercial_operational_date'),
+                Windfarm.ramp_up_end_date.label('wf_ramp_up_end_date'),
+            )
             .outerjoin(Windfarm, GenerationUnit.windfarm_id == Windfarm.id)
-            .order_by(GenerationUnit.code, GenerationUnit.start_date)
+            .where(GenerationUnit.is_active == True)
+            .order_by(GenerationUnit.code, GenerationUnit.start_date, GenerationUnit.id)
         )
         rows = result.all()
 
@@ -168,32 +198,32 @@ class DailyGenerationProcessor:
         self.windfarm_commercial_dates = {}
 
         # Group by source:code (multiple phases can have same code)
-        for unit, windfarm in rows:
+        for r in rows:
             # Use uppercase for case-insensitive matching (TAIPOWER vs Taipower)
-            key = f"{unit.source.upper()}:{unit.code}"
+            key = f"{r.source.upper()}:{r.code}"
 
-            # Get commercial_operational_date from windfarm if available
-            commercial_date = None
-            if windfarm and windfarm.commercial_operational_date:
-                commercial_date = windfarm.commercial_operational_date
-                # Cache by windfarm_id for units without direct windfarm link
-                self.windfarm_commercial_dates[windfarm.id] = commercial_date
+            # commercial_operational_date for CF calculation: prefer unit's own,
+            # else windfarm's.
+            commercial_date = r.commercial_operational_date or r.wf_commercial_operational_date
+            if r.windfarm_id and r.wf_commercial_operational_date:
+                self.windfarm_commercial_dates[r.windfarm_id] = r.wf_commercial_operational_date
 
             unit_info = {
-                'id': unit.id,
-                'windfarm_id': unit.windfarm_id,
-                'capacity_mw': float(unit.capacity_mw) if unit.capacity_mw else None,
-                'name': unit.name,
-                'start_date': unit.start_date,
-                'end_date': unit.end_date,
-                'first_power_date': unit.first_power_date,  # For data filtering (takes precedence over start_date)
-                'commercial_operational_date': commercial_date,  # For capacity factor calculation
-                # Ramp-up period fields
-                'unit_commercial_operational_date': unit.commercial_operational_date,
-                'unit_ramp_up_end_date': unit.ramp_up_end_date,
-                'windfarm_first_power_date': windfarm.first_power_date if windfarm else None,
-                'windfarm_commercial_operational_date': windfarm.commercial_operational_date if windfarm else None,
-                'windfarm_ramp_up_end_date': windfarm.ramp_up_end_date if windfarm else None,
+                'id': r.id,
+                'windfarm_id': r.windfarm_id,
+                'capacity_mw': float(r.capacity_mw) if r.capacity_mw else None,
+                'name': r.name,
+                'code': r.code,
+                'source': r.source,
+                'start_date': r.start_date,
+                'end_date': r.end_date,
+                'first_power_date': r.first_power_date,
+                'commercial_operational_date': commercial_date,
+                'unit_commercial_operational_date': r.commercial_operational_date,
+                'unit_ramp_up_end_date': r.ramp_up_end_date,
+                'windfarm_first_power_date': r.wf_first_power_date,
+                'windfarm_commercial_operational_date': r.wf_commercial_operational_date,
+                'windfarm_ramp_up_end_date': r.wf_ramp_up_end_date,
             }
 
             # If key exists, convert to list or append
@@ -212,84 +242,16 @@ class DailyGenerationProcessor:
         logger.info(f"Loaded generation units from {len(self.generation_units_cache)} unique codes")
 
     def is_unit_operational(self, unit_info: Dict, check_date: datetime) -> bool:
-        """Check if a generation unit is operational on a given date.
+        """Thin wrapper for backwards compatibility — delegates to shared helper."""
+        return _resolver_is_unit_operational(unit_info, check_date)
 
-        Args:
-            unit_info: Unit information from cache
-            check_date: Date to check
-
-        Returns:
-            True if unit is operational on the date
-        """
-        if not unit_info:
-            return False
-
-        # Remove timezone info from check_date for comparison
-        # We compare dates only, not times or timezones
-        if hasattr(check_date, 'date'):
-            check_date_naive = check_date.replace(tzinfo=None) if check_date.tzinfo else check_date
-        else:
-            check_date_naive = check_date
-
-        # Check start date - use first_power_date if set, otherwise fallback to start_date
-        # first_power_date represents when the unit first generated power (earliest data date)
-        # start_date represents when the unit officially started operations
-        effective_start = unit_info.get('first_power_date') or unit_info.get('start_date')
-        if effective_start:
-            # Convert to datetime if it's a date object
-            if not isinstance(effective_start, datetime):
-                effective_start = datetime.combine(effective_start, datetime.min.time())
-            # Remove timezone info if present
-            if hasattr(effective_start, 'tzinfo') and effective_start.tzinfo:
-                effective_start = effective_start.replace(tzinfo=None)
-            if check_date_naive < effective_start:
-                return False
-
-        # Check end date
-        end_date = unit_info.get('end_date')
-        if end_date:
-            # Convert to datetime if it's a date object
-            if not isinstance(end_date, datetime):
-                end_date = datetime.combine(end_date, datetime.max.time())
-            # Remove timezone info if present
-            if hasattr(end_date, 'tzinfo') and end_date.tzinfo:
-                end_date = end_date.replace(tzinfo=None)
-            if check_date_naive > end_date:
-                return False
-
-        return True
-
-    def get_operational_unit(self, cache_entry, check_date: datetime):
-        """Get the operational unit from cache entry.
-
-        Cache entry can be:
-        - A single unit dict (for codes with only one unit)
-        - A list of unit dicts (for codes with multiple phases)
-
-        Args:
-            cache_entry: Entry from generation_units_cache
-            check_date: Date to check
-
-        Returns:
-            The operational unit info dict, or None
-        """
-        if not cache_entry:
-            return None
-
-        # Handle single unit
-        if isinstance(cache_entry, dict):
-            if self.is_unit_operational(cache_entry, check_date):
-                return cache_entry
-            return None
-
-        # Handle list of units (multiple phases)
-        if isinstance(cache_entry, list):
-            for unit_info in cache_entry:
-                if self.is_unit_operational(unit_info, check_date):
-                    return unit_info
-            return None
-
-        return None
+    def get_operational_unit(self, cache_entry, check_date: datetime, preferred_unit_id: Optional[int] = None):
+        """Resolve which generation unit a record belongs to. See unit_resolver."""
+        return resolve_operational_unit(
+            cache_entry, check_date,
+            preferred_unit_id=preferred_unit_id,
+            ambiguous_keys_warned=self._ambiguous_keys_warned,
+        )
 
     async def process_source_for_day(
         self,
@@ -1067,13 +1029,22 @@ class DailyGenerationProcessor:
                 hourly_data[key] = {
                     'generation_mwh': 0,
                     'raw_data_ids': [],
-                    'data_points': 0
+                    'data_points': 0,
+                    'preferred_unit_id': None,
                 }
 
             # Sum generation values for the same unit/hour
             hourly_data[key]['generation_mwh'] += float(record.value_extracted)
             hourly_data[key]['raw_data_ids'].append(record.id)
             hourly_data[key]['data_points'] += 1
+
+            # Capture pre-tagged generation_unit_id from NVE ingest's
+            # find_operational_unit (see import_parallel_optimized.py:225).
+            # This is the authoritative attribution when present.
+            if record.data and 'generation_unit_id' in record.data:
+                tagged_id = record.data.get('generation_unit_id')
+                if tagged_id is not None:
+                    hourly_data[key]['preferred_unit_id'] = int(tagged_id)
 
         # Create hourly records from aggregated data
         hourly_records = []
@@ -1083,8 +1054,10 @@ class DailyGenerationProcessor:
             unit_key = f"NVE:{identifier}"
             cache_entry = self.generation_units_cache.get(unit_key)
 
-            # Get the operational unit (handles both single units and multiple phases)
-            unit_info = self.get_operational_unit(cache_entry, hour)
+            # Resolve unit, preferring the pre-tagged id when available.
+            unit_info = self.get_operational_unit(
+                cache_entry, hour, preferred_unit_id=data['preferred_unit_id']
+            )
 
             if unit_info:
                 capacity_mw = unit_info.get('capacity_mw')
@@ -1099,7 +1072,8 @@ class DailyGenerationProcessor:
                 raw_data_ids=data['raw_data_ids'],
                 data_points=data['data_points'],
                 expected_points=1,  # NVE should have 1 aggregated value per hour
-                metadata={}
+                metadata={},
+                preferred_unit_id=data['preferred_unit_id'],
             ))
 
         return hourly_records
@@ -1193,7 +1167,9 @@ class DailyGenerationProcessor:
             # Moved earlier so we can check commercial_operational_date for capacity factor
             unit_key = f"{source}:{record.identifier}"
             cache_entry = self.generation_units_cache.get(unit_key)
-            unit_info = self.get_operational_unit(cache_entry, record.hour)
+            unit_info = self.get_operational_unit(
+                cache_entry, record.hour, preferred_unit_id=record.preferred_unit_id
+            )
 
             if not unit_info:
                 logger.warning(

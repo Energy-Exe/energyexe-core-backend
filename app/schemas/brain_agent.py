@@ -12,6 +12,8 @@ BrainModelType = Literal["claude-sonnet-4-6", "claude-opus-4-6"]
 
 DEFAULT_BRAIN_MODEL = "claude-sonnet-4-6"
 
+AgentSourceType = Literal["admin", "client"]
+
 
 class AgentChatRequest(BaseModel):
     """Request body for brain agent chat."""
@@ -28,6 +30,13 @@ class AgentChatRequest(BaseModel):
     conversation_history: Optional[List[Any]] = Field(
         default=None,
         description="Prior messages for context when resuming a conversation with a new session.",
+    )
+    source: Optional[AgentSourceType] = Field(
+        default=None,
+        description=(
+            "Caller surface: 'admin' for the internal admin UI, 'client' for the client portal. "
+            "Clients are always forced to 'client' regardless of this value. Admins default to 'admin'."
+        ),
     )
 
 

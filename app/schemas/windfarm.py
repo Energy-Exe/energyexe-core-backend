@@ -111,9 +111,22 @@ class CountrySummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class BidzoneSummary(BaseModel):
+    id: int
+    code: str
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class WindfarmListItem(Windfarm):
     country: Optional[CountrySummary] = None
+    bidzone: Optional[BidzoneSummary] = None
     owners: List[OwnerSummary] = []
+    # #18 — most recent hour with generation_data for this windfarm.
+    # Used by the FE to surface the "data lag" hint on the list and the
+    # Overview tab. NULL if no generation data exists for the windfarm.
+    latest_generation_data_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 

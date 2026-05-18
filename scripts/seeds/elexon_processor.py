@@ -46,6 +46,7 @@ from app.models.generation_data import GenerationDataRaw, GenerationData
 from app.models.generation_unit import GenerationUnit
 from app.models.windfarm import Windfarm
 from app.utils.ramp_up import is_in_ramp_up_period
+from app.utils.unit_resolver import resolve_operational_unit
 
 # Configure logging
 logging.basicConfig(
@@ -78,7 +79,11 @@ class ElexonProcessor:
 
     def __init__(self, session: AsyncSession):
         self.db = session
-        self.generation_units_cache: Dict[str, Dict] = {}
+        # Cache values are dicts when a code maps to one active unit, lists when
+        # multiple active units share a code (5 ELEXON BMUs do this — Kilbraur,
+        # Millennium, Griffin & Calliacher x2, Mid Hill).
+        self.generation_units_cache: Dict[str, Any] = {}
+        self._ambiguous_keys_warned: set = set()
         self.stats = {
             'days_processed': 0,
             'hours_created': 0,
@@ -87,11 +92,13 @@ class ElexonProcessor:
         }
 
     async def load_generation_units(self, windfarm_ids: Optional[List[int]] = None):
-        """Load ELEXON generation units into cache."""
+        """Load active ELEXON generation units into cache."""
         query = (
             select(GenerationUnit, Windfarm)
             .outerjoin(Windfarm, GenerationUnit.windfarm_id == Windfarm.id)
             .where(GenerationUnit.source == 'ELEXON')
+            .where(GenerationUnit.is_active == True)
+            .order_by(GenerationUnit.code, GenerationUnit.start_date, GenerationUnit.id)
         )
 
         if windfarm_ids:
@@ -101,11 +108,14 @@ class ElexonProcessor:
         rows = result.all()
 
         for unit, windfarm in rows:
-            self.generation_units_cache[f"ELEXON:{unit.code}"] = {
+            key = f"ELEXON:{unit.code}"
+            unit_info = {
                 'id': unit.id,
                 'windfarm_id': unit.windfarm_id,
                 'capacity_mw': float(unit.capacity_mw) if unit.capacity_mw else None,
                 'name': unit.name,
+                'code': unit.code,
+                'source': 'ELEXON',
                 'start_date': unit.start_date,
                 'end_date': unit.end_date,
                 'first_power_date': unit.first_power_date,
@@ -118,8 +128,15 @@ class ElexonProcessor:
                 'windfarm_commercial_operational_date': windfarm.commercial_operational_date if windfarm else None,
                 'windfarm_ramp_up_end_date': windfarm.ramp_up_end_date if windfarm else None,
             }
+            existing = self.generation_units_cache.get(key)
+            if existing is None:
+                self.generation_units_cache[key] = unit_info
+            elif isinstance(existing, dict):
+                self.generation_units_cache[key] = [existing, unit_info]
+            else:
+                existing.append(unit_info)
 
-        logger.info(f"Loaded {len(self.generation_units_cache)} ELEXON generation units")
+        logger.info(f"Loaded ELEXON generation units for {len(self.generation_units_cache)} unique BMU codes")
 
     def calculate_utc_hour(self, settlement_date_str: str, settlement_period: int) -> datetime:
         """
@@ -322,8 +339,12 @@ class ElexonProcessor:
             boav = boav_groups.get((hour, identifier), [])
             curtailed_mwh = sum(abs(float(r.value_extracted)) for r in boav if r.value_extracted is not None)
 
-            # Get unit info
-            unit_info = self.generation_units_cache.get(f"ELEXON:{identifier}", {})
+            # Resolve active operational unit at this hour.
+            unit_info = resolve_operational_unit(
+                self.generation_units_cache.get(f"ELEXON:{identifier}"),
+                hour,
+                ambiguous_keys_warned=self._ambiguous_keys_warned,
+            ) or {}
 
             hourly_records.append(HourlyRecord(
                 hour=hour,
@@ -348,7 +369,11 @@ class ElexonProcessor:
             if curtailed_mwh == 0:
                 continue
 
-            unit_info = self.generation_units_cache.get(f"ELEXON:{identifier}", {})
+            unit_info = resolve_operational_unit(
+                self.generation_units_cache.get(f"ELEXON:{identifier}"),
+                hour,
+                ambiguous_keys_warned=self._ambiguous_keys_warned,
+            ) or {}
 
             hourly_records.append(HourlyRecord(
                 hour=hour,
@@ -433,10 +458,13 @@ class ElexonProcessor:
             completeness = min(1.0, record.data_points / 2)  # Expected 2 half-hours
             quality_score = 1.0 if record.data_points >= 2 else (0.5 if record.data_points == 1 else 0.0)
 
-            # Check ramp-up period
+            # Check ramp-up period — resolve against active cache.
             ramp_up_flag = False
-            unit_cache_key = f"ELEXON:{record.identifier}"
-            unit_info = self.generation_units_cache.get(unit_cache_key)
+            unit_info = resolve_operational_unit(
+                self.generation_units_cache.get(f"ELEXON:{record.identifier}"),
+                record.hour,
+                ambiguous_keys_warned=self._ambiguous_keys_warned,
+            )
             if unit_info:
                 ramp_up_flag = is_in_ramp_up_period(unit_info, record.hour)
 
@@ -493,12 +521,18 @@ class ElexonProcessor:
             identifiers = await self.get_windfarm_codes(windfarm_ids)
             if not identifiers:
                 return {'error': 'No generation units found for windfarms'}
-            # Get generation_unit_ids for clearing
-            generation_unit_ids = [
-                self.generation_units_cache[code]['id']
-                for code in identifiers
-                if code in self.generation_units_cache
-            ]
+            # Get generation_unit_ids for clearing — cache keys are "ELEXON:{code}"
+            # and values may be a single dict or a list (for codes shared by
+            # multiple active units).
+            generation_unit_ids = []
+            for code in identifiers:
+                entry = self.generation_units_cache.get(f"ELEXON:{code}")
+                if entry is None:
+                    continue
+                if isinstance(entry, dict):
+                    generation_unit_ids.append(entry['id'])
+                else:
+                    generation_unit_ids.extend(u['id'] for u in entry)
 
         # Fetch raw data
         b1610_data = await self.fetch_raw_b1610_data(day_start, day_end, identifiers)

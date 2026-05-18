@@ -74,6 +74,32 @@ class NormalisationResponse(BaseModel):
     norm_index_p10: Optional[float] = None
 
 
+class WindNormalisedHourPoint(BaseModel):
+    """Per-hour wind-normalised generation point for the client scatter chart.
+
+    Unblocks faisal-energyexe/energyexe-client-ui#25 — the Actual /
+    Wind-normalised toggle. `actual_mwh` plots as the current series;
+    `wind_normalised_mwh` plots as the new series. Hours without a power-curve
+    value or with wind_speed below the normalisation floor (4 m/s) are
+    omitted entirely so the chart only shows qualifying hours.
+    """
+    hour: datetime
+    actual_mwh: float
+    expected_mwh: float
+    wind_normalised_mwh: float
+    norm_ratio: float
+    wind_speed: float
+
+
+class WindNormalisedHourlyResponse(BaseModel):
+    windfarm_id: int
+    reference_curve: str  # 'q50' or 'q90'
+    reference_wind_speed_mps: float
+    long_run_avg_norm_ratio: float
+    qualifying_hours: int
+    points: List[WindNormalisedHourPoint]
+
+
 class DegradationResponse(BaseModel):
     windfarm_id: int
     reference_curve: str

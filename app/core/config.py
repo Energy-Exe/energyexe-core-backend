@@ -2,10 +2,9 @@
 
 import os
 import secrets
-from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import AnyHttpUrl, PostgresDsn, field_validator
+from pydantic import PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,8 +35,11 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "https://dashboard.energyexe.com",
+        "https://app.energyexe.com",
         "http://localhost:5173",  # Vite dev server
         "http://localhost:3000",  # Alternative dev server
+        "http://localhost:3005",  # Admin UI dev
+        "http://localhost:3006",  # Client UI dev
     ]
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
@@ -69,7 +71,7 @@ class Settings(BaseSettings):
     DB_POOL_PRE_PING: bool = True  # Test connections before use
     DB_POOL_RECYCLE: int = 300  # Recycle connections after 5 minutes
     DB_POOL_TIMEOUT: int = 30  # Wait max 30s for connection from pool
-    DB_COMMAND_TIMEOUT: int = 60  # Query timeout: 60 seconds
+    DB_COMMAND_TIMEOUT: int = 180  # Query timeout: 3 minutes (large analytics queries on big zones can run 60–120s)
 
     # Redis (optional)
     REDIS_URL: Optional[str] = None
@@ -81,7 +83,7 @@ class Settings(BaseSettings):
 
     # Client Portal settings
     CLIENT_PORTAL_URL: str = "http://localhost:3000"
-    ADMIN_PORTAL_URL: str = "http://localhost:5173"
+    ADMIN_PORTAL_URL: str = "http://localhost:3005"
     EMAIL_VERIFICATION_EXPIRE_HOURS: int = 24
     PASSWORD_RESET_EXPIRE_HOURS: int = 1
     INVITATION_EXPIRE_DAYS: int = 7
@@ -118,11 +120,15 @@ class Settings(BaseSettings):
     LLM_CACHE_DURATION_HOURS: int = 24
     LLM_MAX_COST_PER_REPORT: float = 0.50  # USD
 
-    # Brain (AI Chat Agent) Configuration
-    BRAIN_PROVIDER: str = "claude"  # claude, openai
+    # Brain Agent default model (used as fallback when caller omits one)
     BRAIN_MODEL: str = "claude-sonnet-4-6"
-    BRAIN_MAX_TOKENS: int = 4096
-    BRAIN_TEMPERATURE: float = 0.3
+
+    # Brain Agent — Postgres read-only role.
+    # When the password is set, the agent's bash env uses these credentials so
+    # every DB connection it spawns is grant-restricted to SELECT only. See
+    # alembic migration a1b2c3d4e5f6_add_brain_agent_ro_role.py.
+    BRAIN_AGENT_RO_USER: str = "brain_agent_ro"
+    BRAIN_AGENT_RO_PASSWORD: str = ""
 
     # Brain Agent — source code access for codebase exploration
     CODE_REPOS_DIR: str = "/tmp/energyexe-repos"
@@ -161,6 +167,31 @@ class Settings(BaseSettings):
         if url.startswith("postgresql+asyncpg://"):
             return url.replace("postgresql+asyncpg://", "postgresql://")
         return url
+
+    @property
+    def database_url_agent_ro(self) -> Optional[str]:
+        """Sync Postgres URL using the brain-agent read-only role.
+
+        Returns ``None`` when ``BRAIN_AGENT_RO_PASSWORD`` is not configured —
+        the caller falls back to the regular URL with a session-level read-only
+        guard. Once the password is set, the agent always connects with
+        ``BRAIN_AGENT_RO_USER`` so the database itself enforces SELECT-only.
+        """
+        if not self.BRAIN_AGENT_RO_PASSWORD:
+            return None
+        if not self.DATABASE_URL:
+            return None
+
+        from urllib.parse import quote, urlparse, urlunparse
+
+        base = self.database_url_sync  # already in sync form
+        parsed = urlparse(base)
+        host = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port else ""
+        user = quote(self.BRAIN_AGENT_RO_USER, safe="")
+        pw = quote(self.BRAIN_AGENT_RO_PASSWORD, safe="")
+        netloc = f"{user}:{pw}@{host}{port}"
+        return urlunparse(parsed._replace(netloc=netloc))
 
     @property
     def database_url_async(self) -> str:

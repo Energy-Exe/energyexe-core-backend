@@ -6,6 +6,7 @@ These tests run against the actual API server and test endpoint functionality.
 import pytest
 import httpx
 import os
+import time
 from datetime import datetime, timedelta
 
 # API configuration
@@ -22,8 +23,8 @@ def api_client():
 def auth_headers(api_client):
     """Get authentication headers for protected endpoints."""
     response = api_client.post("/auth/login", json={
-        "email": os.getenv("TEST_USER_EMAIL", "admin@energyexe.com"),
-        "password": os.getenv("TEST_USER_PASSWORD", "admin123")
+        "username": os.getenv("TEST_USER_USERNAME", "admin"),
+        "password": os.getenv("TEST_USER_PASSWORD", "adminenergyexe"),
     })
 
     if response.status_code != 200:
@@ -98,6 +99,41 @@ class TestPriceStatisticsAPI:
 
         # Should return 404 or empty data
         assert response.status_code in [200, 404]
+
+
+class TestPriceStatisticsNegativeHours:
+    """#round2-5 — /statistics must return negative_hours_count + negative_hours_pct.
+
+    Bug history: the FE Negative Hours % tile divided by 24 (priceProfile is by
+    hour-of-day, not real hours), so any zone with intra-day negative spikes
+    showed 100%. Solution: BE computes the percentage from real hours.
+    """
+
+    def test_negative_hours_fields_present_and_in_range(
+        self, api_client, auth_headers, test_windfarm_id, date_range
+    ):
+        response = api_client.get(
+            f"/prices/windfarms/{test_windfarm_id}/statistics",
+            params=date_range,
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "negative_hours_count" in data, "negative_hours_count missing"
+        assert "negative_hours_pct" in data, "negative_hours_pct missing"
+
+        count = data["negative_hours_count"]
+        pct = data["negative_hours_pct"]
+        assert isinstance(count, int)
+        assert isinstance(pct, (int, float))
+
+        assert count >= 0
+        assert 0.0 <= pct <= 100.0, f"negative_hours_pct={pct} out of [0,100]"
+        assert count <= data["hours_with_data"], (
+            f"negative_hours_count={count} cannot exceed hours_with_data="
+            f"{data['hours_with_data']}"
+        )
 
 
 class TestPriceCoverageAPI:
@@ -587,3 +623,156 @@ class TestPortfolioRevenueAPIPerformance:
         assert response.status_code == 200
         # Should complete in less than 20 seconds
         assert elapsed_time < 20.0, f"Capture rates endpoint took too long: {elapsed_time:.2f}s"
+
+
+# Bidzone IDs we can rely on in this database.
+GB_BIDZONE_ID = 81  # 10YGB----------A — large zone (155 windfarms, ELEXON-priced)
+EAST_ANGLIA_ONE_ID = 7371  # GB windfarm with full 1y price+generation coverage
+
+
+class TestOverallCaptureRateIsMwhWeighted:
+    """Item #29 in the FE feedback PDF: the "Overall: XX%" badge on the
+    capture-rate trend chart must be the MWh-weighted average across the
+    period, not a simple average of monthly capture rates.
+    """
+
+    def test_overall_equals_revenue_div_generation_div_market_avg(
+        self, api_client, auth_headers
+    ):
+        params = {
+            "start_date": "2025-04-29",
+            "end_date": "2026-04-29",
+            "aggregation": "month",
+            "price_type": "day_ahead",
+        }
+        response = api_client.get(
+            f"/prices/analytics/capture-rate/{EAST_ANGLIA_ONE_ID}",
+            params=params,
+            headers=auth_headers,
+        )
+        assert response.status_code == 200, response.text
+        overall = response.json()["overall"]
+        gen = overall["total_generation_mwh"]
+        rev = overall["total_revenue_eur"]
+        ach = overall["achieved_price"]
+        mkt = overall["market_average_price"]
+        cr = overall["capture_rate"]
+        # Weighted achieved price must match revenue / generation.
+        assert ach == pytest.approx(rev / gen, rel=1e-6)
+        # Capture rate must be (weighted achieved) / market_avg.
+        assert cr == pytest.approx(ach / mkt, rel=1e-6)
+
+
+class TestZoneCaptureRateByMonth:
+    """#31 — bidzone capture rate aggregated by month, for the spider chart."""
+
+    def test_gb_zone_returns_monthly_axes(self, api_client, auth_headers):
+        # GB bidzone id = 81; fully populated.
+        response = api_client.get(
+            "/prices/analytics/zone-capture-rate",
+            params={
+                "bidzone_id": 81,
+                "start_date": "2024-01-01",
+                "end_date": "2025-01-01",
+            },
+            headers=auth_headers,
+            timeout=240.0,
+        )
+        assert response.status_code == 200, response.text
+
+        data = response.json()
+        assert data["bidzone_id"] == 81
+        assert data["bidzone_code"] == "10YGB----------A"
+
+        axes = data["axes"]
+        assert isinstance(axes, list)
+        # Expect roughly one axis per month in the year — allow ±1 for BST edge effects.
+        assert 11 <= len(axes) <= 13, f"Expected ~12 monthly axes, got {len(axes)}"
+
+        # Each axis has the expected fields and capture_rate is in a sane range.
+        for axis in axes:
+            for key in (
+                "month",
+                "year",
+                "label",
+                "capture_rate",
+                "achieved_price",
+                "market_average_price",
+                "total_generation_mwh",
+                "total_revenue",
+                "windfarm_count",
+            ):
+                assert key in axis, f"axis missing key {key}: {axis}"
+            assert 1 <= axis["month"] <= 12
+            if axis["capture_rate"] is not None:
+                # Real capture rates can dip below market or spike above; bound generously.
+                assert 0 < axis["capture_rate"] < 2, (
+                    f"capture_rate out of plausible bounds: {axis['capture_rate']}"
+                )
+
+        # At least one axis should have a non-null capture rate (data is populated).
+        non_null = [a for a in axes if a["capture_rate"] is not None]
+        assert len(non_null) >= 6, (
+            "Expected at least half the months to have a non-null capture rate."
+        )
+
+    def test_unknown_bidzone_returns_empty_axes(self, api_client, auth_headers):
+        # A bidzone with no windfarms should return 200 and empty axes — not 500.
+        response = api_client.get(
+            "/prices/analytics/zone-capture-rate",
+            params={
+                "bidzone_id": 72,  # Romania, no windfarms in the seed.
+                "start_date": "2024-01-01",
+                "end_date": "2025-01-01",
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["axes"] == []
+
+
+class TestCompareCaptureRatesByBidzone:
+    """Regression tests for /prices/analytics/compare-capture-rates.
+
+    Item #37b in the client FE feedback PDF: the GB peer chart was
+    returning a 500. Root cause: the SQL query for ELEXON-priced zones
+    de-facto runs over 11M+ price rows; the default 60s asyncpg timeout
+    fired. The fixes were (a) dedupe market_avg with DISTINCT ON so each
+    hour is averaged once instead of 155x, and (b) raise the default
+    DB_COMMAND_TIMEOUT to 180s for analytics workloads.
+    """
+
+    def test_gb_bidzone_returns_windfarms_within_3min(self, api_client, auth_headers):
+        """GB compare-capture-rates must succeed and return >100 windfarms."""
+        # 1-year window — the FE's default.
+        end = datetime(2026, 4, 29)
+        start = datetime(2025, 4, 29)
+        client = httpx.Client(base_url=API_BASE_URL, timeout=200.0)
+        try:
+            t0 = time.time()
+            response = client.get(
+                "/prices/analytics/compare-capture-rates",
+                params={
+                    "bidzone_id": GB_BIDZONE_ID,
+                    "start_date": start.strftime("%Y-%m-%d"),
+                    "end_date": end.strftime("%Y-%m-%d"),
+                },
+                headers=auth_headers,
+            )
+            elapsed = time.time() - t0
+        finally:
+            client.close()
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert "windfarms" in data
+        # GB has 155 windfarms; expect at least 100 to have generation+price data.
+        assert len(data["windfarms"]) >= 100
+        # First entry must have populated capture_rate.
+        first = data["windfarms"][0]
+        assert first.get("capture_rate") is not None
+        assert first.get("achieved_price") is not None
+        assert first.get("market_average_price") is not None
+        # Sanity: did NOT take over the new 180s budget.
+        assert elapsed < 180, f"compare-capture-rates took {elapsed:.1f}s"

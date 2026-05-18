@@ -40,6 +40,7 @@ from app.models.generation_unit import GenerationUnit
 from app.models.windfarm import Windfarm
 from app.models.turbine_unit import TurbineUnit
 from app.utils.ramp_up import is_in_ramp_up_period
+from app.utils.unit_resolver import resolve_operational_unit
 
 # Configure logging
 logging.basicConfig(
@@ -70,6 +71,7 @@ class MonthlyGenerationProcessor:
         self.dry_run = dry_run
         self.generation_units_cache = {}
         self.turbine_units_cache = {}  # For ENERGISTYRELSEN GSRN codes
+        self._ambiguous_keys_warned: set = set()
         self.stats = {
             'raw_records_processed': 0,
             'monthly_records_created': 0,
@@ -133,21 +135,31 @@ class MonthlyGenerationProcessor:
         }
 
     async def load_generation_units(self):
-        """Load generation units into memory for faster lookups."""
+        """Load active generation units into memory for faster lookups.
+
+        Multiple active units can share a source:code (EIA's plant-level code
+        with per-generator rows — e.g., Horse Hollow 56291 has 4 active gens),
+        so duplicates are stored as a list and disambiguated by
+        resolve_operational_unit().
+        """
 
         result = await self.db.execute(
             select(GenerationUnit, Windfarm)
             .outerjoin(Windfarm, GenerationUnit.windfarm_id == Windfarm.id)
+            .where(GenerationUnit.is_active == True)
+            .order_by(GenerationUnit.code, GenerationUnit.start_date, GenerationUnit.id)
         )
         rows = result.all()
 
         for unit, windfarm in rows:
             key = f"{unit.source}:{unit.code}"
-            self.generation_units_cache[key] = {
+            unit_info = {
                 'id': unit.id,
                 'windfarm_id': unit.windfarm_id,
                 'capacity_mw': float(unit.capacity_mw) if unit.capacity_mw else None,
                 'name': unit.name,
+                'code': unit.code,
+                'source': unit.source,
                 'start_date': unit.start_date,
                 'end_date': unit.end_date,
                 'first_power_date': unit.first_power_date,
@@ -159,8 +171,15 @@ class MonthlyGenerationProcessor:
                 'windfarm_commercial_operational_date': windfarm.commercial_operational_date if windfarm else None,
                 'windfarm_ramp_up_end_date': windfarm.ramp_up_end_date if windfarm else None,
             }
+            existing = self.generation_units_cache.get(key)
+            if existing is None:
+                self.generation_units_cache[key] = unit_info
+            elif isinstance(existing, dict):
+                self.generation_units_cache[key] = [existing, unit_info]
+            else:
+                existing.append(unit_info)
 
-        logger.info(f"Loaded {len(self.generation_units_cache)} generation units")
+        logger.info(f"Loaded generation units for {len(self.generation_units_cache)} unique source:code keys")
 
     async def load_turbine_units(self):
         """Load turbine units with turbine model capacity for ENERGISTYRELSEN GSRN code lookups."""
@@ -259,14 +278,28 @@ class MonthlyGenerationProcessor:
         for record in raw_data:
             # Get unit info
             unit_key = f"EIA:{record.identifier}"
-            unit_info = self.generation_units_cache.get(unit_key)
-
-            if not unit_info:
-                logger.debug(f"Unit not found: EIA:{record.identifier}")
-                continue
+            cache_entry = self.generation_units_cache.get(unit_key)
 
             # Parse data JSON (already a dict from JSONB field)
             data_json = record.data if isinstance(record.data, dict) else {}
+
+            # Honour any pre-tagged unit id from the raw record's JSONB.
+            preferred_unit_id = data_json.get('generation_unit_id')
+            if preferred_unit_id is not None:
+                try:
+                    preferred_unit_id = int(preferred_unit_id)
+                except (TypeError, ValueError):
+                    preferred_unit_id = None
+
+            unit_info = resolve_operational_unit(
+                cache_entry, record.period_start,
+                preferred_unit_id=preferred_unit_id,
+                ambiguous_keys_warned=self._ambiguous_keys_warned,
+            )
+
+            if not unit_info:
+                logger.debug(f"Unit not found or not active: EIA:{record.identifier}")
+                continue
 
             # Create monthly record
             monthly_record = MonthlyRecord(
@@ -281,7 +314,8 @@ class MonthlyGenerationProcessor:
                     'fuel_type': data_json.get('fuel_type', 'WND'),
                     'month_name': data_json.get('month'),
                     'year': data_json.get('year'),
-                    'source': 'EIA'
+                    'source': 'EIA',
+                    'generation_unit_id': unit_info['id'],
                 }
             )
 
@@ -406,11 +440,17 @@ class MonthlyGenerationProcessor:
             windfarm_id = record.metadata.get('windfarm_id') if record.metadata else None
             generation_unit_id = None
 
-            # If not in metadata (e.g., EIA), try generation_units_cache
+            # If not in metadata (e.g., EIA), resolve from cache (filtered to active units).
             unit_info = None
             if not turbine_unit_id and not windfarm_id:
                 unit_key = f"{source}:{record.identifier}"
-                unit_info = self.generation_units_cache.get(unit_key)
+                cache_entry = self.generation_units_cache.get(unit_key)
+                preferred = record.metadata.get('generation_unit_id') if record.metadata else None
+                unit_info = resolve_operational_unit(
+                    cache_entry, record.month,
+                    preferred_unit_id=preferred,
+                    ambiguous_keys_warned=self._ambiguous_keys_warned,
+                )
                 if unit_info:
                     generation_unit_id = unit_info['id']
                     windfarm_id = unit_info['windfarm_id']

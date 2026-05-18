@@ -1,6 +1,6 @@
 """API endpoints for the performance analysis pipeline."""
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,6 +13,7 @@ from app.models.performance_anomaly import PerformanceAnomaly
 from app.models.performance_summary import PerformanceSummary
 from app.models.power_curve_bin import PowerCurveBin
 from app.models.user import User
+from app.models.windfarm import Windfarm
 from app.schemas.performance_pipeline import (
     DegradationResponse,
     GenerationConcentrationResponse,
@@ -27,6 +28,8 @@ from app.schemas.performance_pipeline import (
     PowerCurveResponse,
     PPAScenarioRequest,
     PPAScenarioResponse,
+    WindNormalisedHourPoint,
+    WindNormalisedHourlyResponse,
 )
 
 logger = structlog.get_logger()
@@ -333,6 +336,48 @@ async def get_degradation(
     return responses
 
 
+@router.get("/anomalies/recent", response_model=List[Dict[str, Any]])
+async def get_recent_anomalies(
+    limit: int = Query(10, le=100),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Most-recent flagged hours across all windfarms (for dashboard widgets)."""
+    query = (
+        select(
+            PerformanceAnomaly.id,
+            PerformanceAnomaly.windfarm_id,
+            PerformanceAnomaly.hour,
+            PerformanceAnomaly.anomaly_type,
+            PerformanceAnomaly.actual_p_pu,
+            PerformanceAnomaly.expected_p_pu,
+            PerformanceAnomaly.lost_mwh,
+            PerformanceAnomaly.lost_eur,
+            PerformanceAnomaly.run_id,
+            Windfarm.name.label("windfarm_name"),
+        )
+        .join(Windfarm, PerformanceAnomaly.windfarm_id == Windfarm.id)
+        .order_by(PerformanceAnomaly.hour.desc())
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    return [
+        {
+            "id": r.id,
+            "windfarm_id": r.windfarm_id,
+            "windfarm_name": r.windfarm_name,
+            "hour": r.hour.isoformat() if r.hour else None,
+            "anomaly_type": r.anomaly_type,
+            "actual_p_pu": float(r.actual_p_pu) if r.actual_p_pu else None,
+            "expected_p_pu": float(r.expected_p_pu) if r.expected_p_pu else None,
+            "lost_mwh": float(r.lost_mwh) if r.lost_mwh else None,
+            "lost_eur": float(r.lost_eur) if r.lost_eur else None,
+            "run_id": r.run_id,
+        }
+        for r in result.fetchall()
+    ]
+
+
 @router.get("/anomalies/{windfarm_id}", response_model=List[PerformanceAnomalyResponse])
 async def get_anomalies(
     windfarm_id: int,
@@ -597,3 +642,128 @@ async def get_wind_normalisation_monthly(
         for s in rows
         if s.norm_ratio_p50 is not None or s.norm_ratio_p10 is not None
     ]
+
+
+@router.get(
+    "/wind-normalisation/{windfarm_id}/hourly",
+    response_model=WindNormalisedHourlyResponse,
+)
+async def get_wind_normalisation_hourly(
+    windfarm_id: int,
+    start_year: Optional[int] = Query(
+        None, description="Inclusive start year (defaults to all available)."
+    ),
+    end_year: Optional[int] = Query(
+        None, description="Inclusive end year (defaults to all available)."
+    ),
+    reference: str = Query(
+        "q50",
+        regex="^(q50|q90)$",
+        description="Power-curve reference quantile: q50 (median) or q90 (P10).",
+    ),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-hour wind-normalised generation series for a windfarm.
+
+    Unblocks the client portal's Actual / Wind-normalised scatter toggle
+    (faisal-energyexe/energyexe-client-ui#25). Computes per-hour values
+    on demand from the stored hourly generation, ERA5 wind, and the
+    windfarm's `overall_clean` power curve — no extra storage required.
+
+    For each qualifying hour (wind ≥ 4 m/s, curve value exists,
+    expected_mwh > 0):
+
+      expected_mwh = curve(wind_speed) × rated_mw
+      norm_ratio   = actual_mwh / expected_mwh
+      wind_normalised_mwh = norm_ratio × curve(mean_wind_speed) × rated_mw
+
+    `wind_normalised_mwh` is the value users should plot to "factor out
+    wind variability" — it is each hour's measured efficiency projected
+    onto the windfarm's long-run-mean wind speed, so the remaining
+    spread reflects performance, not weather.
+    """
+    from app.models.windfarm import Windfarm
+    from app.services.power_curve_service import PowerCurveService
+    from app.services.wind_normalisation_service import WindNormalisationService
+
+    # Resolve rated capacity.
+    wf_row = (
+        await db.execute(
+            select(Windfarm.nameplate_capacity_mw).where(Windfarm.id == windfarm_id)
+        )
+    ).first()
+    rated_mw = float(wf_row[0]) if wf_row and wf_row[0] is not None else None
+    if not rated_mw or rated_mw <= 0:
+        raise HTTPException(
+            status_code=404,
+            detail="Windfarm has no rated capacity recorded.",
+        )
+
+    norm_svc = WindNormalisationService(db)
+    curve_lookup = await norm_svc._load_curve_lookup(windfarm_id, reference)
+    if not curve_lookup:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No overall_clean power curve fitted for this windfarm at the "
+                f"'{reference}' reference. Run the performance pipeline first."
+            ),
+        )
+
+    pcs = PowerCurveService(db)
+    df = await pcs._load_hourly_data(windfarm_id, start_year, end_year, rated_mw)
+    if df.empty:
+        return WindNormalisedHourlyResponse(
+            windfarm_id=windfarm_id,
+            reference_curve=reference,
+            reference_wind_speed_mps=0.0,
+            long_run_avg_norm_ratio=0.0,
+            qualifying_hours=0,
+            points=[],
+        )
+
+    hourly = WindNormalisationService.compute_hourly_ratios(df, curve_lookup, rated_mw)
+    if hourly.empty:
+        return WindNormalisedHourlyResponse(
+            windfarm_id=windfarm_id,
+            reference_curve=reference,
+            reference_wind_speed_mps=float(df["wind_speed"].mean()) if "wind_speed" in df.columns else 0.0,
+            long_run_avg_norm_ratio=0.0,
+            qualifying_hours=0,
+            points=[],
+        )
+
+    # Reference wind = long-run mean across qualifying hours. Snap to nearest
+    # 1 m/s bin (matches the curve_lookup grid) so curve(reference_wind) is
+    # always defined.
+    ref_wind = float(hourly["wind_speed"].mean())
+    ref_bin = float(int(round(ref_wind)))
+    # Walk down if the rounded bin missing from the curve (rare — e.g. wind
+    # bin 6 m/s outside the fitted band).
+    while ref_bin not in curve_lookup and ref_bin > 0:
+        ref_bin -= 1.0
+    ref_expected_pu = curve_lookup.get(ref_bin, 0.0)
+    ref_expected_mw = ref_expected_pu * rated_mw
+    long_run_norm_ratio = float(hourly["norm_ratio"].mean())
+
+    points = [
+        WindNormalisedHourPoint(
+            hour=row.hour,
+            actual_mwh=float(row.actual_mw),
+            expected_mwh=float(row.expected_mw),
+            wind_normalised_mwh=float(row.norm_ratio) * ref_expected_mw,
+            norm_ratio=float(row.norm_ratio),
+            wind_speed=float(row.wind_speed),
+        )
+        for row in hourly.itertuples()
+    ]
+
+    return WindNormalisedHourlyResponse(
+        windfarm_id=windfarm_id,
+        reference_curve=reference,
+        reference_wind_speed_mps=ref_wind,
+        long_run_avg_norm_ratio=long_run_norm_ratio,
+        qualifying_hours=len(points),
+        points=points,
+    )

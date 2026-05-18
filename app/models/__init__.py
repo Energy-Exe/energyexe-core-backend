@@ -46,6 +46,7 @@ from .financial_entity import FinancialEntity
 from .windfarm_financial_entity import WindfarmFinancialEntity
 from .financial_data import FinancialData
 from .exchange_rate import ExchangeRate
+from .agent_question_template import AgentQuestionTemplate
 from .agent_thread import AgentThread
 from .opportunity import Opportunity, SchemaCode, Severity, Branch, OpportunityStatus
 from .power_curve_bin import PowerCurveBin
@@ -56,6 +57,7 @@ from .peer_group_aggregate import PeerGroupAggregate
 from .generation_concentration_summary import GenerationConcentrationSummary
 
 __all__ = [
+    "AgentQuestionTemplate",
     "AgentThread",
     "AuditLog",
     "Bidzone",
