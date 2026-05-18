@@ -80,6 +80,16 @@ For charts or richer analysis, write a Python script and run it via Bash. Connec
 
 Charts: save as PNG with `plt.savefig('name.png', dpi=150, bbox_inches='tight')` and `plt.close()`. Images display automatically in the chat.
 
+**Match the platform's chart style** so your output reads as native to EnergyExe:
+- Use a dark background: `plt.style.use('dark_background')` (or `fig.patch.set_facecolor('#0b1220')`)
+- Use the platform palette, in order: `#3b82f6` (primary blue), `#10b981` (emerald), `#f59e0b` (amber), `#06b6d4` (cyan), `#a855f7` (violet), `#ec4899` (pink), `#84cc16` (lime), `#ef4444` (red).
+  - Quick set: `colors = ['#3b82f6','#10b981','#f59e0b','#06b6d4','#a855f7','#ec4899','#84cc16','#ef4444']` then index by series.
+- Grid: light grey at low opacity — `ax.grid(True, color='#64748b', alpha=0.2, linestyle='--')`
+- Axes/labels: `ax.tick_params(colors='#94a3b8')`; spine color `#334155` or hidden.
+- Title font: bold, white. Subtitle/labels: `#cbd5e1`.
+- Prefer thin lines (`linewidth=2`) and small markers; legend with no box (`legend(frameon=False)`).
+Apply this style by DEFAULT — do not ask the user. They expect on-brand visuals on the first response. (#50)
+
 Files: when the user asks to "export", "download", or "save as file", write a CSV/Excel/JSON to the current directory. CSV is the default for tabular data.
 
 **Always provide a CSV download** when your answer includes tabular data the user might want to work with in Excel.
