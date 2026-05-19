@@ -41,8 +41,8 @@ MAX_CONCURRENT_SESSIONS = 20
 
 # Per-source agent profiles. Keys map to the AgentSourceType literal in schemas.
 #   - admin: existing behavior (unrestricted, model picks honored)
-#   - client: locked-down for client-portal users (forced Sonnet, lower turn cap,
-#     hard budget per run, narrower system prompt, user input wrapped in delimiters)
+#   - client: same capability envelope as admin; uses a client-flavoured system
+#     prompt with portfolio-as-anchor framing.
 PROFILES: Dict[str, Dict[str, Any]] = {
     "admin": {
         "system_prompt_file": "brain_agent_system.md",
@@ -54,11 +54,11 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     },
     "client": {
         "system_prompt_file": "brain_agent_system_client.md",
-        "model_default": "claude-sonnet-4-6",
-        "model_locked": True,
-        "max_turns": 15,
-        "max_budget_usd": 0.50,
-        "wrap_user_input": True,
+        "model_default": None,
+        "model_locked": False,
+        "max_turns": 25,
+        "max_budget_usd": None,
+        "wrap_user_input": False,
     },
 }
 
