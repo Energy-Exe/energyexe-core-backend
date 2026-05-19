@@ -23,6 +23,7 @@ from app.api.v1.endpoints import (
     generation,
     generation_units,
     import_jobs,
+    map as map_endpoints,
     market_balance_areas,
     opportunities,
     owners,
@@ -141,6 +142,9 @@ api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
 
 # Brain Agent (Claude Agent SDK) endpoints
 api_router.include_router(brain_agent.router, prefix="/brain-agent", tags=["brain-agent"])
+
+# Map page endpoints (client-ui #44 — performance scores, financial metrics, AI interpretation)
+api_router.include_router(map_endpoints.router, prefix="/map", tags=["map"])
 
 # Agent question templates (per-route suggested questions for client portal)
 api_router.include_router(
