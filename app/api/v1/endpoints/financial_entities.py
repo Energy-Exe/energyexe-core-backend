@@ -1,6 +1,6 @@
 """API endpoints for Financial Entity management."""
 
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
@@ -20,6 +20,16 @@ from app.schemas.financial_entity import (
 from app.services.financial_entity_service import FinancialEntityService
 
 router = APIRouter()
+
+
+@router.get("/by-windfarm/{windfarm_id}", response_model=List[FinancialEntity])
+async def list_entities_by_windfarm(
+    windfarm_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all financial entities linked to a windfarm."""
+    service = FinancialEntityService(db)
+    return await service.get_entities_by_windfarm(windfarm_id)
 
 
 @router.get("", response_model=FinancialEntityListResponse)
