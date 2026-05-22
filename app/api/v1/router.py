@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     audit_logs,
     auth,
     bidzones,
+    consents,
     brain_agent,
     cables,
     comparison,
@@ -55,6 +56,7 @@ api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
 api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["audit-logs"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
+api_router.include_router(consents.router, prefix="/consents", tags=["consents"])
 api_router.include_router(countries.router, prefix="/countries", tags=["countries"])
 api_router.include_router(states.router, prefix="/states", tags=["states"])
 api_router.include_router(regions.router, prefix="/regions", tags=["regions"])

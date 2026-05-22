@@ -62,6 +62,9 @@ class User(Base):
     notification_preferences = relationship(
         "NotificationPreference", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    consents = relationship(
+        "UserConsent", back_populates="user", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         """String representation of User."""

@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     INVITATION_EXPIRE_DAYS: int = 7
     SUPPORT_EMAIL: str = "hello@energyexe.com"
 
+    # Legal document versions — bumping either triggers re-acceptance on next
+    # login. Must match the corresponding constants in the client portal
+    # (energyexe-client-ui/src/lib/legal-versions.ts) and the bundled markdown.
+    TERMS_VERSION: str = "2026-05-13"
+    PRIVACY_VERSION: str = "2026-05-13"
+
     # Testing
     TESTING: bool = os.getenv("TESTING", "false").lower() == "true"
 

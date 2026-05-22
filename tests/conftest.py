@@ -18,6 +18,7 @@ from app.models.user import User
 from app.models.audit_log import AuditLog
 from app.models.invitation import Invitation
 from app.models.user_feature import UserFeature
+from app.models.user_consent import UserConsent
 
 # Force testing environment
 os.environ["TESTING"] = "true"
@@ -32,6 +33,7 @@ AUTH_TEST_TABLES = [
     AuditLog.__table__,
     Invitation.__table__,
     UserFeature.__table__,
+    UserConsent.__table__,
 ]
 
 
