@@ -23,6 +23,7 @@ from .turbine_model import TurbineModel
 from .turbine_unit import TurbineUnit
 from .user import User
 from .user_feature import UserFeature, DEFAULT_FEATURES
+from .user_consent import UserConsent
 from .portfolio import Portfolio, PortfolioItem, UserFavorite, PortfolioType
 from .alert import (
     AlertRule,
@@ -88,6 +89,7 @@ __all__ = [
     "TurbineUnit",
     "User",
     "UserFeature",
+    "UserConsent",
     "Portfolio",
     "PortfolioItem",
     "UserFavorite",
