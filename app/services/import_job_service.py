@@ -449,6 +449,7 @@ class ImportJobService:
             ),
             "ELEXON": (
                 f"python {base_path}/elexon/import_from_api.py --start {start_date} --end {end_date} && "
+                f"python {base_path}/elexon/import_acceptance_volumes.py --start {start_date} --end {end_date} && "
                 f"python {agg_path}/process_generation_data_robust.py --source ELEXON --start {start_date} --end {end_date}"
             ),
             "EIA": (

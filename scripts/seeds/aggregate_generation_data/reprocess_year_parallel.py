@@ -65,7 +65,7 @@ def process_month(args: tuple) -> dict:
             cmd,
             capture_output=True,
             text=True,
-            timeout=1800  # 30 min timeout per month
+            timeout=7200  # 2 hr timeout per month
         )
 
         if result.returncode == 0:
