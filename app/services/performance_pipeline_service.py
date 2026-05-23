@@ -130,6 +130,17 @@ class PerformancePipelineService:
             result["error"] = "No years with data"
             return result
 
+        logger.info(
+            "module_2_complete",
+            windfarm_id=windfarm_id,
+            years=years,
+            bins_stored=curves.get("bins_stored"),
+            overperformance_removed_pct=curves.get("overperformance_removed_pct"),
+            raw_rows=curves.get("raw_rows"),
+            clean_rows=curves.get("clean_rows"),
+            curve_rows=curves.get("curve_rows"),
+        )
+
         # Module 3: Anomaly detection — each year in its own SAVEPOINT so one bad
         # year doesn't poison the whole transaction.
         anomaly_svc = PerformanceAnomalyService(self.db)
@@ -150,6 +161,18 @@ class PerformancePipelineService:
                 anomaly_results[year] = {"error": str(e)}
         result["anomaly_detection"] = anomaly_results
 
+        # Summarise across years for easy log scraping during baseline / regression work.
+        ok_years = {y: r for y, r in anomaly_results.items() if isinstance(r, dict) and "error" not in r}
+        logger.info(
+            "module_3_complete",
+            windfarm_id=windfarm_id,
+            years_ok=list(ok_years.keys()),
+            years_failed=[y for y, r in anomaly_results.items() if isinstance(r, dict) and "error" in r],
+            total_underperf_hours=sum(int(r.get("underperf_hours") or 0) for r in ok_years.values()),
+            total_lost_mwh=round(sum(float(r.get("lost_mwh") or 0) for r in ok_years.values()), 3),
+            total_lost_eur=round(sum(float(r.get("lost_eur") or 0) for r in ok_years.values()), 2),
+        )
+
         # Module 4: Wind normalisation — each reference in its own SAVEPOINT.
         norm_svc = WindNormalisationService(self.db)
         norm_out: Dict[str, Any] = {}
@@ -163,6 +186,17 @@ class PerformancePipelineService:
                 logger.error("pipeline_normalisation_error", windfarm_id=windfarm_id, ref=ref, error=str(e))
                 norm_out[key] = {"error": str(e)}
         result["wind_normalisation"] = norm_out
+
+        logger.info(
+            "module_4_complete",
+            windfarm_id=windfarm_id,
+            p50_status="ok" if "error" not in norm_out.get("p50", {}) else norm_out["p50"].get("error"),
+            p50_qualifying_hours=norm_out.get("p50", {}).get("qualifying_hours"),
+            p50_years_computed=norm_out.get("p50", {}).get("years_computed"),
+            p10_status="ok" if "error" not in norm_out.get("p10", {}) else norm_out["p10"].get("error"),
+            p10_qualifying_hours=norm_out.get("p10", {}).get("qualifying_hours"),
+            p10_years_computed=norm_out.get("p10", {}).get("years_computed"),
+        )
 
         # Module 5: Degradation — each reference in its own SAVEPOINT.
         deg_svc = DegradationService(self.db)
@@ -178,6 +212,22 @@ class PerformancePipelineService:
                 deg_out[key] = {"error": str(e)}
         result["degradation"] = deg_out
 
+        # Module 5 is the bug-fix focus area — log all the key metrics so before/after
+        # snapshots can be diffed straight from log scrape during Milestone A rollout.
+        logger.info(
+            "module_5_complete",
+            windfarm_id=windfarm_id,
+            p50_slope_pct=(deg_out.get("p50") or {}).get("slope_pct_per_year"),
+            p50_ci_95=(deg_out.get("p50") or {}).get("ci_95"),
+            p50_r_squared=(deg_out.get("p50") or {}).get("r_squared"),
+            p50_p_value=(deg_out.get("p50") or {}).get("p_value"),
+            p50_data_points=(deg_out.get("p50") or {}).get("data_points"),
+            p10_slope_pct=(deg_out.get("p10") or {}).get("slope_pct_per_year"),
+            p10_ci_95=(deg_out.get("p10") or {}).get("ci_95"),
+            p10_r_squared=(deg_out.get("p10") or {}).get("r_squared"),
+            p10_data_points=(deg_out.get("p10") or {}).get("data_points"),
+        )
+
         # Module 6: Commercial metrics — each year in its own SAVEPOINT.
         commercial_ok = 0
         for year in years:
@@ -188,6 +238,14 @@ class PerformancePipelineService:
             except Exception as e:
                 logger.error("pipeline_commercial_error", windfarm_id=windfarm_id, year=year, error=str(e))
         result["commercial"] = {"years_computed": commercial_ok}
+
+        logger.info(
+            "module_6_complete",
+            windfarm_id=windfarm_id,
+            years_attempted=len(years),
+            years_computed=commercial_ok,
+            years_failed=len(years) - commercial_ok,
+        )
 
         # Spec item 3: Generation Concentration — runs after commercial because
         # it reuses the same hourly (gen, price) join. Each year in its own
