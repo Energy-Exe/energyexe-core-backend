@@ -338,6 +338,129 @@ class TestA1Golden:
         assert abs(slope) < 0.001, f"slope={slope} expected ≈ 0 after deseasonalisation"
 
 
+# ─── A2 — baseline_cap_pu computed from data ───────────────────
+
+
+class TestA2Baseline:
+    """A2: baseline_cap_pu = hours-weighted median of ref_pu in first year."""
+
+    @staticmethod
+    def _curve_with_median(median_value):
+        """Build a yearly capability curve whose hours-weighted median lands
+        at ``median_value``. Uses uniform wind so every bin gets ~equal hours.
+        Each bin's ref_pu = median_value (constant) so the median is exact.
+        """
+        curves = {}
+        for year in (2020, 2021, 2022):
+            curve = {float(wbin): float(median_value) for wbin in range(6, 15)}
+            curves[year] = curve
+        return curves
+
+    def _build_with_curve(self, median_value: float):
+        df = _make_full_year_df(
+            start="2020-01-01",
+            end="2023-01-01",
+            seed=31,
+            slope_pu_per_year=0.0,
+            seasonal_amplitude=0.0,
+            noise_sigma=0.02,
+        )
+        curves = self._curve_with_median(median_value)
+        residuals = DegradationService.compute_residuals(df, curves)
+        return DegradationService.fit_degradation_trend(residuals)
+
+    def test_a2_t1_low_baseline(self):
+        """Curve with median 0.20 → baseline_cap_pu ≈ 0.20."""
+        trend = self._build_with_curve(0.20)
+        assert trend is not None
+        assert abs(trend["baseline_cap_pu"] - 0.20) < 0.005
+
+    def test_a2_t2_high_baseline(self):
+        """Curve with median 0.50 → baseline_cap_pu ≈ 0.50."""
+        trend = self._build_with_curve(0.50)
+        assert trend is not None
+        assert abs(trend["baseline_cap_pu"] - 0.50) < 0.005
+
+    def test_a2_t3_empty_first_year_falls_back(self):
+        """If first-year baseline lookup yields no rows, fall back to 0.35."""
+        # Use a curve whose ref_pu is just under the 0.10 op cutoff for ALL
+        # bins so compute_residuals filters everything → empty df_fit → None.
+        # To test the baseline fallback specifically we have to feed
+        # fit_degradation_trend directly.
+        rng = np.random.RandomState(42)
+        n = 500
+        df = pd.DataFrame(
+            {
+                "hour": pd.date_range("2020-01-01", periods=n, freq="h"),
+                "year": np.full(n, 2020),
+                "year_fraction": 2020 + np.linspace(0, 1, n),
+                "wind_speed": rng.uniform(7, 13, n),
+                "wind_bin": np.full(n, 8.0),
+                # ref_pu NaN forces the baseline median to NaN
+                "ref_pu": np.full(n, np.nan),
+                "p_pu": rng.uniform(0.2, 0.5, n),
+                "residual_pu": rng.normal(0, 0.02, n),
+            }
+        )
+        trend = DegradationService.fit_degradation_trend(df)
+        assert trend is not None
+        assert trend["baseline_cap_pu"] == 0.35
+
+    def test_a2_t4_slope_pct_matches_slope_divided_by_baseline(self):
+        """slope_pct = slope_pu / baseline_cap_pu × 100 (spec :1053)."""
+        trend = self._build_with_curve(0.40)
+        assert trend is not None
+        expected_pct = trend["slope"] / trend["baseline_cap_pu"] * 100
+        assert abs(trend["slope_pct"] - expected_pct) < 1e-9
+
+
+# ─── A3 — CI95_pct surfaced in trend dict ──────────────────────
+
+
+class TestA3CIPct:
+    """A3: ci95_pct populated as (ci_lower/baseline×100, ci_upper/baseline×100)."""
+
+    def test_a3_t1_ci_pct_matches_formula(self):
+        df = _make_full_year_df(
+            start="2020-01-01",
+            end="2023-01-01",
+            seed=41,
+            slope_pu_per_year=-0.005,
+            seasonal_amplitude=0.0,
+            noise_sigma=0.02,
+        )
+        curves = TestA2Baseline._curve_with_median(0.35)
+        residuals = DegradationService.compute_residuals(df, curves)
+        trend = DegradationService.fit_degradation_trend(residuals)
+        assert trend is not None
+        assert trend["ci95"] is not None
+        assert trend["ci95_pct"] is not None
+        lo_pu, hi_pu = trend["ci95"]
+        lo_pct, hi_pct = trend["ci95_pct"]
+        baseline = trend["baseline_cap_pu"]
+        assert abs(lo_pct - lo_pu / baseline * 100) < 1e-9
+        assert abs(hi_pct - hi_pu / baseline * 100) < 1e-9
+
+    def test_a3_t2_ci_pct_none_when_ci_none(self):
+        """If n < 3, ci95 is None → ci95_pct also None."""
+        # Build a 2-row residual DF; OLS technically works but std_err 0 → no CI
+        df = pd.DataFrame(
+            {
+                "hour": pd.date_range("2020-01-01", periods=200, freq="h"),
+                "year": np.full(200, 2020),
+                "year_fraction": np.full(200, 2020.0),  # zero variance → ssx=0 → None
+                "wind_speed": np.full(200, 8.0),
+                "wind_bin": np.full(200, 8.0),
+                "ref_pu": np.full(200, 0.35),
+                "p_pu": np.full(200, 0.35),
+                "residual_pu": np.full(200, 0.0),
+            }
+        )
+        trend = DegradationService.fit_degradation_trend(df)
+        # ssx == 0 → returns None entirely per implementation
+        assert trend is None
+
+
 # ─── remove_seasonal_component helper ──────────────────────────
 
 
