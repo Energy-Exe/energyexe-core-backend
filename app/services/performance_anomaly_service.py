@@ -18,12 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.performance_anomaly import PerformanceAnomaly
 from app.models.performance_summary import PerformanceSummary
 from app.models.power_curve_bin import PowerCurveBin
-from app.models.windfarm import Windfarm
 from app.models.ppa import PPA
+from app.models.windfarm import Windfarm
 
 # IsolationForest is optional (sklearn import) — keeps test env light.
 try:
     from sklearn.ensemble import IsolationForest
+
     HAS_SKLEARN = True
 except ImportError:  # pragma: no cover
     IsolationForest = None  # type: ignore
@@ -41,6 +42,39 @@ LONG_RUN_HOURS = 24
 # spec marks it as optional and notes it does NOT contribute to loss calcs.
 USE_ISOLATION_FOREST = os.getenv("PIPELINE_USE_ISOLATION_FOREST", "false").lower() == "true"
 ISOLATION_CONTAMINATION = float(os.getenv("PIPELINE_ISOLATION_CONTAMINATION", "0.03"))
+
+# Threshold for the W2 NaN-price warning — matches the spec's posture
+# of treating NaN-heavy datasets as suspect (spec :270-280).
+NAN_PRICE_WARN_RATIO = 0.05
+
+
+def _warn_if_market_price_nan_heavy(
+    df: pd.DataFrame,
+    *,
+    windfarm_id: Optional[int] = None,
+    year: Optional[int] = None,
+) -> None:
+    """Log a warning when more than ``NAN_PRICE_WARN_RATIO`` of hours have
+    NaN market price. The math downstream silently drops NaN-priced hours
+    from EUR aggregates, which the spec compensates for with mean-fill —
+    surfacing the gap helps operators decide whether to backfill prices.
+    """
+    if df.empty or "market_price" not in df.columns:
+        return
+    n_total = int(len(df))
+    n_nan = int(df["market_price"].isna().sum())
+    if n_total == 0 or n_nan == 0:
+        return
+    ratio = n_nan / n_total
+    if ratio > NAN_PRICE_WARN_RATIO:
+        logger.warning(
+            "anomaly_nan_price_heavy",
+            windfarm_id=windfarm_id,
+            year=year,
+            nan_hours=n_nan,
+            total_hours=n_total,
+            nan_ratio=round(ratio, 4),
+        )
 
 
 class PerformanceAnomalyService:
@@ -78,6 +112,8 @@ class PerformanceAnomalyService:
         if df.empty:
             return {"error": "No hourly data"}
 
+        _warn_if_market_price_nan_heavy(df, windfarm_id=windfarm_id, year=year)
+
         # Classify hours (statistical MAD layer)
         df_flagged = self.classify_hours(df, capability, float(rated_mw), ppa_price)
 
@@ -108,7 +144,8 @@ class PerformanceAnomalyService:
             "pricing_basis": pricing_basis,
             "isolation_forest_flagged": (
                 int(df_flagged["flag_isolation_forest"].sum())
-                if "flag_isolation_forest" in df_flagged.columns else 0
+                if "flag_isolation_forest" in df_flagged.columns
+                else 0
             ),
         }
 
@@ -133,7 +170,9 @@ class PerformanceAnomalyService:
 
         # Merge capability stats by wind bin
         bins = np.arange(2.0, 26.0, 1.0)
-        out["wind_bin_interval"] = pd.cut(out["wind_speed"], bins=bins, right=False, include_lowest=True)
+        out["wind_bin_interval"] = pd.cut(
+            out["wind_speed"], bins=bins, right=False, include_lowest=True
+        )
 
         # Map capability stats to the same intervals
         cap = capability_stats.copy()
@@ -214,23 +253,26 @@ class PerformanceAnomalyService:
     # ─── Aggregation (pure, testable) ──────────────────────────
 
     @staticmethod
-    def aggregate_summaries(
-        df_flagged: pd.DataFrame, year: int
-    ) -> tuple[List[dict], dict]:
+    def aggregate_summaries(df_flagged: pd.DataFrame, year: int) -> tuple[List[dict], dict]:
         """Aggregate ODI metrics monthly and yearly.
 
         Returns (monthly_list, yearly_dict).
         """
+
         def _agg_group(group: pd.DataFrame) -> dict:
             total = len(group)
             underperf = (group["anomaly_type"] == "underperformance").sum()
             overperf = (group["anomaly_type"] == "overperformance").sum()
             lost_mwh = float(group["lost_mwh"].sum())
-            expected_mwh = float(group["expected_mwh"].sum()) if "expected_mwh" in group.columns else 0
+            expected_mwh = (
+                float(group["expected_mwh"].sum()) if "expected_mwh" in group.columns else 0
+            )
             lost_eur = float(group["lost_eur"].sum())
             # Expected revenue = expected_mwh * avg market price
             avg_price = group["market_price"].mean() if "market_price" in group.columns else 0
-            expected_rev = expected_mwh * float(avg_price) if pd.notna(avg_price) and avg_price > 0 else 0
+            expected_rev = (
+                expected_mwh * float(avg_price) if pd.notna(avg_price) and avg_price > 0 else 0
+            )
 
             # Long runs
             long_runs = 0
@@ -249,10 +291,14 @@ class PerformanceAnomalyService:
                 "odi_pct_underperf": round(underperf / max(total, 1) * 100, 3),
                 "lost_mwh": round(lost_mwh, 3),
                 "expected_mwh": round(expected_mwh, 3),
-                "odi_pct_loss_mwh": round(lost_mwh / max(expected_mwh, 1) * 100, 3) if expected_mwh > 0 else 0,
+                "odi_pct_loss_mwh": round(lost_mwh / max(expected_mwh, 1) * 100, 3)
+                if expected_mwh > 0
+                else 0,
                 "lost_eur": round(lost_eur, 2),
                 "expected_revenue_eur": round(expected_rev, 2),
-                "odi_pct_loss_eur": round(lost_eur / max(expected_rev, 1) * 100, 3) if expected_rev > 0 else 0,
+                "odi_pct_loss_eur": round(lost_eur / max(expected_rev, 1) * 100, 3)
+                if expected_rev > 0
+                else 0,
                 "long_run_count": long_runs,
                 "max_run_hours": max_run,
             }
@@ -280,6 +326,7 @@ class PerformanceAnomalyService:
         """Load hourly data for a specific year. Delegates to PowerCurveService for
         consistent three-table pandas-merge strategy."""
         from app.services.power_curve_service import PowerCurveService
+
         # Get rated capacity
         wf_result = await self.db.execute(
             select(Windfarm.nameplate_capacity_mw).where(Windfarm.id == windfarm_id)
@@ -297,11 +344,13 @@ class PerformanceAnomalyService:
     async def _load_capability_stats(self, windfarm_id: int, year: int) -> pd.DataFrame:
         """Load yearly capability curve bins."""
         result = await self.db.execute(
-            select(PowerCurveBin).where(
+            select(PowerCurveBin)
+            .where(
                 PowerCurveBin.windfarm_id == windfarm_id,
                 PowerCurveBin.year == year,
                 PowerCurveBin.curve_type == "capability",
-            ).order_by(PowerCurveBin.wind_bin)
+            )
+            .order_by(PowerCurveBin.wind_bin)
         )
         bins = result.scalars().all()
         if not bins:
@@ -312,13 +361,15 @@ class PerformanceAnomalyService:
         for b in bins:
             left = float(b.wind_bin)
             right = left + 1.0
-            records.append({
-                "wind_bin": pd.Interval(left, right, closed="left"),
-                "q50_pu": float(b.q50_pu) if b.q50_pu else None,
-                "q90_pu": float(b.q90_pu) if b.q90_pu else None,
-                "mad_pu": float(b.mad_pu) if b.mad_pu else None,
-                "sample_count": b.sample_count,
-            })
+            records.append(
+                {
+                    "wind_bin": pd.Interval(left, right, closed="left"),
+                    "q50_pu": float(b.q50_pu) if b.q50_pu else None,
+                    "q90_pu": float(b.q90_pu) if b.q90_pu else None,
+                    "mad_pu": float(b.mad_pu) if b.mad_pu else None,
+                    "sample_count": b.sample_count,
+                }
+            )
         return pd.DataFrame(records)
 
     async def _get_ppa_price(
@@ -405,11 +456,13 @@ class PerformanceAnomalyService:
         """Delete existing anomalies for this year and insert new."""
         # Delete existing
         await self.db.execute(
-            text("""
+            text(
+                """
                 DELETE FROM performance_anomalies
                 WHERE windfarm_id = :wf_id
                   AND EXTRACT(YEAR FROM hour) = :year
-            """),
+            """
+            ),
             {"wf_id": windfarm_id, "year": int(year)},
         )
 
@@ -421,10 +474,14 @@ class PerformanceAnomalyService:
                 actual_p_pu=float(row["p_pu"]) if pd.notna(row.get("p_pu")) else None,
                 expected_p_pu=float(row["q50_bin"]) if pd.notna(row.get("q50_bin")) else None,
                 wind_speed=float(row["wind_speed"]) if pd.notna(row.get("wind_speed")) else None,
-                wind_bin=float(row["wind_bin_float"]) if pd.notna(row.get("wind_bin_float")) else None,
+                wind_bin=float(row["wind_bin_float"])
+                if pd.notna(row.get("wind_bin_float"))
+                else None,
                 lost_mwh=float(row["lost_mwh"]) if pd.notna(row.get("lost_mwh")) else None,
                 lost_eur=float(row["lost_eur"]) if pd.notna(row.get("lost_eur")) else None,
-                market_price=float(row["market_price"]) if pd.notna(row.get("market_price")) else None,
+                market_price=float(row["market_price"])
+                if pd.notna(row.get("market_price"))
+                else None,
                 run_id=int(row["run_id"]) if pd.notna(row.get("run_id")) else None,
             )
             self.db.add(pa)
@@ -447,25 +504,27 @@ class PerformanceAnomalyService:
         for period in monthly + [yearly]:
             month = period.get("month")
             period_type = "month" if month else "year"
-            rows.append({
-                "windfarm_id": windfarm_id,
-                "period_type": period_type,
-                "year": year,
-                "month": month,
-                "total_hours": period["total_hours"],
-                "underperf_hours": period["underperf_hours"],
-                "overperf_hours": period["overperf_hours"],
-                "odi_pct_underperf": period["odi_pct_underperf"],
-                "lost_mwh": period["lost_mwh"],
-                "expected_mwh": period["expected_mwh"],
-                "odi_pct_loss_mwh": period["odi_pct_loss_mwh"],
-                "lost_eur": period["lost_eur"],
-                "expected_revenue_eur": period["expected_revenue_eur"],
-                "odi_pct_loss_eur": period["odi_pct_loss_eur"],
-                "long_run_count": period["long_run_count"],
-                "max_run_hours": period["max_run_hours"],
-                "pipeline_run_id": pipeline_run_id,
-            })
+            rows.append(
+                {
+                    "windfarm_id": windfarm_id,
+                    "period_type": period_type,
+                    "year": year,
+                    "month": month,
+                    "total_hours": period["total_hours"],
+                    "underperf_hours": period["underperf_hours"],
+                    "overperf_hours": period["overperf_hours"],
+                    "odi_pct_underperf": period["odi_pct_underperf"],
+                    "lost_mwh": period["lost_mwh"],
+                    "expected_mwh": period["expected_mwh"],
+                    "odi_pct_loss_mwh": period["odi_pct_loss_mwh"],
+                    "lost_eur": period["lost_eur"],
+                    "expected_revenue_eur": period["expected_revenue_eur"],
+                    "odi_pct_loss_eur": period["odi_pct_loss_eur"],
+                    "long_run_count": period["long_run_count"],
+                    "max_run_hours": period["max_run_hours"],
+                    "pipeline_run_id": pipeline_run_id,
+                }
+            )
 
         if not rows:
             return
@@ -476,7 +535,8 @@ class PerformanceAnomalyService:
         monthly_rows = [r for r in rows if r["month"] is not None]
         yearly_rows = [r for r in rows if r["month"] is None]
 
-        monthly_sql = text("""
+        monthly_sql = text(
+            """
             INSERT INTO performance_summaries
               (windfarm_id, period_type, year, month,
                total_hours, underperf_hours, overperf_hours, odi_pct_underperf,
@@ -504,7 +564,8 @@ class PerformanceAnomalyService:
               max_run_hours = EXCLUDED.max_run_hours,
               pipeline_run_id = EXCLUDED.pipeline_run_id,
               updated_at = NOW()
-        """)
+        """
+        )
 
         if monthly_rows:
             await self.db.execute(monthly_sql, monthly_rows)
@@ -513,15 +574,18 @@ class PerformanceAnomalyService:
         # so ON CONFLICT won't fire for `month IS NULL`. Delete-then-insert for idempotency.
         if yearly_rows:
             await self.db.execute(
-                text("""
+                text(
+                    """
                     DELETE FROM performance_summaries
                     WHERE windfarm_id = :wf_id AND period_type = 'year'
                       AND year = :year AND month IS NULL
-                """),
+                """
+                ),
                 {"wf_id": windfarm_id, "year": year},
             )
             await self.db.execute(
-                text("""
+                text(
+                    """
                     INSERT INTO performance_summaries
                       (windfarm_id, period_type, year, month,
                        total_hours, underperf_hours, overperf_hours, odi_pct_underperf,
@@ -534,15 +598,20 @@ class PerformanceAnomalyService:
                        :lost_mwh, :expected_mwh, :odi_pct_loss_mwh,
                        :lost_eur, :expected_revenue_eur, :odi_pct_loss_eur,
                        :long_run_count, :max_run_hours, :pipeline_run_id)
-                """),
+                """
+                ),
                 yearly_rows,
             )
 
     # ─── Fast path: accept pre-loaded DataFrame ─────────────────
 
     async def detect_anomalies_from_df(
-        self, windfarm_id: int, year: int, df: pd.DataFrame,
-        rated_mw: float, pipeline_run_id: Optional[int] = None,
+        self,
+        windfarm_id: int,
+        year: int,
+        df: pd.DataFrame,
+        rated_mw: float,
+        pipeline_run_id: Optional[int] = None,
     ) -> dict:
         """Detect anomalies using pre-loaded hourly DataFrame (avoids redundant SQL)."""
         ppa_price, pricing_basis = await self._get_ppa_price(windfarm_id, year)
@@ -550,6 +619,8 @@ class PerformanceAnomalyService:
         capability = await self._load_capability_stats(windfarm_id, year)
         if capability.empty:
             return {"error": f"No capability curve for year {year}"}
+
+        _warn_if_market_price_nan_heavy(df, windfarm_id=windfarm_id, year=year)
 
         df_flagged = self.classify_hours(df, capability, rated_mw, ppa_price)
 
@@ -576,19 +647,24 @@ class PerformanceAnomalyService:
             "pricing_basis": pricing_basis,
             "isolation_forest_flagged": (
                 int(df_flagged["flag_isolation_forest"].sum())
-                if "flag_isolation_forest" in df_flagged.columns else 0
+                if "flag_isolation_forest" in df_flagged.columns
+                else 0
             ),
         }
 
-    async def _store_anomalies_bulk(self, windfarm_id: int, year: int, anomalies: pd.DataFrame) -> None:
+    async def _store_anomalies_bulk(
+        self, windfarm_id: int, year: int, anomalies: pd.DataFrame
+    ) -> None:
         """Bulk insert anomalies using raw SQL for speed."""
         # Delete existing
         await self.db.execute(
-            text("""
+            text(
+                """
                 DELETE FROM performance_anomalies
                 WHERE windfarm_id = :wf_id
                   AND EXTRACT(YEAR FROM hour) = :year
-            """),
+            """
+            ),
             {"wf_id": windfarm_id, "year": int(year)},
         )
 
@@ -599,32 +675,43 @@ class PerformanceAnomalyService:
         has_iforest_col = "flag_isolation_forest" in anomalies.columns
         rows = []
         for _, row in anomalies.iterrows():
-            rows.append({
-                "windfarm_id": windfarm_id,
-                "hour": row["hour"],
-                "anomaly_type": row["anomaly_type"],
-                "actual_p_pu": float(row["p_pu"]) if pd.notna(row.get("p_pu")) else None,
-                "expected_p_pu": float(row["q50_bin"]) if pd.notna(row.get("q50_bin")) else None,
-                "wind_speed": float(row["wind_speed"]) if pd.notna(row.get("wind_speed")) else None,
-                "wind_bin": float(row["wind_bin_float"]) if pd.notna(row.get("wind_bin_float")) else None,
-                "lost_mwh": float(row["lost_mwh"]) if pd.notna(row.get("lost_mwh")) else None,
-                "lost_eur": float(row["lost_eur"]) if pd.notna(row.get("lost_eur")) else None,
-                "market_price": float(row["market_price"]) if pd.notna(row.get("market_price")) else None,
-                "run_id": int(row["run_id"]) if pd.notna(row.get("run_id")) else None,
-                "flag_isolation_forest": (
-                    bool(row["flag_isolation_forest"])
-                    if has_iforest_col and pd.notna(row.get("flag_isolation_forest"))
-                    else None
-                ),
-            })
+            rows.append(
+                {
+                    "windfarm_id": windfarm_id,
+                    "hour": row["hour"],
+                    "anomaly_type": row["anomaly_type"],
+                    "actual_p_pu": float(row["p_pu"]) if pd.notna(row.get("p_pu")) else None,
+                    "expected_p_pu": float(row["q50_bin"])
+                    if pd.notna(row.get("q50_bin"))
+                    else None,
+                    "wind_speed": float(row["wind_speed"])
+                    if pd.notna(row.get("wind_speed"))
+                    else None,
+                    "wind_bin": float(row["wind_bin_float"])
+                    if pd.notna(row.get("wind_bin_float"))
+                    else None,
+                    "lost_mwh": float(row["lost_mwh"]) if pd.notna(row.get("lost_mwh")) else None,
+                    "lost_eur": float(row["lost_eur"]) if pd.notna(row.get("lost_eur")) else None,
+                    "market_price": float(row["market_price"])
+                    if pd.notna(row.get("market_price"))
+                    else None,
+                    "run_id": int(row["run_id"]) if pd.notna(row.get("run_id")) else None,
+                    "flag_isolation_forest": (
+                        bool(row["flag_isolation_forest"])
+                        if has_iforest_col and pd.notna(row.get("flag_isolation_forest"))
+                        else None
+                    ),
+                }
+            )
 
         # Batch insert in chunks of 1000. flag_isolation_forest is included
         # only when the migration adding the column has been applied; the
         # column accepts NULL otherwise.
         for i in range(0, len(rows), 1000):
-            chunk = rows[i:i + 1000]
+            chunk = rows[i : i + 1000]
             await self.db.execute(
-                text("""
+                text(
+                    """
                     INSERT INTO performance_anomalies
                     (windfarm_id, hour, anomaly_type, actual_p_pu, expected_p_pu,
                      wind_speed, wind_bin, lost_mwh, lost_eur, market_price, run_id,
@@ -633,15 +720,14 @@ class PerformanceAnomalyService:
                     (:windfarm_id, :hour, :anomaly_type, :actual_p_pu, :expected_p_pu,
                      :wind_speed, :wind_bin, :lost_mwh, :lost_eur, :market_price, :run_id,
                      :flag_isolation_forest)
-                """),
+                """
+                ),
                 chunk,
             )
 
     # ─── Query helpers ─────────────────────────────────────────
 
-    async def get_odi_metrics(
-        self, windfarm_id: int, year: Optional[int] = None
-    ) -> List[dict]:
+    async def get_odi_metrics(self, windfarm_id: int, year: Optional[int] = None) -> List[dict]:
         """Read ODI metrics from performance_summaries."""
         query = select(PerformanceSummary).where(
             PerformanceSummary.windfarm_id == windfarm_id,
