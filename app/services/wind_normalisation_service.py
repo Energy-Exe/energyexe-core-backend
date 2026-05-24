@@ -59,6 +59,7 @@ class WindNormalisationService:
 
         # Load hourly data (all years)
         from app.services.power_curve_service import PowerCurveService
+
         pcs = PowerCurveService(self.db)
         df = await pcs._load_hourly_data(windfarm_id, None, None, float(rated_mw))
         if df.empty:
@@ -73,7 +74,9 @@ class WindNormalisationService:
         monthly_idx, yearly_idx = self.compute_indices(hourly)
 
         # Store to performance_summaries
-        await self._store_normalisation(windfarm_id, monthly_idx, yearly_idx, reference, pipeline_run_id)
+        await self._store_normalisation(
+            windfarm_id, monthly_idx, yearly_idx, reference, pipeline_run_id
+        )
 
         return {
             "reference": reference,
@@ -102,7 +105,9 @@ class WindNormalisationService:
             return {"error": "No qualifying hours for normalisation"}
 
         monthly_idx, yearly_idx = self.compute_indices(hourly)
-        await self._store_normalisation(windfarm_id, monthly_idx, yearly_idx, reference, pipeline_run_id)
+        await self._store_normalisation(
+            windfarm_id, monthly_idx, yearly_idx, reference, pipeline_run_id
+        )
 
         return {
             "reference": reference,
@@ -157,45 +162,44 @@ class WindNormalisationService:
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Compute monthly and yearly indices relative to historical mean.
 
-        historical_mean = mean of all monthly avg_norm_ratio values.
-        monthly_index = avg_norm_ratio / historical_mean * 100
-        yearly_index = avg_yearly_norm_ratio / historical_mean * 100
+        Monthly: hourly groupby (year, month).mean() of norm_ratio. Historical
+        mean is the mean of those monthly values.
+
+        Yearly: the mean of the monthly means (NOT a fresh hourly groupby) —
+        this is what the reference pipeline does (`energyexe_pipeline_full.py
+        :910-917`), and it avoids partial-month bias when a year is only
+        partially covered. Yearly historical mean is recomputed from the yearly
+        series — separate from the monthly historical mean.
 
         100 = long-run average performance. >100 = above average. <100 = below.
         """
         # Monthly aggregation
-        monthly = (
-            hourly.groupby(["year", "month"], as_index=False)
-            .agg(
-                avg_norm_ratio=("norm_ratio", "mean"),
-                hours_used=("norm_ratio", "count"),
-            )
+        monthly = hourly.groupby(["year", "month"], as_index=False).agg(
+            avg_norm_ratio=("norm_ratio", "mean"),
+            hours_used=("norm_ratio", "count"),
         )
 
-        # Historical mean across all monthly ratios
-        historical_mean = float(monthly["avg_norm_ratio"].mean()) if len(monthly) > 0 else 1.0
-        if historical_mean <= 0:
-            historical_mean = 1.0
+        # Monthly historical mean and index
+        monthly_hist = float(monthly["avg_norm_ratio"].mean()) if len(monthly) > 0 else 1.0
+        if monthly_hist <= 0:
+            monthly_hist = 1.0
+        monthly["index_vs_base"] = monthly["avg_norm_ratio"] / monthly_hist * 100
 
-        monthly["index_vs_base"] = monthly["avg_norm_ratio"] / historical_mean * 100
-
-        # Yearly aggregation
-        yearly = (
-            hourly.groupby("year", as_index=False)
-            .agg(
-                avg_norm_ratio=("norm_ratio", "mean"),
-                hours_used=("norm_ratio", "count"),
-            )
+        # Yearly = mean of monthly means + sum of hours_used.
+        yearly = monthly.groupby("year", as_index=False).agg(
+            avg_norm_ratio=("avg_norm_ratio", "mean"),
+            hours_used=("hours_used", "sum"),
         )
-        yearly["index_vs_base"] = yearly["avg_norm_ratio"] / historical_mean * 100
+        yearly_hist = float(yearly["avg_norm_ratio"].mean()) if len(yearly) > 0 else 1.0
+        if yearly_hist <= 0:
+            yearly_hist = 1.0
+        yearly["index_vs_base"] = yearly["avg_norm_ratio"] / yearly_hist * 100
 
         return monthly, yearly
 
     # ─── Curve lookup ──────────────────────────────────────────
 
-    async def _load_curve_lookup(
-        self, windfarm_id: int, reference: str
-    ) -> Dict[float, float]:
+    async def _load_curve_lookup(self, windfarm_id: int, reference: str) -> Dict[float, float]:
         """Load overall_clean power curve as {wind_bin: q50/q90 p_pu}."""
         col = "q50_pu" if reference == "q50" else "q90_pu"
 
@@ -208,8 +212,13 @@ class WindNormalisationService:
         bins = result.scalars().all()
         lookup = {}
         for b in bins:
-            val = getattr(b, col.replace("_pu", "_pu"))  # q50_pu or q90_pu
-            val = float(b.q50_pu) if reference == "q50" and b.q50_pu else (float(b.q90_pu) if reference == "q90" and b.q90_pu else None)
+            val = (
+                float(b.q50_pu)
+                if reference == "q50" and b.q50_pu
+                else float(b.q90_pu)
+                if reference == "q90" and b.q90_pu
+                else None
+            )
             if val is not None:
                 lookup[float(b.wind_bin)] = val
         return lookup
@@ -252,7 +261,8 @@ class WindNormalisationService:
 
         if monthly_rows:
             await self.db.execute(
-                text(f"""
+                text(
+                    f"""
                     INSERT INTO performance_summaries
                       (windfarm_id, period_type, year, month, {ratio_col}, {index_col}, pipeline_run_id)
                     VALUES
@@ -262,7 +272,8 @@ class WindNormalisationService:
                       {index_col} = EXCLUDED.{index_col},
                       pipeline_run_id = COALESCE(EXCLUDED.pipeline_run_id, performance_summaries.pipeline_run_id),
                       updated_at = NOW()
-                """),
+                """
+                ),
                 monthly_rows,
             )
 
@@ -281,7 +292,8 @@ class WindNormalisationService:
 
         for row in yearly_rows:
             updated = await self.db.execute(
-                text(f"""
+                text(
+                    f"""
                     UPDATE performance_summaries
                     SET {ratio_col} = :ratio,
                         {index_col} = :idx,
@@ -291,16 +303,19 @@ class WindNormalisationService:
                       AND period_type = 'year'
                       AND year = :year
                       AND month IS NULL
-                """),
+                """
+                ),
                 row,
             )
             if updated.rowcount == 0:
                 await self.db.execute(
-                    text(f"""
+                    text(
+                        f"""
                         INSERT INTO performance_summaries
                           (windfarm_id, period_type, year, month, {ratio_col}, {index_col}, pipeline_run_id)
                         VALUES
                           (:windfarm_id, 'year', :year, NULL, :ratio, :idx, :pipeline_run_id)
-                    """),
+                    """
+                    ),
                     row,
                 )
