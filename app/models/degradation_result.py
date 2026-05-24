@@ -1,18 +1,9 @@
 """Degradation analysis OLS regression results."""
 
-from datetime import datetime, timezone, date
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import (
-    Date,
-    DateTime,
-    ForeignKey,
-    Index,
-    Integer,
-    Numeric,
-    String,
-    UniqueConstraint,
-)
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -43,6 +34,8 @@ class DegradationResult(Base):
     p_value: Mapped[Optional[float]] = mapped_column(Numeric(8, 6), nullable=True)
     ci_lower_95: Mapped[Optional[float]] = mapped_column(Numeric(12, 8), nullable=True)
     ci_upper_95: Mapped[Optional[float]] = mapped_column(Numeric(12, 8), nullable=True)
+    ci_lower_95_pct: Mapped[Optional[float]] = mapped_column(Numeric(10, 3), nullable=True)
+    ci_upper_95_pct: Mapped[Optional[float]] = mapped_column(Numeric(10, 3), nullable=True)
     baseline_cap_pu: Mapped[Optional[float]] = mapped_column(Numeric(6, 5), nullable=True)
 
     # Metadata
@@ -63,7 +56,9 @@ class DegradationResult(Base):
     pipeline_run = relationship("ImportJobExecution")
 
     __table_args__ = (
-        UniqueConstraint("windfarm_id", "reference_curve", "pipeline_run_id", name="uq_degradation_wf_ref_run"),
+        UniqueConstraint(
+            "windfarm_id", "reference_curve", "pipeline_run_id", name="uq_degradation_wf_ref_run"
+        ),
         Index("ix_degradation_wf", "windfarm_id"),
     )
 

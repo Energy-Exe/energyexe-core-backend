@@ -161,6 +161,8 @@ class DegradationService:
             "r_squared": trend["r2"],
             "p_value": trend["p_value"],
             "ci_95": trend["ci95"],
+            "ci_95_pct": trend["ci95_pct"],
+            "baseline_cap_pu": trend["baseline_cap_pu"],
             "data_points": trend["n"],
             "analysis_range": f"{analysis_start} to {analysis_end}",
         }
@@ -262,11 +264,34 @@ class DegradationService:
                 float(slope + t_crit * std_err),
             )
 
-        # Baseline placeholder until A2 lands. Real value is the
-        # hours-weighted median of the reference column in the first year
-        # of df_fit (spec :1050-1052).
-        baseline_cap_pu = 0.35
-        slope_pct = float(slope / baseline_cap_pu * 100) if baseline_cap_pu > 0 else None
+        # Hours-weighted median of ref_pu in the first year of df_fit
+        # (spec :1050-1052). df_fit has one row per surviving hour, so a
+        # wind bin with many hours contributes that many identical ref_pu
+        # values to the median — i.e. naturally weighted toward bins the
+        # windfarm actually operates in.
+        first_year = int(df_fit["year_fraction"].min())
+        baseline_df = df_fit[df_fit["year_fraction"].between(first_year, first_year + 1)]
+        if not baseline_df.empty:
+            baseline_cap_pu = float(baseline_df["ref_pu"].median())
+        else:
+            baseline_cap_pu = float("nan")
+
+        if not np.isfinite(baseline_cap_pu) or baseline_cap_pu <= 0:
+            logger.warning(
+                "degradation_baseline_fallback",
+                computed=baseline_cap_pu,
+                first_year=first_year,
+                first_year_rows=len(baseline_df),
+            )
+            baseline_cap_pu = 0.35
+
+        slope_pct = float(slope / baseline_cap_pu * 100)
+        ci95_pct = None
+        if ci95 is not None:
+            ci95_pct = (
+                float(ci95[0] / baseline_cap_pu * 100),
+                float(ci95[1] / baseline_cap_pu * 100),
+            )
 
         return {
             "slope": float(slope),
@@ -275,6 +300,7 @@ class DegradationService:
             "p_value": float(p_value),
             "std_err": float(std_err),
             "ci95": ci95,
+            "ci95_pct": ci95_pct,
             "slope_pct": slope_pct,
             "baseline_cap_pu": baseline_cap_pu,
             "n": n,
@@ -345,6 +371,8 @@ class DegradationService:
             p_value=trend["p_value"],
             ci_lower_95=trend["ci95"][0] if trend["ci95"] else None,
             ci_upper_95=trend["ci95"][1] if trend["ci95"] else None,
+            ci_lower_95_pct=trend["ci95_pct"][0] if trend["ci95_pct"] else None,
+            ci_upper_95_pct=trend["ci95_pct"][1] if trend["ci95_pct"] else None,
             baseline_cap_pu=trend["baseline_cap_pu"],
             pipeline_run_id=pipeline_run_id,
         )
