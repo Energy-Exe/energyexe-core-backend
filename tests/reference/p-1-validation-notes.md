@@ -410,6 +410,38 @@ Two design choices fall out:
 
 Less dramatic than EAO (-14 pp) but still a clear dip. A `year_idx < 90` threshold would NOT flag Hornsea 1; `year_idx < 110` would. The Module 4 safety net (option B1.6) needs a windfarm-relative threshold (e.g. `< 90 % of own historical mean`), not a global cutoff.
 
+---
+
+# A1 — post-implementation Lutelandet check (2026-05-24)
+
+After merging A1 (hourly OLS + seasonal decomposition), running the new
+`DegradationService` directly on `/tmp/p1_lutelandet/wf_lutelandet.csv` with
+the spec-emitted capability curves as input:
+
+| | Pre-A1 (monthly OLS) | **Post-A1 (hourly + deseasonalise)** | Spec target |
+|---|---|---|---|
+| Q50 slope_pu | 0.001756 | **0.001452** | 0.000929 |
+| Q50 n | 46 | **13,474** | 13,196 |
+| Q50 r² | 0.00306 | **0.000078** | 0.000 |
+| Q50 ci95_pu | (-0.00788, +0.01139) | **(-0.001316, +0.004220)** | implied tight |
+| Q90 slope_pu | 0.002278 | **0.003233** | 0.000747 |
+| Q90 n | 46 | **19,767** | 13,196 |
+
+**Findings:**
+
+1. **Math is correct** — synthetic A1.T1/T2/T3 all green (slope recovery within ±0.0005-0.001 of injected truth on 3yr × 8760h fixtures).
+2. **n still differs from spec by ~2%** because the orchestrator currently passes raw `df_all` to Module 5, while the spec uses `df_no_over` (overperformance-cleaned via `PowerCurveService.flag_overperformance`). The Q90 gap is larger because the wind-bin filter only keeps bins where Q90 ≥ 0.10, which admits more bins than the Q50 filter.
+3. **slope_pu Q50 closer to truth by ~37%** vs the monthly OLS (|0.001452-0.000929| = 0.000523 vs old |0.001756-0.000929| = 0.000827).
+4. **slope_pct still wrong** until A2 fixes the hardcoded `baseline_cap_pu = 0.35`.
+
+**Deferred to follow-up (NOT in A1):**
+
+- Wire `df_no_over` from `PowerCurveService.build_power_curves` through the
+  orchestrator so Modules 3 + 5 see the overperf-removed sample. Currently
+  blocks A1.T5 from achieving the planned `n within ±0.5%` tolerance.
+
+---
+
 ## P-1.3 conclusions
 
 1. **The 2024 Q50-suppression pattern is NOT unique to EAO.** Confirmed on two of two multi-BMU offshore windfarms. Almost certainly affects more (Hornsea 2, Walney Extension, Galloper, London Array all to be checked).
