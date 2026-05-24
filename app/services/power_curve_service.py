@@ -48,11 +48,18 @@ class PowerCurveService:
         start_year: Optional[int] = None,
         end_year: Optional[int] = None,
         df_preloaded: Optional[pd.DataFrame] = None,
+        return_df_no_over: bool = False,
     ) -> dict:
         """Build and store all power curves for a windfarm.
 
         Args:
             df_preloaded: If provided, skip data loading (already loaded by orchestrator).
+            return_df_no_over: If True, include the overperformance-cleaned
+                DataFrame under the ``df_no_over`` key in the returned summary.
+                The orchestrator uses this to feed Modules 3 and 5 the same
+                sample the reference pipeline uses (spec :968-1008). Default
+                False so external callers and tests keep their lightweight
+                return shape.
 
         Returns summary dict with curve counts and data quality stats.
         """
@@ -82,7 +89,9 @@ class PowerCurveService:
             return {"error": "No data remaining after plausibility filters"}
 
         # Module 2: Build curves
-        summary = await self._build_and_store_curves(windfarm_id, df_curve)
+        summary = await self._build_and_store_curves(
+            windfarm_id, df_curve, return_df_no_over=return_df_no_over
+        )
 
         summary["raw_rows"] = len(df)
         summary["clean_rows"] = len(df_clean)
@@ -121,7 +130,8 @@ class PowerCurveService:
             gen_params["end_year"] = end_year
 
         # 1) Generation — aggregate across units (the real multi-row case)
-        gen_q = text(f"""
+        gen_q = text(
+            f"""
             SELECT hour,
                    SUM(generation_mwh) AS generation_mwh,
                    BOOL_OR(is_ramp_up) AS any_ramp_up
@@ -131,7 +141,8 @@ class PowerCurveService:
               {year_filter_gen}
             GROUP BY hour
             HAVING BOOL_OR(is_ramp_up) = false
-        """)
+        """
+        )
         gen_rows = (await self.db.execute(gen_q, gen_params)).fetchall()
         if not gen_rows:
             return pd.DataFrame()
@@ -139,30 +150,52 @@ class PowerCurveService:
         df_gen["generation_mwh"] = df_gen["generation_mwh"].astype(float)
 
         # 2) Weather — AVG across any duplicates (usually 1 row per hour)
-        wx_q = text(f"""
+        wx_q = text(
+            f"""
             SELECT hour, AVG(wind_speed_100m) AS wind_speed
             FROM weather_data
             WHERE windfarm_id = :wf_id
               AND wind_speed_100m IS NOT NULL
               {year_filter_wx}
             GROUP BY hour
-        """)
+        """
+        )
         wx_rows = (await self.db.execute(wx_q, gen_params)).fetchall()
-        df_wx = pd.DataFrame(wx_rows, columns=["hour", "wind_speed"]) if wx_rows else pd.DataFrame({"hour": pd.Series([], dtype="datetime64[ns, UTC]"), "wind_speed": pd.Series([], dtype="float64")})
+        df_wx = (
+            pd.DataFrame(wx_rows, columns=["hour", "wind_speed"])
+            if wx_rows
+            else pd.DataFrame(
+                {
+                    "hour": pd.Series([], dtype="datetime64[ns, UTC]"),
+                    "wind_speed": pd.Series([], dtype="float64"),
+                }
+            )
+        )
         if not df_wx.empty:
             df_wx["wind_speed"] = df_wx["wind_speed"].astype(float)
 
         # 3) Price — AVG across sources (some farms have ENTSOE + ELEXON)
-        px_q = text(f"""
+        px_q = text(
+            f"""
             SELECT hour, AVG(day_ahead_price) AS market_price
             FROM price_data
             WHERE windfarm_id = :wf_id
               AND day_ahead_price IS NOT NULL
               {year_filter_px}
             GROUP BY hour
-        """)
+        """
+        )
         px_rows = (await self.db.execute(px_q, gen_params)).fetchall()
-        df_px = pd.DataFrame(px_rows, columns=["hour", "market_price"]) if px_rows else pd.DataFrame({"hour": pd.Series([], dtype="datetime64[ns, UTC]"), "market_price": pd.Series([], dtype="float64")})
+        df_px = (
+            pd.DataFrame(px_rows, columns=["hour", "market_price"])
+            if px_rows
+            else pd.DataFrame(
+                {
+                    "hour": pd.Series([], dtype="datetime64[ns, UTC]"),
+                    "market_price": pd.Series([], dtype="float64"),
+                }
+            )
+        )
         if not df_px.empty:
             df_px["market_price"] = pd.to_numeric(df_px["market_price"], errors="coerce")
 
@@ -221,12 +254,14 @@ class PowerCurveService:
 
         grouped = df.dropna(subset=["wind_bin", "p_pu"]).groupby("wind_bin", observed=False)["p_pu"]
 
-        stats = pd.DataFrame({
-            "sample_count": grouped.count(),
-            "q50_pu": grouped.median(),
-            "q90_pu": grouped.quantile(0.90),
-            "mean_pu": grouped.mean(),
-        }).reset_index()
+        stats = pd.DataFrame(
+            {
+                "sample_count": grouped.count(),
+                "q50_pu": grouped.median(),
+                "q90_pu": grouped.quantile(0.90),
+                "mean_pu": grouped.mean(),
+            }
+        ).reset_index()
 
         # MAD: median absolute deviation
         mad_vals = grouped.apply(lambda x: float(np.nanmedian(np.abs(x - np.nanmedian(x)))))
@@ -249,9 +284,7 @@ class PowerCurveService:
     # ─── Module 2: Overperformance flagging ────────────────────
 
     @staticmethod
-    def flag_overperformance(
-        df: pd.DataFrame, yearly_stats: pd.DataFrame
-    ) -> pd.Series:
+    def flag_overperformance(df: pd.DataFrame, yearly_stats: pd.DataFrame) -> pd.Series:
         """Flag overperforming hours for removal.
 
         A row is overperforming if EITHER:
@@ -268,10 +301,16 @@ class PowerCurveService:
         # Statistical ceiling per year per bin
         bins = np.arange(WIND_MIN_FOR_CURVE, WIND_MAX_FOR_CURVE + BIN_WIDTH, BIN_WIDTH)
         df_binned = df.copy()
-        df_binned["wind_bin"] = pd.cut(df_binned["wind_speed"], bins=bins, right=False, include_lowest=True)
+        df_binned["wind_bin"] = pd.cut(
+            df_binned["wind_speed"], bins=bins, right=False, include_lowest=True
+        )
 
         for year in df_binned["year"].unique():
-            year_stats = yearly_stats[yearly_stats.get("year", pd.Series()) == year] if "year" in yearly_stats.columns else yearly_stats
+            year_stats = (
+                yearly_stats[yearly_stats.get("year", pd.Series()) == year]
+                if "year" in yearly_stats.columns
+                else yearly_stats
+            )
             if year_stats.empty:
                 continue
 
@@ -292,12 +331,17 @@ class PowerCurveService:
     # ─── Module 2: Build and store all curves ──────────────────
 
     async def _build_and_store_curves(
-        self, windfarm_id: int, df_curve: pd.DataFrame
+        self,
+        windfarm_id: int,
+        df_curve: pd.DataFrame,
+        return_df_no_over: bool = False,
     ) -> dict:
         """Build yearly raw, yearly capability, and overall clean curves."""
         bins = np.arange(WIND_MIN_FOR_CURVE, WIND_MAX_FOR_CURVE + BIN_WIDTH, BIN_WIDTH)
         df_curve = df_curve.copy()
-        df_curve["wind_bin"] = pd.cut(df_curve["wind_speed"], bins=bins, right=False, include_lowest=True)
+        df_curve["wind_bin"] = pd.cut(
+            df_curve["wind_speed"], bins=bins, right=False, include_lowest=True
+        )
 
         years = sorted(df_curve["year"].unique())
         all_yearly_raw: List[pd.DataFrame] = []
@@ -339,18 +383,27 @@ class PowerCurveService:
 
         stored = 0
         for raw_df in all_yearly_raw:
-            stored += await self._store_bins(windfarm_id, int(raw_df["year"].iloc[0]), "raw", raw_df)
+            stored += await self._store_bins(
+                windfarm_id, int(raw_df["year"].iloc[0]), "raw", raw_df
+            )
         for cap_df in all_yearly_capability:
-            stored += await self._store_bins(windfarm_id, int(cap_df["year"].iloc[0]), "capability", cap_df)
+            stored += await self._store_bins(
+                windfarm_id, int(cap_df["year"].iloc[0]), "capability", cap_df
+            )
         stored += await self._store_bins(windfarm_id, None, "overall_clean", overall_clean)
 
         await self.db.flush()
 
-        return {
+        summary: dict = {
             "years": years,
             "overperformance_removed_pct": round(overperf_pct, 2),
             "bins_stored": stored,
         }
+        if return_df_no_over:
+            # Drop the wind_bin Categorical so downstream services can do their
+            # own binning without dtype surprises.
+            summary["df_no_over"] = df_no_over.drop(columns=["wind_bin"], errors="ignore")
+        return summary
 
     async def _store_bins(
         self,
@@ -382,9 +435,7 @@ class PowerCurveService:
 
     async def _delete_existing_curves(self, windfarm_id: int) -> None:
         """Delete all existing curves for this windfarm (idempotent rebuild)."""
-        await self.db.execute(
-            delete(PowerCurveBin).where(PowerCurveBin.windfarm_id == windfarm_id)
-        )
+        await self.db.execute(delete(PowerCurveBin).where(PowerCurveBin.windfarm_id == windfarm_id))
 
     # ─── Read stored curves ────────────────────────────────────
 

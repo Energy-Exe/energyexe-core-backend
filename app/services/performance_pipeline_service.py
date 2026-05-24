@@ -117,13 +117,28 @@ class PerformancePipelineService:
             return {"windfarm_id": windfarm_id, "error": "No hourly data"}
 
         # Module 1+2: Power curves — pass pre-loaded data (avoids second SQL query).
-        # If this fails, the whole pipeline fails (everything else depends on curves).
+        # `return_df_no_over=True` so Modules 3 and 5 below run on the same
+        # overperformance-cleaned sample the reference pipeline uses (spec
+        # :968-1008). Without this they fit on the raw df_all and over-weight
+        # the ~2-4% of rows the curve-fitting step would have dropped.
         curves = await pcs.build_power_curves(
-            windfarm_id, start_year, end_year, df_preloaded=df_all
+            windfarm_id,
+            start_year,
+            end_year,
+            df_preloaded=df_all,
+            return_df_no_over=True,
         )
         result["power_curves"] = curves
         if "error" in curves:
             return result
+
+        # Extract df_no_over and remove from the response dict (large DF;
+        # don't bloat the orchestrator return shape or logs with it).
+        df_no_over = curves.pop("df_no_over", None)
+        if df_no_over is None or df_no_over.empty:
+            # Defensive fallback: shouldn't happen given the empty checks
+            # above, but keeps a single clear failure path.
+            df_no_over = df_all
 
         years = [int(y) for y in curves.get("years", [])]
         if not years:
@@ -170,13 +185,14 @@ class PerformancePipelineService:
             result["structural_constraints"] = {"error": str(e)}
 
         # Module 3: Anomaly detection — each year in its own SAVEPOINT so one bad
-        # year doesn't poison the whole transaction.
+        # year doesn't poison the whole transaction. Uses df_no_over to match
+        # the reference pipeline's sample (FX1).
         anomaly_svc = PerformanceAnomalyService(self.db)
         anomaly_results: Dict[int, Any] = {}
         for year in years:
             try:
                 async with self.db.begin_nested():
-                    df_year = df_all[df_all["year"] == year].copy()
+                    df_year = df_no_over[df_no_over["year"] == year].copy()
                     if df_year.empty:
                         anomaly_results[year] = {"error": "No data for year"}
                         continue
@@ -210,13 +226,14 @@ class PerformancePipelineService:
         )
 
         # Module 4: Wind normalisation — each reference in its own SAVEPOINT.
+        # Uses df_no_over to match the reference pipeline's sample (FX1).
         norm_svc = WindNormalisationService(self.db)
         norm_out: Dict[str, Any] = {}
         for ref, key in [("q50", "p50"), ("q90", "p10")]:
             try:
                 async with self.db.begin_nested():
                     norm_out[key] = await norm_svc.compute_normalisation_from_df(
-                        windfarm_id, df_all, float(rated_mw), ref, pipeline_run_id
+                        windfarm_id, df_no_over, float(rated_mw), ref, pipeline_run_id
                     )
             except Exception as e:
                 logger.error(
@@ -240,14 +257,15 @@ class PerformancePipelineService:
             p10_years_computed=norm_out.get("p10", {}).get("years_computed"),
         )
 
-        # Module 5: Degradation — each reference in its own SAVEPOINT.
+        # Module 5: Degradation — each reference in its own SAVEPOINT. Uses
+        # df_no_over to match the reference pipeline's sample (FX1).
         deg_svc = DegradationService(self.db)
         deg_out: Dict[str, Any] = {}
         for ref, key in [("q50", "p50"), ("q90", "p10")]:
             try:
                 async with self.db.begin_nested():
                     deg_out[key] = await deg_svc.analyze_degradation_from_df(
-                        windfarm_id, df_all, ref, pipeline_run_id
+                        windfarm_id, df_no_over, ref, pipeline_run_id
                     )
             except Exception as e:
                 logger.error(
