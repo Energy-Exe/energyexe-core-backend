@@ -141,6 +141,34 @@ class PerformancePipelineService:
             curve_rows=curves.get("curve_rows"),
         )
 
+        # Module 1b: Structural constraint detection (write-only). Detected
+        # runs go to `structural_constraint_flags` for analyst review;
+        # Modules 2/3/5 still see the unfiltered df_all in this milestone.
+        try:
+            import numpy as np
+
+            from app.services.structural_constraint_detection_service import (
+                StructuralConstraintDetectionService,
+            )
+
+            async with self.db.begin_nested():
+                df_for_detect = df_all.copy()
+                df_for_detect["wind_bin"] = np.floor(df_for_detect["wind_speed"]).astype(float)
+                detector = StructuralConstraintDetectionService(self.db)
+                detect_out = await detector.detect_constraints(
+                    windfarm_id, df_for_detect, pipeline_run_id=pipeline_run_id
+                )
+            result["structural_constraints"] = detect_out
+            logger.info(
+                "module_1b_complete",
+                windfarm_id=windfarm_id,
+                runs_detected=detect_out.get("runs_detected", 0),
+                total_constrained_hours=detect_out.get("total_constrained_hours", 0),
+            )
+        except Exception as e:
+            logger.error("pipeline_module_1b_error", windfarm_id=windfarm_id, error=str(e))
+            result["structural_constraints"] = {"error": str(e)}
+
         # Module 3: Anomaly detection — each year in its own SAVEPOINT so one bad
         # year doesn't poison the whole transaction.
         anomaly_svc = PerformanceAnomalyService(self.db)
