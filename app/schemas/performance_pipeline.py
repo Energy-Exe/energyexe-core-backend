@@ -7,7 +7,9 @@ from pydantic import BaseModel, Field
 
 
 class PipelineRunRequest(BaseModel):
-    windfarm_ids: Optional[List[int]] = Field(None, description="Specific windfarms. If empty, scans all operational.")
+    windfarm_ids: Optional[List[int]] = Field(
+        None, description="Specific windfarms. If empty, scans all operational."
+    )
     start_year: Optional[int] = None
     end_year: Optional[int] = None
 
@@ -83,6 +85,7 @@ class WindNormalisedHourPoint(BaseModel):
     value or with wind_speed below the normalisation floor (4 m/s) are
     omitted entirely so the chart only shows qualifying hours.
     """
+
     hour: datetime
     actual_mwh: float
     expected_mwh: float
@@ -146,6 +149,8 @@ class PerformanceSummaryResponse(BaseModel):
     # Commercial
     constraint_proxy_mwh: Optional[float] = None
     lost_value_eur: Optional[float] = None
+    contract_revenue_eur: Optional[float] = None
+    contract_revenue_vs_p50_target_eur: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -162,6 +167,8 @@ class PPAScenarioResponse(BaseModel):
     revenue_eur: float
     revenue_vs_p50_eur: float
     value_of_1pct_eur_per_year: float
+    is_base: bool = False
+    revenue_uplift_vs_base_eur: Optional[float] = None
 
 
 # ─── Spec item 3: Generation Concentration ────────────────────
