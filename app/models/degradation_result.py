@@ -37,6 +37,7 @@ class DegradationResult(Base):
     ci_lower_95_pct: Mapped[Optional[float]] = mapped_column(Numeric(10, 3), nullable=True)
     ci_upper_95_pct: Mapped[Optional[float]] = mapped_column(Numeric(10, 3), nullable=True)
     baseline_cap_pu: Mapped[Optional[float]] = mapped_column(Numeric(6, 5), nullable=True)
+    n_constraint_hours_excluded: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Metadata
     pipeline_run_id: Mapped[Optional[int]] = mapped_column(

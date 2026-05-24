@@ -112,12 +112,27 @@ class DegradationService:
         df: pd.DataFrame,
         reference: str = "q50",
         pipeline_run_id: Optional[int] = None,
+        n_constraint_hours_excluded: Optional[int] = None,
     ) -> Optional[dict]:
-        """Run degradation analysis using a pre-loaded hourly DataFrame."""
+        """Run degradation analysis using a pre-loaded hourly DataFrame.
+
+        Args:
+            n_constraint_hours_excluded: how many hours the orchestrator
+                dropped from ``df`` because they fell inside an active
+                structural constraint. Persisted on the result row for
+                downstream reporting; does not affect the fit itself.
+        """
         yearly_curves = await self._load_yearly_capability(windfarm_id, reference)
         if not yearly_curves:
             return None
-        return await self._run_from_df(windfarm_id, df, yearly_curves, reference, pipeline_run_id)
+        return await self._run_from_df(
+            windfarm_id,
+            df,
+            yearly_curves,
+            reference,
+            pipeline_run_id,
+            n_constraint_hours_excluded=n_constraint_hours_excluded,
+        )
 
     async def _run_from_df(
         self,
@@ -126,6 +141,7 @@ class DegradationService:
         yearly_curves: Dict[int, Dict[float, float]],
         reference: str,
         pipeline_run_id: Optional[int],
+        n_constraint_hours_excluded: Optional[int] = None,
     ) -> Optional[dict]:
         residuals = self.compute_residuals(df, yearly_curves)
         if residuals.empty or len(residuals) < MIN_FIT_HOURS:
@@ -152,6 +168,7 @@ class DegradationService:
             analysis_end,
             trend["n"],
             pipeline_run_id,
+            n_constraint_hours_excluded=n_constraint_hours_excluded,
         )
 
         return {
@@ -163,6 +180,7 @@ class DegradationService:
             "ci_95": trend["ci95"],
             "ci_95_pct": trend["ci95_pct"],
             "baseline_cap_pu": trend["baseline_cap_pu"],
+            "n_constraint_hours_excluded": n_constraint_hours_excluded,
             "data_points": trend["n"],
             "analysis_range": f"{analysis_start} to {analysis_end}",
         }
@@ -349,6 +367,7 @@ class DegradationService:
         analysis_end: date,
         data_points: int,
         pipeline_run_id: Optional[int],
+        n_constraint_hours_excluded: Optional[int] = None,
     ) -> None:
         """Store or update degradation result."""
         await self.db.execute(
@@ -374,6 +393,7 @@ class DegradationService:
             ci_lower_95_pct=trend["ci95_pct"][0] if trend["ci95_pct"] else None,
             ci_upper_95_pct=trend["ci95_pct"][1] if trend["ci95_pct"] else None,
             baseline_cap_pu=trend["baseline_cap_pu"],
+            n_constraint_hours_excluded=n_constraint_hours_excluded,
             pipeline_run_id=pipeline_run_id,
         )
         self.db.add(dr)

@@ -3,9 +3,12 @@
 Auto-detects sustained low-output periods that look like infrastructure
 constraints (cable failures, half-BMU offline, curtailment programmes,
 etc.). Writes ``pending_review`` rows to ``structural_constraint_flags``
-for analyst follow-up. Downstream modules (2/3/5) currently still see
-the unfiltered dataset — they will start consuming confirmed flags in a
-follow-up milestone.
+for analyst follow-up.
+
+Active flags (``review_status IN ('pending_review', 'confirmed')``) are
+loaded back by the orchestrator and used to mask out constrained hours
+from Modules 3/4/5 before they consume the dataset. Analysts can flip a
+flag to ``'dismissed'`` to bring its hours back into the calculation.
 
 Compared with the reference pipeline (``energyexe_pipeline_full.py
 :425-494``) we extend the detector with a parallel Q50-ratio check
@@ -344,6 +347,56 @@ class StructuralConstraintDetectionService:
             "runs_detected": runs_detected,
             "total_constrained_hours": total_hours,
         }
+
+    async def load_active_periods(self, windfarm_id: int) -> List[Dict[str, Any]]:
+        """Return active constraint periods for a windfarm.
+
+        "Active" = ``review_status IN ('pending_review', 'confirmed')``.
+        Dismissed flags are excluded. Used by the orchestrator to mask out
+        constrained hours from Modules 3/4/5 (FX2).
+        """
+        stmt = (
+            select(
+                StructuralConstraintFlag.period_start,
+                StructuralConstraintFlag.period_end,
+            )
+            .where(StructuralConstraintFlag.windfarm_id == windfarm_id)
+            .where(StructuralConstraintFlag.review_status.in_(("pending_review", "confirmed")))
+        )
+        rows = (await self.db.execute(stmt)).all()
+        return [{"period_start": r.period_start, "period_end": r.period_end} for r in rows]
+
+
+def build_constraint_mask(
+    df: pd.DataFrame,
+    periods: List[Dict[str, Any]],
+    *,
+    time_col: str = "hour",
+) -> pd.Series:
+    """Boolean Series aligned to ``df.index`` — True where the row's
+    ``time_col`` falls inside any active constraint period.
+
+    Periods are treated as closed-closed intervals to match how the
+    detector groups runs (``period_end`` is the last constrained hour).
+    """
+    if df.empty or not periods:
+        return pd.Series(False, index=df.index)
+
+    ts = pd.to_datetime(df[time_col])
+    if ts.dt.tz is None:
+        ts = ts.dt.tz_localize("UTC")
+
+    mask = pd.Series(False, index=df.index)
+    for period in periods:
+        start = pd.Timestamp(period["period_start"])
+        end = pd.Timestamp(period["period_end"])
+        if start.tz is None:
+            start = start.tz_localize("UTC")
+        if end.tz is None:
+            end = end.tz_localize("UTC")
+        mask |= (ts >= start) & (ts <= end)
+
+    return mask
 
 
 def _ensure_tz(ts: Any) -> datetime:

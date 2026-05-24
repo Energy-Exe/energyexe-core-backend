@@ -156,29 +156,45 @@ class PerformancePipelineService:
             curve_rows=curves.get("curve_rows"),
         )
 
-        # Module 1b: Structural constraint detection (write-only). Detected
-        # runs go to `structural_constraint_flags` for analyst review;
-        # Modules 2/3/5 still see the unfiltered df_all in this milestone.
+        # Module 1b: Structural constraint detection. Writes pending_review
+        # rows to `structural_constraint_flags`. Modules 3/4/5 below then
+        # drop any hours covered by ACTIVE flags (pending_review or confirmed
+        # — analyst can flip a flag to 'dismissed' to bring those hours back
+        # into the calculation).
+        n_constraint_hours_excluded = 0
         try:
             import numpy as np
 
             from app.services.structural_constraint_detection_service import (
                 StructuralConstraintDetectionService,
+                build_constraint_mask,
             )
 
+            detector = StructuralConstraintDetectionService(self.db)
             async with self.db.begin_nested():
                 df_for_detect = df_all.copy()
                 df_for_detect["wind_bin"] = np.floor(df_for_detect["wind_speed"]).astype(float)
-                detector = StructuralConstraintDetectionService(self.db)
                 detect_out = await detector.detect_constraints(
                     windfarm_id, df_for_detect, pipeline_run_id=pipeline_run_id
                 )
             result["structural_constraints"] = detect_out
+
+            # FX2: apply active flags as a mask on df_no_over before Modules
+            # 3/4/5 consume it. Includes both this-run detections (still
+            # pending_review) and prior runs the analyst has confirmed.
+            active_periods = await detector.load_active_periods(windfarm_id)
+            if active_periods:
+                mask = build_constraint_mask(df_no_over, active_periods)
+                n_constraint_hours_excluded = int(mask.sum())
+                df_no_over = df_no_over[~mask].reset_index(drop=True)
+
             logger.info(
                 "module_1b_complete",
                 windfarm_id=windfarm_id,
                 runs_detected=detect_out.get("runs_detected", 0),
                 total_constrained_hours=detect_out.get("total_constrained_hours", 0),
+                active_periods=len(active_periods),
+                hours_masked_from_downstream=n_constraint_hours_excluded,
             )
         except Exception as e:
             logger.error("pipeline_module_1b_error", windfarm_id=windfarm_id, error=str(e))
@@ -186,7 +202,8 @@ class PerformancePipelineService:
 
         # Module 3: Anomaly detection — each year in its own SAVEPOINT so one bad
         # year doesn't poison the whole transaction. Uses df_no_over to match
-        # the reference pipeline's sample (FX1).
+        # the reference pipeline's sample (FX1), with constraint hours masked
+        # out (FX2).
         anomaly_svc = PerformanceAnomalyService(self.db)
         anomaly_results: Dict[int, Any] = {}
         for year in years:
@@ -258,14 +275,20 @@ class PerformancePipelineService:
         )
 
         # Module 5: Degradation — each reference in its own SAVEPOINT. Uses
-        # df_no_over to match the reference pipeline's sample (FX1).
+        # df_no_over to match the reference pipeline's sample (FX1), with
+        # constraint hours masked out (FX2). Records how many hours were
+        # excluded on the degradation_results row for reporting.
         deg_svc = DegradationService(self.db)
         deg_out: Dict[str, Any] = {}
         for ref, key in [("q50", "p50"), ("q90", "p10")]:
             try:
                 async with self.db.begin_nested():
                     deg_out[key] = await deg_svc.analyze_degradation_from_df(
-                        windfarm_id, df_no_over, ref, pipeline_run_id
+                        windfarm_id,
+                        df_no_over,
+                        ref,
+                        pipeline_run_id,
+                        n_constraint_hours_excluded=n_constraint_hours_excluded,
                     )
             except Exception as e:
                 logger.error(
