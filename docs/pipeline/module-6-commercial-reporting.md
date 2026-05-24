@@ -134,18 +134,18 @@ Default scenarios: `[23.2, 26.0, 30.0, 35.0, 40.0]` EUR/MWh.
 - "If `lost_value_eur` (q90-q50 gap) is consistently > €2M AND degradation slope is positive → recommend derate review."
 - "If actual is sub-P50 for 3 consecutive years → flag covenant-watch alert."
 
-## Gaps vs spec
+## Status vs spec (post 2026-05-25)
 
 | Spec ask | Status | Notes |
 |---|---|---|
-| `lost_mwh_proxy` per-hour timeseries | ✗ stored aggregate-only | Hourly proxy is computed but only the annual sum lands on `performance_summaries`. No hourly timeseries persisted. |
-| Annual `Actual_MWh`, `Contract_Revenue_EUR`, `LostEnergyProxy_MWh`, `LostValue_EUR` | ✓ partial | `constraint_proxy_mwh` (= LostEnergyProxy_MWh) and `lost_value_eur` are stored. `Contract_Revenue_EUR` and `Contract_Revenue_vs_P50Target_EUR` are computed on-demand in scenario analysis but never persisted. |
-| PPA scenario analysis | ✓ | On-demand only, not cached. |
+| `lost_mwh_proxy` per-hour timeseries | ✗ stored aggregate-only | Hourly proxy is computed but only the annual sum lands on `performance_summaries`. Deferred. |
+| Annual `Actual_MWh`, `Contract_Revenue_EUR`, `LostEnergyProxy_MWh`, `LostValue_EUR` | ✓ (PR #67) | All four now persisted on `performance_summaries`: `actual_mwh`, `contract_revenue_eur`, `contract_revenue_vs_p50_target_eur`, `constraint_proxy_mwh`, `lost_value_eur`. Contract revenue uses active PPA price if any, else hourly market_price (NaN-filled with mean per spec `:270-280`). |
+| PPA scenario analysis | ✓ | On-demand. |
 | `value_of_1pct_per_year` | ✓ | Inside scenario response. |
+| **Revenue uplift column when base PPA price is in scenarios** | ✓ (PR #67) | Each scenario response now includes `is_base` and `revenue_uplift_vs_base_eur`. |
 | `commercial_summary_board_level_q90_vs_q50.csv` | ✗ | No CSV export endpoint. |
 | `scenario_ppa_q90_vs_q50.csv` | ✗ | No CSV export endpoint. |
 | Multi-year commercial roll-up (cumulative vs P50, year-on-year revenue trend) | ✗ | No service or API today. |
-| Revenue uplift column when base PPA price is included in the scenario list | ✗ | Not computed today. |
 
 ### Greenfield opportunity (suggested by exploration)
 

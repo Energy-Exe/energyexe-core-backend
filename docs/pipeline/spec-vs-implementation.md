@@ -1,5 +1,40 @@
 # Spec vs implementation — gaps and improvement plan
 
+> **STATUS (2026-05-25): everything in the original improvement plan has shipped.** All headline bugs (A, B, C), Gap D (Module 1b), Gap E (Module 4), the API gaps in Module 5, the Module 6 polish work, and the W1/W2 quick wins are merged to master. See `HANDOFF.md` for the consolidated post-implementation summary and what's left (backfill + release note + analyst-review UI).
+>
+> The body of this document is preserved verbatim as the historical record of the comparison work. Items now resolved are listed below; check `HANDOFF.md` for which PR shipped each fix.
+
+## Resolved (status 2026-05-25)
+
+| Item from this doc | Resolved by |
+|---|---|
+| Bug A — Module 5 monthly OLS | PR #64 (hourly OLS + seasonal) |
+| Bug B — Module 5 no seasonal decomposition | PR #64 (statsmodels `seasonal_decompose`) |
+| Bug C — Module 5 hardcoded `baseline_cap_pu = 0.35` | PR #70 (per-windfarm first-year median) |
+| Gap D — Module 1b not implemented | PR #68 (with B1.5 Q50-ratio extension beyond spec) |
+| Gap E — Module 4 yearly aggregation basis | PR #66 |
+| #5 `ci_95_pct` not exposed | PR #70 |
+| #6 `p_value` not in API | PR #70 (via `DegradationResponse`) |
+| #9 Module 3/5 loss reference for constrained hours | PR #71 (df_no_over) + PR #72 (active-flag mask) |
+| #12 PPA scenario `Revenue_Uplift_vs_Base_EUR` | PR #67 |
+| Module 6 `Contract_Revenue_EUR` + vs-P50 | PR #67 |
+| Module 1b downstream wiring through Modules 2/3/5 | PR #72 (active = pending_review OR confirmed) |
+| W1 dead code in wind_normalisation_service | PR #66 |
+| W2 NaN-price warning | PR #69 |
+| W3 + W4 docstring updates | PR #64 |
+
+**Still open from this doc:**
+- #11 PPA scenario caching — deferred; dashboards aren't hitting it hard yet
+- #13 Hourly `lost_mwh_proxy` persistence — deferred; revisit if dashboards need it
+- E1 `_load_hourly_data` cross-service import cleanup — tech debt; see `HANDOFF.md`
+- E2 `pipeline_run_audit` row counts — tech debt; see `HANDOFF.md`
+- E3 `pipeline_run_id` on every output table — partial
+- E4 Document IsolationForest opt-in — partial (env var documented in module-3 doc)
+
+---
+
+## Original analysis (preserved for historical context)
+
 Detailed comparison between the May 2026 reference pipeline (`energyexe_pipeline_full.py`, 1,216 lines, Jupyter-style monolith with CSV outputs) and our productionised service-based implementation in `app/services/`.
 
 The reference code was generated for one windfarm running off a CSV. Our system runs nightly across ~360 windfarms, reads/writes Postgres, exposes APIs to admin/client UIs, and enriches with bidzone peer comparison. **Most architectural deltas are deliberate productionisation wins**. The gaps that matter are mathematical / statistical correctness bugs, not architecture.
