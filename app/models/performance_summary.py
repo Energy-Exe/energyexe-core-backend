@@ -1,18 +1,9 @@
 """Monthly/yearly aggregated performance metrics — ODI, normalisation, commercial."""
 
-from datetime import datetime, timezone, date
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import (
-    Date,
-    DateTime,
-    ForeignKey,
-    Index,
-    Integer,
-    Numeric,
-    String,
-    UniqueConstraint,
-)
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -54,6 +45,10 @@ class PerformanceSummary(Base):
     # ── Module 6: Commercial ──
     constraint_proxy_mwh: Mapped[Optional[float]] = mapped_column(Numeric(12, 3), nullable=True)
     lost_value_eur: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    contract_revenue_eur: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    contract_revenue_vs_p50_target_eur: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
 
     # ── Metadata ──
     pipeline_run_id: Mapped[Optional[int]] = mapped_column(
@@ -73,7 +68,9 @@ class PerformanceSummary(Base):
     pipeline_run = relationship("ImportJobExecution")
 
     __table_args__ = (
-        UniqueConstraint("windfarm_id", "period_type", "year", "month", name="uq_perf_summary_wf_period"),
+        UniqueConstraint(
+            "windfarm_id", "period_type", "year", "month", name="uq_perf_summary_wf_period"
+        ),
         Index("ix_perf_summary_wf_year", "windfarm_id", "year"),
     )
 

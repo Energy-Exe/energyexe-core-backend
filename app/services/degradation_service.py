@@ -4,12 +4,14 @@ Estimates whether there is a statistically significant long-run trend in
 operational performance — i.e. whether the turbine is degrading (or recovering)
 over time, after accounting for wind variability and seasonal effects.
 
-Method: compute hourly residuals vs yearly capability curve in operational
-wind range (4-14 m/s), optionally remove seasonal component, fit OLS trend.
+Method: compute per-hour residuals vs yearly capability curve in operational
+wind range (4-14 m/s), remove the seasonal component via additive
+decomposition (period = 8760 observations), then fit an OLS trend on
+year_fraction vs deseasonalised residual.
 """
 
-from datetime import date, datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from datetime import date
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -22,16 +24,51 @@ from app.models.degradation_result import DegradationResult
 from app.models.power_curve_bin import PowerCurveBin
 from app.models.windfarm import Windfarm
 
+try:
+    from statsmodels.tsa.seasonal import seasonal_decompose
+
+    HAS_STATSMODELS = True
+except ImportError:  # pragma: no cover - statsmodels is a hard dependency
+    HAS_STATSMODELS = False
+
 logger = structlog.get_logger(__name__)
 
 # ─── Configuration ─────────────────────────────────────────────
-OP_WIND_MIN = 4.0   # Operational wind range min (m/s)
+OP_WIND_MIN = 4.0  # Operational wind range min (m/s)
 OP_WIND_MAX = 14.0  # Operational wind range max (m/s)
-MIN_MEDIAN_PU_FOR_OPERATIONAL = 0.10  # Skip bins where P50 is too low
+MIN_MEDIAN_PU_FOR_OPERATIONAL = 0.10  # Skip bins where reference is too low
+MIN_FIT_HOURS = 100  # Skip fit if fewer than this many qualifying hours
+SEASONAL_PERIOD_HOURS = 8760  # One calendar-year cycle, in observations
+
+
+# ─── Module-level helpers (pure compute, testable) ─────────────
+
+
+def remove_seasonal_component(series: pd.Series, period: int = SEASONAL_PERIOD_HOURS) -> pd.Series:
+    """Subtract additive seasonal component from a series.
+
+    Mirrors the reference pipeline (`energyexe_pipeline_full.py:323-334`):
+    when statsmodels is unavailable or the series is shorter than two
+    periods, return the series unchanged. Otherwise fill gaps then
+    decompose and subtract the seasonal piece.
+    """
+    if not HAS_STATSMODELS or len(series) < 2 * period:
+        return series
+    try:
+        result = seasonal_decompose(
+            series.interpolate().ffill().bfill(),
+            model="additive",
+            period=period,
+            extrapolate_trend="freq",
+        )
+        return series - result.seasonal
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("seasonal_decompose_failed", error=str(exc))
+        return series
 
 
 class DegradationService:
-    """Analyzes long-run performance degradation trends."""
+    """Analyses long-run performance degradation trends."""
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -55,51 +92,19 @@ class DegradationService:
         if not rated_mw:
             return None
 
-        # Load yearly capability curves
         yearly_curves = await self._load_yearly_capability(windfarm_id, reference)
         if not yearly_curves:
             logger.warning("degradation_no_curves", windfarm_id=windfarm_id)
             return None
 
-        # Load hourly data
         from app.services.power_curve_service import PowerCurveService
+
         pcs = PowerCurveService(self.db)
         df = await pcs._load_hourly_data(windfarm_id, None, None, float(rated_mw))
         if df.empty:
             return None
 
-        # Compute residuals
-        residuals = self.compute_residuals(df, yearly_curves)
-        if residuals.empty or len(residuals) < 12:
-            logger.warning("degradation_insufficient_data", windfarm_id=windfarm_id, months=len(residuals))
-            return None
-
-        # Fit trend
-        trend = self.fit_degradation_trend(residuals)
-        if trend is None:
-            return None
-
-        # Store result
-        analysis_start = date(int(residuals["year"].min()), 1, 1)
-        analysis_end = date(int(residuals["year"].max()), 12, 31)
-
-        await self._store_result(
-            windfarm_id, reference, trend, analysis_start, analysis_end,
-            len(residuals), pipeline_run_id,
-        )
-
-        return {
-            "reference": reference,
-            "slope_pct_per_year": trend["slope_pct"],
-            "slope_pu_per_year": trend["slope"],
-            "r_squared": trend["r2"],
-            "p_value": trend["p_value"],
-            "ci_95": trend["ci95"],
-            "data_points": len(residuals),
-            "analysis_range": f"{analysis_start} to {analysis_end}",
-        }
-
-    # ─── Fast path: accept pre-loaded DataFrame ─────────────────
+        return await self._run_from_df(windfarm_id, df, yearly_curves, reference, pipeline_run_id)
 
     async def analyze_degradation_from_df(
         self,
@@ -108,26 +113,45 @@ class DegradationService:
         reference: str = "q50",
         pipeline_run_id: Optional[int] = None,
     ) -> Optional[dict]:
-        """Run degradation analysis using pre-loaded hourly DataFrame."""
+        """Run degradation analysis using a pre-loaded hourly DataFrame."""
         yearly_curves = await self._load_yearly_capability(windfarm_id, reference)
         if not yearly_curves:
             return None
+        return await self._run_from_df(windfarm_id, df, yearly_curves, reference, pipeline_run_id)
 
+    async def _run_from_df(
+        self,
+        windfarm_id: int,
+        df: pd.DataFrame,
+        yearly_curves: Dict[int, Dict[float, float]],
+        reference: str,
+        pipeline_run_id: Optional[int],
+    ) -> Optional[dict]:
         residuals = self.compute_residuals(df, yearly_curves)
-        if residuals.empty or len(residuals) < 12:
+        if residuals.empty or len(residuals) < MIN_FIT_HOURS:
+            logger.warning(
+                "degradation_insufficient_data",
+                windfarm_id=windfarm_id,
+                reference=reference,
+                hours=len(residuals),
+            )
             return None
 
         trend = self.fit_degradation_trend(residuals)
         if trend is None:
             return None
 
-        from datetime import date as date_type
-        analysis_start = date_type(int(residuals["year"].min()), 1, 1)
-        analysis_end = date_type(int(residuals["year"].max()), 12, 31)
+        analysis_start = date(int(residuals["year"].min()), 1, 1)
+        analysis_end = date(int(residuals["year"].max()), 12, 31)
 
         await self._store_result(
-            windfarm_id, reference, trend, analysis_start, analysis_end,
-            len(residuals), pipeline_run_id,
+            windfarm_id,
+            reference,
+            trend,
+            analysis_start,
+            analysis_end,
+            trend["n"],
+            pipeline_run_id,
         )
 
         return {
@@ -137,7 +161,10 @@ class DegradationService:
             "r_squared": trend["r2"],
             "p_value": trend["p_value"],
             "ci_95": trend["ci95"],
-            "data_points": len(residuals),
+            "ci_95_pct": trend["ci95_pct"],
+            "baseline_cap_pu": trend["baseline_cap_pu"],
+            "data_points": trend["n"],
+            "analysis_range": f"{analysis_start} to {analysis_end}",
         }
 
     # ─── Pure computation (testable) ───────────────────────────
@@ -150,102 +177,131 @@ class DegradationService:
         op_wind_max: float = OP_WIND_MAX,
         min_median_pu: float = MIN_MEDIAN_PU_FOR_OPERATIONAL,
     ) -> pd.DataFrame:
-        """Compute monthly mean residual_pu = actual_p_pu - reference_bin_p_pu.
+        """Compute per-hour residual_pu = p_pu - reference_bin_pu.
 
-        Filters to operational wind range and bins where reference >= min_median_pu.
-        Returns DataFrame with columns: year, month, year_fraction, mean_residual_pu.
+        Filters to the operational wind range and to bins where the reference
+        is above ``min_median_pu``. Returns hourly rows (one per surviving
+        hour) with columns: ``hour, year, year_fraction, wind_speed, wind_bin,
+        ref_pu, p_pu, residual_pu``.
+
+        year_fraction follows the reference at line 1001:
+            year + (dayofyear - 1) / 365.25
         """
         out = df.copy()
 
-        # Filter to operational wind range
         out = out[(out["wind_speed"] >= op_wind_min) & (out["wind_speed"] <= op_wind_max)].copy()
         if out.empty:
             return pd.DataFrame()
 
-        # Assign wind bins
         out["wind_bin"] = np.floor(out["wind_speed"]).astype(float)
 
-        # Look up reference p_pu from yearly capability curve
-        def lookup_ref(row):
-            year = int(row["year"])
-            wbin = row["wind_bin"]
-            curve = yearly_curves.get(year, {})
-            return curve.get(wbin)
-
-        out["ref_pu"] = out.apply(lookup_ref, axis=1)
-
-        # Filter: must have reference and reference >= minimum
+        out["ref_pu"] = [
+            yearly_curves.get(int(y), {}).get(b) for y, b in zip(out["year"], out["wind_bin"])
+        ]
         out = out[out["ref_pu"].notna() & (out["ref_pu"] >= min_median_pu)].copy()
         if out.empty:
             return pd.DataFrame()
 
-        # Residual
-        out["residual_pu"] = out["p_pu"] - out["ref_pu"]
+        out["ref_pu"] = out["ref_pu"].astype(float)
+        out["residual_pu"] = out["p_pu"].astype(float) - out["ref_pu"]
 
-        # Monthly aggregation
-        out["month"] = out["hour"].dt.month
-        monthly = (
-            out.groupby(["year", "month"], as_index=False)
-            .agg(
-                mean_residual_pu=("residual_pu", "mean"),
-                median_residual_pu=("residual_pu", "median"),
-                n_hours=("residual_pu", "count"),
-            )
-        )
+        ts = pd.to_datetime(out["hour"])
+        out["year_fraction"] = ts.dt.year + (ts.dt.dayofyear - 1) / 365.25
 
-        # Year fraction for OLS: 2020-Jan = 2020.042, 2020-Jul = 2020.542
-        monthly["year_fraction"] = monthly["year"] + (monthly["month"] - 0.5) / 12.0
-
-        return monthly
+        cols = [
+            "hour",
+            "year",
+            "year_fraction",
+            "wind_speed",
+            "wind_bin",
+            "ref_pu",
+            "p_pu",
+            "residual_pu",
+        ]
+        return out[cols].reset_index(drop=True)
 
     @staticmethod
-    def fit_degradation_trend(monthly_residuals: pd.DataFrame) -> Optional[dict]:
-        """Fit OLS: mean_residual_pu vs year_fraction.
+    def fit_degradation_trend(
+        residuals: pd.DataFrame,
+        seasonal_period: int = SEASONAL_PERIOD_HOURS,
+    ) -> Optional[dict]:
+        """Fit OLS on (year_fraction, residual_deseasonalised).
 
-        Returns dict with slope, intercept, r2, p_value, stderr, ci95, slope_pct.
-        Returns None if insufficient data (< 2 points).
+        Returns a summary dict (slope, intercept, r2, p_value, std_err, ci95,
+        slope_pct, baseline_cap_pu, n) or None when there is not enough data.
+        Mirrors spec :1019-1064.
         """
-        x = monthly_residuals["year_fraction"].to_numpy(dtype=float)
-        y = monthly_residuals["mean_residual_pu"].to_numpy(dtype=float)
+        if residuals.empty or len(residuals) < MIN_FIT_HOURS:
+            return None
 
-        # Remove NaN
+        df_fit = residuals.sort_values("hour").reset_index(drop=True)
+
+        # Deseasonalise: index by hour so seasonal_decompose can align.
+        # Spec uses time_col-indexed series, period=8760 observations.
+        series = df_fit.set_index("hour")["residual_pu"]
+        deseasonalised = remove_seasonal_component(series, period=seasonal_period)
+        df_fit["residual_deseasonalised"] = deseasonalised.values
+
+        x = df_fit["year_fraction"].to_numpy(dtype=float)
+        y = df_fit["residual_deseasonalised"].to_numpy(dtype=float)
         mask = np.isfinite(x) & np.isfinite(y)
         x, y = x[mask], y[mask]
-        n = len(x)
-
+        n = int(len(x))
         if n < 2:
+            return None
+
+        ssx = float(np.sum((x - x.mean()) ** 2))
+        if ssx == 0:
             return None
 
         slope, intercept, r_value, p_value, std_err = scipy_stats.linregress(x, y)
 
-        # 95% confidence interval
         ci95 = None
-        if n >= 3 and std_err > 0:
-            t_crit = scipy_stats.t.ppf(0.975, df=n - 2)
-            ci95 = (float(slope - t_crit * std_err), float(slope + t_crit * std_err))
+        if n >= 3 and std_err > 0 and np.isfinite(std_err):
+            t_crit = float(scipy_stats.t.ppf(0.975, df=n - 2))
+            ci95 = (
+                float(slope - t_crit * std_err),
+                float(slope + t_crit * std_err),
+            )
 
-        # Baseline capability: mean reference p_pu in first year
-        first_year_months = monthly_residuals[
-            monthly_residuals["year"] == monthly_residuals["year"].min()
-        ]
-        # Use intercept at first year as baseline proxy
-        baseline_cap = float(intercept + slope * x.min()) if n > 0 else 0
-        # For slope_pct, we need absolute baseline — use first year's actual mean_residual near zero
-        # baseline from curve: typically q50 in operational range averages ~0.3-0.5 p.u.
-        # slope_pct = slope / baseline * 100, but baseline of residual is ~0, so use reference
-        # We approximate baseline_cap as median q50 in operational range (passed in monthly)
-        baseline_cap_pu = 0.35  # Default if we can't compute — will be overridden by pipeline
+        # Hours-weighted median of ref_pu in the first year of df_fit
+        # (spec :1050-1052). df_fit has one row per surviving hour, so a
+        # wind bin with many hours contributes that many identical ref_pu
+        # values to the median — i.e. naturally weighted toward bins the
+        # windfarm actually operates in.
+        first_year = int(df_fit["year_fraction"].min())
+        baseline_df = df_fit[df_fit["year_fraction"].between(first_year, first_year + 1)]
+        if not baseline_df.empty:
+            baseline_cap_pu = float(baseline_df["ref_pu"].median())
+        else:
+            baseline_cap_pu = float("nan")
 
-        slope_pct = (slope / baseline_cap_pu * 100) if baseline_cap_pu > 0 else None
+        if not np.isfinite(baseline_cap_pu) or baseline_cap_pu <= 0:
+            logger.warning(
+                "degradation_baseline_fallback",
+                computed=baseline_cap_pu,
+                first_year=first_year,
+                first_year_rows=len(baseline_df),
+            )
+            baseline_cap_pu = 0.35
+
+        slope_pct = float(slope / baseline_cap_pu * 100)
+        ci95_pct = None
+        if ci95 is not None:
+            ci95_pct = (
+                float(ci95[0] / baseline_cap_pu * 100),
+                float(ci95[1] / baseline_cap_pu * 100),
+            )
 
         return {
             "slope": float(slope),
             "intercept": float(intercept),
-            "r2": float(r_value ** 2),
+            "r2": float(r_value**2),
             "p_value": float(p_value),
             "std_err": float(std_err),
             "ci95": ci95,
-            "slope_pct": float(slope_pct) if slope_pct is not None else None,
+            "ci95_pct": ci95_pct,
+            "slope_pct": slope_pct,
             "baseline_cap_pu": baseline_cap_pu,
             "n": n,
         }
@@ -295,7 +351,6 @@ class DegradationService:
         pipeline_run_id: Optional[int],
     ) -> None:
         """Store or update degradation result."""
-        # Delete existing for this windfarm + reference (keep only latest)
         await self.db.execute(
             delete(DegradationResult).where(
                 DegradationResult.windfarm_id == windfarm_id,
@@ -316,6 +371,8 @@ class DegradationService:
             p_value=trend["p_value"],
             ci_lower_95=trend["ci95"][0] if trend["ci95"] else None,
             ci_upper_95=trend["ci95"][1] if trend["ci95"] else None,
+            ci_lower_95_pct=trend["ci95_pct"][0] if trend["ci95_pct"] else None,
+            ci_upper_95_pct=trend["ci95_pct"][1] if trend["ci95_pct"] else None,
             baseline_cap_pu=trend["baseline_cap_pu"],
             pipeline_run_id=pipeline_run_id,
         )

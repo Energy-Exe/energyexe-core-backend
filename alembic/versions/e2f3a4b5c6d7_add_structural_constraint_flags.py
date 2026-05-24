@@ -5,7 +5,7 @@ etc.) pending analyst review. Downstream modules will consume confirmed
 flags in a follow-up milestone — for now this is write-only.
 
 Revision ID: e2f3a4b5c6d7
-Revises: e4a1c83d9b21
+Revises: d1f2a3b4c5e6
 Create Date: 2026-05-24
 """
 
@@ -15,7 +15,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "e2f3a4b5c6d7"
-down_revision = "e4a1c83d9b21"
+down_revision = "d1f2a3b4c5e6"
 branch_labels = None
 depends_on = None
 

@@ -343,10 +343,17 @@ class PerformancePipelineService:
     async def _compute_commercial_metrics(
         self, windfarm_id: int, year: int, pipeline_run_id: Optional[int] = None
     ) -> None:
-        """Compute constraint proxy and lost value for a year.
+        """Compute commercial metrics for a year.
 
-        constraint_proxy_mwh = sum((q90_bin - q50_bin) * rated_mw) per qualifying hour
-        lost_value_eur = constraint_proxy_mwh * avg_market_price
+        Persists onto ``performance_summaries`` (period_type='year'):
+        - constraint_proxy_mwh = sum((q90_bin - q50_bin) * rated_mw) per qualifying hour
+        - lost_value_eur = constraint_proxy_mwh * avg_market_price
+        - contract_revenue_eur = sum(actual_mwh × price), where price is the
+          active PPA price if the windfarm has a fixed-price contract for
+          this year, else the hourly market_price (NaN-filled with the
+          windfarm/year mean, matching spec :270-280).
+        - contract_revenue_vs_p50_target_eur = contract_revenue - target_revenue
+          where target_revenue = p50_target_mwh × avg_price.
         """
         # Get rated MW
         wf_result = await self.db.execute(
@@ -374,7 +381,7 @@ class PerformancePipelineService:
         if not gap_by_bin:
             return
 
-        # Reuse power curve service's robust pandas-merge loader (avoids 3-table SQL join plan).
+        # Reuse power curve service's robust pandas-merge loader.
         import pandas as pd
 
         from app.services.power_curve_service import PowerCurveService
@@ -386,11 +393,35 @@ class PerformancePipelineService:
 
         df["wind_bin"] = df["wind_speed"].apply(lambda v: float(int(v)) if pd.notna(v) else None)
         df = df.dropna(subset=["wind_bin"])
+
+        # Resolve effective price per hour: PPA if active, else market_price.
+        ppa_price = await self._get_active_ppa_price(windfarm_id, year)
+        if ppa_price is not None:
+            df["effective_price"] = float(ppa_price)
+        else:
+            n_nan = int(df["market_price"].isna().sum())
+            mean_price = float(df["market_price"].mean()) if len(df) else 0.0
+            if n_nan > 0 and mean_price > 0:
+                # Match spec: fill NaN price with mean; log if appreciable
+                if n_nan / max(len(df), 1) > 0.05:
+                    logger.warning(
+                        "commercial_nan_price_fill",
+                        windfarm_id=windfarm_id,
+                        year=year,
+                        nan_hours=n_nan,
+                        total_hours=len(df),
+                        mean_price=mean_price,
+                    )
+                df = df.assign(effective_price=df["market_price"].fillna(mean_price))
+            else:
+                df = df.assign(effective_price=df["market_price"])
+
+        # Aggregate constraint proxy per wind_bin
         grouped = (
             df.groupby("wind_bin")
             .agg(
                 hours=("hour", "count"),
-                avg_price=("market_price", "mean"),
+                avg_price=("effective_price", "mean"),
             )
             .reset_index()
         )
@@ -409,15 +440,31 @@ class PerformancePipelineService:
                 if pd.notna(row["avg_price"]):
                     total_price_sum += float(row["avg_price"]) * hours
 
-        avg_price = total_price_sum / max(total_proxy_hours, 1)
-        lost_value = total_proxy_mwh * avg_price
+        avg_price_in_proxy_hours = total_price_sum / max(total_proxy_hours, 1)
+        lost_value = total_proxy_mwh * avg_price_in_proxy_hours
 
-        # Update yearly summary — UPDATE then INSERT fallback (NULL month defeats ON CONFLICT).
+        # Contract revenue: price-weighted sum across ALL valid hours
+        actual_mwh = float(df["generation_mwh"].sum())
+        contract_revenue = float((df["generation_mwh"] * df["effective_price"]).sum(skipna=True))
+        avg_year_price = float(df["effective_price"].mean(skipna=True)) if len(df) else 0.0
+
+        # P50 target → target revenue
+        p50_mwh = await self._get_p50_target_mwh(windfarm_id, year)
+        if p50_mwh is not None and avg_year_price > 0:
+            target_revenue = float(p50_mwh) * avg_year_price
+            revenue_vs_target = contract_revenue - target_revenue
+        else:
+            revenue_vs_target = None
+
         params = {
             "wf_id": windfarm_id,
             "year": year,
             "proxy_mwh": round(total_proxy_mwh, 3),
             "lost_value": round(lost_value, 2),
+            "contract_revenue": round(contract_revenue, 2),
+            "contract_revenue_vs_p50": (
+                round(revenue_vs_target, 2) if revenue_vs_target is not None else None
+            ),
             "pipeline_run_id": pipeline_run_id,
         }
         updated = await self.db.execute(
@@ -426,13 +473,15 @@ class PerformancePipelineService:
                 UPDATE performance_summaries
                 SET constraint_proxy_mwh = :proxy_mwh,
                     lost_value_eur = :lost_value,
+                    contract_revenue_eur = :contract_revenue,
+                    contract_revenue_vs_p50_target_eur = :contract_revenue_vs_p50,
                     pipeline_run_id = COALESCE(:pipeline_run_id, pipeline_run_id),
                     updated_at = NOW()
                 WHERE windfarm_id = :wf_id
                   AND period_type = 'year'
                   AND year = :year
                   AND month IS NULL
-            """
+                """
             ),
             params,
         )
@@ -442,14 +491,67 @@ class PerformancePipelineService:
                     """
                     INSERT INTO performance_summaries
                       (windfarm_id, period_type, year, month,
-                       constraint_proxy_mwh, lost_value_eur, pipeline_run_id)
+                       constraint_proxy_mwh, lost_value_eur,
+                       contract_revenue_eur, contract_revenue_vs_p50_target_eur,
+                       pipeline_run_id)
                     VALUES
                       (:wf_id, 'year', :year, NULL,
-                       :proxy_mwh, :lost_value, :pipeline_run_id)
-                """
+                       :proxy_mwh, :lost_value,
+                       :contract_revenue, :contract_revenue_vs_p50,
+                       :pipeline_run_id)
+                    """
                 ),
                 params,
             )
+
+    async def _get_active_ppa_price(self, windfarm_id: int, year: int) -> Optional[float]:
+        """Return the active PPA price for the given year, if a fixed-price
+        contract covers it. Returns None for merchant/spot exposure.
+        """
+        from datetime import date as _date
+
+        from app.models.ppa import PPA
+
+        year_start = _date(year, 1, 1)
+        year_end = _date(year, 12, 31)
+        result = await self.db.execute(
+            select(PPA.ppa_price_eur_mwh)
+            .where(
+                PPA.windfarm_id == windfarm_id,
+                PPA.contract_type == "fixed_price",
+                PPA.ppa_price_eur_mwh.isnot(None),
+                (PPA.ppa_start_date.is_(None)) | (PPA.ppa_start_date <= year_end),
+                (PPA.ppa_end_date.is_(None)) | (PPA.ppa_end_date >= year_start),
+            )
+            .order_by(PPA.ppa_start_date.desc())
+            .limit(1)
+        )
+        val = result.scalar_one_or_none()
+        return float(val) if val is not None else None
+
+    async def _get_p50_target_mwh(self, windfarm_id: int, year: int) -> Optional[float]:
+        """Return the active P50 target in MWh for the given year."""
+        from datetime import date as _date
+
+        from app.models.p50_target import P50Target
+
+        year_start = _date(year, 1, 1)
+        year_end = _date(year, 12, 31)
+        result = await self.db.execute(
+            select(P50Target.p50_target_volume_gwh)
+            .where(
+                P50Target.windfarm_id == windfarm_id,
+                P50Target.p50_target_start_date <= year_end,
+                (P50Target.p50_target_end_date.is_(None))
+                | (P50Target.p50_target_end_date >= year_start),
+            )
+            .order_by(P50Target.p50_target_start_date.desc())
+            .limit(1)
+        )
+        gwh = result.scalar_one_or_none()
+        if gwh is None:
+            return None
+        return float(gwh) * 1000.0
 
     # ─── PPA scenario analysis ─────────────────────────────────
 
@@ -514,12 +616,22 @@ class PerformancePipelineService:
             p50_gwh = p50_result.scalar_one_or_none()
         p50_mwh = float(p50_gwh) * 1000 if p50_gwh else actual_mwh
 
+        # Resolve base PPA price if any scenario matches the windfarm's
+        # actual contracted price — that scenario becomes the base for
+        # the uplift column (spec :1184-1194).
+        base_price = await self._get_active_ppa_price(windfarm_id, year)
+        base_revenue: Optional[float] = None
+        if base_price is not None and base_price in price_scenarios:
+            base_revenue = actual_mwh * float(base_price)
+
         scenarios = []
         for price in price_scenarios:
             revenue = actual_mwh * price
             p50_revenue = p50_mwh * price
             gap = revenue - p50_revenue
             value_1pct = 0.01 * actual_mwh * price
+            is_base = base_price is not None and price == base_price
+            uplift = round(revenue - base_revenue, 2) if base_revenue is not None else None
 
             scenarios.append(
                 {
@@ -528,6 +640,8 @@ class PerformancePipelineService:
                     "revenue_eur": round(revenue, 2),
                     "revenue_vs_p50_eur": round(gap, 2),
                     "value_of_1pct_eur_per_year": round(value_1pct, 2),
+                    "is_base": is_base,
+                    "revenue_uplift_vs_base_eur": uplift,
                 }
             )
 
