@@ -27,9 +27,7 @@ import pandas as pd
 import pytest
 
 from app.services.degradation_service import DegradationService
-from app.services.generation_concentration_service import (
-    GenerationConcentrationService,
-)
+from app.services.generation_concentration_service import GenerationConcentrationService
 from app.services.performance_anomaly_service import PerformanceAnomalyService
 from app.services.power_curve_service import PowerCurveService
 
@@ -150,10 +148,9 @@ class TestEndToEndMath:
             curves[y] = curve
 
         residuals = DegradationService.compute_residuals(df, curves)
-        # Residuals should hover around zero — mean within ±0.10. Column is
-        # `mean_residual_pu` (monthly aggregate).
+        # Residuals should hover around zero — per-hour mean within ±0.10.
         if len(residuals) > 0:
-            mean_resid = float(residuals["mean_residual_pu"].mean())
+            mean_resid = float(residuals["residual_pu"].mean())
             assert -0.10 < mean_resid < 0.10
 
     def test_module_5_picks_up_negative_slope(self):
@@ -162,7 +159,9 @@ class TestEndToEndMath:
         df = pd.concat(
             [
                 _synthetic_windfarm_year(
-                    year=y, seed=y, degradation_pct=0.05 * (i),
+                    year=y,
+                    seed=y,
+                    degradation_pct=0.05 * (i),
                 )
                 for i, y in enumerate(years)
             ],
@@ -178,10 +177,10 @@ class TestEndToEndMath:
         curves = {y: first_curve for y in years}
 
         residuals = DegradationService.compute_residuals(df, curves)
-        # Year-over-year mean monthly residual should decrease (more negative
+        # Year-over-year mean hourly residual should decrease (more negative
         # each year as we injected progressive degradation).
         if len(residuals) >= 24:
-            yearly_means = residuals.groupby("year")["mean_residual_pu"].mean()
+            yearly_means = residuals.groupby("year")["residual_pu"].mean()
             # 2024 mean residual < 2022 mean residual
             assert yearly_means.iloc[-1] < yearly_means.iloc[0]
 
@@ -199,9 +198,7 @@ class TestEndToEndMath:
         approx_max = RATED_MW * 8760
         assert 0 < result["total_mwh"] < approx_max
         # Decile shares sum to ~100%
-        assert math.isclose(
-            sum(result["decile_shares_full"].values()), 100.0, abs_tol=0.5
-        )
+        assert math.isclose(sum(result["decile_shares_full"].values()), 100.0, abs_tol=0.5)
 
 
 class TestPipelineConsistency:
