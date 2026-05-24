@@ -9,10 +9,10 @@ from app.api.v1.endpoints import (
     audit_logs,
     auth,
     bidzones,
-    consents,
     brain_agent,
     cables,
     comparison,
+    consents,
     control_areas,
     countries,
     data_anomalies,
@@ -24,10 +24,13 @@ from app.api.v1.endpoints import (
     generation,
     generation_units,
     import_jobs,
-    map as map_endpoints,
+)
+from app.api.v1.endpoints import map as map_endpoints
+from app.api.v1.endpoints import (
     market_balance_areas,
     opportunities,
     owners,
+    p50_targets,
     performance_pipeline,
     portfolio,
     ppas,
@@ -37,16 +40,16 @@ from app.api.v1.endpoints import (
     regions,
     report_commentary,
     states,
+    structural_constraints,
     substations,
     turbine_models,
     turbine_units,
     users,
     weather_data,
     weather_imports,
-    windfarms,
-    windfarm_timeline,
     windfarm_reports,
-    p50_targets,
+    windfarm_timeline,
+    windfarms,
 )
 
 api_router = APIRouter()
@@ -79,12 +82,8 @@ api_router.include_router(ppas.router, prefix="/ppas", tags=["ppas"])
 api_router.include_router(
     financial_entities.router, prefix="/financial-entities", tags=["financial-entities"]
 )
-api_router.include_router(
-    financial_data.router, prefix="/financial-data", tags=["financial-data"]
-)
-api_router.include_router(
-    exchange_rates.router, prefix="/exchange-rates", tags=["exchange-rates"]
-)
+api_router.include_router(financial_data.router, prefix="/financial-data", tags=["financial-data"])
+api_router.include_router(exchange_rates.router, prefix="/exchange-rates", tags=["exchange-rates"])
 
 # New unified generation data endpoints
 api_router.include_router(generation.router, prefix="/generation", tags=["generation"])
@@ -102,7 +101,9 @@ api_router.include_router(portfolio.router, prefix="/portfolios", tags=["portfol
 api_router.include_router(windfarm_timeline.router, prefix="/windfarms", tags=["windfarm-timeline"])
 
 # External data sources endpoints
-api_router.include_router(external_data_sources.router, prefix="/external-sources", tags=["external-sources"])
+api_router.include_router(
+    external_data_sources.router, prefix="/external-sources", tags=["external-sources"]
+)
 
 # Raw data fetching endpoints (fetch from APIs and store in generation_data_raw)
 api_router.include_router(raw_data_fetch.router, prefix="/raw-data", tags=["raw-data"])
@@ -117,7 +118,9 @@ api_router.include_router(import_jobs.router, prefix="/import-jobs", tags=["impo
 api_router.include_router(weather_data.router)
 
 # Weather import jobs management
-api_router.include_router(weather_imports.router, prefix="/weather-imports", tags=["weather-imports"])
+api_router.include_router(
+    weather_imports.router, prefix="/weather-imports", tags=["weather-imports"]
+)
 
 # Windfarm performance reports endpoints
 api_router.include_router(windfarm_reports.router, tags=["windfarm-reports"])
@@ -126,7 +129,9 @@ api_router.include_router(windfarm_reports.router, tags=["windfarm-reports"])
 api_router.include_router(p50_targets.router, tags=["p50-targets"])
 
 # Report commentary (LLM-generated) endpoints
-api_router.include_router(report_commentary.router, prefix="/report-commentary", tags=["report-commentary"])
+api_router.include_router(
+    report_commentary.router, prefix="/report-commentary", tags=["report-commentary"]
+)
 
 # Data export endpoints
 api_router.include_router(export.router, prefix="/export", tags=["export"])
@@ -137,6 +142,13 @@ api_router.include_router(opportunities.router, prefix="/opportunities", tags=["
 # Performance analysis pipeline endpoints
 api_router.include_router(
     performance_pipeline.router, prefix="/performance-pipeline", tags=["performance-pipeline"]
+)
+
+# Structural-constraint flags (Module 1b)
+api_router.include_router(
+    structural_constraints.router,
+    prefix="/structural-constraints",
+    tags=["structural-constraints"],
 )
 
 # Alerts and notifications endpoints

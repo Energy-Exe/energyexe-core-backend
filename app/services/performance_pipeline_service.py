@@ -4,7 +4,7 @@ Also contains Module 6 (Commercial Reporting) logic: constraint proxy
 timeseries and PPA scenario analysis.
 """
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -32,9 +32,7 @@ class PerformancePipelineService:
 
     # ─── Batch runner ──────────────────────────────────────────
 
-    async def run_pipeline_batch(
-        self, windfarm_ids: Optional[List[int]] = None
-    ) -> dict:
+    async def run_pipeline_batch(self, windfarm_ids: Optional[List[int]] = None) -> dict:
         """Run pipeline for all/specified windfarms as a tracked import job."""
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -120,7 +118,9 @@ class PerformancePipelineService:
 
         # Module 1+2: Power curves — pass pre-loaded data (avoids second SQL query).
         # If this fails, the whole pipeline fails (everything else depends on curves).
-        curves = await pcs.build_power_curves(windfarm_id, start_year, end_year, df_preloaded=df_all)
+        curves = await pcs.build_power_curves(
+            windfarm_id, start_year, end_year, df_preloaded=df_all
+        )
         result["power_curves"] = curves
         if "error" in curves:
             return result
@@ -141,6 +141,34 @@ class PerformancePipelineService:
             curve_rows=curves.get("curve_rows"),
         )
 
+        # Module 1b: Structural constraint detection (write-only). Detected
+        # runs go to `structural_constraint_flags` for analyst review;
+        # Modules 2/3/5 still see the unfiltered df_all in this milestone.
+        try:
+            import numpy as np
+
+            from app.services.structural_constraint_detection_service import (
+                StructuralConstraintDetectionService,
+            )
+
+            async with self.db.begin_nested():
+                df_for_detect = df_all.copy()
+                df_for_detect["wind_bin"] = np.floor(df_for_detect["wind_speed"]).astype(float)
+                detector = StructuralConstraintDetectionService(self.db)
+                detect_out = await detector.detect_constraints(
+                    windfarm_id, df_for_detect, pipeline_run_id=pipeline_run_id
+                )
+            result["structural_constraints"] = detect_out
+            logger.info(
+                "module_1b_complete",
+                windfarm_id=windfarm_id,
+                runs_detected=detect_out.get("runs_detected", 0),
+                total_constrained_hours=detect_out.get("total_constrained_hours", 0),
+            )
+        except Exception as e:
+            logger.error("pipeline_module_1b_error", windfarm_id=windfarm_id, error=str(e))
+            result["structural_constraints"] = {"error": str(e)}
+
         # Module 3: Anomaly detection — each year in its own SAVEPOINT so one bad
         # year doesn't poison the whole transaction.
         anomaly_svc = PerformanceAnomalyService(self.db)
@@ -157,18 +185,26 @@ class PerformancePipelineService:
                     )
                     anomaly_results[year] = ar
             except Exception as e:
-                logger.error("pipeline_anomaly_error", windfarm_id=windfarm_id, year=year, error=str(e))
+                logger.error(
+                    "pipeline_anomaly_error", windfarm_id=windfarm_id, year=year, error=str(e)
+                )
                 anomaly_results[year] = {"error": str(e)}
         result["anomaly_detection"] = anomaly_results
 
         # Summarise across years for easy log scraping during baseline / regression work.
-        ok_years = {y: r for y, r in anomaly_results.items() if isinstance(r, dict) and "error" not in r}
+        ok_years = {
+            y: r for y, r in anomaly_results.items() if isinstance(r, dict) and "error" not in r
+        }
         logger.info(
             "module_3_complete",
             windfarm_id=windfarm_id,
             years_ok=list(ok_years.keys()),
-            years_failed=[y for y, r in anomaly_results.items() if isinstance(r, dict) and "error" in r],
-            total_underperf_hours=sum(int(r.get("underperf_hours") or 0) for r in ok_years.values()),
+            years_failed=[
+                y for y, r in anomaly_results.items() if isinstance(r, dict) and "error" in r
+            ],
+            total_underperf_hours=sum(
+                int(r.get("underperf_hours") or 0) for r in ok_years.values()
+            ),
             total_lost_mwh=round(sum(float(r.get("lost_mwh") or 0) for r in ok_years.values()), 3),
             total_lost_eur=round(sum(float(r.get("lost_eur") or 0) for r in ok_years.values()), 2),
         )
@@ -183,17 +219,23 @@ class PerformancePipelineService:
                         windfarm_id, df_all, float(rated_mw), ref, pipeline_run_id
                     )
             except Exception as e:
-                logger.error("pipeline_normalisation_error", windfarm_id=windfarm_id, ref=ref, error=str(e))
+                logger.error(
+                    "pipeline_normalisation_error", windfarm_id=windfarm_id, ref=ref, error=str(e)
+                )
                 norm_out[key] = {"error": str(e)}
         result["wind_normalisation"] = norm_out
 
         logger.info(
             "module_4_complete",
             windfarm_id=windfarm_id,
-            p50_status="ok" if "error" not in norm_out.get("p50", {}) else norm_out["p50"].get("error"),
+            p50_status="ok"
+            if "error" not in norm_out.get("p50", {})
+            else norm_out["p50"].get("error"),
             p50_qualifying_hours=norm_out.get("p50", {}).get("qualifying_hours"),
             p50_years_computed=norm_out.get("p50", {}).get("years_computed"),
-            p10_status="ok" if "error" not in norm_out.get("p10", {}) else norm_out["p10"].get("error"),
+            p10_status="ok"
+            if "error" not in norm_out.get("p10", {})
+            else norm_out["p10"].get("error"),
             p10_qualifying_hours=norm_out.get("p10", {}).get("qualifying_hours"),
             p10_years_computed=norm_out.get("p10", {}).get("years_computed"),
         )
@@ -208,7 +250,9 @@ class PerformancePipelineService:
                         windfarm_id, df_all, ref, pipeline_run_id
                     )
             except Exception as e:
-                logger.error("pipeline_degradation_error", windfarm_id=windfarm_id, ref=ref, error=str(e))
+                logger.error(
+                    "pipeline_degradation_error", windfarm_id=windfarm_id, ref=ref, error=str(e)
+                )
                 deg_out[key] = {"error": str(e)}
         result["degradation"] = deg_out
 
@@ -236,7 +280,9 @@ class PerformancePipelineService:
                     await self._compute_commercial_metrics(windfarm_id, year, pipeline_run_id)
                 commercial_ok += 1
             except Exception as e:
-                logger.error("pipeline_commercial_error", windfarm_id=windfarm_id, year=year, error=str(e))
+                logger.error(
+                    "pipeline_commercial_error", windfarm_id=windfarm_id, year=year, error=str(e)
+                )
         result["commercial"] = {"years_computed": commercial_ok}
 
         logger.info(
@@ -256,14 +302,18 @@ class PerformancePipelineService:
             try:
                 async with self.db.begin_nested():
                     cr = await concentration_svc.compute_for_windfarm(
-                        windfarm_id, year, df_preloaded=df_all,
+                        windfarm_id,
+                        year,
+                        df_preloaded=df_all,
                         pipeline_run_id=pipeline_run_id,
                     )
                     concentration_results[year] = cr
             except Exception as e:
                 logger.error(
                     "pipeline_concentration_error",
-                    windfarm_id=windfarm_id, year=year, error=str(e),
+                    windfarm_id=windfarm_id,
+                    year=year,
+                    error=str(e),
                 )
                 concentration_results[year] = {"error": str(e)}
         result["generation_concentration"] = concentration_results
@@ -280,7 +330,8 @@ class PerformancePipelineService:
         except Exception as e:
             logger.warning(
                 "pipeline_peer_aggregate_refresh_failed",
-                windfarm_id=windfarm_id, error=str(e),
+                windfarm_id=windfarm_id,
+                error=str(e),
             )
 
         # Final flush — surfaces any remaining issues loudly instead of silently rolling back at commit.
@@ -324,8 +375,10 @@ class PerformancePipelineService:
             return
 
         # Reuse power curve service's robust pandas-merge loader (avoids 3-table SQL join plan).
-        from app.services.power_curve_service import PowerCurveService
         import pandas as pd
+
+        from app.services.power_curve_service import PowerCurveService
+
         pcs = PowerCurveService(self.db)
         df = await pcs._load_hourly_data(windfarm_id, year, year, float(rated_mw))
         if df.empty:
@@ -333,10 +386,14 @@ class PerformancePipelineService:
 
         df["wind_bin"] = df["wind_speed"].apply(lambda v: float(int(v)) if pd.notna(v) else None)
         df = df.dropna(subset=["wind_bin"])
-        grouped = df.groupby("wind_bin").agg(
-            hours=("hour", "count"),
-            avg_price=("market_price", "mean"),
-        ).reset_index()
+        grouped = (
+            df.groupby("wind_bin")
+            .agg(
+                hours=("hour", "count"),
+                avg_price=("market_price", "mean"),
+            )
+            .reset_index()
+        )
 
         total_proxy_mwh = 0.0
         total_proxy_hours = 0
@@ -364,7 +421,8 @@ class PerformancePipelineService:
             "pipeline_run_id": pipeline_run_id,
         }
         updated = await self.db.execute(
-            text("""
+            text(
+                """
                 UPDATE performance_summaries
                 SET constraint_proxy_mwh = :proxy_mwh,
                     lost_value_eur = :lost_value,
@@ -374,19 +432,22 @@ class PerformancePipelineService:
                   AND period_type = 'year'
                   AND year = :year
                   AND month IS NULL
-            """),
+            """
+            ),
             params,
         )
         if updated.rowcount == 0:
             await self.db.execute(
-                text("""
+                text(
+                    """
                     INSERT INTO performance_summaries
                       (windfarm_id, period_type, year, month,
                        constraint_proxy_mwh, lost_value_eur, pipeline_run_id)
                     VALUES
                       (:wf_id, 'year', :year, NULL,
                        :proxy_mwh, :lost_value, :pipeline_run_id)
-                """),
+                """
+                ),
                 params,
             )
 
@@ -405,7 +466,8 @@ class PerformancePipelineService:
         """
         # Get actual generation — SUM across all units per hour then across hours.
         # Exclude hours where ANY unit was ramping up (keeps semantics consistent).
-        query = text("""
+        query = text(
+            """
             WITH h AS (
                 SELECT hour, SUM(generation_mwh) as hourly_gen, BOOL_OR(is_ramp_up) as any_ramp_up
                 FROM generation_data
@@ -415,7 +477,8 @@ class PerformancePipelineService:
                 HAVING BOOL_OR(is_ramp_up) = false
             )
             SELECT COALESCE(SUM(hourly_gen), 0) as total_mwh FROM h
-        """)
+        """
+        )
         result = await self.db.execute(query, {"wf_id": windfarm_id, "year": int(year)})
         row = result.fetchone()
         actual_mwh = float(row.total_mwh) if row and row.total_mwh else 0
@@ -458,12 +521,14 @@ class PerformancePipelineService:
             gap = revenue - p50_revenue
             value_1pct = 0.01 * actual_mwh * price
 
-            scenarios.append({
-                "ppa_eur_per_mwh": price,
-                "actual_mwh": round(actual_mwh, 1),
-                "revenue_eur": round(revenue, 2),
-                "revenue_vs_p50_eur": round(gap, 2),
-                "value_of_1pct_eur_per_year": round(value_1pct, 2),
-            })
+            scenarios.append(
+                {
+                    "ppa_eur_per_mwh": price,
+                    "actual_mwh": round(actual_mwh, 1),
+                    "revenue_eur": round(revenue, 2),
+                    "revenue_vs_p50_eur": round(gap, 2),
+                    "value_of_1pct_eur_per_year": round(value_1pct, 2),
+                }
+            )
 
         return scenarios
