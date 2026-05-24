@@ -115,6 +115,7 @@ class DegradationResponse(BaseModel):
     ci_lower_95_pct: Optional[float] = None
     ci_upper_95_pct: Optional[float] = None
     baseline_cap_pu: Optional[float] = None
+    n_constraint_hours_excluded: Optional[int] = None
     data_points: int
     analysis_start: date
     analysis_end: date
