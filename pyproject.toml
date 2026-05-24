@@ -110,9 +110,12 @@ warn_unused_configs = true
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-ra -q --cov=app --cov-report=term-missing"
+addopts = "-ra -q --cov=app --cov-report=term-missing -m 'not integration'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: requires DB and external fixtures (skipped by default; opt in via -m integration)",
+]
 
 [tool.coverage.run]
 source = ["app"]
