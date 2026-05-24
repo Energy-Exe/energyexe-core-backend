@@ -140,18 +140,20 @@ The prompt requires the LLM to make it clear that the index is *wind-corrected* 
 - `energyexe-client-ui/src/components/.../GenerationScatterChart` — toggles between actual and wind-normalised generation, calling the on-demand hourly endpoint.
 - LLM commentary: rendered via the broader commentary infrastructure (`app/services/llm_commentary_service.py` + `windfarm_reports`).
 
-## Gaps vs spec
+## Status vs spec (post 2026-05-25)
 
 | Spec ask | Status | Notes |
 |---|---|---|
 | Hourly `norm_ratio = actual / expected` from `overall_clean` curve | ✓ | |
 | `wind_speed >= 4 m/s` floor | ✓ | constant `NORM_WIND_MIN_MPS = 4.0` |
-| Monthly + yearly indices vs historical mean | ✓ | |
+| Monthly avg + monthly historical_mean → monthly index | ✓ | |
+| **Yearly avg = mean of monthly means** | ✓ (PR #66) | matches spec at `tests/reference/energyexe_pipeline_full.py:910-917` byte-identically on Lutelandet |
+| **Yearly historical_mean separate from monthly** | ✓ (PR #66) | |
 | Q50 and Q10 references (separate runs) | ✓ | naming reconciled at storage time (q90 → p10) |
+| **Constraint hours masked out before this module runs** | ✓ (PR #72) | orchestrator masks active `structural_constraint_flags` from `df_no_over` before Module 4 receives it |
 | CSV outputs (`wind_norm_*.csv`, `*.png`) | ✗ | persisted to Postgres; charts rendered client-side |
 | Quality/coverage flag when curve has gaps in wind bins | ✗ | hours in gap bins are silently dropped — no warning logged |
 | Caching of on-demand hourly endpoint | ✗ | every request recomputes (1–2 s for multi-year farms) |
-| **Reference is built from `df_curve_clean` (excludes structurally constrained hours)** | ✗ | tied to Module 1b — until that lands, the `overall_clean` baseline can be diluted by infrastructure failures |
 
 ## File reference
 

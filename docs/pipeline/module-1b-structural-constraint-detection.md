@@ -1,14 +1,13 @@
 # Module 1b — Structural constraint detection
 
-> **Status: NOT IMPLEMENTED.** This module appears in the May 2026 spec ("post-Niord update") but has no corresponding service, model, or migration in our codebase as of 2026-05-20. This doc records the concept, why it matters, and where it would slot in — useful when we build it.
+Auto-detect sustained periods (≥ 2 weeks, default 336 h) where windfarm output is systematically truncated relative to wind conditions — the signature of partial export-infrastructure failure (single cable on a multi-cable farm, half-BMU offline, sustained curtailment campaign). These periods quietly contaminate Modules 2, 3 and 5 if not excluded.
 
-## Purpose
-
-Detect sustained periods (≥ 2 weeks, default) where windfarm output is systematically truncated relative to wind conditions — the signature of a partial export-infrastructure failure (typically a single cable on a multi-cable offshore farm). These periods quietly contaminate Modules 2, 3 and 5 if not excluded.
+**Implementation: PR #68 (detector) + PR #72 (downstream wiring). Live as of 2026-05-25.**
 
 ## Concepts
 
 ### What a "structural constraint" looks like
+
 On a two-cable offshore farm, if one cable fails, generation continues but is capped at ~50 % of nameplate. The turbines never go dark — they keep producing — but a hard ceiling appears in the upper wind bins:
 
 ```
@@ -17,6 +16,7 @@ Pre-failure, mid-to-high wind bins:        Post-failure (cable down):
 ```
 
 ### Why hour-by-hour anomaly detection (Module 3) misses this
+
 Module 3 uses MAD-based thresholds **per wind bin per year**. During a 7-month cable outage:
 - The yearly capability curve for that bin gets *built from constrained hours*, so the curve itself shifts down.
 - Each individual constrained hour looks "near the median" against that shifted-down curve.
@@ -25,122 +25,159 @@ Module 3 uses MAD-based thresholds **per wind bin per year**. During a 7-month c
 The constraint is a **distributional shift across many hours and bins simultaneously** — invisible to point-anomaly detectors.
 
 ### Why leave-one-year-out reference
-You can't fix this by comparing 2024 against a baseline that *includes* 2024 — the baseline absorbs the contamination. The detector builds a reference Q90-per-wind-bin from **all years except Y**, then compares year Y's observed Q90 against that clean reference. Now a depressed year stands out.
+
+You can't fix this by comparing 2024 against a baseline that *includes* 2024 — the baseline absorbs the contamination. The detector builds a reference percentile-per-wind-bin from **all years except Y**, then compares year Y's observed percentile against that clean reference. A depressed year stands out.
 
 ### Wind-banded ratio thresholds
-The detector flags a (bin, month) as constrained when `observed_Q90 / reference_Q90` falls below a band-specific threshold:
 
-| Wind band | Default threshold | Why this threshold |
-|---|---|---|
-| < 7 m/s | no check | output is naturally noisy near cut-in; ratio is unreliable |
-| 7 – 10 m/s | 0.70 | ramp region — natural variance is higher |
-| 10 – 25 m/s | 0.80 | rated region — turbines should be near full output; truncation is unambiguous |
+The detector flags a (bin, month) as constrained when either `observed_Q90 / reference_Q90` or `observed_Q50 / reference_Q50` falls below a band-specific threshold:
+
+| Wind band | Q90 threshold | Q50 threshold (B1.5) | Why |
+|---|---|---|---|
+| < 7 m/s | no check | no check | output is naturally noisy near cut-in; ratio is unreliable |
+| 7 – 10 m/s | 0.70 | 0.70 | ramp region — natural variance is higher |
+| 10 – 25 m/s | 0.80 | 0.85 | rated region — turbines should be near full output; truncation is unambiguous |
 
 A run of flagged bin-months gets grouped into a candidate "run". Runs shorter than 336 hours (2 weeks) are dropped — short events belong to Module 3, not 1b.
 
-### Mean Q90 ratio is a fault-type fingerprint
-- Ratio ≈ 0.5 → single cable failure on a two-cable farm
-- Ratio ≈ 0.0 → full export outage
-- Ratio in 0.5–0.8 → partial curtailment or noise restriction (analyst review needed)
+### B1 vs B1.5 — why two paths
 
-### Downstream contamination if not implemented
-Without Module 1b, a 7-month cable constraint in a 4-year dataset:
+The reference spec only checks the Q90 ratio. P-1 validation against three real windfarms (Lutelandet / EAO / Hornsea 1) found that **two-of-two multi-BMU UK offshore farms in 2024** show a different signature: the *median* hour is constrained (~50 % output, signature of one-of-N BMUs offline most of the time) while the *upper-decile* hour stays near normal (the BMUs that ARE running can still hit full capacity). A Q90-only detector misses this entirely.
+
+**B1.5** runs the same LOYO machinery on the Q50 (median) ratio in parallel. A bin-month is flagged constrained if EITHER ratio drops below its band threshold. The `flag_trigger` column on each detected run records which path fired: `'q90_ratio'`, `'q50_ratio'`, or `'both'`. This is a deliberate extension beyond the reference spec.
+
+### Mean Q90/Q50 ratio is a fault-type fingerprint
+
+The persisted `mean_q90_ratio` and `mean_q50_ratio` columns are the 90th/50th percentile of `p_pu` within the run (not the mean of ratios — naming is historical, matches spec verbatim).
+
+- `mean_q50 ≈ 0.5, mean_q90 ≈ 0.5` → full half-output ceiling (e.g. single cable down)
+- `mean_q50 ≈ 0.5, mean_q90 ≈ 0.9` → half-BMU pattern (typical hour capped, peak hour OK)
+- `mean_q50 ≈ 0.0, mean_q90 ≈ 0.0` → full outage
+- `mean_q50` and `mean_q90` both in 0.5-0.8 → partial curtailment or noise restriction (analyst review needed)
+
+### Downstream contamination this prevents
+
+Without the constraint mask, a 7-month cable constraint in a 4-year dataset poisons every downstream module:
 
 | Module | Effect of contamination |
 |---|---|
-| 2 — power curve | Yearly Q50/Q90 in mid-to-high wind bins are depressed → capability curve understates true capability |
-| 3 — losses | Anomalies computed against an *already-degraded* baseline → losses are reported as ~zero even though half the energy is missing |
-| 5 — degradation | OLS sees the constraint as a step-down → fits a steep negative slope → reports fake degradation that can flip the sign of the real estimate |
-| 4 — wind norm | Reference curve (`overall_clean`) is built from contaminated hours → index for the constrained period reads "normal" (~100), masking the problem |
+| 2 — power curve | Yearly Q50/Q90 in mid-to-high wind bins are depressed → capability curve understates true capability. **Module 2 still uses the unmasked sample so its curves are unaffected by the constraint** — this is intentional and matches spec. |
+| 3 — losses | Constraint hours are dropped from the loss calculation before classification. Lost MWh attributable to known infrastructure is reported separately under Module 6's `constraint_proxy_mwh`. |
+| 4 — wind norm | Index for the constrained period reads accurately once those hours are dropped from the sample. |
+| 5 — degradation | OLS slope is no longer dragged by the step-change at the constraint boundary. `n_constraint_hours_excluded` reports how many hours were dropped. |
+| 6 — commercial | Picks up cleaner capability stats automatically; `lost_value_eur` separates constraint-attributable lost value. |
 
-### The pending_review flow
-This is a borderline detection (real constraint vs prolonged maintenance campaign vs noise curtailment). The spec defines a two-stage flow:
+### The review workflow
 
-1. **Auto-detector** runs as part of the pipeline, writes candidate runs with `review_status='pending_review'`.
-2. **Analyst** reviews each candidate, confirms it's a real constraint (`confirmed`) or rejects it (`dismissed`).
-3. **Backend emails the analyst** when new `pending_review` rows appear (notification logic lives outside the Python pipeline).
-4. Downstream modules **exclude only confirmed runs** from their reference data.
+Detection is borderline (real constraint vs prolonged maintenance vs noise curtailment), so flags are staged for analyst review:
 
-## What exists in the codebase today
+1. **Auto-detector** runs during the daily pipeline, writes candidate runs with `review_status='pending_review'`.
+2. **Modules 3/4/5 mask out all active flags (`pending_review` OR `confirmed`) automatically.** This is the locked design (Option 1 from the FX2 decision) — fixes EAO/Hornsea 1 immediately, without waiting on analyst review.
+3. **Analyst reviews** each candidate. Marking a flag `dismissed` opts those hours back into the calculation on the next pipeline run.
+4. **Read API**: `GET /api/v1/structural-constraints?windfarm_id=&review_status=` lists flags. Confirm/dismiss actions are a future admin-ui ticket (out of backend scope).
 
-`grep` across `app/`, `scripts/`, `alembic/` for `structural_constraint`, `constraint_run`, `constraint_detection`, `leave_one_year`, `cable_fail`, `export_constraint`, `q90_ratio`, `pending_review` — **zero matches**.
+## Implementation walkthrough
 
-Closest existing patterns:
+**File:** `app/services/structural_constraint_detection_service.py`
 
-| Component | What it does | Why it's NOT Module 1b |
-|---|---|---|
-| `DataAnomalyService` (`app/services/data_anomaly_service.py`) | Detects raw-data quality issues — capacity factor > 120 %, data gaps, generation spikes vs unit capacity. | Operates on raw input data, not on distributional shifts of a power curve. |
-| `PerformanceAnomalyService` (`app/services/performance_anomaly_service.py`) | Per-hour MAD-based under/overperformance flags (Module 3). | Treats hours independently — exactly the blindspot Module 1b is designed to cover. |
-| `PerformanceSummary` (`app/models/performance_summary.py`) | Stores monthly/yearly ODI metrics. | No constraint-related columns. |
+### Pure helpers (testable, no DB)
 
-## Proposed integration points (when we build it)
+| Function | What it does |
+|---|---|
+| `compute_loyo_reference(df_curve, percentile)` | Leave-one-year-out percentile per wind bin. Returns `(wind_bin, _year, ref_value)`. Empty if `<2` years. |
+| `compute_observed_percentile(df_curve, percentile)` | Observed percentile per `(wind_bin, _month, _year)`. |
+| `flag_bin_months(observed, reference, bands)` | Joins observed vs reference, computes ratio, applies band thresholds, returns flagged `(wind_bin, _month)` pairs. |
+| `group_into_runs(df_curve, flagged_q90, flagged_q50, min_hours)` | Maps each hour to "constrained or not" via `(wind_bin, _month)` lookup, groups consecutive flagged hours into runs, filters by `min_hours`, labels `flag_trigger`. |
+| `detect_constraints_df(df_curve, ...)` | Full pipeline — orchestrates the above into a runs DataFrame. |
+| `build_constraint_mask(df, periods, time_col='hour')` | Builds a boolean Series aligned to `df.index`, True where `df[time_col]` falls inside any period (closed-closed). Handles tz-naive and tz-aware inputs. |
 
-### Where it sits in the pipeline
-Between Module 1 (data load) and Module 2 (power curve fitting). It needs `df_clean` to spot constraints, and it needs to produce `df_curve_clean` (= `df_curve` minus confirmed-constraint hours) before Module 2 builds the capability curves.
+### Service class
 
-In `PerformancePipelineService.run_pipeline` (`app/services/performance_pipeline_service.py:92–230`), this would go between the data-load (~line 117) and the `pcs.build_power_curves(...)` call (~line 123):
+`StructuralConstraintDetectionService(db)`
+
+| Method | Purpose |
+|---|---|
+| `detect_constraints(windfarm_id, df_curve, *, pipeline_run_id=None, replace_existing=True)` | Runs `detect_constraints_df` and persists each run as a `pending_review` row. With `replace_existing=True` (default), drops prior auto-detected `pending_review` rows for the windfarm first — analyst-curated rows (status != pending_review) are preserved. |
+| `load_active_periods(windfarm_id)` | Returns all flag periods with `review_status IN ('pending_review', 'confirmed')`. Used by the orchestrator to build the downstream mask. |
+
+### Orchestrator integration
+
+In `PerformancePipelineService.run_pipeline`:
 
 ```python
-# Module 1b: structural constraint detection
-constraint_svc = StructuralConstraintDetectionService(self.db)
-constraint_result = await constraint_svc.detect(
-    windfarm_id, df_clean, df_curve, years
-)
-df_curve_clean = constraint_svc.apply_exclusions(df_curve, constraint_result.confirmed_runs)
-result["structural_constraints"] = constraint_result.summary
+# Module 1b runs between Module 2 (curves built from raw df_no_over)
+# and Modules 3/4/5 (which receive the constraint-masked df_no_over).
+detector = StructuralConstraintDetectionService(self.db)
+detect_out = await detector.detect_constraints(windfarm_id, df_for_detect, ...)
+
+active_periods = await detector.load_active_periods(windfarm_id)
+if active_periods:
+    mask = build_constraint_mask(df_no_over, active_periods)
+    n_constraint_hours_excluded = int(mask.sum())
+    df_no_over = df_no_over[~mask].reset_index(drop=True)
+
+# Modules 3, 4, 5 now consume the masked df_no_over.
 ```
 
-### Proposed DB schema
+The `module_1b_complete` structlog event records `runs_detected`, `total_constrained_hours`, `active_periods`, `hours_masked_from_downstream`.
 
-```sql
-CREATE TABLE structural_constraint_flags (
-    id              SERIAL PRIMARY KEY,
-    windfarm_id     INT NOT NULL REFERENCES windfarms(id) ON DELETE CASCADE,
-    period_start    TIMESTAMPTZ NOT NULL,
-    period_end      TIMESTAMPTZ NOT NULL,
-    duration_hours  INT NOT NULL,
-    wind_bins_affected INT,
-    mean_q90_ratio  NUMERIC(6,3),       -- ~0.5 = single cable, ~0.0 = full outage
-    flag_source     VARCHAR(40) DEFAULT 'auto_constraint_detector',
-    review_status   VARCHAR(20) DEFAULT 'pending_review',  -- pending_review | confirmed | dismissed
-    analyst_notes   TEXT,
-    reviewed_by     INT REFERENCES users(id),
-    reviewed_at     TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (windfarm_id, period_start, period_end)
-);
-CREATE INDEX ix_structural_constraint_flags_status ON structural_constraint_flags(review_status);
+## Configuration constants
+
+In `app/services/structural_constraint_detection_service.py`:
+
+```python
+Q90_RATIO_BANDS = [
+    {"wind_min": 7.0,  "wind_max": 10.0, "threshold": 0.70},
+    {"wind_min": 10.0, "wind_max": 25.0, "threshold": 0.80},
+]
+Q50_RATIO_BANDS = [
+    {"wind_min": 7.0,  "wind_max": 10.0, "threshold": 0.70},
+    {"wind_min": 10.0, "wind_max": 25.0, "threshold": 0.85},
+]
+CONSTRAINT_MIN_HOURS = 336  # ~14 days; ignore short blips
 ```
 
-A second table can hold the leave-one-year-out reference if we want to expose it (otherwise it's recomputed each run from `power_curve_bins`).
+## DB schema
 
-### Downstream wiring once it exists
+**File:** `app/models/structural_constraint_flag.py`
+**Table:** `structural_constraint_flags`
+**Migration:** `e2f3a4b5c6d7_add_structural_constraint_flags.py`
 
-| Module | Required change |
-|---|---|
-| 2 | Build `overall_clean` and `yearly_capability_stats` from `df_curve_clean` (excludes confirmed runs). |
-| 3 | For constrained hours, use `overall_clean.q50` (not `yearly_capability_stats.q50`) as the loss reference. Add `flag_structural_constraint` column on `performance_anomalies`. New `constraint_loss_summary` output (per-run lost MWh / EUR). |
-| 4 | `overall_clean` is now genuinely clean → no service change required, output naturally becomes more accurate. |
-| 5 | Exclude confirmed-constraint hours from the OLS fit. Add `n_constraint_hours_excluded` column on `degradation_results`. |
-| 6 | No change — picks up cleaner capability stats automatically. |
+| Column | Type | Notes |
+|---|---|---|
+| `id` | SERIAL PK | |
+| `windfarm_id` | Int FK | CASCADE delete on windfarm removal |
+| `period_start` | TIMESTAMPTZ | first constrained hour |
+| `period_end` | TIMESTAMPTZ | last constrained hour (inclusive) |
+| `duration_hours` | Int | total flagged hours in the run |
+| `wind_bins_affected` | Int | distinct wind bins involved |
+| `mean_q90_ratio` | Numeric(6,3) | 90th-pct p_pu within the run |
+| `mean_q50_ratio` | Numeric(6,3) | 50th-pct p_pu within the run (B1.5) |
+| `flag_trigger` | VARCHAR(20) | `'q90_ratio'` / `'q50_ratio'` / `'both'` |
+| `flag_source` | VARCHAR(40) | default `'auto_constraint_detector'` |
+| `review_status` | VARCHAR(20) | `'pending_review'` / `'confirmed'` / `'dismissed'` |
+| `analyst_notes` | TEXT | free-form analyst commentary |
+| `reviewed_by` | Int FK users | SET NULL on user delete |
+| `reviewed_at` | TIMESTAMPTZ | |
+| `pipeline_run_id` | Int FK | SET NULL on job delete |
+| `created_at` | TIMESTAMPTZ | |
 
-### Notification
+**Unique:** `(windfarm_id, period_start, period_end)`.
+**Indexes:** `review_status`, `windfarm_id`.
 
-Per spec, the backend (not the Python pipeline) should email the responsible analyst when new `pending_review` rows appear. Candidate hooks:
+## Known limitations
 
-- A cron sweep (e.g. `pipeline_daily.py` post-step) that queries `structural_constraint_flags WHERE review_status='pending_review' AND created_at > last_sweep`.
-- Or a Postgres NOTIFY / trigger feeding into the existing alerting infrastructure (`app/services/alert_service.py`).
+- Needs **≥ 2 years of data** to build the leave-one-year-out reference. Single-year windfarms produce no flags (a warning is logged).
+- **Per-hour run grouping breaks across non-flagged wind bins** (typically wind < 7 m/s). Real sustained constraints coincide with sustained mid/high wind, so this isn't a problem in practice — and it matches the reference pipeline's behaviour (`tests/reference/energyexe_pipeline_full.py:477-494`).
+- ERA5 wind-speed bias (0.5 m/s at 10–12 m/s) translates to 5–8 % expected-output error per bin, which can push borderline periods over or under the threshold. Analyst review is the safety net.
+- Cannot distinguish a real cable failure from prolonged noise curtailment or multi-turbine derating campaigns — the `pending_review` queue is intentional for this.
 
-## Limitations (also from spec)
+## File reference
 
-- Needs **≥ 2 years of data** to build the leave-one-year-out reference. Single-year windfarms should pass `df_curve` through unchanged with a warning.
-- Cannot distinguish a real cable failure from other sustained upper-curve truncations (prolonged noise curtailment, multi-turbine campaigns, derating). The `pending_review` flow exists precisely for this reason.
-- ERA5 wind-speed bias (0.5 m/s at 10–12 m/s) translates to 5–8 % expected-output error per bin, which can push borderline periods over or under the threshold.
-
-## File reference (for when we build it)
-
-- Where to add the service: `app/services/structural_constraint_detection_service.py` (new)
-- Where to add the model: `app/models/structural_constraint_flag.py` (new)
-- Where to add the migration: `alembic/versions/{hash}_add_structural_constraint_flags.py` (new)
-- Where to call it from: `app/services/performance_pipeline_service.py:~120` (between data load and power-curve build)
-- Where to expose review UI: `app/api/v1/endpoints/` (new endpoint group) + admin-ui review page
+- Service: `app/services/structural_constraint_detection_service.py`
+- Model: `app/models/structural_constraint_flag.py`
+- Migration: `alembic/versions/e2f3a4b5c6d7_add_structural_constraint_flags.py`
+- Read API: `app/api/v1/endpoints/structural_constraints.py`
+- Orchestrator integration: `app/services/performance_pipeline_service.py:run_pipeline` (Module 1b block)
+- Tests: `tests/test_structural_constraint_detection.py` (11 unit tests including B1.5 half-BMU synthetic), `tests/test_fx2_constraint_consumption.py` (7 mask-builder tests)
+- P-1 validation findings: `tests/reference/p-1-validation-notes.md` (EAO + Hornsea 1 Q50-suppression evidence)

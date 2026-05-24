@@ -2,21 +2,23 @@
 
 Reference docs for the six-module performance pipeline that turns raw hourly generation / weather / price data into the operational KPIs the platform surfaces (ODI, power curves, wind-normalised indices, degradation slopes, commercial summaries).
 
-These docs describe **what the system actually does today** — based on a code walkthrough done 2026-05-20. The original module spec is `EnergyExe_Pipeline_Module_Documentation - 15 May 2026.docx` (SharePoint → Development → Documentation → Other current docs). Gaps between code and spec are flagged at the bottom of each module doc.
+📋 **[HANDOFF.md](./HANDOFF.md) — current status + what's left to do.** Read this first.
+
+These docs describe **what the system actually does today** — last comprehensive update 2026-05-25 (after the pipeline correctness work landed). The original module spec is `EnergyExe_Pipeline_Module_Documentation - 15 May 2026.docx` (SharePoint → Development → Documentation → Other current docs). Per-module status vs spec is at the bottom of each module doc.
 
 ## Module index
 
 | Module | Doc | Service file | Status |
 |---|---|---|---|
 | 1 — Data loading & cleaning | [module-1-data-loading.md](./module-1-data-loading.md) | inside `power_curve_service.py` | implemented |
-| 1b — Structural constraint detection | [module-1b-structural-constraint-detection.md](./module-1b-structural-constraint-detection.md) | — | **not implemented** |
+| 1b — Structural constraint detection | [module-1b-structural-constraint-detection.md](./module-1b-structural-constraint-detection.md) | `structural_constraint_detection_service.py` | implemented (PR #68 + #72, with B1.5 Q50-ratio extension) |
 | 2 — Power curve analysis | [module-2-power-curve.md](./module-2-power-curve.md) | `power_curve_service.py` | implemented |
 | 3 — Anomaly detection & loss | [module-3-anomaly-detection.md](./module-3-anomaly-detection.md) | `performance_anomaly_service.py` | implemented |
-| 4 — Wind normalisation | [module-4-wind-normalisation.md](./module-4-wind-normalisation.md) | `wind_normalisation_service.py` | implemented |
-| 5 — Degradation | [module-5-degradation.md](./module-5-degradation.md) | `degradation_service.py` | implemented (3 statistical bugs — see spec-vs-impl) |
-| 6 — Commercial reporting | [module-6-commercial-reporting.md](./module-6-commercial-reporting.md) | inline in `performance_pipeline_service.py` + `ppa_service.py` + `p50_target_service.py` | partial |
+| 4 — Wind normalisation | [module-4-wind-normalisation.md](./module-4-wind-normalisation.md) | `wind_normalisation_service.py` | implemented (yearly-aggregation fix PR #66) |
+| 5 — Degradation | [module-5-degradation.md](./module-5-degradation.md) | `degradation_service.py` | implemented (hourly OLS + per-WF baseline + CI%; PRs #64, #70, #71, #72) |
+| 6 — Commercial reporting | [module-6-commercial-reporting.md](./module-6-commercial-reporting.md) | inline in `performance_pipeline_service.py` + `ppa_service.py` + `p50_target_service.py` | implemented (contract revenue + PPA uplift PR #67) |
 
-📋 **[Spec vs implementation — gaps and improvement plan](./spec-vs-implementation.md)** — compares our code line-by-line against the May 2026 reference Python pipeline (`energyexe_pipeline_full.py`). Identifies 3 high-severity correctness bugs in Module 5, the Module 1b gap, and a prioritised 4-milestone improvement plan. **Start here if you're deciding what to ship next.**
+📋 **[Spec vs implementation — gaps and improvement plan](./spec-vs-implementation.md)** — original line-by-line comparison against the May 2026 reference Python pipeline. **Status section at top tracks which items have shipped.** Body of the doc is preserved as the historical record.
 
 ## Architecture at a glance
 
