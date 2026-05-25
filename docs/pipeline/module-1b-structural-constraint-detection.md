@@ -87,7 +87,7 @@ Detection is borderline (real constraint vs prolonged maintenance vs noise curta
 | `compute_loyo_reference(df_curve, percentile)` | Leave-one-year-out percentile per wind bin. Returns `(wind_bin, _year, ref_value)`. Empty if `<2` years. |
 | `compute_observed_percentile(df_curve, percentile)` | Observed percentile per `(wind_bin, _month, _year)`. |
 | `flag_bin_months(observed, reference, bands)` | Joins observed vs reference, computes ratio, applies band thresholds, returns flagged `(wind_bin, _month)` pairs. |
-| `group_into_runs(df_curve, flagged_q90, flagged_q50, min_hours)` | Maps each hour to "constrained or not" via `(wind_bin, _month)` lookup, groups consecutive flagged hours into runs, filters by `min_hours`, labels `flag_trigger`. |
+| `group_into_runs(df_curve, flagged_q90, flagged_q50, min_hours)` | Restricts to in-band hours (≥7 m/s), computes per-month flagged_share, marks months as constrained when share ≥ 25% AND in-band hours ≥ 24, groups consecutive constrained months into runs, filters by `min_hours`, labels `flag_trigger`. |
 | `detect_constraints_df(df_curve, ...)` | Full pipeline — orchestrates the above into a runs DataFrame. |
 | `build_constraint_mask(df, periods, time_col='hour')` | Builds a boolean Series aligned to `df.index`, True where `df[time_col]` falls inside any period (closed-closed). Handles tz-naive and tz-aware inputs. |
 
@@ -135,7 +135,24 @@ Q50_RATIO_BANDS = [
     {"wind_min": 10.0, "wind_max": 25.0, "threshold": 0.85},
 ]
 CONSTRAINT_MIN_HOURS = 336  # ~14 days; ignore short blips
+CONSTRAINED_MONTH_THRESHOLD = 0.25  # share of in-band hours that must be in flagged bin-months
+IN_BAND_WIND_MIN_MPS = 7.0  # min wind for an hour to count toward run-grouping
+MIN_IN_BAND_HOURS_PER_MONTH = 24  # data-sparsity floor; below this, month can't be constrained
 ```
+
+**Note on run grouping (post 2026-05-25):** The reference spec groups flagged
+hours per-hour: `(constrained != constrained.shift()).cumsum()` on the
+time-sorted hourly dataframe. On real data this gets shattered by
+interleaved sub-7 m/s wind hours — a 7-month constraint on EAO 2024
+fragmented into 320 sub-runs (median 3 h, max 133 h, all below the 336 h
+threshold). The spec itself returns zero runs for EAO and Hornsea 1 (per
+`tests/reference/p-1-validation-notes.md`). Our implementation instead
+groups at calendar-month granularity: a month is "constrained" if ≥25%
+of its in-band hours fall in flagged (bin, month) pairs (and the month
+has at least 24 in-band hours). Consecutive constrained months form a
+run. This matches how infrastructure constraints actually present and
+correctly catches EAO 2024 (2,598 h run, mean_q50 = 0.477) and Hornsea 1
+2024 (2,258 h run, mean_q50 = 0.473).
 
 ## DB schema
 
@@ -168,7 +185,7 @@ CONSTRAINT_MIN_HOURS = 336  # ~14 days; ignore short blips
 ## Known limitations
 
 - Needs **≥ 2 years of data** to build the leave-one-year-out reference. Single-year windfarms produce no flags (a warning is logged).
-- **Per-hour run grouping breaks across non-flagged wind bins** (typically wind < 7 m/s). Real sustained constraints coincide with sustained mid/high wind, so this isn't a problem in practice — and it matches the reference pipeline's behaviour (`tests/reference/energyexe_pipeline_full.py:477-494`).
+- Pre-commissioning years (where the asset produced ~0 MW for an extended period) get flagged as constraints (e.g. Hornsea 1 2018-11 → 2018-12 with mean_q50 ≈ 0). Technically correct (output capped at zero), but should typically be dismissed by analysts on review.
 - ERA5 wind-speed bias (0.5 m/s at 10–12 m/s) translates to 5–8 % expected-output error per bin, which can push borderline periods over or under the threshold. Analyst review is the safety net.
 - Cannot distinguish a real cable failure from prolonged noise curtailment or multi-turbine derating campaigns — the `pending_review` queue is intentional for this.
 

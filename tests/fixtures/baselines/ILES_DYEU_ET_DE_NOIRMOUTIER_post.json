@@ -1,0 +1,19 @@
+{
+  "windfarm": {
+    "id": 7388,
+    "code": "ILES_D\u2019YEU_ET_DE_NOIRMOUTIER",
+    "name": "Iles d\u2019Yeu et de Noirmoutier",
+    "nameplate_capacity_mw": 496.0,
+    "gen_start": "2025-06-25",
+    "gen_end": "2026-05-21"
+  },
+  "captured_at": "2026-05-25T08:09:30.560328Z",
+  "power_curve_bins": [],
+  "degradation_results": [],
+  "performance_summaries": [],
+  "row_counts": {
+    "power_curve_bins": 0,
+    "degradation_results": 0,
+    "performance_summaries": 0
+  }
+}
