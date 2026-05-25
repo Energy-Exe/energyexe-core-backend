@@ -31,8 +31,8 @@ Single-file scratchpad for this session's work. Will be cleaned up into proper d
 | 1 | Patch `tests/reference/spec_patches.py` for dayfirst + module-4 cat-vs-int | ✅ done |
 | 2 | Append P-1.4 to `tests/reference/p-1-validation-notes.md` | ✅ done |
 | 3 | Re-validate Lutelandet/EAO/Roan against spec-patched | ✅ done (all match) |
-| 4 | Commit Module 1b run-grouping fix + spec_patches addition | ⏳ pending |
-| 5 | Draft release note with corrected narrative | ⏳ pending |
+| 4 | Commit Module 1b run-grouping fix + spec_patches addition | ✅ done — PR #74 |
+| 5 | Draft release note with corrected narrative | ✅ done — `docs/pipeline/release-notes-2026-05-25.md` |
 
 ## Prod backfill scope (queued)
 
