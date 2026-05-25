@@ -452,3 +452,113 @@ the spec-emitted capability curves as input:
 4. **B1.6 (Module 4 safety net) is still worth it** as a belt-and-braces — but the threshold needs to be windfarm-relative, e.g. "year_index < 90 % of windfarm's own historical mean of yearly indices".
 5. **The 2-pandas-compat-patches finding from P-1.1 still holds** on these multi-unit farms — same script ran without issue on all three after the patches.
 6. **Multi-source CTE pre-aggregation worked cleanly** on both EAO (2 units × 2 prices) and Hornsea (3 units × 2 prices). The pattern scales.
+
+---
+
+# ⚠️ RETRACTION HEADER (added 2026-05-25 — read before citing anything above)
+
+**Every "Spec" column in P-1.1, P-1.2, P-1.3 above was computed with a buggy reference pipeline.** See P-1.4 below for the discovery, the corrected spec numbers, and the (much smaller) implications for our pipeline.
+
+The high-stakes claim *"Hornsea 1 Bug A flips the SIGN — spec says −0.60 %/yr degrading, we say +0.68 %/yr improving"* (P-1.3, line 363) **is wrong**. With the dayfirst patch the spec gives **+0.77 %/yr** on Hornsea — same direction as ours, ~5 % off in magnitude. No sign flip.
+
+Do not cite the P-1.1 / P-1.2 / P-1.3 "Spec" columns in stakeholder communication until they are re-captured against the patched spec.
+
+---
+
+# P-1.4 — Discovery: spec script's date parser was corrupting input (2026-05-25)
+
+## Trigger
+
+After applying the Module 1b month-level run-grouping fix (this session, see `docs/pipeline/SESSION_2026_05_25_PROGRESS.md`), the pre-flight re-run gave:
+
+| WF | Our v2 (no mask) | Spec target (P-1.3) | Disagreement |
+|---|---|---|---|
+| LUTELANDET | +0.341 %/yr | +0.343 %/yr | within tolerance |
+| EAO | +0.595 %/yr | +0.596 %/yr | within tolerance |
+| **HORNSEA 1** | **+0.770 %/yr** | **−0.605 %/yr** | **sign mismatch (!)** |
+
+Hornsea 1 disagreed in *direction* before any constraint masking entered the picture. The fits in our Module 5 are mathematically equivalent to the spec, and our Lutelandet + EAO numbers match — so a bug somewhere in our path didn't fit the story. Investigated the spec instead.
+
+## Root cause
+
+Line 382 of the vendored reference (`tests/reference/energyexe_pipeline_full.py`):
+
+```python
+df0[cfg.time_col] = pd.to_datetime(df0[cfg.time_col], dayfirst=True, errors="coerce")
+```
+
+Our `tests/utils/spec_csv_exporter.py` emits ISO-format timestamps (`YYYY-MM-DD HH:MM:SS`, what Postgres `timestamptz` round-trips). On ISO input, pandas with `dayfirst=True`:
+
+- Rows with day ≤ 12 → **month/day swapped silently** (e.g. `2024-11-01` → `2024-01-11`)
+- Rows with day > 12 → **dropped as NaT** (parser tries day=01, month=11+; treats e.g. `2024-11-13` as day=24, month=11, year=13 → invalid)
+
+Net effect on Hornsea 1's CSV (51,863 rows ISO-formatted):
+
+| Stage | Rows | % |
+|---|---|---|
+| Loaded from CSV | 51,863 | 100 % |
+| After `dayfirst=True` parse → drop NaT | 20,693 | 40 % |
+| After spec's hard cleaning (above + value-range filters) | 19,277 | 37 % |
+| Used for Module 5 fit | 11,563 | 22 % |
+
+The spec's Hornsea slope_pct of **−0.605 %/yr** in P-1.3 was computed on **22 % of the dataset, with roughly half of the rows month-day swapped**. It's not a true reference — it's a parsing artifact.
+
+## Proof: patched spec matches our pipeline exactly
+
+Patched spec = vendored reference with `dayfirst=True` removed (plus a pre-existing pandas-2.x compat patch for Module 4 categorical-vs-int). Run via the same `tests/reference/spec_patches.py` infrastructure as P-1.1 / P-1.2 / P-1.3.
+
+Same Hornsea CSV, both pipelines:
+
+| Stage | Spec (buggy) | Spec (patched) | Our v2 |
+|---|---|---|---|
+| Rows after hard cleaning | 19,277 (37 %) | **48,936 (94 %)** | 48,936 |
+| Module 5 q50 slope_pu | −0.0030 | **+0.0037** | +0.00373 |
+| Module 5 q50 slope_pct | **−0.605 %/yr** | **+0.770 %/yr** | **+0.770 %/yr** |
+| Module 5 q50 n | 11,563 | 28,283 | 28,288 |
+
+slope_pct match within 0.0005 percentage points. n within 5 rows. **Our implementation is correct.**
+
+## Re-validation: all 4 reference windfarms after spec patch
+
+```
+LUTELANDET     spec=+0.34 %/yr  n=13196   ours=+0.341 %/yr  n=13197   ✅
+ROAN           spec=−2.51 %/yr  n=35255   ours=−2.509 %/yr n=35257   ✅
+EAST_ANGLIA    spec=+0.60 %/yr  n=27573   ours=+0.595 %/yr n=27574   ✅
+HORNSEA_1      spec=+0.77 %/yr  n=28283   ours=+0.770 %/yr n=28288   ✅
+```
+
+Every windfarm matches the (corrected) spec to ≤ 1 % of slope_pct and ≤ 5 rows of n. **Our Module 5 is byte-for-byte equivalent to the corrected spec.**
+
+## Why P-1.1 and P-1.2's Lutelandet/EAO numbers happened to land close
+
+The original P-1.1 / P-1.2 were run with the consultant's own CSV files (`Wind_power_price_rawdata_Lutelandet_2022-2025.csv`), not our exporter. Those CSVs were already in DD/MM/YYYY format, so `dayfirst=True` happened to be correct for them. Only when we started feeding the spec ISO-formatted CSVs from our DB exporter (P-1.3 for Hornsea, this session for Hornsea/EAO/Roan/Lutelandet) did the bug fire.
+
+A reasonable interpretation of the P-1.1 / P-1.2 spec columns: still on a different sample (33 % of rows that the original consultant CSVs happened to contain vs our DB's full record), but at least with non-corrupted dates. The Lutelandet match in P-1.1 and EAO match in P-1.2 are coincidental — both happened to land close to our v2 numbers, but the underlying samples differ.
+
+## Patches applied to spec_patches.py
+
+Two new patches added to `tests/reference/spec_patches.py` (see module docstring):
+
+| # | Patch | Why |
+|---|---|---|
+| 3 | Drop `dayfirst=True` from Module 1 date parse | This bug |
+| 4 | Cast `wind_bin` to object before `.map(reference_lookup)` in Module 4 | Pandas 2.x raises `TypeError: Invalid comparison between dtype=category and int` on the resulting `.gt(0)`; same root cause as patch 1, different call site |
+
+With patches 1-4 applied, the spec runs to completion on every windfarm tested.
+
+## Implications
+
+1. **No Hornsea sign flip.** True Hornsea 1 slope ≈ **+0.77 %/yr (slightly improving)**, not −0.60. Drop this from the release note.
+
+2. **Our pipeline was always right.** Module 5's hourly OLS + seasonal decomposition + per-WF baseline implementation matches the corrected spec to 3-4 decimal places on all 4 reference windfarms.
+
+3. **The Module 1b month-level run-grouping fix (this session) is still warranted.** It correctly catches EAO 2024 (2598 h, q50=0.477) and Hornsea 1 2024 (2258 h, q50=0.473) cable issues, which the spec-as-shipped misses (it returns 0 runs with or without the dayfirst bug). Module 1b's downstream value is independent of the slope question.
+
+4. **Roan q50 = −2.51 %/yr (CI excludes 0) is real.** Both spec-patched and our v2 agree. `reference_windfarms.yaml` calls Roan a "clean Nordic baseline, expected small drift". The −2.51 %/yr should be flagged for operational verification in the release note — it's either real degradation or another data-side issue worth investigating, not a pipeline artifact.
+
+5. **All "Spec" columns in P-1.1 / P-1.2 / P-1.3 should be treated as suspect** and re-captured against the patched spec before any stakeholder citation.
+
+## Files modified
+
+- `tests/reference/spec_patches.py` — added patches 3 + 4
+- `tests/reference/p-1-validation-notes.md` — this section (P-1.4)

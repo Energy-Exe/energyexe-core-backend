@@ -31,16 +31,38 @@ def _logistic(v: float, *, slope: float = 1.0) -> float:
 
 def _make_baseline_year(year: int, *, seed: int = 0) -> pd.DataFrame:
     """One year × 8760 h of clean operation. Wind uniform [7, 16] so every
-    hour falls in the detection bands ([7, 10) or [10, 25)). With mixed
-    in-band/out-of-band hours the spec's per-hour run grouping breaks the
-    run wherever an out-of-band hour appears (the spec has the same
-    limitation; in real offshore data sustained constraints coincide with
-    sustained mid/high wind, so it's not a problem in practice).
+    hour falls in the detection bands ([7, 10) or [10, 25)).
     """
     rng = np.random.RandomState(seed)
     hours = pd.date_range(f"{year}-01-01", f"{year + 1}-01-01", freq="h", inclusive="left")
     n = len(hours)
     wind = rng.uniform(7, 16, size=n)
+    base = np.array([_logistic(v) for v in wind])
+    noise = rng.normal(0, 0.03, n)
+    p_pu = np.clip(base + noise, 0, 1.0)
+    return pd.DataFrame(
+        {
+            "hour": hours,
+            "wind_speed": wind,
+            "wind_bin": np.floor(wind).astype(float),
+            "p_pu": p_pu,
+            "year": year,
+        }
+    )
+
+
+def _make_baseline_year_realistic_wind(year: int, *, seed: int = 0) -> pd.DataFrame:
+    """Like _make_baseline_year but with realistic wind variability — wind
+    uniform [0, 25] m/s. Most hours fall below 7 m/s (the detection band
+    floor) and are interleaved with in-band hours throughout the day. Used
+    to regression-guard against the per-hour run-grouping bug where
+    interleaved out-of-band hours shatter what should be a sustained run
+    on real data.
+    """
+    rng = np.random.RandomState(seed)
+    hours = pd.date_range(f"{year}-01-01", f"{year + 1}-01-01", freq="h", inclusive="left")
+    n = len(hours)
+    wind = rng.uniform(0, 25, size=n)
     base = np.array([_logistic(v) for v in wind])
     noise = rng.normal(0, 0.03, n)
     p_pu = np.clip(base + noise, 0, 1.0)
@@ -232,3 +254,78 @@ class TestBands:
         assert Q90_RATIO_BANDS[1]["threshold"] == 0.80
         assert Q50_RATIO_BANDS[0]["threshold"] == 0.70
         assert Q50_RATIO_BANDS[1]["threshold"] == 0.85
+
+
+class TestRealisticWindRunGrouping:
+    """Regression tests for the month-level run grouping (PR after #72).
+
+    The original spec-faithful per-hour run grouping was shattered on real
+    data by interleaved sub-7 m/s hours: a 7-month constraint on EAO 2024
+    fragmented into 320 sub-runs (max 133 h, median 3 h), all below the
+    336 h threshold. Month-level grouping fixes this.
+    """
+
+    def test_constraint_survives_wind_variability(self):
+        """4 yr; 7-month cable failure; wind uniform [0, 25] (realistic).
+        Per-hour grouping would shatter this; month-level grouping keeps it.
+        """
+        df = pd.concat(
+            [_make_baseline_year_realistic_wind(y, seed=y) for y in range(2020, 2024)]
+        )
+        df = _apply_cable_failure(df, start="2023-02-01", end="2023-09-01", cap_to=0.5)
+        runs = detect_constraints_df(df)
+        assert len(runs) >= 1
+        biggest = runs.sort_values("duration_hours", ascending=False).iloc[0]
+        # Run length is in flagged in-band hours; should be a large fraction
+        # of the 7-month window's mid/high-wind hour count.
+        assert biggest["duration_hours"] >= CONSTRAINT_MIN_HOURS
+        # Period bounds land inside the cable-failure window (loosely).
+        assert biggest["period_start"] >= pd.Timestamp("2023-01-01")
+        assert biggest["period_end"] <= pd.Timestamp("2023-12-31")
+        # Median p_pu within the run reflects the half-output ceiling.
+        assert biggest["mean_q50_ratio"] <= 0.65
+
+    def test_low_wind_only_year_returns_no_runs(self):
+        """A year with all hours sub-7 m/s has zero in-band hours and so
+        cannot trigger a constraint regardless of p_pu.
+        """
+        rng = np.random.RandomState(0)
+        hours = pd.date_range("2020-01-01", "2024-01-01", freq="h", inclusive="left")
+        wind = rng.uniform(0, 6, size=len(hours))
+        df = pd.DataFrame(
+            {
+                "hour": hours,
+                "wind_speed": wind,
+                "wind_bin": np.floor(wind).astype(float),
+                "p_pu": np.zeros(len(hours)),  # zero output everywhere
+                "year": pd.to_datetime(hours).year,
+            }
+        )
+        runs = detect_constraints_df(df)
+        assert runs.empty
+
+    def test_sparse_in_band_month_not_flagged(self):
+        """A month with only a handful of in-band hours (< 24) must not
+        be flagged even if all of those hours are in flagged bin-months.
+        Guards against spurious flags on data-sparse months.
+        """
+        rng = np.random.RandomState(0)
+        hours = pd.date_range("2020-01-01", "2024-01-01", freq="h", inclusive="left")
+        wind = rng.uniform(0, 6, size=len(hours))
+        # Sprinkle 10 in-band hours into a specific month — too few to flag.
+        target = (pd.to_datetime(hours).month == 6) & (pd.to_datetime(hours).year == 2023)
+        idx = np.where(target)[0][:10]
+        wind[idx] = 12.0
+        df = pd.DataFrame(
+            {
+                "hour": hours,
+                "wind_speed": wind,
+                "wind_bin": np.floor(wind).astype(float),
+                "p_pu": np.zeros(len(hours)),
+                "year": pd.to_datetime(hours).year,
+            }
+        )
+        runs = detect_constraints_df(df)
+        # The 10 in-band hours all sit at p_pu=0, well below any threshold,
+        # but there's only 10 of them — below MIN_IN_BAND_HOURS_PER_MONTH (24).
+        assert runs.empty

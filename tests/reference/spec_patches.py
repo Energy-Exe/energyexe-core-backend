@@ -4,7 +4,7 @@ The vendored `energyexe_pipeline_full.py` is a Jupyter-style script with module-
 execution at the bottom (it runs `load_and_clean(CFG)`, `run_constraint_detection`, etc.
 on import). Auto-execution makes Python-level monkey-patching painful — the spec module
 fails to import unless `cfg.csv_path` points at a real file. The cleanest workaround is
-text-substitution: read the vendored source, apply the two pandas 2.3 patches plus the
+text-substitution: read the vendored source, apply the pandas 2.3 patches plus the
 caller's `csv_path`/`rated_mw` overrides, write the result to a temp path, then run that
 file as a normal subprocess.
 
@@ -27,8 +27,27 @@ Patches applied:
      `_x/_y` suffixed columns instead of the bare name → KeyError. Fix: skip
      the merge when `df_no_over` already has the column; fillna in place instead.
 
-Both bugs surface only on real data (the spec's example Lutelandet dataset 2022-2025
-happens to dodge them). Reported / TBD to spec author (Aje).
+  3. **Module 1 — `dayfirst=True` silently corrupts ISO timestamps.** The spec's
+     `load_and_clean` parses dates with `pd.to_datetime(..., dayfirst=True)`.
+     On ISO-format input (`YYYY-MM-DD HH:MM:SS`, what `tests/utils/spec_csv_exporter.py`
+     emits), pandas tries DD/MM/YYYY first, which (a) silently swaps month/day on
+     rows where day ≤ 12 (e.g. `2024-11-01` becomes `2024-01-11`) and (b) drops
+     rows where day > 12 as NaT (parsing `01` as month → invalid month 11+).
+     Net effect: spec drops ~60 % of real-data CSVs and mis-labels ~half of what
+     remains — invalidating every downstream metric. **This bug was the source of
+     the spurious "Hornsea 1 -0.605 %/yr degrading" reference number in
+     `p-1-validation-notes.md` (P-1.3).** With the patch the spec gives the same
+     Hornsea slope (+0.77 %/yr) we compute. Fix: drop the `dayfirst=True` kwarg.
+
+  4. **Module 4 — categorical-vs-int comparison in `compute_hourly_norm_ratios`.**
+     `out["expected_mw"] = out["wind_bin"].map(reference_lookup)` returns a
+     Categorical Series in pandas 2.x because `wind_bin` is Categorical (from
+     `pd.cut`). The subsequent `.gt(0)` then raises `TypeError: Invalid
+     comparison between dtype=category and int`. Fix: cast to object before map,
+     coerce to numeric after.
+
+All four bugs surface only on real data (the spec's example Lutelandet dataset 2022-2025
+happens to dodge most of them). Reported / TBD to spec author (Aje).
 """
 
 from __future__ import annotations
@@ -64,6 +83,8 @@ def write_patched_spec(
 
     src = _apply_v_center_patch(src)
     src = _apply_merge_guard_patch(src)
+    src = _apply_dayfirst_patch(src)
+    src = _apply_module4_cat_patch(src)
     src = _apply_config_overrides(src, csv_path=csv_path, rated_mw=rated_mw)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +146,56 @@ def _apply_merge_guard_patch(src: str) -> str:
     if before not in src:
         raise RuntimeError(
             "spec_patches: merge-guard patch target not found — vendored source may "
+            "have been revised. Check tests/reference/VERSION.md and the SHA-256."
+        )
+    return src.replace(before, after, 1)
+
+
+def _apply_dayfirst_patch(src: str) -> str:
+    """Patch 3: `dayfirst=True` silently corrupts ISO timestamps.
+
+    On `YYYY-MM-DD HH:MM:SS` input, pandas with dayfirst=True:
+      - rows with day ≤ 12: month/day swapped (e.g. 2024-11-01 → 2024-01-11)
+      - rows with day > 12: dropped as NaT (parser tries day=YYYY etc, fails)
+
+    The exporter at tests/utils/spec_csv_exporter.py emits ISO timestamps.
+    Without this patch the spec drops ~60 % of rows and mis-labels another
+    ~half of what remains. See module docstring + p-1-validation-notes.md
+    P-1.4 for the discovery.
+    """
+    before = (
+        'df0[cfg.time_col]  = pd.to_datetime(df0[cfg.time_col], dayfirst=True, errors="coerce")'
+    )
+    after = (
+        'df0[cfg.time_col]  = pd.to_datetime(df0[cfg.time_col], errors="coerce")  '
+        '# spec_patches: dropped dayfirst=True (corrupts ISO timestamps)'
+    )
+    if before not in src:
+        raise RuntimeError(
+            "spec_patches: dayfirst patch target not found — vendored source may "
+            "have been revised. Check tests/reference/VERSION.md and the SHA-256."
+        )
+    return src.replace(before, after, 1)
+
+
+def _apply_module4_cat_patch(src: str) -> str:
+    """Patch 4: categorical-vs-int comparison in `compute_hourly_norm_ratios`.
+
+    `out["wind_bin"].map(reference_lookup)` returns a Categorical Series in
+    pandas 2.x (because `wind_bin` came from `pd.cut`). The downstream
+    `.gt(0)` then raises `TypeError: Invalid comparison between
+    dtype=category and int`. Cast to object before map, coerce to numeric
+    after.
+    """
+    before = 'out["expected_mw"] = out["wind_bin"].map(reference_lookup)'
+    after = (
+        'out["expected_mw"] = pd.to_numeric(\n'
+        '        out["wind_bin"].astype(object).map(reference_lookup), errors="coerce"\n'
+        '    )  # spec_patches: cat-to-float for downstream .gt(0)'
+    )
+    if before not in src:
+        raise RuntimeError(
+            "spec_patches: module4 cat patch target not found — vendored source may "
             "have been revised. Check tests/reference/VERSION.md and the SHA-256."
         )
     return src.replace(before, after, 1)

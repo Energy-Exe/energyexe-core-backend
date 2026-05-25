@@ -50,6 +50,25 @@ Q50_RATIO_BANDS: List[Dict[str, float]] = [
 
 CONSTRAINT_MIN_HOURS = 336  # ~14 days; ignore short blips
 
+# Run-grouping at calendar-month granularity. A month is "constrained"
+# if >= CONSTRAINED_MONTH_THRESHOLD of its in-band hours fall in a
+# flagged (bin, month) pair. Hours below IN_BAND_WIND_MIN_MPS are
+# excluded from both numerator and denominator (they cannot be flagged
+# and the spec's bands start at 7 m/s; including them inflates the
+# denominator and hides real constraints).
+#
+# Why month-grouping: the spec's per-hour run grouping is shattered by
+# normal wind variability — interleaved sub-7 m/s hours flip the
+# constraint state ~5-10x per day and fragment what should be a
+# sustained 7-month constraint into tiny sub-runs (verified on EAO 2024:
+# 3,387 constrained hours -> 320 runs, max length 133 h, all below the
+# 336 h threshold). Aggregating at month granularity matches how
+# infrastructure constraints actually present and what an analyst would
+# call out.
+CONSTRAINED_MONTH_THRESHOLD = 0.25
+IN_BAND_WIND_MIN_MPS = 7.0
+MIN_IN_BAND_HOURS_PER_MONTH = 24  # don't flag a month from a handful of in-band hours
+
 
 # ─── Pure helpers (testable, no DB) ────────────────────────────
 
@@ -169,21 +188,29 @@ def group_into_runs(
     *,
     min_hours: int = CONSTRAINT_MIN_HOURS,
     time_col: str = "hour",
+    constrained_month_threshold: float = CONSTRAINED_MONTH_THRESHOLD,
+    in_band_wind_min_mps: float = IN_BAND_WIND_MIN_MPS,
+    min_in_band_hours_per_month: int = MIN_IN_BAND_HOURS_PER_MONTH,
 ) -> pd.DataFrame:
-    """Group consecutive flagged hours into runs and filter by min_hours.
+    """Group flagged hours into runs at calendar-month granularity.
 
-    A bin-month is considered constrained when EITHER the Q90 OR the Q50
-    detector flagged it (B1.5). The ``flag_trigger`` column records which
-    path fired: ``'q90_ratio' | 'q50_ratio' | 'both'``.
+    Algorithm:
+      1. Restrict to in-band hours (``wind_bin >= in_band_wind_min_mps``).
+         Hours below the lowest detection band cannot be flagged and
+         break the spec's hour-level run grouping on real data.
+      2. Compute per-month ``flagged_share = flagged_hrs / in_band_hrs``.
+         A month is "constrained" when ``flagged_share`` meets the
+         threshold AND has at least ``min_in_band_hours_per_month`` of
+         in-band data (avoids spurious flags from sparse months).
+      3. Group consecutive constrained months into runs.
+      4. Aggregate per-run stats (using only flagged in-band hours
+         within the run's calendar range, matching spec semantics where
+         ``duration_hours`` = count of constrained hours).
+      5. Filter by ``min_hours``.
 
-    Note on the per-hour grouping: an hour whose ``wind_bin`` falls
-    outside the detection bands (typically wind < 7 m/s) is always
-    non-constrained. Interleaved low-wind hours therefore break a
-    physically-continuous constraint into multiple shorter sub-runs.
-    This matches the reference pipeline's behaviour (spec :477-494) and
-    works on real data because sustained infrastructure constraints
-    coincide with sustained mid/high wind during the offshore failure
-    patterns we care about (EAO 2024, Hornsea 1 2024, etc.).
+    A bin-month is considered constrained when EITHER the Q90 OR Q50
+    detector flagged it (B1.5). The ``flag_trigger`` column records
+    which path dominated: ``'q90_ratio' | 'q50_ratio' | 'both'``.
     """
     if df_curve.empty:
         return pd.DataFrame()
@@ -202,46 +229,86 @@ def group_into_runs(
         return pd.DataFrame()
 
     df["_key"] = list(zip(df["wind_bin"], df["_month"]))
-    df["_constrained"] = df["_key"].isin(all_keys)
+    df["_in_flagged_bin_month"] = df["_key"].isin(all_keys)
     df["_q90_only"] = df["_key"].isin(q90_keys - q50_keys)
     df["_q50_only"] = df["_key"].isin(q50_keys - q90_keys)
     df["_both"] = df["_key"].isin(q90_keys & q50_keys)
 
-    df = df.sort_values(time_col).reset_index(drop=True)
-    df["_run_id"] = (df["_constrained"] != df["_constrained"].shift()).cumsum()
+    # In-band hours only (denominator for flagged_share + the run source)
+    df_band = df[df["wind_bin"] >= in_band_wind_min_mps].copy()
+    if df_band.empty:
+        return pd.DataFrame()
 
-    runs = (
-        df[df["_constrained"]]
+    # Per-month aggregation
+    monthly = (
+        df_band.groupby("_month")
+        .agg(
+            in_band_hours=("_key", "size"),
+            flagged_hours=("_in_flagged_bin_month", "sum"),
+        )
+        .reset_index()
+    )
+    monthly["flagged_share"] = monthly["flagged_hours"] / monthly["in_band_hours"]
+    monthly["_constrained_month"] = (
+        (monthly["flagged_share"] >= constrained_month_threshold)
+        & (monthly["in_band_hours"] >= min_in_band_hours_per_month)
+    )
+
+    if not monthly["_constrained_month"].any():
+        return pd.DataFrame()
+
+    # Group consecutive constrained months into runs (month-level)
+    monthly = monthly.sort_values("_month").reset_index(drop=True)
+    monthly["_run_id"] = (
+        monthly["_constrained_month"] != monthly["_constrained_month"].shift()
+    ).cumsum()
+
+    runs_meta = (
+        monthly[monthly["_constrained_month"]]
         .groupby("_run_id")
         .agg(
-            period_start=(time_col, "min"),
-            period_end=(time_col, "max"),
-            duration_hours=(time_col, "count"),
-            wind_bins_affected=("wind_bin", lambda x: x.nunique()),
-            mean_q90_ratio=("p_pu", lambda x: float(x.quantile(0.90))),
-            mean_q50_ratio=("p_pu", lambda x: float(x.quantile(0.50))),
-            _q90_share=("_q90_only", "sum"),
-            _q50_share=("_q50_only", "sum"),
-            _both_share=("_both", "sum"),
+            month_start=("_month", "min"),
+            month_end=("_month", "max"),
         )
         .reset_index(drop=True)
     )
 
-    def _label_trigger(row: pd.Series) -> str:
-        if row["_both_share"] > 0 and (row["_q90_share"] == 0 and row["_q50_share"] == 0):
-            return "both"
-        # Mixed across the run — keep the simpler labels
-        if row["_q50_share"] > row["_q90_share"] and row["_both_share"] == 0:
-            return "q50_ratio"
-        if row["_q90_share"] > row["_q50_share"] and row["_both_share"] == 0:
-            return "q90_ratio"
-        # If both paths contributed (either via _both rows or via the
-        # mixed-share fallback) report "both" for the run as a whole.
-        return "both"
+    rows = []
+    for _, run in runs_meta.iterrows():
+        m_start, m_end = run["month_start"], run["month_end"]
+        in_run = df_band[(df_band["_month"] >= m_start) & (df_band["_month"] <= m_end)]
+        flagged_in_run = in_run[in_run["_in_flagged_bin_month"]]
+        if flagged_in_run.empty:
+            continue
 
-    runs["flag_trigger"] = runs.apply(_label_trigger, axis=1)
-    runs = runs.drop(columns=["_q90_share", "_q50_share", "_both_share"])
+        q90_only = int(flagged_in_run["_q90_only"].sum())
+        q50_only = int(flagged_in_run["_q50_only"].sum())
+        both = int(flagged_in_run["_both"].sum())
+        if both > 0 and q90_only == 0 and q50_only == 0:
+            trigger = "both"
+        elif q50_only > q90_only and both == 0:
+            trigger = "q50_ratio"
+        elif q90_only > q50_only and both == 0:
+            trigger = "q90_ratio"
+        else:
+            trigger = "both"
 
+        rows.append(
+            {
+                "period_start": flagged_in_run[time_col].min(),
+                "period_end": flagged_in_run[time_col].max(),
+                "duration_hours": int(len(flagged_in_run)),
+                "wind_bins_affected": int(flagged_in_run["wind_bin"].nunique()),
+                "mean_q90_ratio": float(flagged_in_run["p_pu"].quantile(0.90)),
+                "mean_q50_ratio": float(flagged_in_run["p_pu"].quantile(0.50)),
+                "flag_trigger": trigger,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+
+    runs = pd.DataFrame(rows)
     runs = runs[runs["duration_hours"] >= min_hours].reset_index(drop=True)
     return runs
 
