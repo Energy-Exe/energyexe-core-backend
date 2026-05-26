@@ -61,6 +61,62 @@ Expect it to run ~5 min per windfarm. The pool cascade may strike again after 70
 
 ---
 
+## 🚀🚀 ALTERNATIVE: parallel launch (~4× faster, ~3h instead of ~11h)
+
+After step 3 above (re-derived remaining list), instead of one sequential run, launch 4 parallel processes each with a disjoint chunk:
+
+```bash
+cd /Users/mdfaisal/Documents/energyexe/energyexe-core-backend
+
+# Split remaining WFs into 4 chunks
+python3 -c "
+wfs = open('docs/pipeline/backfill_remaining_wfs.txt').read().split()
+n = 4
+chunks = [wfs[i::n] for i in range(n)]  # round-robin split
+for i, c in enumerate(chunks, 1):
+    with open(f'/tmp/wfs_chunk_{i}.txt', 'w') as f:
+        f.write(' '.join(c))
+    print(f'Chunk {i}: {len(c)} WFs, first={c[0]}, last={c[-1]}')
+"
+
+# Launch 4 parallel backfills, each in its own caffeinate + tee
+# Each gets its own asyncpg pool — cascade in one doesn't affect the others
+for i in 1 2 3 4; do
+  caffeinate -i poetry run python scripts/backfill_pipeline.py --pipeline-only \
+      --windfarm-ids $(cat /tmp/wfs_chunk_$i.txt) \
+      > /tmp/backfill_chunk_$i.log 2>&1 &
+  echo "Launched chunk $i, PID $!"
+done
+
+# Monitor all 4 at once
+watch -n 60 'for i in 1 2 3 4; do
+  ok=$(grep -cE "] OK \(" /tmp/backfill_chunk_$i.log 2>/dev/null)
+  err=$(grep -cE "] ERROR " /tmp/backfill_chunk_$i.log 2>/dev/null)
+  total=$(wc -w < /tmp/wfs_chunk_$i.txt)
+  echo "Chunk $i: $ok ok / $err err / of $total"
+done'
+```
+
+**Expected speedup:** ~4× = 2.5-3h total instead of ~11h.
+
+**Trade-offs:**
+- ~20 RDS connections used (5 per process × 4) — well within RDS limits
+- **Peer aggregate refresh races**: if two chunks finish WFs in the same bidzone simultaneously, you'll see `peer_aggregate_refresh_failed` warnings. Non-fatal but noisy in logs.
+- If one chunk hits the pool cascade, kill only that chunk's PID and relaunch its remaining WFs in a new process.
+
+**When a chunk finishes**, run a final reconciliation:
+```bash
+# Identify still-failed WFs across all chunks
+for i in 1 2 3 4; do
+  grep -E "\] ERROR " /tmp/backfill_chunk_$i.log | sed 's/.*\[\([0-9]*\)\].*/\1/'
+done | sort -u > /tmp/final_retries.txt
+# Re-run the failed ones in a single process
+caffeinate -i poetry run python scripts/backfill_pipeline.py --pipeline-only \
+    --windfarm-ids $(cat /tmp/final_retries.txt) 2>&1 | tee /tmp/backfill_final_retry.log
+```
+
+---
+
 ## What's done (engineering)
 
 **5 PRs landed today:**
