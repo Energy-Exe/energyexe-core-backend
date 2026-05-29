@@ -70,6 +70,9 @@ CONSTRAINED_MONTH_THRESHOLD = 0.25
 IN_BAND_WIND_MIN_MPS = 7.0
 MIN_IN_BAND_HOURS_PER_MONTH = 24  # don't flag a month from a handful of in-band hours
 
+# Analyst review workflow states for structural_constraint_flags.review_status.
+ALLOWED_REVIEW_STATUSES = ("pending_review", "confirmed", "dismissed")
+
 
 # ─── Pure helpers (testable, no DB) ────────────────────────────
 
@@ -434,6 +437,40 @@ class StructuralConstraintDetectionService:
         )
         rows = (await self.db.execute(stmt)).all()
         return [{"period_start": r.period_start, "period_end": r.period_end} for r in rows]
+
+    async def set_review_status(
+        self,
+        flag_id: int,
+        *,
+        review_status: str,
+        analyst_notes: Optional[str] = None,
+        reviewed_by: Optional[int] = None,
+    ) -> Optional[StructuralConstraintFlag]:
+        """Confirm / dismiss / re-open a constraint flag (analyst review).
+
+        Sets ``review_status`` (+ optional ``analyst_notes``) and stamps
+        ``reviewed_by`` / ``reviewed_at``. Returns the updated row, or None if
+        no flag with ``flag_id`` exists. Raises ValueError on an invalid status.
+        """
+        if review_status not in ALLOWED_REVIEW_STATUSES:
+            raise ValueError(
+                f"Invalid review_status {review_status!r}; "
+                f"expected one of {ALLOWED_REVIEW_STATUSES}"
+            )
+
+        flag = await self.db.get(StructuralConstraintFlag, flag_id)
+        if flag is None:
+            return None
+
+        flag.review_status = review_status
+        if analyst_notes is not None:
+            flag.analyst_notes = analyst_notes
+        flag.reviewed_by = reviewed_by
+        flag.reviewed_at = datetime.now(timezone.utc)
+
+        await self.db.commit()
+        await self.db.refresh(flag)
+        return flag
 
 
 def build_constraint_mask(

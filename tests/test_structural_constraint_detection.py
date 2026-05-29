@@ -1,10 +1,9 @@
 """Unit tests for Module 1b — structural constraint detection.
 
-Pure pandas/numpy; no DB. Covers the spec's Q90-ratio path plus the
-B1.5 Q50-ratio augmentation.
+Covers the spec's Q90-ratio path plus the B1.5 Q50-ratio augmentation
+(pure pandas/numpy), and the DB-bound analyst review action via a
+throwaway in-memory SQLite engine.
 """
-
-import math
 
 import numpy as np
 import pandas as pd
@@ -15,10 +14,8 @@ from app.services.structural_constraint_detection_service import (
     Q50_RATIO_BANDS,
     Q90_RATIO_BANDS,
     compute_loyo_reference,
-    compute_observed_percentile,
     detect_constraints_df,
     flag_bin_months,
-    group_into_runs,
 )
 
 # ─── Fixture builders ─────────────────────────────────────────
@@ -327,6 +324,78 @@ class TestRealisticWindRunGrouping:
         # The 10 in-band hours all sit at p_pu=0, well below any threshold,
         # but there's only 10 of them — below MIN_IN_BAND_HOURS_PER_MONTH (24).
         assert runs.empty
+
+
+# ─── DB-bound: analyst review action (set_review_status) ──────────
+
+
+class TestSetReviewStatus:
+    """Confirm/dismiss flow used by the analyst review queue API."""
+
+    @staticmethod
+    async def _seed_flag(session):
+        from datetime import datetime, timezone
+
+        from app.models.structural_constraint_flag import StructuralConstraintFlag
+
+        flag = StructuralConstraintFlag(
+            windfarm_id=7371,
+            period_start=datetime(2024, 3, 1, tzinfo=timezone.utc),
+            period_end=datetime(2024, 10, 1, tzinfo=timezone.utc),
+            duration_hours=2598,
+            review_status="pending_review",
+            flag_trigger="both",
+            flag_source="auto_constraint_detector",
+        )
+        session.add(flag)
+        await session.commit()
+        await session.refresh(flag)
+        return flag.id
+
+    async def _run(self, body):
+        from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+        from app.models.structural_constraint_flag import StructuralConstraintFlag
+        from app.services.structural_constraint_detection_service import (
+            StructuralConstraintDetectionService,
+        )
+
+        engine = create_async_engine("sqlite+aiosqlite://")
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(StructuralConstraintFlag.__table__.create)
+            async with AsyncSession(engine) as session:
+                flag_id = await self._seed_flag(session)
+                svc = StructuralConstraintDetectionService(session)
+                return await body(svc, flag_id)
+        finally:
+            await engine.dispose()
+
+    async def test_confirm_stamps_reviewer_and_status(self):
+        async def body(svc, flag_id):
+            updated = await svc.set_review_status(
+                flag_id, review_status="confirmed", analyst_notes="real cable", reviewed_by=42
+            )
+            assert updated is not None
+            assert updated.review_status == "confirmed"
+            assert updated.analyst_notes == "real cable"
+            assert updated.reviewed_by == 42
+            assert updated.reviewed_at is not None
+
+        await self._run(body)
+
+    async def test_unknown_flag_returns_none(self):
+        async def body(svc, _flag_id):
+            assert await svc.set_review_status(999999, review_status="confirmed") is None
+
+        await self._run(body)
+
+    async def test_invalid_status_raises(self):
+        async def body(svc, flag_id):
+            with pytest.raises(ValueError):
+                await svc.set_review_status(flag_id, review_status="bogus")
+
+        await self._run(body)
 
 
 # ─── DB-bound: confirmed-only masking policy (issue #79) ──────────
