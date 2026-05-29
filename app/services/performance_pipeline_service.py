@@ -116,16 +116,62 @@ class PerformancePipelineService:
         if df_all.empty:
             return {"windfarm_id": windfarm_id, "error": "No hourly data"}
 
-        # Module 1+2: Power curves — pass pre-loaded data (avoids second SQL query).
-        # `return_df_no_over=True` so Modules 3 and 5 below run on the same
-        # overperformance-cleaned sample the reference pipeline uses (spec
-        # :968-1008). Without this they fit on the raw df_all and over-weight
-        # the ~2-4% of rows the curve-fitting step would have dropped.
+        # Module 1b: Structural constraint detection — runs BEFORE Module 2 so
+        # the capability / overall_clean curves are built from constraint-
+        # cleaned data (issue #81; spec: df_curve_clean replaces df_curve from
+        # Module 2 onward). Detection writes pending_review flags for analyst
+        # review, but only CONFIRMED flags (issue #79) actually clean the
+        # curves and the Modules 3/4/5 sample. Until an analyst confirms a
+        # flag, nothing is masked and curves match the spec's no-constraint
+        # path exactly.
+        import numpy as np
+
+        from app.services.structural_constraint_detection_service import (
+            StructuralConstraintDetectionService,
+            build_constraint_mask,
+        )
+
+        n_constraint_hours_excluded = 0
+        df_for_curves = df_all
+        try:
+            detector = StructuralConstraintDetectionService(self.db)
+            async with self.db.begin_nested():
+                df_for_detect = df_all.copy()
+                df_for_detect["wind_bin"] = np.floor(df_for_detect["wind_speed"]).astype(float)
+                detect_out = await detector.detect_constraints(
+                    windfarm_id, df_for_detect, pipeline_run_id=pipeline_run_id
+                )
+            result["structural_constraints"] = detect_out
+
+            active_periods = await detector.load_active_periods(windfarm_id)
+            if active_periods:
+                mask = build_constraint_mask(df_all, active_periods)
+                n_constraint_hours_excluded = int(mask.sum())
+                df_for_curves = df_all[~mask].reset_index(drop=True)
+
+            logger.info(
+                "module_1b_complete",
+                windfarm_id=windfarm_id,
+                runs_detected=detect_out.get("runs_detected", 0),
+                total_constrained_hours=detect_out.get("total_constrained_hours", 0),
+                active_periods=len(active_periods),
+                hours_masked_from_curves_and_downstream=n_constraint_hours_excluded,
+            )
+        except Exception as e:
+            logger.error("pipeline_module_1b_error", windfarm_id=windfarm_id, error=str(e))
+            result["structural_constraints"] = {"error": str(e)}
+            df_for_curves = df_all
+
+        # Module 1+2: Power curves — built from the constraint-cleaned sample
+        # (issue #81). `return_df_no_over=True` so Modules 3 and 5 fit on the
+        # same overperformance-cleaned sample the reference pipeline uses (spec
+        # :968-1008); here that sample is already constraint-cleaned, so the
+        # downstream modules need no further masking.
         curves = await pcs.build_power_curves(
             windfarm_id,
             start_year,
             end_year,
-            df_preloaded=df_all,
+            df_preloaded=df_for_curves,
             return_df_no_over=True,
         )
         result["power_curves"] = curves
@@ -138,7 +184,7 @@ class PerformancePipelineService:
         if df_no_over is None or df_no_over.empty:
             # Defensive fallback: shouldn't happen given the empty checks
             # above, but keeps a single clear failure path.
-            df_no_over = df_all
+            df_no_over = df_for_curves
 
         years = [int(y) for y in curves.get("years", [])]
         if not years:
@@ -155,51 +201,6 @@ class PerformancePipelineService:
             clean_rows=curves.get("clean_rows"),
             curve_rows=curves.get("curve_rows"),
         )
-
-        # Module 1b: Structural constraint detection. Writes pending_review
-        # rows to `structural_constraint_flags` for analyst review. Modules
-        # 3/4/5 below drop only hours covered by CONFIRMED flags (issue #79) —
-        # unreviewed pending_review detections are surfaced but do not change
-        # published numbers until an analyst confirms them.
-        n_constraint_hours_excluded = 0
-        try:
-            import numpy as np
-
-            from app.services.structural_constraint_detection_service import (
-                StructuralConstraintDetectionService,
-                build_constraint_mask,
-            )
-
-            detector = StructuralConstraintDetectionService(self.db)
-            async with self.db.begin_nested():
-                df_for_detect = df_all.copy()
-                df_for_detect["wind_bin"] = np.floor(df_for_detect["wind_speed"]).astype(float)
-                detect_out = await detector.detect_constraints(
-                    windfarm_id, df_for_detect, pipeline_run_id=pipeline_run_id
-                )
-            result["structural_constraints"] = detect_out
-
-            # FX2: apply CONFIRMED constraint flags as a mask on df_no_over
-            # before Modules 3/4/5 consume it (issue #79 — pending_review
-            # detections are not applied). Typically empty until an analyst
-            # confirms a flag.
-            active_periods = await detector.load_active_periods(windfarm_id)
-            if active_periods:
-                mask = build_constraint_mask(df_no_over, active_periods)
-                n_constraint_hours_excluded = int(mask.sum())
-                df_no_over = df_no_over[~mask].reset_index(drop=True)
-
-            logger.info(
-                "module_1b_complete",
-                windfarm_id=windfarm_id,
-                runs_detected=detect_out.get("runs_detected", 0),
-                total_constrained_hours=detect_out.get("total_constrained_hours", 0),
-                active_periods=len(active_periods),
-                hours_masked_from_downstream=n_constraint_hours_excluded,
-            )
-        except Exception as e:
-            logger.error("pipeline_module_1b_error", windfarm_id=windfarm_id, error=str(e))
-            result["structural_constraints"] = {"error": str(e)}
 
         # Module 3: Anomaly detection — each year in its own SAVEPOINT so one bad
         # year doesn't poison the whole transaction. Uses df_no_over to match
