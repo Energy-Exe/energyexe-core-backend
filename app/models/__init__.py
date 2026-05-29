@@ -1,61 +1,62 @@
 """Database models package."""
 
+from .agent_question_template import AgentQuestionTemplate
+from .agent_thread import AgentThread
+from .alert import (
+    AlertCondition,
+    AlertMetric,
+    AlertRule,
+    AlertScope,
+    AlertSeverity,
+    AlertTrigger,
+    AlertTriggerStatus,
+    Notification,
+    NotificationChannel,
+    NotificationPreference,
+    NotificationStatus,
+)
 from .audit_log import AuditLog
 from .bidzone import Bidzone
 from .cable import Cable
+from .constraint_loss_summary import ConstraintLossSummary
 from .control_area import ControlArea
 from .country import Country
-from .data_anomaly import DataAnomaly, AnomalyType, AnomalyStatus, AnomalySeverity
-from .generation_data import GenerationDataRaw, GenerationData, GenerationUnitMapping
-from .price_data import PriceDataRaw, PriceData
+from .data_anomaly import AnomalySeverity, AnomalyStatus, AnomalyType, DataAnomaly
+from .degradation_result import DegradationResult
+from .exchange_rate import ExchangeRate
+from .financial_data import FinancialData
+from .financial_entity import FinancialEntity
+from .generation_concentration_summary import GenerationConcentrationSummary
+from .generation_data import GenerationData, GenerationDataRaw, GenerationUnitMapping
 from .generation_unit import GenerationUnit
-from .weather_data import WeatherDataRaw, WeatherData
-from .report_commentary import ReportCommentary
+from .import_job_execution import ImportJobExecution
 from .invitation import Invitation
 from .market_balance_area import MarketBalanceArea
+from .opportunity import Branch, Opportunity, OpportunityStatus, SchemaCode, Severity
 from .owner import Owner
+from .p50_target import P50Target
+from .peer_group_aggregate import PeerGroupAggregate
+from .performance_anomaly import PerformanceAnomaly
+from .performance_summary import PerformanceSummary
+from .portfolio import Portfolio, PortfolioItem, PortfolioType, UserFavorite
+from .power_curve_bin import PowerCurveBin
+from .ppa import PPA
+from .price_data import PriceData, PriceDataRaw
 from .project import Project
 from .region import Region
+from .report_commentary import ReportCommentary
 from .state import State
 from .substation import Substation
 from .substation_owner import SubstationOwner
 from .turbine_model import TurbineModel
 from .turbine_unit import TurbineUnit
 from .user import User
-from .user_feature import UserFeature, DEFAULT_FEATURES
 from .user_consent import UserConsent
-from .portfolio import Portfolio, PortfolioItem, UserFavorite, PortfolioType
-from .alert import (
-    AlertRule,
-    AlertTrigger,
-    Notification,
-    NotificationPreference,
-    AlertMetric,
-    AlertCondition,
-    AlertScope,
-    AlertSeverity,
-    AlertTriggerStatus,
-    NotificationChannel,
-    NotificationStatus,
-)
+from .user_feature import DEFAULT_FEATURES, UserFeature
+from .weather_data import WeatherData, WeatherDataRaw
 from .windfarm import Windfarm
-from .windfarm_owner import WindfarmOwner
-from .ppa import PPA
-from .p50_target import P50Target
-from .import_job_execution import ImportJobExecution
-from .financial_entity import FinancialEntity
 from .windfarm_financial_entity import WindfarmFinancialEntity
-from .financial_data import FinancialData
-from .exchange_rate import ExchangeRate
-from .agent_question_template import AgentQuestionTemplate
-from .agent_thread import AgentThread
-from .opportunity import Opportunity, SchemaCode, Severity, Branch, OpportunityStatus
-from .power_curve_bin import PowerCurveBin
-from .performance_anomaly import PerformanceAnomaly
-from .performance_summary import PerformanceSummary
-from .degradation_result import DegradationResult
-from .peer_group_aggregate import PeerGroupAggregate
-from .generation_concentration_summary import GenerationConcentrationSummary
+from .windfarm_owner import WindfarmOwner
 
 __all__ = [
     "AgentQuestionTemplate",
@@ -127,4 +128,5 @@ __all__ = [
     "DegradationResult",
     "PeerGroupAggregate",
     "GenerationConcentrationSummary",
+    "ConstraintLossSummary",
 ]
