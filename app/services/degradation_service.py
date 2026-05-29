@@ -143,7 +143,15 @@ class DegradationService:
         pipeline_run_id: Optional[int],
         n_constraint_hours_excluded: Optional[int] = None,
     ) -> Optional[dict]:
-        residuals = self.compute_residuals(df, yearly_curves)
+        # The operational floor is always q50 (spec line 998). When fitting the
+        # q90 reference, load the q50 curve so the floor is applied against it
+        # rather than against q90 (which would admit low-wind hours the spec
+        # excludes — see issue #80).
+        floor_curves = None
+        if reference != "q50":
+            floor_curves = await self._load_yearly_capability(windfarm_id, "q50")
+
+        residuals = self.compute_residuals(df, yearly_curves, floor_curves=floor_curves)
         if residuals.empty or len(residuals) < MIN_FIT_HOURS:
             logger.warning(
                 "degradation_insufficient_data",
@@ -194,13 +202,21 @@ class DegradationService:
         op_wind_min: float = OP_WIND_MIN,
         op_wind_max: float = OP_WIND_MAX,
         min_median_pu: float = MIN_MEDIAN_PU_FOR_OPERATIONAL,
+        floor_curves: Optional[Dict[int, Dict[float, float]]] = None,
     ) -> pd.DataFrame:
         """Compute per-hour residual_pu = p_pu - reference_bin_pu.
 
-        Filters to the operational wind range and to bins where the reference
-        is above ``min_median_pu``. Returns hourly rows (one per surviving
-        hour) with columns: ``hour, year, year_fraction, wind_speed, wind_bin,
-        ref_pu, p_pu, residual_pu``.
+        Filters to the operational wind range and to bins where the **q50**
+        capability is above ``min_median_pu``. Returns hourly rows (one per
+        surviving hour) with columns: ``hour, year, year_fraction, wind_speed,
+        wind_bin, ref_pu, p_pu, residual_pu``.
+
+        The residual is taken against the *active* reference (``yearly_curves``,
+        q50 or q90). The operational floor, however, is **always** the q50
+        curve — matching the reference pipeline, which filters on ``q50_bin``
+        for both references (``energyexe_pipeline_full.py:998``). When fitting
+        q90, pass the q50 curve as ``floor_curves``; for the q50 fit it is
+        ``None`` and the active curve doubles as its own floor.
 
         year_fraction follows the reference at line 1001:
             year + (dayofyear - 1) / 365.25
@@ -213,10 +229,19 @@ class DegradationService:
 
         out["wind_bin"] = np.floor(out["wind_speed"]).astype(float)
 
+        # Residual reference: the active curve (q50 or q90).
         out["ref_pu"] = [
             yearly_curves.get(int(y), {}).get(b) for y, b in zip(out["year"], out["wind_bin"])
         ]
-        out = out[out["ref_pu"].notna() & (out["ref_pu"] >= min_median_pu)].copy()
+        # Operational floor: always q50 (spec line 998). floor_curves carries
+        # the q50 curve when fitting q90; otherwise reuse the active curve.
+        floor = floor_curves if floor_curves is not None else yearly_curves
+        out["floor_pu"] = [
+            floor.get(int(y), {}).get(b) for y, b in zip(out["year"], out["wind_bin"])
+        ]
+        out = out[
+            out["ref_pu"].notna() & out["floor_pu"].notna() & (out["floor_pu"] >= min_median_pu)
+        ].copy()
         if out.empty:
             return pd.DataFrame()
 
@@ -294,14 +319,18 @@ class DegradationService:
         else:
             baseline_cap_pu = float("nan")
 
+        # No hardcoded fallback. The old `baseline_cap_pu = 0.35` silently
+        # resurrected Bug-C (a fabricated denominator). If the first-year
+        # baseline is invalid we cannot express slope as a % of capability, so
+        # skip this fit rather than report a meaningless slope_pct (issue #80).
         if not np.isfinite(baseline_cap_pu) or baseline_cap_pu <= 0:
             logger.warning(
-                "degradation_baseline_fallback",
+                "degradation_baseline_invalid_skip",
                 computed=baseline_cap_pu,
                 first_year=first_year,
                 first_year_rows=len(baseline_df),
             )
-            baseline_cap_pu = 0.35
+            return None
 
         slope_pct = float(slope / baseline_cap_pu * 100)
         ci95_pct = None
