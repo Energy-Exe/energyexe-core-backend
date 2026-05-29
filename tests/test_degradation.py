@@ -2,7 +2,6 @@
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from app.services.degradation_service import (
     OP_WIND_MAX,
@@ -169,6 +168,63 @@ class TestComputeResiduals:
 
         residuals = DegradationService.compute_residuals(df, curves)
         assert residuals.empty
+
+
+class TestQ50OperationalFloor:
+    """Issue #80 — the operational floor must always be q50, even for the q90 fit.
+
+    The spec filters the operational subset on ``q50_bin >= 0.10`` for BOTH
+    references (``energyexe_pipeline_full.py:998``). A low-wind bin whose q50 is
+    below the floor but whose q90 clears it must be EXCLUDED from the q90 fit.
+    """
+
+    @staticmethod
+    def _two_bin_df(seed=1):
+        """Hours split between a low-wind bin (4) and a mid bin (8), one year."""
+        rng = np.random.RandomState(seed)
+        n = 200
+        wind = np.concatenate([np.full(n, 4.5), np.full(n, 8.5)])  # bins 4 and 8
+        p_pu = np.concatenate([rng.uniform(0.0, 0.1, n), rng.uniform(0.4, 0.6, n)])
+        hours = pd.date_range("2020-01-01", periods=len(wind), freq="h")
+        return pd.DataFrame(
+            {
+                "hour": hours,
+                "year": 2020,
+                "generation_mwh": p_pu * 100,
+                "wind_speed": wind,
+                "market_price": 30.0,
+                "p_pu": p_pu,
+            }
+        )
+
+    # q50 below floor in bin 4; q90 above floor in bin 4. Bin 8 clears both.
+    Q50_CURVES = {2020: {4.0: 0.05, 8.0: 0.50}}
+    Q90_CURVES = {2020: {4.0: 0.15, 8.0: 0.70}}
+
+    def test_q90_fit_uses_q50_floor_excludes_low_wind_bin(self):
+        df = self._two_bin_df()
+        residuals = DegradationService.compute_residuals(
+            df, self.Q90_CURVES, floor_curves=self.Q50_CURVES
+        )
+        # Bin 4's q50 (0.05) is below the 0.10 floor → excluded despite q90=0.15.
+        assert set(residuals["wind_bin"].unique()) == {8.0}
+        # Residual is still taken against the ACTIVE (q90) curve for bin 8.
+        assert residuals["ref_pu"].unique().tolist() == [0.70]
+
+    def test_q90_without_floor_curve_would_admit_low_wind_bin(self):
+        """Guard: with no floor curve the q90 curve floors itself (the old bug)."""
+        df = self._two_bin_df()
+        residuals = DegradationService.compute_residuals(df, self.Q90_CURVES)
+        # q90 bin 4 (0.15) clears 0.10 → bin 4 leaks in. This is exactly the
+        # behaviour #80 fixes; the orchestrator must pass floor_curves=q50.
+        assert 4.0 in set(residuals["wind_bin"].unique())
+
+    def test_q50_fit_unchanged_floor_equals_active(self):
+        df = self._two_bin_df()
+        residuals = DegradationService.compute_residuals(df, self.Q50_CURVES)
+        # q50 bin 4 (0.05) below floor → excluded; only bin 8 survives.
+        assert set(residuals["wind_bin"].unique()) == {8.0}
+        assert residuals["ref_pu"].unique().tolist() == [0.50]
 
 
 # ─── fit_degradation_trend ─────────────────────────────────────
@@ -381,12 +437,13 @@ class TestA2Baseline:
         assert trend is not None
         assert abs(trend["baseline_cap_pu"] - 0.50) < 0.005
 
-    def test_a2_t3_empty_first_year_falls_back(self):
-        """If first-year baseline lookup yields no rows, fall back to 0.35."""
-        # Use a curve whose ref_pu is just under the 0.10 op cutoff for ALL
-        # bins so compute_residuals filters everything → empty df_fit → None.
-        # To test the baseline fallback specifically we have to feed
-        # fit_degradation_trend directly.
+    def test_a2_t3_invalid_baseline_skips(self):
+        """If the first-year baseline is invalid, skip (return None).
+
+        Issue #80: the old code fell back to a hardcoded 0.35, silently
+        resurrecting Bug-C. With no valid first-year capability we cannot
+        express slope as a % of capability, so the fit is skipped instead.
+        """
         rng = np.random.RandomState(42)
         n = 500
         df = pd.DataFrame(
@@ -403,8 +460,7 @@ class TestA2Baseline:
             }
         )
         trend = DegradationService.fit_degradation_trend(df)
-        assert trend is not None
-        assert trend["baseline_cap_pu"] == 0.35
+        assert trend is None
 
     def test_a2_t4_slope_pct_matches_slope_divided_by_baseline(self):
         """slope_pct = slope_pu / baseline_cap_pu × 100 (spec :1053)."""

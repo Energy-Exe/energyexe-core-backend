@@ -5,10 +5,11 @@ constraints (cable failures, half-BMU offline, curtailment programmes,
 etc.). Writes ``pending_review`` rows to ``structural_constraint_flags``
 for analyst follow-up.
 
-Active flags (``review_status IN ('pending_review', 'confirmed')``) are
-loaded back by the orchestrator and used to mask out constrained hours
-from Modules 3/4/5 before they consume the dataset. Analysts can flip a
-flag to ``'dismissed'`` to bring its hours back into the calculation.
+Only ``confirmed`` flags (issue #79) are loaded back by the orchestrator
+and used to mask out constrained hours from Modules 3/4/5 before they
+consume the dataset. Auto detections start as ``pending_review`` and are
+surfaced for analyst review but do not change published numbers until an
+analyst confirms them; ``dismissed`` flags stay out of the calculation.
 
 Compared with the reference pipeline (``energyexe_pipeline_full.py
 :425-494``) we extend the detector with a parallel Q50-ratio check
@@ -420,9 +421,11 @@ class StructuralConstraintDetectionService:
     async def load_active_periods(self, windfarm_id: int) -> List[Dict[str, Any]]:
         """Return active constraint periods for a windfarm.
 
-        "Active" = ``review_status IN ('pending_review', 'confirmed')``.
-        Dismissed flags are excluded. Used by the orchestrator to mask out
-        constrained hours from Modules 3/4/5 (FX2).
+        "Active" = ``review_status = 'confirmed'`` only (issue #79). Auto
+        detections land as ``pending_review`` and are surfaced for analyst
+        review but do NOT alter published analytics until confirmed — this
+        prevents unreviewed false positives (e.g. on clean reference farms)
+        from silently masking Modules 3/4/5. ``dismissed`` flags are excluded.
         """
         stmt = (
             select(
@@ -430,7 +433,7 @@ class StructuralConstraintDetectionService:
                 StructuralConstraintFlag.period_end,
             )
             .where(StructuralConstraintFlag.windfarm_id == windfarm_id)
-            .where(StructuralConstraintFlag.review_status.in_(("pending_review", "confirmed")))
+            .where(StructuralConstraintFlag.review_status == "confirmed")
         )
         rows = (await self.db.execute(stmt)).all()
         return [{"period_start": r.period_start, "period_end": r.period_end} for r in rows]

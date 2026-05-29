@@ -396,3 +396,59 @@ class TestSetReviewStatus:
                 await svc.set_review_status(flag_id, review_status="bogus")
 
         await self._run(body)
+
+
+# ─── DB-bound: confirmed-only masking policy (issue #79) ──────────
+
+
+class TestLoadActivePeriodsConfirmedOnly:
+    """load_active_periods must return ONLY confirmed flags (issue #79).
+
+    pending_review (unreviewed auto-detections) and dismissed flags must not
+    mask downstream modules. Uses a throwaway in-memory SQLite with just the
+    one table created (no JSONB; FK targets unnecessary as enforcement is off).
+    """
+
+    async def test_only_confirmed_periods_are_returned(self):
+        from datetime import datetime, timezone
+
+        from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+        from app.models.structural_constraint_flag import StructuralConstraintFlag
+        from app.services.structural_constraint_detection_service import (
+            StructuralConstraintDetectionService,
+        )
+
+        def _flag(status: str, month: int) -> StructuralConstraintFlag:
+            return StructuralConstraintFlag(
+                windfarm_id=1,
+                period_start=datetime(2024, month, 1, tzinfo=timezone.utc),
+                period_end=datetime(2024, month, 20, tzinfo=timezone.utc),
+                duration_hours=336,
+                review_status=status,
+                flag_trigger="both",
+                flag_source="auto_constraint_detector",
+            )
+
+        engine = create_async_engine("sqlite+aiosqlite://")
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(StructuralConstraintFlag.__table__.create)
+
+            async with AsyncSession(engine) as session:
+                session.add_all(
+                    [
+                        _flag("pending_review", 1),
+                        _flag("confirmed", 3),
+                        _flag("dismissed", 5),
+                    ]
+                )
+                await session.commit()
+
+                svc = StructuralConstraintDetectionService(session)
+                periods = await svc.load_active_periods(1)
+
+            assert len(periods) == 1
+            assert periods[0]["period_start"].month == 3
+        finally:
+            await engine.dispose()
