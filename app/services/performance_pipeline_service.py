@@ -4,12 +4,15 @@ Also contains Module 6 (Commercial Reporting) logic: constraint proxy
 timeseries and PPA scenario analysis.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
 
 from app.models.import_job_execution import ImportJobExecution, ImportJobStatus
 from app.models.performance_summary import PerformanceSummary
@@ -438,13 +441,35 @@ class PerformancePipelineService:
         # and any failure here can no longer touch the already-committed
         # analytical results above. Downstream vs-zone API responses reflect the
         # latest values once this succeeds.
-        try:
+        #
+        # Wall-clock bound (PIPELINE_PEER_AGG_TIMEOUT_S): peer-agg recomputes the
+        # whole group across all peers per metric/year and is pathologically
+        # slow on big zones (GB ~200 combos). A slow or connection-dropped
+        # refresh previously froze the run for ~80 min — no socket timeout fires
+        # when the connection silently dies, so nothing returned. asyncio.wait_for
+        # cancels the await at the event-loop layer regardless of what asyncpg is
+        # blocked on, so the pipeline always proceeds. The whole session block
+        # (incl. close) is inside the bound so a hung cleanup is cancellable too.
+        async def _refresh_peer_aggregates() -> None:
             from app.core.database import get_session_factory
             from app.services.peer_aggregate_service import PeerAggregateService
 
             async with get_session_factory()() as agg_db:
                 await PeerAggregateService(agg_db).refresh_for_windfarm(windfarm_id, years)
                 await agg_db.commit()
+
+        peer_agg_timeout = get_settings().PIPELINE_PEER_AGG_TIMEOUT_S
+        try:
+            if peer_agg_timeout and peer_agg_timeout > 0:
+                await asyncio.wait_for(_refresh_peer_aggregates(), timeout=peer_agg_timeout)
+            else:
+                await _refresh_peer_aggregates()
+        except asyncio.TimeoutError:
+            logger.warning(
+                "pipeline_peer_aggregate_refresh_timeout",
+                windfarm_id=windfarm_id,
+                timeout_s=peer_agg_timeout,
+            )
         except Exception as e:
             logger.warning(
                 "pipeline_peer_aggregate_refresh_failed",
