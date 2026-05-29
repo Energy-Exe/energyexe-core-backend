@@ -244,6 +244,30 @@ class PerformancePipelineService:
             total_lost_eur=round(sum(float(r.get("lost_eur") or 0) for r in ok_years.values()), 2),
         )
 
+        # Module 3f: Constraint loss summary — confirmed-constraint hours are
+        # masked out of the ODI accounting above, so their infrastructure loss
+        # is attributed here, priced against overall_clean Q50 (issue #82).
+        # No-op until an analyst confirms a flag.
+        try:
+            from app.services.constraint_loss_service import ConstraintLossService
+
+            async with self.db.begin_nested():
+                cls_out = await ConstraintLossService(self.db).compute_and_store(
+                    windfarm_id, df_all, float(rated_mw), pipeline_run_id=pipeline_run_id
+                )
+            result["constraint_loss"] = cls_out
+            if cls_out.get("periods"):
+                logger.info(
+                    "module_3f_complete",
+                    windfarm_id=windfarm_id,
+                    periods=cls_out["periods"],
+                    total_lost_mwh=cls_out["total_lost_mwh"],
+                    total_lost_eur=cls_out["total_lost_eur"],
+                )
+        except Exception as e:
+            logger.error("pipeline_constraint_loss_error", windfarm_id=windfarm_id, error=str(e))
+            result["constraint_loss"] = {"error": str(e)}
+
         # Module 4: Wind normalisation — each reference in its own SAVEPOINT.
         # Uses df_no_over to match the reference pipeline's sample (FX1).
         norm_svc = WindNormalisationService(self.db)
