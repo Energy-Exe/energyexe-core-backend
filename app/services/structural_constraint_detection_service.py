@@ -396,12 +396,38 @@ class StructuralConstraintDetectionService:
                 )
             )
 
+        # Preserve analyst-reviewed periods. The DELETE above intentionally
+        # keeps confirmed/dismissed flags, so re-detecting their exact period
+        # and inserting a fresh pending_review row would collide on
+        # uq_scf_windfarm_period (windfarm_id, period_start, period_end) and
+        # crash detection — which silently fell through to the no-masking path,
+        # so a CONFIRMED constraint was never actually applied on re-runs. Skip
+        # any detected run whose period already has a reviewed flag; the
+        # analyst's decision (and its masking, via load_active_periods) stands.
+        reviewed = await self.db.execute(
+            select(
+                StructuralConstraintFlag.period_start,
+                StructuralConstraintFlag.period_end,
+            ).where(
+                StructuralConstraintFlag.windfarm_id == windfarm_id,
+                StructuralConstraintFlag.review_status != "pending_review",
+            )
+        )
+        reviewed_periods = {(_ensure_tz(ps), _ensure_tz(pe)) for ps, pe in reviewed.all()}
+
+        runs_inserted = 0
+        runs_preserved = 0
         for _, run in runs.iterrows():
+            period_start = _ensure_tz(run["period_start"])
+            period_end = _ensure_tz(run["period_end"])
+            if (period_start, period_end) in reviewed_periods:
+                runs_preserved += 1
+                continue
             self.db.add(
                 StructuralConstraintFlag(
                     windfarm_id=windfarm_id,
-                    period_start=_ensure_tz(run["period_start"]),
-                    period_end=_ensure_tz(run["period_end"]),
+                    period_start=period_start,
+                    period_end=period_end,
                     duration_hours=int(run["duration_hours"]),
                     wind_bins_affected=int(run["wind_bins_affected"]),
                     mean_q90_ratio=float(run["mean_q90_ratio"]),
@@ -412,10 +438,13 @@ class StructuralConstraintDetectionService:
                     pipeline_run_id=pipeline_run_id,
                 )
             )
+            runs_inserted += 1
 
         return {
             "runs_detected": runs_detected,
             "total_constrained_hours": total_hours,
+            "runs_inserted": runs_inserted,
+            "runs_preserved": runs_preserved,
         }
 
     async def load_active_periods(self, windfarm_id: int) -> List[Dict[str, Any]]:
