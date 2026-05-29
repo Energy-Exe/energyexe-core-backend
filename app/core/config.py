@@ -71,7 +71,18 @@ class Settings(BaseSettings):
     DB_POOL_PRE_PING: bool = True  # Test connections before use
     DB_POOL_RECYCLE: int = 300  # Recycle connections after 5 minutes
     DB_POOL_TIMEOUT: int = 30  # Wait max 30s for connection from pool
-    DB_COMMAND_TIMEOUT: int = 180  # Query timeout: 3 minutes (large analytics queries on big zones can run 60–120s)
+    DB_COMMAND_TIMEOUT: int = (
+        180  # Query timeout: 3 minutes (large analytics queries on big zones can run 60–120s)
+    )
+
+    # Wall-clock bound on the per-windfarm peer-aggregate refresh in the
+    # pipeline. Peer-agg is best-effort (it updates zone/country averages for
+    # the vs-zone API) and recomputes the whole group across all peers per
+    # metric/year — pathologically slow on big zones (GB ~200 combos). Without
+    # a bound, a slow or connection-dropped refresh froze the pipeline for
+    # ~80 min and blocked every subsequent windfarm. On timeout we log and move
+    # on; the nightly run re-attempts. 0 disables the bound.
+    PIPELINE_PEER_AGG_TIMEOUT_S: int = 120
 
     # Redis (optional)
     REDIS_URL: Optional[str] = None
@@ -149,7 +160,7 @@ class Settings(BaseSettings):
     VALKEY_PUBLIC_PORT: str = "6379"
     VALKEY_PASSWORD: str = ""  # Set via environment variable
     VALKEY_USER: str = "default"
-    
+
     # Celery settings
     CELERY_BROKER_URL: Optional[str] = None
     CELERY_RESULT_BACKEND: Optional[str] = None
