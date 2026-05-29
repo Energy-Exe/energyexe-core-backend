@@ -157,10 +157,10 @@ class PerformancePipelineService:
         )
 
         # Module 1b: Structural constraint detection. Writes pending_review
-        # rows to `structural_constraint_flags`. Modules 3/4/5 below then
-        # drop any hours covered by ACTIVE flags (pending_review or confirmed
-        # — analyst can flip a flag to 'dismissed' to bring those hours back
-        # into the calculation).
+        # rows to `structural_constraint_flags` for analyst review. Modules
+        # 3/4/5 below drop only hours covered by CONFIRMED flags (issue #79) —
+        # unreviewed pending_review detections are surfaced but do not change
+        # published numbers until an analyst confirms them.
         n_constraint_hours_excluded = 0
         try:
             import numpy as np
@@ -179,9 +179,10 @@ class PerformancePipelineService:
                 )
             result["structural_constraints"] = detect_out
 
-            # FX2: apply active flags as a mask on df_no_over before Modules
-            # 3/4/5 consume it. Includes both this-run detections (still
-            # pending_review) and prior runs the analyst has confirmed.
+            # FX2: apply CONFIRMED constraint flags as a mask on df_no_over
+            # before Modules 3/4/5 consume it (issue #79 — pending_review
+            # detections are not applied). Typically empty until an analyst
+            # confirms a flag.
             active_periods = await detector.load_active_periods(windfarm_id)
             if active_periods:
                 mask = build_constraint_mask(df_no_over, active_periods)

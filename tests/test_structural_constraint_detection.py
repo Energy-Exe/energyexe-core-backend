@@ -269,9 +269,7 @@ class TestRealisticWindRunGrouping:
         """4 yr; 7-month cable failure; wind uniform [0, 25] (realistic).
         Per-hour grouping would shatter this; month-level grouping keeps it.
         """
-        df = pd.concat(
-            [_make_baseline_year_realistic_wind(y, seed=y) for y in range(2020, 2024)]
-        )
+        df = pd.concat([_make_baseline_year_realistic_wind(y, seed=y) for y in range(2020, 2024)])
         df = _apply_cable_failure(df, start="2023-02-01", end="2023-09-01", cap_to=0.5)
         runs = detect_constraints_df(df)
         assert len(runs) >= 1
@@ -329,3 +327,59 @@ class TestRealisticWindRunGrouping:
         # The 10 in-band hours all sit at p_pu=0, well below any threshold,
         # but there's only 10 of them — below MIN_IN_BAND_HOURS_PER_MONTH (24).
         assert runs.empty
+
+
+# ─── DB-bound: confirmed-only masking policy (issue #79) ──────────
+
+
+class TestLoadActivePeriodsConfirmedOnly:
+    """load_active_periods must return ONLY confirmed flags (issue #79).
+
+    pending_review (unreviewed auto-detections) and dismissed flags must not
+    mask downstream modules. Uses a throwaway in-memory SQLite with just the
+    one table created (no JSONB; FK targets unnecessary as enforcement is off).
+    """
+
+    async def test_only_confirmed_periods_are_returned(self):
+        from datetime import datetime, timezone
+
+        from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+        from app.models.structural_constraint_flag import StructuralConstraintFlag
+        from app.services.structural_constraint_detection_service import (
+            StructuralConstraintDetectionService,
+        )
+
+        def _flag(status: str, month: int) -> StructuralConstraintFlag:
+            return StructuralConstraintFlag(
+                windfarm_id=1,
+                period_start=datetime(2024, month, 1, tzinfo=timezone.utc),
+                period_end=datetime(2024, month, 20, tzinfo=timezone.utc),
+                duration_hours=336,
+                review_status=status,
+                flag_trigger="both",
+                flag_source="auto_constraint_detector",
+            )
+
+        engine = create_async_engine("sqlite+aiosqlite://")
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(StructuralConstraintFlag.__table__.create)
+
+            async with AsyncSession(engine) as session:
+                session.add_all(
+                    [
+                        _flag("pending_review", 1),
+                        _flag("confirmed", 3),
+                        _flag("dismissed", 5),
+                    ]
+                )
+                await session.commit()
+
+                svc = StructuralConstraintDetectionService(session)
+                periods = await svc.load_active_periods(1)
+
+            assert len(periods) == 1
+            assert periods[0]["period_start"].month == 3
+        finally:
+            await engine.dispose()
