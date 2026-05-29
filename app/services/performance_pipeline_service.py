@@ -33,7 +33,19 @@ class PerformancePipelineService:
     # ─── Batch runner ──────────────────────────────────────────
 
     async def run_pipeline_batch(self, windfarm_ids: Optional[List[int]] = None) -> dict:
-        """Run pipeline for all/specified windfarms as a tracked import job."""
+        """Run pipeline for all/specified windfarms as a tracked import job.
+
+        L4 (7404 fix): each windfarm runs in its OWN session/connection rather
+        than sharing this batch session. Previously a connection death on one
+        long-history windfarm (e.g. 7404) poisoned the shared connection, so
+        every subsequent windfarm failed and the single end-of-batch commit
+        rolled back the whole batch. With a fresh per-windfarm session (and
+        run_pipeline committing its own analytics), a death on one windfarm is
+        contained — its peers are already durable and the next windfarm gets a
+        healthy, pre_ping-validated connection.
+        """
+        from app.core.database import get_session_factory
+
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         job = ImportJobExecution(
@@ -47,6 +59,12 @@ class PerformancePipelineService:
         )
         self.db.add(job)
         await self.db.flush()
+        # Commit the job row up front so its id is visible to the independent
+        # per-windfarm sessions below and the RUNNING state is observable.
+        await self.db.commit()
+        job_id = job.id
+
+        factory = get_session_factory()
 
         try:
             if not windfarm_ids:
@@ -58,13 +76,19 @@ class PerformancePipelineService:
             results = {}
             for wf_id in windfarm_ids:
                 try:
-                    wf_result = await self.run_pipeline(wf_id, pipeline_run_id=job.id)
+                    async with factory() as wf_db:
+                        wf_svc = PerformancePipelineService(wf_db)
+                        wf_result = await wf_svc.run_pipeline(wf_id, pipeline_run_id=job_id)
+                        # run_pipeline commits its own analytics (L1); this is a
+                        # no-op safety net for any tail writes / early returns.
+                        await wf_db.commit()
                     results[wf_id] = wf_result
                 except Exception as e:
                     logger.error("pipeline_windfarm_error", windfarm_id=wf_id, error=str(e))
                     results[wf_id] = {"error": str(e)}
 
             succeeded = sum(1 for r in results.values() if "error" not in r)
+            job = await self.db.get(ImportJobExecution, job_id)
             job.mark_success(records_imported=succeeded)
             await self.db.commit()
 
@@ -74,15 +98,17 @@ class PerformancePipelineService:
                 succeeded=succeeded,
             )
             return {
-                "job_id": job.id,
+                "job_id": job_id,
                 "windfarms_processed": len(windfarm_ids),
                 "succeeded": succeeded,
                 "failed": len(windfarm_ids) - succeeded,
             }
 
         except Exception as e:
-            job.mark_failed(str(e))
-            await self.db.commit()
+            job = await self.db.get(ImportJobExecution, job_id)
+            if job is not None:
+                job.mark_failed(str(e))
+                await self.db.commit()
             raise
 
     # ─── Single windfarm pipeline ──────────────────────────────
@@ -101,6 +127,18 @@ class PerformancePipelineService:
         import pandas as pd
 
         result: Dict[str, Any] = {"windfarm_id": windfarm_id}
+
+        # L3 (7404 fix): disable Postgres' idle-in-transaction timeout for this
+        # session. A long-history windfarm spends minutes in CPU-heavy pandas
+        # work (Module 2 binning, Module 5 OLS) between DB writes, leaving the
+        # connection idle-in-transaction the whole time. Without this, the
+        # server (or RDS) terminates the "idle" connection mid-run and every
+        # uncommitted module 1-6 write is lost. Scoped to this session only so
+        # normal API requests keep their idle-in-transaction protection.
+        try:
+            await self.db.execute(text("SET idle_in_transaction_session_timeout = 0"))
+        except Exception as e:  # non-fatal — SQLite (tests) doesn't support it
+            logger.debug("idle_in_transaction_timeout_unset_skipped", error=str(e))
 
         # Get rated capacity
         wf_result = await self.db.execute(
@@ -385,15 +423,28 @@ class PerformancePipelineService:
                 concentration_results[year] = {"error": str(e)}
         result["generation_concentration"] = concentration_results
 
-        # Refresh peer aggregates that include this windfarm so downstream
-        # vs-zone API responses reflect the latest values. Best-effort —
-        # crashes here would mask the per-windfarm pipeline result.
+        # L1 (7404 fix): commit the analytical results (modules 1-6 +
+        # concentration) NOW, before the peer-aggregate refresh. Peer-agg is the
+        # phase where the connection has historically died (~2 min in) on
+        # long-history windfarms, and previously that death rolled back every
+        # uncommitted module 1-6 write. Committing here makes the analytics
+        # durable regardless of what happens during peer-agg.
+        await self.db.commit()
+        logger.info("pipeline_analytics_committed", windfarm_id=windfarm_id)
+
+        # L2 (7404 fix): refresh peer aggregates in a SEPARATE session/
+        # connection. Best-effort and fully decoupled — a fresh connection is
+        # pre_ping-validated at checkout (the held pipeline connection was not),
+        # and any failure here can no longer touch the already-committed
+        # analytical results above. Downstream vs-zone API responses reflect the
+        # latest values once this succeeds.
         try:
+            from app.core.database import get_session_factory
             from app.services.peer_aggregate_service import PeerAggregateService
 
-            agg_svc = PeerAggregateService(self.db)
-            async with self.db.begin_nested():
-                await agg_svc.refresh_for_windfarm(windfarm_id, years)
+            async with get_session_factory()() as agg_db:
+                await PeerAggregateService(agg_db).refresh_for_windfarm(windfarm_id, years)
+                await agg_db.commit()
         except Exception as e:
             logger.warning(
                 "pipeline_peer_aggregate_refresh_failed",
@@ -401,8 +452,6 @@ class PerformancePipelineService:
                 error=str(e),
             )
 
-        # Final flush — surfaces any remaining issues loudly instead of silently rolling back at commit.
-        await self.db.flush()
         return result
 
     # ─── Module 6: Commercial metrics ──────────────────────────
