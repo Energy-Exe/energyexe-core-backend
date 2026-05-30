@@ -49,6 +49,7 @@ from app.services.opportunity_schemas import (
     ops05_grid_curtailment,
     ops06_persistent_underperformance,
     ops07_fleet_age_risk,
+    ops08_structural_constraint,
 )
 from app.services.opportunity_schemas.context import DetectionContext, DetectorResult
 
@@ -89,6 +90,7 @@ SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {
     SchemaCode.OPS_05: ops05_grid_curtailment.detect,  # #100
     SchemaCode.OPS_06: ops06_persistent_underperformance.detect,  # #101
     SchemaCode.OPS_07: ops07_fleet_age_risk.detect,  # #102 (no dependency)
+    SchemaCode.OPS_08: ops08_structural_constraint.detect,  # #103 (no dependency)
 }
 
 

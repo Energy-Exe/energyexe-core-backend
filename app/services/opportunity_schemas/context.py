@@ -699,6 +699,95 @@ class DetectionContext:
             return None
         return start_dates
 
+    async def load_structural_constraint_flags(self) -> Optional[dict]:
+        """The single most-relevant structural-constraint flag for this windfarm.
+
+        Reads ``structural_constraint_flags`` (Module 1b — one row per detected
+        constrained-output run, awaiting analyst review). OPS-08 (issue #103)
+        classifies severity from the analyst ``review_status`` plus the
+        constraint's ``duration_hours`` / ``mean_q90_ratio``; it operates on a
+        *single* flag, so this accessor collapses the windfarm's flags to the one
+        that drives the strongest finding rather than returning an aggregate.
+
+        Selection order (most-severe-wins, so an analyst-confirmed constraint is
+        never masked by an unreviewed one):
+
+            1. ``review_status`` rank — ``confirmed`` > ``pending_review`` >
+               ``dismissed`` (a dismissed flag still surfaces only when it is the
+               sole row, so the detector can resolve it to "no fire").
+            2. longest ``duration_hours``.
+            3. lowest ``mean_q90_ratio`` (deepest constraint).
+            4. most recent ``period_end`` as a stable final tie-breaker.
+
+        Returns a plain dict (DB-free injectable via the ``"structural_constraint_flags"``
+        cache key) with the fields OPS-08 needs::
+
+            {
+                "review_status": str,
+                "duration_hours": int | None,
+                "mean_q90_ratio": float | None,
+                "mean_q50_ratio": float | None,
+                "period_start": datetime | None,
+                "period_end": datetime | None,
+                "flag_trigger": str | None,
+            }
+
+        Returns ``None`` when the windfarm has no flag rows at all (so OPS-08 does
+        not fire). None-safe: any access failure (no session / DB-free harness)
+        resolves to ``None``. Cache key: ``"structural_constraint_flags"``.
+        """
+        if "structural_constraint_flags" in self._cache:
+            return self._cache["structural_constraint_flags"]
+
+        self._cache[
+            "structural_constraint_flags"
+        ] = await self._compute_structural_constraint_flag()
+        return self._cache["structural_constraint_flags"]
+
+    async def _compute_structural_constraint_flag(self) -> Optional[dict]:
+        from app.models.structural_constraint_flag import StructuralConstraintFlag
+
+        try:
+            result = await self.db.execute(
+                select(StructuralConstraintFlag).where(
+                    StructuralConstraintFlag.windfarm_id == self.windfarm_id
+                )
+            )
+            rows = result.scalars().all()
+        except Exception:
+            return None
+
+        if not rows:
+            return None
+
+        # Most-severe-wins ordering done in Python (kept DB-free / portable):
+        # confirmed > pending_review > dismissed, then longest duration, then
+        # deepest constraint (lowest q90 ratio), then most-recent period_end.
+        status_rank = {"confirmed": 2, "pending_review": 1, "dismissed": 0}
+
+        def _sort_key(r: Any):
+            return (
+                status_rank.get(r.review_status, -1),
+                r.duration_hours or 0,
+                -(float(r.mean_q90_ratio) if r.mean_q90_ratio is not None else 0.0),
+                r.period_end or datetime.min,
+            )
+
+        flag = max(rows, key=_sort_key)
+
+        def _f(v: Any) -> Optional[float]:
+            return float(v) if v is not None else None
+
+        return {
+            "review_status": flag.review_status,
+            "duration_hours": flag.duration_hours,
+            "mean_q90_ratio": _f(flag.mean_q90_ratio),
+            "mean_q50_ratio": _f(flag.mean_q50_ratio),
+            "period_start": flag.period_start,
+            "period_end": flag.period_end,
+            "flag_trigger": flag.flag_trigger,
+        }
+
     # ─── Accessors deferred to later issues ────────────────────────────────
     #
     # The following memoized accessors are part of the DetectionContext surface
@@ -706,7 +795,6 @@ class DetectionContext:
     # alongside the detector that needs it). They are intentionally NOT stubbed
     # here to avoid shipping broken bodies:
     #
-    #   load_structural_constraint_flags() — added by #103 (OPS-08 structural constraint)
     #   load_generation_gaps()             — added by #109 (DQ-01 generation data gaps)
     #   compute_zone_opex_median(location_type) — added by #108 (FIN-02/03 OPEX overrun)
     #
