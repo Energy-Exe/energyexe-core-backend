@@ -260,3 +260,48 @@ async def test_load_ppa_info_empty_when_no_ppa():
     db.execute.reset_mock()
     assert await ctx.load_ppa_info() == {}
     db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_compute_zone_opex_median_prefetched_short_circuits():
+    """#108: a prefetched per-location-type median short-circuits the DB query."""
+    db = _make_db()
+    ctx = DetectionContext(
+        db=db,
+        windfarm=SimpleNamespace(id=1, bidzone_id=5),
+        period_start=START,
+        period_end=END,
+        prefetched={"zone_opex_median:onshore": 31.8},
+    )
+    assert await ctx.compute_zone_opex_median("onshore") == 31.8
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_compute_zone_opex_median_none_when_location_type_missing():
+    """#108: unknown location_type → None (no defined cohort), no DB access."""
+    db = _make_db()
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.compute_zone_opex_median(None) is None
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_own_opex_financials_prefetched_short_circuits():
+    """#108: a prefetched own_opex_financials dict short-circuits the DB query."""
+    db = _make_db()
+    sentinel = {
+        "total_opex_eur": 60e6,
+        "generation_gwh": 1000.0,
+        "full_years": 2,
+        "relationship_type": "primary_asset",
+    }
+    ctx = DetectionContext(
+        db=db,
+        windfarm=1,
+        period_start=START,
+        period_end=END,
+        prefetched={"own_opex_financials": sentinel},
+    )
+    assert await ctx.load_own_opex_financials() is sentinel
+    db.execute.assert_not_called()

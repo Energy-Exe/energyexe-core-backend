@@ -40,6 +40,8 @@ from typing import Awaitable, Callable, Dict, List, Optional
 from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode
 from app.services.opportunity_schemas import (
     fin01_p50_attainment,
+    fin02_onshore_opex,
+    fin03_offshore_opex,
     mkt01_low_capture_contracting,
     mkt02_low_capture_storage,
     mkt03_high_cannibalisation,
@@ -106,6 +108,8 @@ SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {
     SchemaCode.MKT_07: mkt07_forecast_deviation.detect,  # #106 (INACTIVE — no forecast data)
     # M5 — new financial detectors (no cross-schema dependency).
     SchemaCode.FIN_01: fin01_p50_attainment.detect,  # #107 (no dependency)
+    SchemaCode.FIN_02: fin02_onshore_opex.detect,  # #108 (no dependency, onshore)
+    SchemaCode.FIN_03: fin03_offshore_opex.detect,  # #108 (no dependency, offshore)
 }
 
 

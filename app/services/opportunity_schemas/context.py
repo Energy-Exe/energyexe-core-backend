@@ -51,6 +51,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.opportunity import SchemaCode, Severity
 
+# Month after which a commissioning calendar year is treated as a partial
+# (ramp-up) operating year and excluded from the FIN-02/03 full-year count.
+# month > 5 (June onward) → first year is partial. Mirrors FIN-01's COD rule.
+_COD_PARTIAL_YEAR_MONTH = 5
+
+
+def _is_cod_partial_year(commercial_operational_date: Optional[date], year: int) -> bool:
+    """True when ``year`` is the windfarm's first (partial) operating year.
+
+    Excludes only the commissioning calendar year, and only when COD landed after
+    May — a late-in-year COD means the first reporting year is a ramp-up artefact.
+    Returns ``False`` when COD is unknown (cannot prove the year is partial).
+    """
+    if commercial_operational_date is None:
+        return False
+    if commercial_operational_date.year != year:
+        return False
+    return commercial_operational_date.month > _COD_PARTIAL_YEAR_MONTH
+
 
 @dataclass
 class DetectorResult:
@@ -917,6 +936,203 @@ class DetectionContext:
             return None
         return annual
 
+    async def load_own_opex_financials(self) -> Optional[dict]:
+        """The subject windfarm's own OPEX + generation financials (FIN-02 / FIN-03).
+
+        Reads this windfarm's ``primary_asset``-linked financial entity and
+        aggregates its ``financial_data`` rows. v1 deliberately skips
+        ``consolidated`` (non-``primary_asset``) links — a consolidated entity
+        bundles several windfarms' costs, so attributing its OPEX to one farm
+        would double-count. Returns a dict the FIN-02 / FIN-03 detectors consume::
+
+            {
+                "total_opex_eur": float | None,   # SUM(total_operating_expenses)
+                "generation_gwh": float | None,   # SUM(reported_generation_gwh)
+                "full_years": int,                # count of full operating years
+                "relationship_type": "primary_asset",
+            }
+
+        ``full_years`` counts distinct financial-reporting years EXCLUDING the
+        windfarm's commissioning (COD) calendar year when COD falls after May
+        (a partial first year is a ramp-up artefact, not a full operating year) —
+        FIN-03 requires ``full_years >= 2``.
+
+        Returns ``None`` when the windfarm has **no** ``primary_asset`` financial
+        entity, or that entity has no financial-data rows (so neither FIN detector
+        fires). None-safe: any access failure resolves to ``None``. Cache key:
+        ``"own_opex_financials"`` (inject the dict, or ``None``, via ``prefetched``
+        for DB-free tests).
+        """
+        if "own_opex_financials" in self._cache:
+            return self._cache["own_opex_financials"]
+
+        self._cache["own_opex_financials"] = await self._compute_own_opex_financials()
+        return self._cache["own_opex_financials"]
+
+    async def _compute_own_opex_financials(self) -> Optional[dict]:
+        # Per-year OPEX + generation for the windfarm's primary_asset entity. We
+        # pull per-year rows so the COD partial-year can be excluded from the
+        # full-year count (FIN-03's two-full-years requirement) before summing.
+        query = text(
+            """
+            SELECT
+                EXTRACT(YEAR FROM fd.period_start)::int AS year,
+                SUM(fd.total_operating_expenses) AS total_opex,
+                SUM(fd.reported_generation_gwh) AS generation_gwh
+            FROM windfarm_financial_entities wfe
+            JOIN financial_data fd
+                ON fd.financial_entity_id = wfe.financial_entity_id
+            WHERE wfe.windfarm_id = :wf_id
+              AND wfe.relationship_type = 'primary_asset'
+            GROUP BY EXTRACT(YEAR FROM fd.period_start)::int
+            ORDER BY year
+        """
+        )
+        try:
+            result = await self.db.execute(query, {"wf_id": self.windfarm_id})
+            rows = result.fetchall()
+        except Exception:
+            return None
+
+        if not rows:
+            return None
+
+        cod = self._cod()
+        total_opex = 0.0
+        generation_gwh = 0.0
+        full_years = 0
+        for r in rows:
+            year = int(r.year)
+            if r.total_opex is not None:
+                total_opex += float(r.total_opex)
+            if r.generation_gwh is not None:
+                generation_gwh += float(r.generation_gwh)
+            if not _is_cod_partial_year(cod, year):
+                full_years += 1
+
+        return {
+            "total_opex_eur": total_opex,
+            "generation_gwh": generation_gwh,
+            "full_years": full_years,
+            "relationship_type": "primary_asset",
+        }
+
+    def _cod(self) -> Optional[date]:
+        """The subject windfarm's COD, None-safe (bare-int / detached ORM)."""
+        wf = self.windfarm
+        if isinstance(wf, int):
+            return None
+        cod = getattr(wf, "commercial_operational_date", None)
+        if isinstance(cod, datetime):
+            return cod.date()
+        if isinstance(cod, date):
+            return cod
+        return None
+
+    async def compute_zone_opex_median(self, location_type: Optional[str]) -> Optional[float]:
+        """Peer-cohort median OPEX-per-MWh for FIN-02 / FIN-03 (issue #108).
+
+        Computes ``PERCENTILE_CONT(0.5)`` (the continuous median) of each peer
+        windfarm's OPEX-per-MWh, over the cohort of windfarms that share BOTH:
+
+          * the same ``location_type`` (``onshore`` / ``offshore``) as the subject
+            farm — so an offshore farm is NEVER benchmarked against onshore peers
+            and vice versa; and
+          * the same ``bidzone_id`` (same market) as the subject farm — the median
+            is always per-bidzone, never cross-market.
+
+        Only ``primary_asset`` 1:1 windfarm↔financial-entity links are included
+        (v1 skips ``consolidated`` / multi-asset entities to avoid attributing one
+        entity's costs across several windfarms). Per peer, OPEX-per-MWh is
+        ``SUM(total_operating_expenses) / SUM(reported_generation_gwh * 1000)``
+        aggregated over that peer's financial-data rows.
+
+        Returns ``None`` when:
+
+          * ``location_type`` is unknown (``None``) — a farm with no location type
+            has no defined cohort; or
+          * the subject farm has no resolvable ``bidzone_id``; or
+          * the cohort yields no peer with a positive denominator (no median).
+
+        The result is memoized under a *location-type-specific* cache key
+        (``"zone_opex_median:onshore"`` / ``":offshore"``) so FIN-02 and FIN-03 do
+        not collide and each can be injected independently via ``prefetched`` for
+        DB-free tests. None-safe: any access failure resolves to ``None``.
+        """
+        if location_type is None:
+            return None
+        cache_key = f"zone_opex_median:{location_type}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        self._cache[cache_key] = await self._compute_zone_opex_median(location_type)
+        return self._cache[cache_key]
+
+    async def _compute_zone_opex_median(self, location_type: str) -> Optional[float]:
+        # Resolve the subject windfarm's bidzone (cohort is per-bidzone).
+        bidzone_id = await self._resolve_bidzone_id()
+        if not bidzone_id:
+            return None
+
+        # PERCENTILE_CONT(0.5) over each peer's aggregated OPEX-per-MWh. Peers are
+        # primary_asset-linked windfarms in the SAME location_type AND bidzone.
+        # Per-peer OPEX/MWh aggregates the entity's financial rows; rows with a
+        # NULL/0 generation denominator are excluded.
+        query = text(
+            """
+            WITH peer_opex AS (
+                SELECT
+                    w.id AS windfarm_id,
+                    SUM(fd.total_operating_expenses)
+                        / NULLIF(SUM(fd.reported_generation_gwh * 1000.0), 0) AS opex_per_mwh
+                FROM windfarms w
+                JOIN windfarm_financial_entities wfe
+                    ON wfe.windfarm_id = w.id
+                    AND wfe.relationship_type = 'primary_asset'
+                JOIN financial_data fd
+                    ON fd.financial_entity_id = wfe.financial_entity_id
+                WHERE w.location_type = :location_type
+                  AND w.bidzone_id = :bidzone_id
+                  AND fd.total_operating_expenses IS NOT NULL
+                  AND fd.reported_generation_gwh IS NOT NULL
+                GROUP BY w.id
+            )
+            SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY opex_per_mwh) AS median_opex
+            FROM peer_opex
+            WHERE opex_per_mwh IS NOT NULL
+        """
+        )
+        try:
+            result = await self.db.execute(
+                query,
+                {"location_type": location_type, "bidzone_id": bidzone_id},
+            )
+            row = result.fetchone()
+        except Exception:
+            return None
+
+        if row is None or row.median_opex is None:
+            return None
+        return float(row.median_opex)
+
+    async def _resolve_bidzone_id(self) -> Optional[int]:
+        """The subject windfarm's bidzone id (from the ORM object or a DB lookup)."""
+        wf = self.windfarm
+        if not isinstance(wf, int):
+            bz = getattr(wf, "bidzone_id", None)
+            if bz is not None:
+                return int(bz)
+        from app.models.windfarm import Windfarm
+
+        try:
+            result = await self.db.execute(
+                select(Windfarm.bidzone_id).where(Windfarm.id == self.windfarm_id)
+            )
+            bidzone_id = result.scalar_one_or_none()
+        except Exception:
+            return None
+        return int(bidzone_id) if bidzone_id is not None else None
+
     # ─── Accessors deferred to later issues ────────────────────────────────
     #
     # The following memoized accessors are part of the DetectionContext surface
@@ -925,7 +1141,6 @@ class DetectionContext:
     # here to avoid shipping broken bodies:
     #
     #   load_generation_gaps()             — added by #109 (DQ-01 generation data gaps)
-    #   compute_zone_opex_median(location_type) — added by #108 (FIN-02/03 OPEX overrun)
     #
     # ────────────────────────────────────────────────────────────────────────
 
