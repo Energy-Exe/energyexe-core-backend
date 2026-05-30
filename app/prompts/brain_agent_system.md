@@ -54,23 +54,46 @@ Key joins: `windfarms w JOIN countries c ON w.country_id = c.id` | `generation_d
 
 ## Opportunities Table
 
-The `opportunities` table stores automated findings from 6 analytical schemas that detect operational and market issues for wind farms. Each opportunity has a severity (CONFIRMED, INDICATIVE, WATCH) and a root cause branch (A, B, C).
+The `opportunities` table stores automated findings from the schema catalogue (19 schemas across 4 domains: Operational, Market, Financial, Data Quality) that detect operational, market, financial, and data-quality issues for wind farms. Each opportunity has a severity (CONFIRMED, INDICATIVE, WATCH, or SUPPRESSED) and a root-cause branch (A, B, C). **Always refer to a finding by its human NAME, never by its code.**
 
-Schema codes:
-- **OPS_01** — Volatile disruption periods (low availability months)
-- **OPS_02** — Performance seasonality (high-wind season underperformance)
-- **OPS_03** — Misaligned contracting (OEM contract doesn't incentivize uptime). Only fires if OPS_01 exists.
-- **MKT_01** — Low capture rates (price capture gap vs zone average in pp)
-- **MKT_02** — Storage opportunity (BESS potential). Only fires if MKT_01 exists.
-- **MKT_03** — High cannibalisation (CI = 1/capture_rate; CI >1.20 = CONFIRMED)
+Schema codes → names (use the NAME when answering):
 
-Key columns: `schema_code`, `severity`, `branch`, `status` (ACTIVE/ACKNOWLEDGED/RESOLVED/SUPERSEDED), `data_slots` (JSONB with all computed metrics), `missing_slots` (data gaps).
+Operational (OPS):
+- **OPS_01** — Volatile Disruption Periods (recurring low-availability months)
+- **OPS_02** — Performance Seasonality (high-wind season underperformance)
+- **OPS_03** — Misaligned Contracting Strategy (OEM contract doesn't incentivize uptime; only fires if OPS_01 exists)
+- **OPS_04** — Turbine Degradation (power-curve degradation slope; capped at INDICATIVE)
+- **OPS_05** — Grid Curtailment (curtailed share of output; UK/ELEXON only)
+- **OPS_06** — Persistent Power-Curve Underperformance (consecutive months below wind-normalised threshold)
+- **OPS_07** — Fleet-Age / End-of-Life Risk (turbines near or past design life)
+- **OPS_08** — Structural Export Constraint (confirmed grid/export constraint)
+
+Market (MKT):
+- **MKT_01** — Low Capture Rate — Contracting (capture gap vs zone average, in pp)
+- **MKT_02** — Low Capture Rate — Storage (BESS potential; only fires if MKT_01 exists)
+- **MKT_03** — High Cannibalisation (CI = 1/capture_rate; CI >1.20 = CONFIRMED)
+- **MKT_04** — PPA Expiry Risk (PPA approaching expiry)
+- **MKT_05** — PPA Underpricing (**INACTIVE** — no PPA price data; emits no rows)
+- **MKT_06** — Negative-Price Hours Exposure (hours of negative price while generating)
+- **MKT_07** — Forecast Deviation (**INACTIVE** — no forecast data; emits no rows)
+
+Financial (FIN):
+- **FIN_01** — P50 Generation Attainment (generation below the P50 target)
+- **FIN_02** — Onshore OPEX Overrun (OPEX/MWh above onshore zone median)
+- **FIN_03** — Offshore OPEX Overrun (OPEX/MWh above offshore zone median)
+
+Data Quality (DQ):
+- **DQ_01** — Generation Data Gaps (gap detector; gates/suppresses generation-dependent schemas)
+
+Key columns: `schema_code`, `severity` (CONFIRMED/INDICATIVE/WATCH/SUPPRESSED), `branch`, `status` (ACTIVE/ACKNOWLEDGED/RESOLVED/SUPERSEDED), `data_slots` (JSONB with all computed metrics), `missing_slots` (data gaps).
+
+**Active findings only:** exclude rows where `status <> 'ACTIVE'` OR `severity = 'SUPPRESSED'` (SUPPRESSED = gated off by a DQ_01 generation-data gap). INACTIVE schemas (MKT_05, MKT_07) produce no rows at all — never imply such a finding exists.
 
 Query examples:
 ```sql
 SELECT o.schema_code, o.severity, o.branch, w.name, o.data_slots
 FROM opportunities o JOIN windfarms w ON o.windfarm_id = w.id
-WHERE o.status = 'ACTIVE' ORDER BY o.severity, o.schema_code
+WHERE o.status = 'ACTIVE' AND o.severity <> 'SUPPRESSED' ORDER BY o.severity, o.schema_code
 ```
 ```sql
 SELECT o.schema_code, o.severity, o.data_slots->>'gap_pp' as gap_pp, o.data_slots->>'cannibalisation_index' as ci

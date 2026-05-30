@@ -13,6 +13,7 @@ This verifies the async-vs-sync branch + the ``schema_codes`` pass-through
 WITHOUT requiring a live Postgres.
 """
 
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -197,3 +198,63 @@ def test_detect_rejects_unknown_schema_code(detect_client):
 
     assert resp.status_code == 422, resp.text
     bg_mock.assert_not_awaited()
+
+
+# ── #115: schema_name surfacing on the response (no live DB needed) ──
+
+
+class _FakeOpportunity:
+    """Attribute-only stand-in for the Opportunity ORM row that ``_to_response``
+    reads. Avoids needing a Postgres-backed model instance in SQLite tests."""
+
+    def __init__(self, schema_code: str):
+        now = datetime(2026, 1, 1, 0, 0, 0)
+        self.id = 1
+        self.windfarm_id = 7182
+        self.schema_code = schema_code
+        self.severity = "CONFIRMED"
+        self.branch = "A"
+        self.status = "ACTIVE"
+        self.data_slots = {}
+        self.missing_slots = []
+        self.triggered_by_id = None
+        self.detection_period_start = now
+        self.detection_period_end = now
+        self.detection_run_id = None
+        self.suppression_reason = None
+        self.created_at = now
+        self.updated_at = now
+        self.acknowledged_at = None
+        self.resolved_at = None
+
+
+def test_response_includes_human_schema_name():
+    """An OPS_01 row mapped through ``_to_response`` carries the human name."""
+    resp = opp_endpoint._to_response(_FakeOpportunity("OPS_01"), windfarm_name="Lutelandet")
+    assert resp.schema_code == "OPS_01"
+    assert resp.schema_name == "Volatile Disruption Periods"
+
+
+def test_response_schema_name_for_new_schema_code():
+    """A new (non-original-6) code still resolves — guards against a stale 6-only map."""
+    resp = opp_endpoint._to_response(_FakeOpportunity("FIN_01"))
+    assert resp.schema_name == "P50 Generation Attainment"
+
+
+def test_response_schema_name_none_for_unknown_code():
+    """Unknown/legacy code → schema_name is None (graceful), schema_code preserved."""
+    resp = opp_endpoint._to_response(_FakeOpportunity("LEGACY_99"))
+    assert resp.schema_name is None
+    assert resp.schema_code == "LEGACY_99"
+
+
+def test_every_schema_code_has_name():
+    """Lint guard: every SchemaCode resolves to a non-empty SCHEMA_NAMES entry (19)."""
+    from app.models.opportunity import SchemaCode
+    from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES
+
+    assert len(list(SchemaCode)) == 19
+    assert len(SCHEMA_NAMES) == 19
+    for code in SchemaCode:
+        assert code in SCHEMA_NAMES, f"missing name for {code}"
+        assert SCHEMA_NAMES[code].strip(), f"empty name for {code}"

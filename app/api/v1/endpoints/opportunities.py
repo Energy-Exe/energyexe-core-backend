@@ -22,6 +22,7 @@ from app.schemas.opportunity import (
     OpportunityResponse,
     OpportunityStatusUpdate,
 )
+from app.services.opportunity_schemas.schema_names import get_schema_name
 from app.services.portfolio_service import PortfolioService
 
 logger = structlog.get_logger()
@@ -75,12 +76,18 @@ async def _run_detection_in_background(
 
 
 def _to_response(opp: Opportunity, windfarm_name: Optional[str] = None) -> OpportunityResponse:
-    """Convert Opportunity model to response schema."""
+    """Convert Opportunity model to response schema.
+
+    ``schema_name`` is resolved from ``SCHEMA_NAMES`` via ``get_schema_name``,
+    which returns ``None`` for an unknown/legacy ``schema_code`` (no crash); the
+    raw code remains available on ``schema_code`` for that fallback case.
+    """
     return OpportunityResponse(
         id=opp.id,
         windfarm_id=opp.windfarm_id,
         windfarm_name=windfarm_name,
         schema_code=opp.schema_code,
+        schema_name=get_schema_name(opp.schema_code),
         severity=opp.severity,
         branch=opp.branch,
         status=opp.status,

@@ -13,6 +13,14 @@ class OpportunityResponse(BaseModel):
     windfarm_id: int
     windfarm_name: Optional[str] = None
     schema_code: str
+    schema_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Human-readable schema name (e.g. 'Volatile Disruption Periods'), "
+            "resolved from SCHEMA_NAMES. Null for unknown/legacy codes — clients "
+            "should fall back to schema_code in that case."
+        ),
+    )
     severity: str
     branch: Optional[str] = None
     status: str
