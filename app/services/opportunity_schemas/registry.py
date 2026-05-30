@@ -541,6 +541,7 @@ async def run_for_windfarm(
     dependencies: Dict[SchemaCode, List[SchemaCode]] = SCHEMA_DEPENDENCIES,
     status: Dict[SchemaCode, str] = SCHEMA_STATUS,
     detection_run_id: Optional[int] = None,
+    schema_codes: Optional[List[SchemaCode]] = None,
 ) -> List[Opportunity]:
     """Run every registered detector for one windfarm and persist findings.
 
@@ -593,6 +594,13 @@ async def run_for_windfarm(
         status: ``SchemaCode -> "ACTIVE" | "INACTIVE"``.
         detection_run_id: optional ``import_job_executions`` id stamped onto
             every created row.
+        schema_codes: optional whitelist of ``SchemaCode``s to run. ``None``
+            (the default) runs every registered schema — byte-identical to the
+            pre-#114 behaviour. When a list is supplied, any schema NOT in it is
+            skipped entirely (treated like an INACTIVE schema: no detector call,
+            no result, no row). Dependency gating still applies to the survivors,
+            so filtering to a dependent schema without its prerequisite simply
+            yields no result for the dependent.
 
     Returns:
         The list of created ``Opportunity`` rows (empty if nothing fired).
@@ -615,7 +623,17 @@ async def run_for_windfarm(
     results_by_code: Dict[SchemaCode, DetectorResult] = {}
     ordered_codes: List[SchemaCode] = []
 
+    # Schema-code whitelist (#114): when a filter is supplied, anything not in it
+    # is skipped wholesale — same effect as an INACTIVE status. ``None`` = run all
+    # (byte-identical to the unfiltered behaviour). Normalised to a set for O(1)
+    # membership; accepts the SchemaCode enum members.
+    schema_code_filter = set(schema_codes) if schema_codes is not None else None
+
     for schema_code, detect in registry.items():
+        # Schema-code filter gate (#114): skip schemas not in the whitelist.
+        if schema_code_filter is not None and schema_code not in schema_code_filter:
+            continue
+
         # Status gate: skip INACTIVE schemas wholesale.
         if status.get(schema_code, "ACTIVE") == "INACTIVE":
             continue

@@ -44,9 +44,17 @@ class OpportunityDetectionService:
     # ─── Job runner ────────────────────────────────────────────────
 
     async def run_detection_job(
-        self, windfarm_ids: Optional[List[int]] = None, period_months: int = 24
+        self,
+        windfarm_ids: Optional[List[int]] = None,
+        period_months: int = 24,
+        schema_codes: Optional[List[SchemaCode]] = None,
     ) -> dict:
-        """Run opportunity detection as a tracked import job."""
+        """Run opportunity detection as a tracked import job.
+
+        ``schema_codes`` (#114) optionally restricts the run to a subset of
+        schemas; ``None`` (the default) runs every registered schema. The default
+        no-arg call — used by the daily cron (#113) — is unchanged.
+        """
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         job = ImportJobExecution(
@@ -68,7 +76,9 @@ class OpportunityDetectionService:
                 )
                 windfarm_ids = [r[0] for r in result.fetchall()]
 
-            opportunities = await self.detect_all(windfarm_ids, period_months, job.id)
+            opportunities = await self.detect_all(
+                windfarm_ids, period_months, job.id, schema_codes=schema_codes
+            )
 
             job.mark_success(records_imported=len(opportunities))
             await self.db.commit()
@@ -97,8 +107,13 @@ class OpportunityDetectionService:
         windfarm_ids: List[int],
         period_months: int = 24,
         detection_run_id: Optional[int] = None,
+        schema_codes: Optional[List[SchemaCode]] = None,
     ) -> List[Opportunity]:
-        """Run all 6 schemas for given windfarms, respecting dependency order."""
+        """Run all schemas for given windfarms, respecting dependency order.
+
+        ``schema_codes`` (#114) optionally restricts the run to a subset of
+        schemas; ``None`` (the default) runs every registered schema unchanged.
+        """
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         period_start = now - timedelta(days=period_months * 30)
         period_end = now
@@ -120,7 +135,7 @@ class OpportunityDetectionService:
         for wf_id in windfarm_ids:
             try:
                 wf_opps = await self._detect_windfarm(
-                    wf_id, period_start, period_end, detection_run_id
+                    wf_id, period_start, period_end, detection_run_id, schema_codes
                 )
                 all_opportunities.extend(wf_opps)
             except Exception as e:
@@ -138,6 +153,7 @@ class OpportunityDetectionService:
         period_start: datetime,
         period_end: datetime,
         detection_run_id: Optional[int],
+        schema_codes: Optional[List[SchemaCode]] = None,
     ) -> List[Opportunity]:
         """Run all schemas for a single windfarm in dependency order.
 
@@ -149,7 +165,9 @@ class OpportunityDetectionService:
         ``_detect_opsXX`` / ``_detect_mktXX`` methods below are retained (no longer
         the live path) so the #91 characterization harness can still drive them.
         """
-        return await self._run_registry(windfarm_id, period_start, period_end, detection_run_id)
+        return await self._run_registry(
+            windfarm_id, period_start, period_end, detection_run_id, schema_codes
+        )
 
     async def _run_registry(
         self,
@@ -157,6 +175,7 @@ class OpportunityDetectionService:
         period_start: datetime,
         period_end: datetime,
         detection_run_id: Optional[int],
+        schema_codes: Optional[List[SchemaCode]] = None,
     ) -> List[Opportunity]:
         """Registry-based detection — the LIVE detection path (cut over in #93).
 
@@ -176,7 +195,9 @@ class OpportunityDetectionService:
             period_start=period_start,
             period_end=period_end,
         )
-        return await run_for_windfarm(ctx, detection_run_id=detection_run_id)
+        return await run_for_windfarm(
+            ctx, detection_run_id=detection_run_id, schema_codes=schema_codes
+        )
 
     # ─── Schema detectors ──────────────────────────────────────────
 

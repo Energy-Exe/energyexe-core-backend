@@ -177,3 +177,49 @@ async def test_inactive_status_schema_is_skipped():
     assert created == []
     assert mkt05_calls["n"] == 0  # INACTIVE schema is never invoked
     assert ctx.db.added == []
+
+
+@pytest.mark.asyncio
+async def test_schema_codes_filter_runs_only_listed(monkeypatch):
+    """schema_codes whitelist → only listed detectors run; others skipped (#114)."""
+    ctx = _make_ctx()
+    calls = {"ops01": 0, "mkt01": 0}
+
+    async def ops01_detect(c):
+        calls["ops01"] += 1
+        return DetectorResult(schema_code=SchemaCode.OPS_01, severity=Severity.WATCH)
+
+    async def mkt01_detect(c):
+        calls["mkt01"] += 1
+        return DetectorResult(schema_code=SchemaCode.MKT_01, severity=Severity.WATCH)
+
+    registry = {SchemaCode.OPS_01: ops01_detect, SchemaCode.MKT_01: mkt01_detect}
+
+    created = await run_for_windfarm(
+        ctx,
+        registry=registry,
+        dependencies={},
+        schema_codes=[SchemaCode.OPS_01],
+    )
+
+    assert calls["ops01"] == 1
+    assert calls["mkt01"] == 0  # not in whitelist → never invoked
+    assert [o.schema_code for o in created] == [SchemaCode.OPS_01]
+
+
+@pytest.mark.asyncio
+async def test_schema_codes_none_runs_all():
+    """schema_codes=None (default) is byte-identical to the unfiltered run (#114)."""
+    ctx = _make_ctx()
+    registry = {
+        SchemaCode.OPS_01: _detector(
+            DetectorResult(schema_code=SchemaCode.OPS_01, severity=Severity.WATCH)
+        ),
+        SchemaCode.MKT_01: _detector(
+            DetectorResult(schema_code=SchemaCode.MKT_01, severity=Severity.WATCH)
+        ),
+    }
+
+    created = await run_for_windfarm(ctx, registry=registry, dependencies={}, schema_codes=None)
+
+    assert {o.schema_code for o in created} == {SchemaCode.OPS_01, SchemaCode.MKT_01}
