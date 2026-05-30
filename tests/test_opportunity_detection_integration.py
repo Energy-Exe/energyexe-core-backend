@@ -318,10 +318,35 @@ SCENARIO_INPUTS: Dict[str, Dict[str, Any]] = {
             "ppa_duration_years": 3,
         },
     },
-    # OPS-02 "should be CONFIRMED but is forced to WATCH" (BUG 2). Requires the
+    # OPS-02 "should be CONFIRMED but is forced to WATCH" (BUG 2). The LEGACY path
+    # (M1_LEGACY_INPUTS below) keeps only the ``seasonal`` input: it requires the
     # structurally-impossible inversion (low_wind_cf > high_wind_cf) just to fire,
     # then forces WATCH because wind_resource_index_monthly is always missing.
+    # CHANGED #96: the LIVE path no longer reads seasonal CF — OPS-02 is now the
+    #   HODI+SSR detector reading monthly ODI-underperformance via
+    #   load_monthly_performance(). The ``monthly`` rows below are a full 12-month
+    #   year with high-wind-season (Oct–Mar) underperformance concentrated in a
+    #   single 54% spike (availability 46%) and zero elsewhere: HODI = 54/6 = 9.0,
+    #   HODI_all = 54/12 = 4.5 → SSR = 2.0 → (>=9.0, >=1.30) CONFIRMED. Only ONE
+    #   month is below the OPS-01 95% ODI threshold, so OPS-01 (which shares this
+    #   accessor) does NOT fire and OPS-02 is the sole finding. ``seasonal`` is
+    #   retained purely so the FROZEN legacy runner still reproduces its WATCH
+    #   tuple (M1_LEGACY_INPUTS strips ``monthly`` for this scenario).
     "ops02_should_be_confirmed_is_watch": {
+        "monthly": _months(
+            ("2024-10", 46.0),  # high-wind spike: 54% underperf (the only low month)
+            ("2024-11", 100.0),
+            ("2024-12", 100.0),
+            ("2025-01", 100.0),
+            ("2025-02", 100.0),
+            ("2025-03", 100.0),
+            ("2024-04", 100.0),
+            ("2024-05", 100.0),
+            ("2024-06", 100.0),
+            ("2024-07", 100.0),
+            ("2024-08", 100.0),
+            ("2024-09", 100.0),
+        ),
         "seasonal": {"high_wind_cf": 0.30, "low_wind_cf": 0.45, "years_with_inversion": 2},
         "ppa": {},
     },
@@ -449,13 +474,24 @@ EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
     #   The legacy runner still produces the WATCH+followon pair against the frozen
     #   1/2/3 thresholds — see M1_LEGACY_BASELINE, which stays byte-identical.
     "ops01_watch_with_ops03_followon": (),
-    # [BUG 2] OPS-02 forced to WATCH despite CONFIRMED-eligible gap+years.
-    # POST-FIX(#96): full HODI+SSR rewrite — severity reaches CONFIRMED, the
-    # inversion-only firing condition is removed, data_slots/missing_slots change.
+    # [BUG 2 — FIXED #96] OPS-02 was forced to WATCH despite a CONFIRMED-eligible
+    # signal AND required a structurally-impossible inversion to fire at all.
+    # CHANGED #96: old ((OPS_02 "WATCH" "C" ... seasonal-CF data_slots ...),) ->
+    #   ((OPS_02 "CONFIRMED" "C" ... HODI+SSR data_slots ...),) (reason: full
+    #   HODI+SSR rewrite. The detector now reads monthly ODI-underperformance, not
+    #   seasonal CF: HODI = 9.0 (mean high-wind underperf), SSR = 2.0 → both meet
+    #   the CONFIRMED floors (>=9.0, >=1.30) → CONFIRMED. The inversion-only firing
+    #   condition and the wind_resource_index_monthly WATCH force-cap are removed,
+    #   so the result stays CONFIRMED. data_slots change from the seasonal-CF set
+    #   to {hodi_pct, ssr, high_wind_months, high_wind_months_observed,
+    #   months_observed, period}; missing_slots are unchanged. OPS-01 does NOT
+    #   co-fire: only one month is below the 95% ODI threshold). The FROZEN legacy
+    #   runner still produces the old WATCH tuple — see M1_LEGACY_BASELINE, which
+    #   strips ``monthly`` for this scenario and stays byte-identical.
     "ops02_should_be_confirmed_is_watch": (
         (
             "OPS_02",
-            "WATCH",
+            "CONFIRMED",
             "C",
             "ACTIVE",
             (
@@ -466,11 +502,12 @@ EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
                 "wind_resource_index_monthly",
             ),
             (
-                "high_wind_season_capture",
-                "low_wind_season_capture",
+                "high_wind_months",
+                "high_wind_months_observed",
+                "hodi_pct",
+                "months_observed",
                 "period",
-                "seasonal_gap_pp",
-                "years_with_inversion",
+                "ssr",
             ),
         ),
     ),
@@ -653,6 +690,15 @@ M1_LEGACY_INPUTS: Dict[str, Dict[str, Any]] = {
         "cannibalisation": None,
         "ppa": {"ppa_status": "active"},
     },
+    # #96: the legacy OPS-02 detector reads ``seasonal`` (not ``monthly``); the
+    # ``monthly`` rows are a LIVE-path-only input (the HODI+SSR rewrite). Strip
+    # ``monthly`` here so the frozen legacy runner reproduces its WATCH-only
+    # behaviour from the seasonal inversion (and so legacy OPS-01 stays None for
+    # this scenario, exactly as pre-#96).
+    "ops02_should_be_confirmed_is_watch": {
+        "seasonal": {"high_wind_cf": 0.30, "low_wind_cf": 0.45, "years_with_inversion": 2},
+        "ppa": {},
+    },
 }
 
 # Frozen pre-#94 legacy outputs. This baseline is the completed #93
@@ -667,9 +713,35 @@ M1_LEGACY_INPUTS: Dict[str, Dict[str, Any]] = {
 #   #95: ``ops01_should_be_confirmed_is_indicative`` keeps the OPS-01 force-downgrade
 #        (INDICATIVE, not CONFIRMED); ``ops01_watch_with_ops03_followon`` keeps the
 #        old 1-low-month WATCH + OPS-03 WATCH pair (legacy 1/2/3-month thresholds).
+#   #96: ``ops02_should_be_confirmed_is_watch`` keeps the OPS-02 WATCH force-cap +
+#        seasonal-CF data_slots (the legacy detector reads ``seasonal`` and force-caps
+#        to WATCH; the HODI+SSR CONFIRMED result is LIVE-path only).
 M1_LEGACY_BASELINE: Dict[str, Tuple[tuple, ...]] = {
     **EXPECTED_SNAPSHOT,
     "mkt01_never_fires_no_opportunities": (),
+    # #96: legacy OPS-02 force-capped to WATCH with seasonal-CF data_slots.
+    "ops02_should_be_confirmed_is_watch": (
+        (
+            "OPS_02",
+            "WATCH",
+            "C",
+            "ACTIVE",
+            (
+                "cannibalisation_index_seasonal",
+                "maintenance_calendar",
+                "revenue_uplift_potential_eur",
+                "turbine_scatter_spread",
+                "wind_resource_index_monthly",
+            ),
+            (
+                "high_wind_season_capture",
+                "low_wind_season_capture",
+                "period",
+                "seasonal_gap_pp",
+                "years_with_inversion",
+            ),
+        ),
+    ),
     # #95: legacy OPS-01 force-downgrade (CONFIRMED→INDICATIVE) preserved.
     "ops01_should_be_confirmed_is_indicative": (
         (
@@ -825,7 +897,9 @@ async def test_bug_ops02_only_ever_reaches_watch():
     """BUG 2: CONFIRMED-eligible seasonal gap (≥8pp, 2 years) is forced to WATCH
     because wind_resource_index_monthly is always missing."""
     assert OpportunityDetectionService.determine_ops02_severity(15.0, 2) == Severity.CONFIRMED
-    svc = _make_service(**SCENARIO_INPUTS["ops02_should_be_confirmed_is_watch"])
+    # The FROZEN legacy runner reads ``seasonal`` only — M1_LEGACY_INPUTS strips the
+    # ``monthly`` rows that the #96 LIVE HODI+SSR detector now consumes.
+    svc = _make_service(**M1_LEGACY_INPUTS["ops02_should_be_confirmed_is_watch"])
     opps = await _run_legacy(svc)
     ops02 = next(o for o in opps if o.schema_code == SchemaCode.OPS_02)
     assert ops02.severity == Severity.WATCH  # forced down — the bug
