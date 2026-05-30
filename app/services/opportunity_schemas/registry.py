@@ -43,7 +43,9 @@ from app.services.opportunity_schemas import (
     mkt02_low_capture_storage,
     mkt03_high_cannibalisation,
     mkt04_ppa_expiry,
+    mkt05_ppa_underpricing,
     mkt06_negative_price_hours,
+    mkt07_forecast_deviation,
     ops01_volatile_disruption,
     ops02_performance_seasonality,
     ops03_misaligned_contracting,
@@ -66,7 +68,7 @@ Detector = Callable[[DetectionContext], Awaitable[Optional[DetectorResult]]]
 #   #92 → OPS_01, OPS_02, OPS_03
 #   #93 → MKT_01, MKT_03, MKT_02   (and the live-path cutover)
 #   M3  → OPS_04..OPS_08
-#   M4  → MKT_04, MKT_06   (MKT_05/MKT_07 stay out — INACTIVE, see #106)
+#   M4  → MKT_04, MKT_06   (MKT_05/MKT_07 registered but INACTIVE, see #106)
 #   M5  → FIN_01, FIN_02, FIN_03
 #   M6  → DQ_01
 #
@@ -96,6 +98,11 @@ SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {
     # M4 — new market detectors.
     SchemaCode.MKT_04: mkt04_ppa_expiry.detect,  # #104 (no dependency)
     SchemaCode.MKT_06: mkt06_negative_price_hours.detect,  # #105 (no dependency)
+    # M4 — data-blocked schemas: REGISTERED so they are known to the engine, but
+    # flipped to INACTIVE below so run_for_windfarm skips them (no rows). Their
+    # detect() is a documented no-op returning None. #106 / activation tracked #116.
+    SchemaCode.MKT_05: mkt05_ppa_underpricing.detect,  # #106 (INACTIVE — no PPA prices)
+    SchemaCode.MKT_07: mkt07_forecast_deviation.detect,  # #106 (INACTIVE — no forecast data)
 }
 
 
@@ -116,7 +123,12 @@ SCHEMA_DEPENDENCIES: Dict[SchemaCode, List[SchemaCode]] = {
 # ACTIVE today; MKT_05 (no PPA prices) and MKT_07 (no forecast data) are flipped
 # to INACTIVE by #106. Defaulting to ACTIVE keeps any not-yet-listed code active.
 SCHEMA_STATUS: Dict[SchemaCode, str] = {code: "ACTIVE" for code in SchemaCode}
-# MKT_05 / MKT_07 become "INACTIVE" in #106 (data-blocked).
+# #106: MKT_05 (no PPA strike prices) and MKT_07 (no forecast data) are
+# data-blocked. They are registered in SCHEMA_REGISTRY (so they are known) but
+# overridden to INACTIVE here, so run_for_windfarm skips them and they emit no
+# per-windfarm rows. Activation (flip back to "ACTIVE") tracked in #116.
+SCHEMA_STATUS[SchemaCode.MKT_05] = "INACTIVE"
+SCHEMA_STATUS[SchemaCode.MKT_07] = "INACTIVE"
 
 
 async def run_for_windfarm(
