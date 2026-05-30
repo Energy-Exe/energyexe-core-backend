@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable, Dict, List, Optional
 
-from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode
+from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode, Severity
 from app.services.opportunity_schemas import (
     dq01_data_gaps,
     fin01_p50_attainment,
@@ -143,6 +143,103 @@ SCHEMA_STATUS[SchemaCode.MKT_05] = "INACTIVE"
 SCHEMA_STATUS[SchemaCode.MKT_07] = "INACTIVE"
 
 
+# ─── DQ-01 suppression gate (#110, M6) ───
+#
+# When DQ-01 fires (a >= 72h generation gap is present in the detection window —
+# DQ-01 only produces a finding at its CONFIRMED floor and above), every finding
+# whose schema reads the (now-unreliable) generation series must be SUPPRESSED
+# rather than published, so analysts are not chasing artefacts of missing data.
+# Findings are still PERSISTED (severity=SUPPRESSED, status=ACTIVE — see the SUPPRESSED
+# storage decision in the plan) so the gate is auditable; only their severity is
+# rewritten. The gate is a PURE post-pass over the orchestrator's
+# ``results_by_code: dict[SchemaCode, DetectorResult]`` — exactly like the
+# co-firing / reclassification post-passes arriving in #111/#112 — so it is
+# DB-free and unit-testable in isolation.
+#
+# GENERATION_DEPENDENT_SCHEMAS — membership rationale (per the spec; each entry
+# reads the gapped ``generation_data`` series, directly or via a derived metric):
+#   * OPS_01 — monthly ODI / availability is computed FROM the generation series.
+#   * OPS_02 — HODI+SSR seasonality is computed FROM monthly ODI (generation).
+#   * OPS_04 — turbine-degradation OLS regresses normalised OUTPUT over time.
+#   * OPS_05 — curtailment % = curtailed / (curtailed + generation).
+#   * OPS_06 — the wind-normalised performance index derives FROM generation.
+#   * MKT_01 — capture-rate gap = generation-weighted price capture vs zone avg.
+#   * MKT_02 — inherits MKT_01's capture signal (storage upside off the same gap).
+#   * MKT_03 — cannibalisation index = 1 / (generation-weighted capture rate).
+#   * MKT_06 — counts hours the farm GENERATES at a negative price.
+#   * FIN_01 — P50 attainment = actual ANNUAL GENERATION vs the sourced P50 target.
+#
+# Deliberately EXCLUDED (their findings stay valid under a generation gap):
+#   * DQ_01  — the gate's own trigger; suppressing it would erase the evidence.
+#   * OPS_03 — date/contract-based (contract type + penalties); it only *inherits*
+#              OPS_01's tier, and OPS_01 is itself suppressed, so OPS_03 is left
+#              as-is rather than double-gated.
+#   * OPS_07 — fleet-age risk is driven by turbine commissioning dates vs an
+#              as-of date — independent of the generation series.
+#   * OPS_08 — structural-constraint findings come from analyst-reviewed
+#              Module-1b flags, not the raw generation series.
+#   * MKT_04 — PPA expiry is purely a contract-date calculation.
+#   * MKT_05 / MKT_07 — INACTIVE (no rows produced anyway).
+#   * FIN_02 / FIN_03 — OPEX-per-MWh uses ``reported_generation_gwh`` from the
+#              annual ``financial_data`` rows, NOT the hourly ``generation_data``
+#              series DQ-01 monitors; a gap in the hourly feed does not invalidate
+#              the reported annual financials, so these are NOT gen-dependent.
+GENERATION_DEPENDENT_SCHEMAS: set[SchemaCode] = {
+    SchemaCode.OPS_01,
+    SchemaCode.OPS_02,
+    SchemaCode.OPS_04,
+    SchemaCode.OPS_05,
+    SchemaCode.OPS_06,
+    SchemaCode.MKT_01,
+    SchemaCode.MKT_02,
+    SchemaCode.MKT_03,
+    SchemaCode.MKT_06,
+    SchemaCode.FIN_01,
+}
+
+# The human-readable reason stamped onto every gen-dependent finding the gate
+# suppresses. Surfaced on the persisted ``Opportunity.suppression_reason`` so the
+# admin UI can explain why a finding is muted.
+DATA_GAP_SUPPRESSION_REASON = "DQ-01: generation data gap detected in period"
+
+
+def apply_data_gap_gate(
+    results: Dict[SchemaCode, DetectorResult],
+    gap_present: bool,
+) -> Dict[SchemaCode, DetectorResult]:
+    """Suppress generation-dependent findings when a data gap is present (#110).
+
+    PURE post-pass over the orchestrator's ``results_by_code`` map. When
+    ``gap_present`` is ``True``, every result whose ``schema_code`` is in
+    :data:`GENERATION_DEPENDENT_SCHEMAS` has its ``severity`` rewritten to
+    :attr:`Severity.SUPPRESSED` and its ``suppression_reason`` set to
+    :data:`DATA_GAP_SUPPRESSION_REASON`. Results NOT in the set — and the DQ-01
+    finding itself — are left untouched, so the data-gap evidence and any
+    non-generation findings (e.g. PPA-expiry, fleet-age) still publish normally.
+
+    When ``gap_present`` is ``False`` the ``results`` map is returned unchanged
+    (the no-op the legacy / no-gap scenarios rely on for snapshot stability).
+
+    Args:
+        results: ``SchemaCode -> DetectorResult`` produced this run (the
+            orchestrator's ``results_by_code``). Mutated in place AND returned for
+            ergonomic chaining with the other post-passes.
+        gap_present: ``True`` when DQ-01 produced a finding for this windfarm.
+
+    Returns:
+        The same ``results`` mapping (mutated in place when a gap is present).
+    """
+    if not gap_present:
+        return results
+
+    for schema_code, result in results.items():
+        if schema_code in GENERATION_DEPENDENT_SCHEMAS:
+            result.severity = Severity.SUPPRESSED
+            result.suppression_reason = DATA_GAP_SUPPRESSION_REASON
+
+    return results
+
+
 async def run_for_windfarm(
     ctx: DetectionContext,
     *,
@@ -158,19 +255,30 @@ async def run_for_windfarm(
     each non-``None`` result into one ``ACTIVE`` row, wires ``triggered_by_id``
     from its dependency's persisted row, and flushes parents before children.
 
-    Behaviour:
-      * Iterates ``registry`` in insertion order (= dependency order).
-      * **Status gating** — a schema whose ``status`` is ``"INACTIVE"`` is
-        skipped entirely (no detector call, no row).
-      * **Dependency gating** — a schema is skipped unless EVERY prerequisite in
-        ``dependencies`` produced a result earlier in this run. (Because the
-        registry is dependency-ordered, prerequisites are evaluated first.)
-      * Calls ``await detect(ctx)``; ``None`` means "no finding" → no row.
-      * Builds one ``Opportunity`` per ``DetectorResult`` (the only ORM-build
-        point), copying ``severity`` / ``branch`` / ``data_slots`` /
-        ``missing_slots`` / ``suppression_reason``, stamping ``status=ACTIVE``
-        and the detection period, then ``add`` + ``flush`` so the row gets an id
-        before any dependent detector references it via ``triggered_by_id``.
+    Behaviour (two phases — detect, then persist — with the DQ-01 gate between):
+      * **Detection phase** — iterates ``registry`` in insertion order (=
+        dependency order), collecting the non-``None`` ``DetectorResult``s into a
+        ``results_by_code: dict[SchemaCode, DetectorResult]``:
+          - **Status gating** — a schema whose ``status`` is ``"INACTIVE"`` is
+            skipped entirely (no detector call).
+          - **Dependency gating** — a schema is skipped unless EVERY prerequisite
+            in ``dependencies`` produced a result earlier in this run. (Because
+            the registry is dependency-ordered, prerequisites are evaluated
+            first.)
+          - Calls ``await detect(ctx)``; ``None`` means "no finding".
+      * **DQ-01 suppression gate** (#110) — a PURE post-pass: ``gap_present`` is
+        ``True`` iff DQ-01 produced a finding this run; :func:`apply_data_gap_gate`
+        then rewrites every generation-dependent result's severity to
+        ``SUPPRESSED`` (no-op when there is no gap). Runs AFTER detection collects
+        all results and BEFORE any ``Opportunity`` is built, so the suppressed
+        severities are what get persisted. (Co-firing / reclassification
+        post-passes #111/#112 will hang off the same ``results_by_code`` here.)
+      * **Persist phase** — builds one ``Opportunity`` per surviving
+        ``DetectorResult`` (the only ORM-build point), copying ``severity`` /
+        ``branch`` / ``data_slots`` / ``missing_slots`` / ``suppression_reason``,
+        stamping ``status=ACTIVE`` and the detection period, then ``add`` +
+        ``flush`` so the row gets an id before any dependent row references it via
+        ``triggered_by_id``.
 
     Args:
         ctx: the per-windfarm ``DetectionContext`` (carries ``db`` + period).
@@ -192,17 +300,22 @@ async def run_for_windfarm(
         performs no DB writes — it is a safe no-op seam until #93 cuts the live
         path over to it.
     """
-    created: List[Opportunity] = []
-    # Map of schema -> the persisted row it produced this run, for dependency
-    # gating and triggered_by_id wiring.
-    results_by_code: Dict[SchemaCode, Opportunity] = {}
+    # ── Phase 1: detection ──
+    # Collect the pure DetectorResults (NOT yet ORM rows) in detection order so
+    # the cross-schema post-passes (the DQ-01 gate now; co-firing #111/#112 later)
+    # can operate over the full dict[SchemaCode, DetectorResult] before anything is
+    # persisted. ``ordered_codes`` preserves the registry's iteration order for the
+    # persist phase (a plain dict already preserves insertion order, but pinning
+    # the order explicitly keeps parents-before-children unambiguous).
+    results_by_code: Dict[SchemaCode, DetectorResult] = {}
+    ordered_codes: List[SchemaCode] = []
 
     for schema_code, detect in registry.items():
         # Status gate: skip INACTIVE schemas wholesale.
         if status.get(schema_code, "ACTIVE") == "INACTIVE":
             continue
 
-        # Dependency gate: every prerequisite must have produced a row.
+        # Dependency gate: every prerequisite must have produced a result.
         prereqs = dependencies.get(schema_code, [])
         if prereqs and any(p not in results_by_code for p in prereqs):
             continue
@@ -211,7 +324,27 @@ async def run_for_windfarm(
         if result is None:
             continue
 
-        triggered_by_id = _resolve_triggered_by_id(prereqs, results_by_code)
+        results_by_code[schema_code] = result
+        ordered_codes.append(schema_code)
+
+    # ── Phase 2: DQ-01 suppression gate (#110) ──
+    # A pure post-pass over results_by_code: if DQ-01 produced a finding this run,
+    # downgrade every generation-dependent result's severity to SUPPRESSED so the
+    # suppressed severity is what gets persisted below. No-op when no gap fired
+    # (the legacy / no-gap scenarios), keeping the M1 snapshot byte-identical.
+    gap_present = SchemaCode.DQ_01 in results_by_code
+    apply_data_gap_gate(results_by_code, gap_present)
+
+    # ── Phase 3: persist ──
+    # The SOLE ORM-build point. Iterate in detection order so a prerequisite's row
+    # is flushed (and has an id) before its dependent row wires triggered_by_id.
+    created: List[Opportunity] = []
+    persisted_by_code: Dict[SchemaCode, Opportunity] = {}
+
+    for schema_code in ordered_codes:
+        result = results_by_code[schema_code]
+        prereqs = dependencies.get(schema_code, [])
+        triggered_by_id = _resolve_triggered_by_id(prereqs, persisted_by_code)
 
         opp = Opportunity(
             windfarm_id=ctx.windfarm_id,
@@ -228,18 +361,18 @@ async def run_for_windfarm(
             detection_run_id=detection_run_id,
         )
         ctx.db.add(opp)
-        # Flush so the parent row gets an id before any dependent detector below
+        # Flush so the parent row gets an id before any dependent row below
         # references it via triggered_by_id.
         await ctx.db.flush()
 
         created.append(opp)
-        results_by_code[schema_code] = opp
+        persisted_by_code[schema_code] = opp
 
     return created
 
 
 def _resolve_triggered_by_id(
-    prereqs: List[SchemaCode], results_by_code: Dict[SchemaCode, Opportunity]
+    prereqs: List[SchemaCode], persisted_by_code: Dict[SchemaCode, Opportunity]
 ) -> Optional[int]:
     """Pick the ``triggered_by_id`` for a dependent row.
 
@@ -249,7 +382,7 @@ def _resolve_triggered_by_id(
     MKT_02→MKT_01). Returns ``None`` when there is no prerequisite.
     """
     for code in prereqs:
-        parent = results_by_code.get(code)
+        parent = persisted_by_code.get(code)
         if parent is not None:
             return parent.id
     return None

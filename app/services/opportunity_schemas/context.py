@@ -1188,6 +1188,31 @@ class DetectionContext:
 
         return find_generation_gaps(present_hours, self.period_start, self.period_end)
 
+    async def has_data_gap(self) -> bool:
+        """``True`` when a DQ-01-firing generation gap is present in the window.
+
+        Convenience over :meth:`load_generation_gaps` for the DQ-01 suppression
+        gate (#110): a gap counts only when its length reaches the DQ-01 firing
+        floor (``GAP_HOURS_CONFIRMED`` = 72h — DQ-01 only produces a finding at its
+        CONFIRMED tier, which is what arms the gate). Mirrors exactly what
+        ``run_for_windfarm`` keys ``gap_present`` off (the presence of a DQ-01
+        finding), so the orchestrator and tests can share one notion of "is there a
+        gap". Memoised via the same ``"generation_gaps"`` cache as
+        :meth:`load_generation_gaps`.
+
+        ``run_for_windfarm`` itself keys ``gap_present`` off the DQ-01
+        ``DetectorResult`` rather than calling this — so the gate stays a pure
+        function of the collected results — but this exposes the same fact for
+        callers / tests that have only a context in hand. None/empty-safe: no gaps
+        (or no data at all) ⇒ ``False``.
+        """
+        from app.services.opportunity_schemas.dq01_data_gaps import GAP_HOURS_CONFIRMED
+
+        gaps = await self.load_generation_gaps()
+        if not gaps:
+            return False
+        return any(int(gap_hours) >= GAP_HOURS_CONFIRMED for _, _, gap_hours in gaps)
+
     def _price_analytics(self):
         """Lazily build a PriceAnalyticsService bound to this context's session."""
         from app.services.price_analytics_service import PriceAnalyticsService
