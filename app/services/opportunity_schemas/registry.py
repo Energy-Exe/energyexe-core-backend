@@ -42,6 +42,7 @@ from app.services.opportunity_schemas import (
     mkt01_low_capture_contracting,
     mkt02_low_capture_storage,
     mkt03_high_cannibalisation,
+    mkt04_ppa_expiry,
     ops01_volatile_disruption,
     ops02_performance_seasonality,
     ops03_misaligned_contracting,
@@ -91,6 +92,8 @@ SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {
     SchemaCode.OPS_06: ops06_persistent_underperformance.detect,  # #101
     SchemaCode.OPS_07: ops07_fleet_age_risk.detect,  # #102 (no dependency)
     SchemaCode.OPS_08: ops08_structural_constraint.detect,  # #103 (no dependency)
+    # M4 — new market detectors.
+    SchemaCode.MKT_04: mkt04_ppa_expiry.detect,  # #104 (no dependency)
 }
 
 
