@@ -36,13 +36,13 @@ entirely. So a DB-free test does::
 Cache keys (stable — downstream tests depend on these):
     "ppa_info", "monthly_performance", "capture_rate", "cannibalisation_index",
     "seasonal_capture", "curtailment_pct", "degradation_result",
-    "norm_index_series".
+    "norm_index_series", "turbine_start_dates".
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy import select, text
@@ -655,6 +655,49 @@ class DetectionContext:
             "analysis_end": row.analysis_end,
             "data_points": row.data_points,
         }
+
+    async def load_turbine_start_dates(self) -> Optional[List[date]]:
+        """Commissioning ``start_date`` of every turbine on this windfarm (OPS-07).
+
+        Reads ``turbine_units.start_date`` for the windfarm's turbines (the
+        per-turbine commissioning date). OPS-07 (fleet-age / end-of-life risk)
+        compares each turbine's age against the 25-year design life, so it needs
+        the raw start dates rather than an aggregate.
+
+        Returns a list of :class:`datetime.date` (turbines with a NULL
+        ``start_date`` are dropped — an unknown commissioning date contributes no
+        age signal). Returns ``None`` when the windfarm has no turbine rows at all
+        (or none with a usable ``start_date``), so OPS-07 simply does not fire.
+
+        None-safe: any access failure (no session, detached relationship in a
+        DB-free test) resolves to ``None``. Cache key: ``"turbine_start_dates"``
+        (inject via ``prefetched`` for DB-free tests — the injected value may be a
+        list of ``date`` objects, or ``None``).
+        """
+        if "turbine_start_dates" in self._cache:
+            return self._cache["turbine_start_dates"]
+
+        self._cache["turbine_start_dates"] = await self._compute_turbine_start_dates()
+        return self._cache["turbine_start_dates"]
+
+    async def _compute_turbine_start_dates(self) -> Optional[List[date]]:
+        from app.models.turbine_unit import TurbineUnit
+
+        try:
+            result = await self.db.execute(
+                select(TurbineUnit.start_date).where(
+                    TurbineUnit.windfarm_id == self.windfarm_id,
+                    TurbineUnit.start_date.isnot(None),
+                )
+            )
+            rows = result.scalars().all()
+        except Exception:
+            return None
+
+        start_dates = [d for d in rows if d is not None]
+        if not start_dates:
+            return None
+        return start_dates
 
     # ─── Accessors deferred to later issues ────────────────────────────────
     #
