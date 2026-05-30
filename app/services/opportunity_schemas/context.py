@@ -36,7 +36,8 @@ entirely. So a DB-free test does::
 Cache keys (stable — downstream tests depend on these):
     "ppa_info", "monthly_performance", "capture_rate", "cannibalisation_index",
     "seasonal_capture", "curtailment_pct", "degradation_result",
-    "norm_index_series", "turbine_start_dates", "negative_price_hours".
+    "norm_index_series", "turbine_start_dates", "negative_price_hours",
+    "p50_target", "annual_generation_gwh".
 """
 
 from __future__ import annotations
@@ -819,6 +820,102 @@ class DetectionContext:
             "period_end": flag.period_end,
             "flag_trigger": flag.flag_trigger,
         }
+
+    async def load_p50_target(self) -> Optional[float]:
+        """Sourced P50 annual generation target in GWh for this windfarm (FIN-01).
+
+        Reads ``p50_targets.p50_target_volume_gwh`` — the externally-provided P50
+        annual energy-production estimate from a wind resource assessment. FIN-01
+        compares actual annual generation against this *sourced* target only; it
+        never substitutes an internal estimate.
+
+        When multiple targets exist (non-overlapping date ranges) the most recent
+        one (latest ``p50_target_start_date``) is used. Returns ``None`` when the
+        windfarm has no sourced target — FIN-01 turns that into a *blank finding*
+        rather than crashing. None-safe: any access failure (no session / DB-free
+        harness whose ``execute`` stub returns no row) resolves to ``None``.
+
+        Cache key: ``"p50_target"`` (inject a bare float, or ``None``, via
+        ``prefetched`` for DB-free tests).
+        """
+        if "p50_target" in self._cache:
+            return self._cache["p50_target"]
+
+        self._cache["p50_target"] = await self._compute_p50_target()
+        return self._cache["p50_target"]
+
+    async def _compute_p50_target(self) -> Optional[float]:
+        from app.models.p50_target import P50Target
+
+        try:
+            result = await self.db.execute(
+                select(P50Target.p50_target_volume_gwh)
+                .where(P50Target.windfarm_id == self.windfarm_id)
+                .order_by(P50Target.p50_target_start_date.desc())
+            )
+            value = result.scalars().first()
+        except Exception:
+            return None
+
+        if value is None:
+            return None
+        return float(value)
+
+    async def load_annual_generation_gwh(self) -> Optional[Dict[int, float]]:
+        """Actual annual generation in GWh per calendar year (FIN-01).
+
+        Sums ``generation_data.generation_mwh`` per ``EXTRACT(YEAR FROM hour)`` over
+        the detection window and converts MWh → GWh (``/ 1000``). Returns a dict
+        ``{year: gwh}`` (one entry per calendar year with non-NULL generation), so
+        FIN-01 can pick the latest year and the immediately prior year.
+
+        Returns ``None`` when there is **no** actual generation data for the
+        window — this is the snapshot-safety contract: the M1 legacy scenarios
+        inject no generation, so this resolves to ``None`` and FIN-01 returns
+        ``None`` (no finding), keeping the characterization snapshot byte-identical.
+        None-safe: any access failure resolves to ``None``.
+
+        Cache key: ``"annual_generation_gwh"`` (inject a ``{year: gwh}`` dict, or
+        ``None``, via ``prefetched`` for DB-free tests).
+        """
+        if "annual_generation_gwh" in self._cache:
+            return self._cache["annual_generation_gwh"]
+
+        self._cache["annual_generation_gwh"] = await self._compute_annual_generation_gwh()
+        return self._cache["annual_generation_gwh"]
+
+    async def _compute_annual_generation_gwh(self) -> Optional[Dict[int, float]]:
+        query = text(
+            """
+            SELECT
+                EXTRACT(YEAR FROM hour)::int AS year,
+                SUM(generation_mwh) AS generation_mwh
+            FROM generation_data
+            WHERE windfarm_id = :wf_id
+              AND hour >= :start AND hour < :end
+              AND generation_mwh IS NOT NULL
+            GROUP BY EXTRACT(YEAR FROM hour)::int
+            ORDER BY year
+        """
+        )
+        try:
+            result = await self.db.execute(
+                query,
+                {"wf_id": self.windfarm_id, "start": self.period_start, "end": self.period_end},
+            )
+            rows = result.fetchall()
+        except Exception:
+            return None
+
+        annual: Dict[int, float] = {}
+        for r in rows:
+            if r.generation_mwh is None:
+                continue
+            annual[int(r.year)] = float(r.generation_mwh) / 1000.0
+
+        if not annual:
+            return None
+        return annual
 
     # ─── Accessors deferred to later issues ────────────────────────────────
     #

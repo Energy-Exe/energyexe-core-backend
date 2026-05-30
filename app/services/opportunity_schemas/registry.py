@@ -39,6 +39,7 @@ from typing import Awaitable, Callable, Dict, List, Optional
 
 from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode
 from app.services.opportunity_schemas import (
+    fin01_p50_attainment,
     mkt01_low_capture_contracting,
     mkt02_low_capture_storage,
     mkt03_high_cannibalisation,
@@ -103,6 +104,8 @@ SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {
     # detect() is a documented no-op returning None. #106 / activation tracked #116.
     SchemaCode.MKT_05: mkt05_ppa_underpricing.detect,  # #106 (INACTIVE — no PPA prices)
     SchemaCode.MKT_07: mkt07_forecast_deviation.detect,  # #106 (INACTIVE — no forecast data)
+    # M5 — new financial detectors (no cross-schema dependency).
+    SchemaCode.FIN_01: fin01_p50_attainment.detect,  # #107 (no dependency)
 }
 
 
