@@ -206,6 +206,47 @@ async def test_load_monthly_performance_matches_legacy_calc():
 
 
 @pytest.mark.asyncio
+async def test_load_degradation_result_prefetched_short_circuits():
+    """#99: a prefetched degradation_result short-circuits the DB query."""
+    db = _make_db()
+    sentinel = {"slope_pct_per_year": -4.0, "p_value": 0.04, "reference_curve": "q50"}
+    ctx = DetectionContext(
+        db=db,
+        windfarm=1,
+        period_start=START,
+        period_end=END,
+        prefetched={"degradation_result": sentinel},
+    )
+    assert await ctx.load_degradation_result() is sentinel
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_degradation_result_none_when_no_row():
+    """#99: no degradation row → None, and the result is memoized."""
+    db = _make_db()
+    empty = MagicMock()
+    empty.scalars.return_value.first.return_value = None
+    db.execute.return_value = empty
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_degradation_result() is None
+
+    db.execute.reset_mock()
+    assert await ctx.load_degradation_result() is None  # memoized
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_degradation_result_none_on_db_error():
+    """#99: a failing query degrades to None, not an exception."""
+    db = _make_db()
+    db.execute.side_effect = RuntimeError("no such table: degradation_results")
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_degradation_result() is None
+
+
+@pytest.mark.asyncio
 async def test_load_ppa_info_empty_when_no_ppa():
     """load_ppa_info returns {} when no PPA row exists, and memoizes."""
     db = _make_db()

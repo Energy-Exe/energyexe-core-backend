@@ -99,14 +99,61 @@ DETECTION_RUN_ID = 555
 # ───────────────────────── DB-free harness plumbing ─────────────────────────
 
 
+class _EmptyResult:
+    """A SQLAlchemy-Result-shaped stub that reports 'no rows' for every pattern.
+
+    Returned by ``_FakeSession.execute`` (issue #99). It is self-similar — every
+    chaining accessor (``scalars()``, ``mappings()``) returns ``self`` — so the
+    common result-consumption patterns used by ``DetectionContext`` accessors all
+    resolve to "absent": new detectors whose injected data is missing read no rows
+    and return ``None``, keeping the legacy ``EXPECTED_SNAPSHOT`` unchanged.
+    """
+
+    def scalars(self) -> "_EmptyResult":
+        return self
+
+    def mappings(self) -> "_EmptyResult":
+        return self
+
+    def all(self) -> list:
+        return []
+
+    def first(self):
+        return None
+
+    def one_or_none(self):
+        return None
+
+    def fetchone(self):
+        return None
+
+    def fetchall(self) -> list:
+        return []
+
+    def scalar(self):
+        return None
+
+    def scalar_one_or_none(self):
+        return None
+
+
 class _FakeSession:
     """Minimal AsyncSession stand-in (same contract as test_registry.FakeSession).
 
     Records ``add()``ed objects and assigns a sequential ``id`` on each
     ``flush()`` so ``triggered_by_id`` wiring (parent.id read after flush) works
-    without Postgres. ``execute`` raises by default: scenarios that need it (only
-    the MKT-01 bug test, which drives the real ``_calc_capture_rate_gap``) inject
-    their own ``execute`` mock.
+    without Postgres.
+
+    ``execute`` (issue #99) returns an :class:`_EmptyResult` "no rows" stub rather
+    than raising. This makes the harness robust to NEW M3+ detectors registered in
+    ``SCHEMA_REGISTRY``: ``run_for_windfarm`` calls every registered detector for
+    every scenario, but the scenarios only ``prefetch`` the six legacy accessors.
+    A new detector's accessor (e.g. ``load_degradation_result`` for OPS-04) whose
+    cache key is absent therefore falls through to ``execute``, reads "no rows" →
+    returns ``None`` → the detector does not fire, so the existing snapshots stay
+    byte-identical. (Scenarios that need a *specific* DB return — only the MKT-01
+    bug test, which drives the real ``_calc_capture_rate_gap`` — inject their own
+    ``execute`` mock instead of using ``_FakeSession``.)
     """
 
     def __init__(self) -> None:
@@ -121,6 +168,9 @@ class _FakeSession:
             if getattr(obj, "id", None) is None:
                 obj.id = self._next_id
                 self._next_id += 1
+
+    async def execute(self, *args, **kwargs) -> "_EmptyResult":
+        return _EmptyResult()
 
 
 def _make_service(

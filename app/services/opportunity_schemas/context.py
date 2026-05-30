@@ -35,7 +35,7 @@ entirely. So a DB-free test does::
 
 Cache keys (stable — downstream tests depend on these):
     "ppa_info", "monthly_performance", "capture_rate", "cannibalisation_index",
-    "seasonal_capture", "curtailment_pct".
+    "seasonal_capture", "curtailment_pct", "degradation_result".
 """
 
 from __future__ import annotations
@@ -522,6 +522,83 @@ class DetectionContext:
             "years_with_inversion": inv_row.years_inverted if inv_row else 0,
         }
 
+    async def load_degradation_result(self) -> Optional[dict]:
+        """Latest degradation OLS result for this windfarm (issue #99, OPS-04).
+
+        Reads the most-recent ``degradation_results`` row for the windfarm — the
+        Module 5 OLS regression of normalized output against time. Used by OPS-04
+        (turbine degradation): a significant negative ``slope_pct_per_year`` is the
+        degradation signal.
+
+        "Latest" = highest ``pipeline_run_id`` (most recent pipeline run), with
+        ``id`` as a stable tie-breaker. The ``q50`` (P50) reference curve is
+        preferred over ``q90`` (P10); when only ``q90`` exists it is used.
+
+        Returns a plain dict (DB-free injectable via ``prefetched`` cache key
+        ``"degradation_result"``) with the fields OPS-04 needs::
+
+            {
+                "slope_pct_per_year": float | None,
+                "p_value": float | None,
+                "r_squared": float | None,
+                "ci_lower_95_pct": float | None,
+                "ci_upper_95_pct": float | None,
+                "n_constraint_hours_excluded": int | None,
+                "baseline_cap_pu": float | None,
+                "reference_curve": str,
+                "analysis_start": date | None,
+                "analysis_end": date | None,
+                "data_points": int | None,
+            }
+
+        Returns ``None`` when no degradation row exists for the windfarm (so
+        OPS-04 simply does not fire). Cache key: ``"degradation_result"``.
+        """
+        if "degradation_result" in self._cache:
+            return self._cache["degradation_result"]
+
+        self._cache["degradation_result"] = await self._compute_degradation_result()
+        return self._cache["degradation_result"]
+
+    async def _compute_degradation_result(self) -> Optional[dict]:
+        from app.models.degradation_result import DegradationResult
+
+        try:
+            result = await self.db.execute(
+                select(DegradationResult)
+                .where(DegradationResult.windfarm_id == self.windfarm_id)
+                .order_by(
+                    # Prefer the q50 (P50) reference curve, then the most recent
+                    # pipeline run, then a stable id tie-breaker.
+                    (DegradationResult.reference_curve == "q50").desc(),
+                    DegradationResult.pipeline_run_id.desc().nullslast(),
+                    DegradationResult.id.desc(),
+                )
+            )
+            row = result.scalars().first()
+        except Exception:
+            return None
+
+        if row is None:
+            return None
+
+        def _f(v: Any) -> Optional[float]:
+            return float(v) if v is not None else None
+
+        return {
+            "slope_pct_per_year": _f(row.slope_pct_per_year),
+            "p_value": _f(row.p_value),
+            "r_squared": _f(row.r_squared),
+            "ci_lower_95_pct": _f(row.ci_lower_95_pct),
+            "ci_upper_95_pct": _f(row.ci_upper_95_pct),
+            "n_constraint_hours_excluded": row.n_constraint_hours_excluded,
+            "baseline_cap_pu": _f(row.baseline_cap_pu),
+            "reference_curve": row.reference_curve,
+            "analysis_start": row.analysis_start,
+            "analysis_end": row.analysis_end,
+            "data_points": row.data_points,
+        }
+
     # ─── Accessors deferred to later issues ────────────────────────────────
     #
     # The following memoized accessors are part of the DetectionContext surface
@@ -529,7 +606,6 @@ class DetectionContext:
     # alongside the detector that needs it). They are intentionally NOT stubbed
     # here to avoid shipping broken bodies:
     #
-    #   load_degradation_result()          — added by #99  (OPS-04 turbine degradation)
     #   load_structural_constraint_flags() — added by #103 (OPS-08 structural constraint)
     #   load_generation_gaps()             — added by #109 (DQ-01 generation data gaps)
     #   compute_zone_opex_median(location_type) — added by #108 (FIN-02/03 OPEX overrun)
