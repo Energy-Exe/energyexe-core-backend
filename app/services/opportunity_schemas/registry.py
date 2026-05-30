@@ -392,6 +392,148 @@ def reclassify_seasonality_to_cannibalisation(
     return results
 
 
+# ─── Cross-schema overlap-downgrade post-passes (#112, M7) ───
+#
+# Two more PURE post-passes over the same ``results_by_code`` map, encoding the
+# spec's overlap relationships (#25). Unlike reclassification (#111) — which
+# fully re-attributes a symptom finding to its cause (mute-but-persist) — these
+# encode a SOFTER overlap: two findings share a root cause, so the *secondary*
+# one is de-emphasised (one severity tier down) or merely FLAGGED PROVISIONAL,
+# never suppressed.
+#
+#   1. MKT-06 vs MKT-03 (negative-price exposure vs cannibalisation). Both read
+#      the price profile; when cannibalisation is CONFIRMED (MKT-03), the
+#      negative-price-hours finding (MKT-06) is partly the same story, so MKT-06
+#      is downgraded by ONE severity tier (CONFIRMED→INDICATIVE→WATCH; WATCH is
+#      already the floor and stays WATCH). MKT-06's data_slots / branch are left
+#      intact — only its tier moves — so the finding still publishes, just lower.
+#      Left UNCHANGED whenever MKT-03 is not CONFIRMED (a non-CONFIRMED MKT-03 is
+#      not a strong enough shared cause to dim MKT-06).
+#
+#   2. OPS-08 marks OPS-04 / OPS-06 provisional. A CONFIRMED structural
+#      constraint (OPS-08, infrastructure root cause) can MASQUERADE as turbine
+#      condition: a grid/connection constraint depresses output, which OPS-04
+#      (turbine degradation) and OPS-06 (persistent underperformance) read off
+#      the generation series. So when OPS-08 is CONFIRMED we do NOT suppress
+#      OPS-04 / OPS-06 — the turbine problem may still be real — we only stamp
+#      ``data_slots["provisional"] = True`` on them so an analyst knows the
+#      structural constraint is a candidate alternative explanation. Their
+#      severity is untouched.
+#
+# Both run AFTER reclassification (#111) and BEFORE the DQ-01 gap gate (#110):
+# reclassification reasons on the detectors' real severities, then these overlap
+# downgrades adjust the *survivors*, then the data-quality veto is applied last.
+# Both are no-ops on the legacy / no-overlap scenarios, keeping the M1
+# characterization snapshot byte-identical (no legacy scenario co-fires MKT-03 +
+# MKT-06 or OPS-08 + OPS-04/06).
+
+# Single-tier-down ladder for the MKT-06 overlap downgrade. WATCH is the floor:
+# a WATCH finding has nowhere lower to go (the next step would be SUPPRESSED,
+# which is a data-quality / reclassification verdict, NOT an overlap dimming), so
+# it stays WATCH. SUPPRESSED is intentionally absent — a suppressed finding is
+# already muted and must not be "downgraded" back into an active tier.
+_ONE_TIER_DOWN: Dict[Severity, Severity] = {
+    Severity.CONFIRMED: Severity.INDICATIVE,
+    Severity.INDICATIVE: Severity.WATCH,
+    Severity.WATCH: Severity.WATCH,
+}
+
+# Stamped on MKT-06 when it is dimmed because cannibalisation (MKT-03) is the
+# shared, confirmed root cause — surfaced for the admin UI / analyst audit.
+_MKT06_DOWNGRADE_REASON = (
+    "MKT-06 downgraded one tier: negative-price exposure overlaps confirmed "
+    "cannibalisation (MKT-03)"
+)
+
+
+def _downgrade_one_tier(severity: Severity) -> Severity:
+    """Return the severity one tier below ``severity`` (WATCH is the floor).
+
+    CONFIRMED→INDICATIVE, INDICATIVE→WATCH, WATCH→WATCH. Any other severity
+    (e.g. SUPPRESSED) is returned unchanged — a muted finding is never moved.
+    """
+    return _ONE_TIER_DOWN.get(severity, severity)
+
+
+def downgrade_negative_price_if_cannibalisation_confirmed(
+    results: Dict[SchemaCode, DetectorResult],
+) -> Dict[SchemaCode, DetectorResult]:
+    """Downgrade MKT-06 one tier when MKT-03 is CONFIRMED (#112, overlap #25).
+
+    PURE post-pass over ``results_by_code``. When BOTH MKT-06 fired AND MKT-03 is
+    CONFIRMED, the negative-price-hours exposure (MKT-06) shares its root cause
+    with the confirmed price cannibalisation (MKT-03), so MKT-06 is dimmed by
+    exactly ONE severity tier via :func:`_downgrade_one_tier`
+    (CONFIRMED→INDICATIVE, INDICATIVE→WATCH, WATCH stays WATCH). The finding is
+    NOT suppressed — its ``data_slots`` / ``branch`` are untouched — so it still
+    publishes, just at a lower tier, with a redirect note recorded on
+    ``data_slots["overlap_downgraded_from"]`` for audit.
+
+    No-op (the ``results`` map is returned unchanged) when MKT-06 did not fire,
+    MKT-03 did not fire, or MKT-03 is not CONFIRMED (a non-CONFIRMED MKT-03 is too
+    weak a shared cause to dim MKT-06). An already-SUPPRESSED MKT-06 is also left
+    intact (``_downgrade_one_tier`` returns SUPPRESSED unchanged) — a muted
+    finding is never resurrected.
+
+    Args:
+        results: ``SchemaCode -> DetectorResult`` (mutated in place AND returned
+            for chaining with the other Phase-2 post-passes).
+
+    Returns:
+        The same ``results`` mapping.
+    """
+    mkt06 = results.get(SchemaCode.MKT_06)
+    mkt03 = results.get(SchemaCode.MKT_03)
+    if mkt06 is None or mkt03 is None:
+        return results
+    if mkt03.severity != Severity.CONFIRMED:
+        return results
+
+    downgraded = _downgrade_one_tier(mkt06.severity)
+    if downgraded == mkt06.severity:
+        # WATCH floor (or a non-movable severity): nothing to record.
+        return results
+
+    mkt06.data_slots["overlap_downgraded_from"] = mkt06.severity.value
+    mkt06.severity = downgraded
+    mkt06.suppression_reason = _MKT06_DOWNGRADE_REASON
+    return results
+
+
+def mark_provisional_if_structural_constraint(
+    results: Dict[SchemaCode, DetectorResult],
+) -> Dict[SchemaCode, DetectorResult]:
+    """Flag OPS-04 / OPS-06 provisional when OPS-08 is CONFIRMED (#112, overlap #25).
+
+    PURE post-pass over ``results_by_code``. When OPS-08 (structural constraint)
+    is CONFIRMED, the infrastructure constraint can masquerade as turbine
+    condition — it depresses the generation series that OPS-04 (turbine
+    degradation) and OPS-06 (persistent underperformance) regress / index. So
+    each of OPS-04 / OPS-06 that fired this run gets ``data_slots["provisional"]
+    = True``, marking the structural constraint as a candidate alternative
+    explanation. Their ``severity`` is DELIBERATELY left intact — they are NOT
+    suppressed, only flagged — because the turbine problem may still be real.
+
+    No-op (returned unchanged) when OPS-08 did not fire, OPS-08 is not CONFIRMED,
+    or neither OPS-04 nor OPS-06 fired.
+
+    Args:
+        results: ``SchemaCode -> DetectorResult`` (mutated in place AND returned).
+
+    Returns:
+        The same ``results`` mapping.
+    """
+    ops08 = results.get(SchemaCode.OPS_08)
+    if ops08 is None or ops08.severity != Severity.CONFIRMED:
+        return results
+
+    for code in (SchemaCode.OPS_04, SchemaCode.OPS_06):
+        result = results.get(code)
+        if result is not None:
+            result.data_slots["provisional"] = True
+    return results
+
+
 async def run_for_windfarm(
     ctx: DetectionContext,
     *,
@@ -426,6 +568,12 @@ async def run_for_windfarm(
             OPS-02 to ``SUPPRESSED`` (with a redirect reason) and annotate MKT-03's
             ``reclassified_from`` when cannibalisation is the dominant driver. Run
             first, on the detectors' real severities.
+          - **Overlap downgrades** (#112) —
+            :func:`downgrade_negative_price_if_cannibalisation_confirmed` dims
+            MKT-06 by one severity tier when MKT-03 is CONFIRMED, and
+            :func:`mark_provisional_if_structural_constraint` stamps
+            ``data_slots["provisional"]`` on OPS-04 / OPS-06 when OPS-08 is
+            CONFIRMED. Run after reclassification, before the gap gate.
           - **DQ-01 suppression gate** (#110) — :func:`apply_data_gap_gate` rewrites
             every generation-dependent result's severity to ``SUPPRESSED`` when a
             gap is present (no-op otherwise). Run last (a data-quality veto).
@@ -498,17 +646,33 @@ async def run_for_windfarm(
     #      sees already-SUPPRESSED severities; reclassification deliberately runs
     #      before it for exactly that reason — a data gap is a data-quality veto
     #      applied last, not an input to cross-schema re-attribution.)
-    #   2. DQ-01 suppression gate (#110) — applied LAST: if DQ-01 fired, every
+    #   2. Overlap downgrades (#112) — softer cross-schema overlaps applied to the
+    #      reclassification survivors: a CONFIRMED MKT-03 dims MKT-06 by one tier
+    #      (shared price-cannibalisation root cause), and a CONFIRMED OPS-08
+    #      (structural constraint) flags OPS-04 / OPS-06 provisional (the
+    #      infrastructure constraint may explain the apparent turbine condition).
+    #      Slotted AFTER reclassification (so they reason about the post-#111
+    #      severities) and BEFORE the gap gate (so the data-quality veto still has
+    #      the final word).
+    #   3. DQ-01 suppression gate (#110) — applied LAST: if DQ-01 fired, every
     #      generation-dependent result (including a still-active MKT-03, and any
     #      already-reclassified MKT-01/OPS-02 — re-suppressing is idempotent) is
     #      muted to SUPPRESSED. No-op when no gap fired.
     #
-    # All four are no-ops on the legacy / no-gap / normal-CI scenarios, keeping the
-    # M1 characterization snapshot byte-identical. (#112 will add its
-    # overlap-downgrade passes into THIS block — they should slot in after
-    # reclassification and before the gap gate, alongside the #111 passes.)
+    # FINAL Phase-2 order:
+    #   reclassify_capture_to_cannibalisation
+    #     → reclassify_seasonality_to_cannibalisation
+    #       → downgrade_negative_price_if_cannibalisation_confirmed
+    #         → mark_provisional_if_structural_constraint
+    #           → apply_data_gap_gate
+    #
+    # All five are no-ops on the legacy / no-gap / normal-CI / no-overlap
+    # scenarios, keeping the M1 characterization snapshot byte-identical.
     reclassify_capture_to_cannibalisation(results_by_code)
     reclassify_seasonality_to_cannibalisation(results_by_code)
+
+    downgrade_negative_price_if_cannibalisation_confirmed(results_by_code)
+    mark_provisional_if_structural_constraint(results_by_code)
 
     gap_present = SchemaCode.DQ_01 in results_by_code
     apply_data_gap_gate(results_by_code, gap_present)
