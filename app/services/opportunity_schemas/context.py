@@ -37,7 +37,7 @@ Cache keys (stable — downstream tests depend on these):
     "ppa_info", "monthly_performance", "capture_rate", "cannibalisation_index",
     "seasonal_capture", "curtailment_pct", "degradation_result",
     "norm_index_series", "turbine_start_dates", "negative_price_hours",
-    "p50_target", "annual_generation_gwh".
+    "p50_target", "annual_generation_gwh", "generation_gaps".
 """
 
 from __future__ import annotations
@@ -1133,16 +1133,60 @@ class DetectionContext:
             return None
         return int(bidzone_id) if bidzone_id is not None else None
 
-    # ─── Accessors deferred to later issues ────────────────────────────────
-    #
-    # The following memoized accessors are part of the DetectionContext surface
-    # per the plan but are added by their respective downstream issues (each
-    # alongside the detector that needs it). They are intentionally NOT stubbed
-    # here to avoid shipping broken bodies:
-    #
-    #   load_generation_gaps()             — added by #109 (DQ-01 generation data gaps)
-    #
-    # ────────────────────────────────────────────────────────────────────────
+    async def load_generation_gaps(self) -> List[tuple]:
+        """Consecutive missing-generation-hour runs over the window (DQ-01, #109).
+
+        Reads the *distinct present hours* (``generation_data.hour`` rows that
+        exist for this windfarm in the window) and derives the contiguous
+        missing-hour runs **between** present data, using the pure
+        :func:`dq01_data_gaps.find_generation_gaps` helper. Each gap is a
+        ``(gap_start, gap_end, gap_hours)`` tuple.
+
+        Crucially this only finds gaps that are *bracketed* by present data: a
+        windfarm with NO generation data at all yields an empty present-hours set
+        and therefore **no gaps** (not "the whole window is one giant gap"). That
+        keeps the M1 characterization snapshot byte-identical — the legacy
+        scenarios inject no generation, so this resolves to ``[]`` and DQ-01
+        returns ``None`` (no finding).
+
+        Returns ``[]`` (never ``None``) when there are no gaps, or on any access
+        failure (no session / DB-free harness whose ``execute`` stub returns no
+        rows). Cache key: ``"generation_gaps"`` (inject a list of
+        ``(start, end, hours)`` tuples via ``prefetched`` for DB-free tests).
+        """
+        if "generation_gaps" in self._cache:
+            return self._cache["generation_gaps"]
+
+        self._cache["generation_gaps"] = await self._compute_generation_gaps()
+        return self._cache["generation_gaps"]
+
+    async def _compute_generation_gaps(self) -> List[tuple]:
+        from app.services.opportunity_schemas.dq01_data_gaps import find_generation_gaps
+
+        # Distinct hours that HAVE generation data for this windfarm in the window.
+        query = text(
+            """
+            SELECT DISTINCT date_trunc('hour', hour) AS present_hour
+            FROM generation_data
+            WHERE windfarm_id = :wf_id
+              AND hour >= :start AND hour < :end
+            ORDER BY present_hour
+        """
+        )
+        try:
+            result = await self.db.execute(
+                query,
+                {"wf_id": self.windfarm_id, "start": self.period_start, "end": self.period_end},
+            )
+            rows = result.fetchall()
+        except Exception:
+            return []
+
+        present_hours = [r.present_hour for r in rows if r.present_hour is not None]
+        if not present_hours:
+            return []
+
+        return find_generation_gaps(present_hours, self.period_start, self.period_end)
 
     def _price_analytics(self):
         """Lazily build a PriceAnalyticsService bound to this context's session."""

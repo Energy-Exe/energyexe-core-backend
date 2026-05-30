@@ -39,6 +39,7 @@ from typing import Awaitable, Callable, Dict, List, Optional
 
 from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode
 from app.services.opportunity_schemas import (
+    dq01_data_gaps,
     fin01_p50_attainment,
     fin02_onshore_opex,
     fin03_offshore_opex,
@@ -110,6 +111,10 @@ SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {
     SchemaCode.FIN_01: fin01_p50_attainment.detect,  # #107 (no dependency)
     SchemaCode.FIN_02: fin02_onshore_opex.detect,  # #108 (no dependency, onshore)
     SchemaCode.FIN_03: fin03_offshore_opex.detect,  # #108 (no dependency, offshore)
+    # M6 — data-quality gate detector. Registered with NO dependency. The DQ-01
+    # SUPPRESSION GATE (downstream gen-dependent schemas → SUPPRESSED when a gap
+    # is present) is wired separately in #110 via apply_data_gap_gate — NOT here.
+    SchemaCode.DQ_01: dq01_data_gaps.detect,  # #109 (no dependency)
 }
 
 
