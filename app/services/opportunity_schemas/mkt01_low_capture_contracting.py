@@ -25,7 +25,11 @@ UNTOUCHED — the 57 legacy unit tests in ``tests/test_opportunity_detection.py`
 still import and assert against them. The corrected logic lives here.
 
 The MKT-03 reclassification short-circuit (``ci > MKT03_CI_CONFIRMED`` → ``None``)
-is preserved as-is; the proper reclassification hook is #111.
+that #94 carried forward inline has been REMOVED by #111: the cross-schema
+redirect now lives in the ``reclassify_capture_to_cannibalisation`` post-pass in
+``registry.py``, so MKT-01's ``detect`` always fires on its own capture-gap
+signal and the registry's Phase-2 pass mutes it (→ ``SUPPRESSED`` + redirect
+reason) when MKT-03 is the dominant (CI-driven) explanation.
 
 Data is obtained exclusively through ``DetectionContext`` accessors
 (``load_capture_rate`` / ``load_cannibalisation_index`` / ``load_ppa_info`` /
@@ -39,11 +43,7 @@ from __future__ import annotations
 from typing import Optional
 
 from app.models.opportunity import SchemaCode, Severity
-from app.services.opportunity_detection_service import (
-    LONG_PPA_YEARS,
-    MKT03_CI_CONFIRMED,
-    OpportunityDetectionService,
-)
+from app.services.opportunity_detection_service import LONG_PPA_YEARS, OpportunityDetectionService
 from app.services.opportunity_schemas.context import DetectionContext, DetectorResult
 
 # ─── Recalibrated thresholds (issue #94 — spec 15 May 2026) ──────────────────
@@ -119,9 +119,11 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     """MKT-01: Low capture rates — contracting.
 
     Returns ``None`` when there is no finding: no zone benchmark
-    (``load_capture_rate`` is ``None``), gap below the WATCH threshold,
-    suppressed (curtailment >15% or locked fixed-price PPA), or the MKT-03
-    reclassification short-circuit (``ci > MKT03_CI_CONFIRMED``).
+    (``load_capture_rate`` is ``None``), gap below the WATCH threshold, or
+    suppressed (curtailment >15% or locked fixed-price PPA). The MKT-03
+    reclassification short-circuit was REMOVED by #111 — when cannibalisation is
+    the dominant driver, MKT-01 still fires here and is muted to ``SUPPRESSED`` by
+    the ``reclassify_capture_to_cannibalisation`` post-pass in ``registry.py``.
     """
     gap_data = await ctx.load_capture_rate()
     if gap_data is None:
@@ -165,10 +167,13 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     if not ppa_info.get("ppa_end_date"):
         missing.append("ppa_expiry_date")
 
-    # Reclassification: if CI is dominant driver, reclassify to MKT-03
-    if ci and ci > MKT03_CI_CONFIRMED:
-        # MKT-03 will handle this — skip MKT-01 (proper hook is #111)
-        return None
+    # NOTE (#111): the legacy inline reclassification short-circuit
+    # (``if ci and ci > MKT03_CI_CONFIRMED: return None``) has been REMOVED. MKT-01
+    # now always fires on its own capture-gap signal; the cross-schema redirect
+    # to MKT-03 when cannibalisation is the dominant driver is handled by the
+    # ``reclassify_capture_to_cannibalisation`` post-pass in ``registry.py`` (Phase
+    # 2 of ``run_for_windfarm``), so ALL cross-schema logic lives in one auditable
+    # place over the full result set rather than buried inside this detector.
 
     # Branch selection
     branch = select_capture_branch(ci, ppa_info)

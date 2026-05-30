@@ -240,6 +240,158 @@ def apply_data_gap_gate(
     return results
 
 
+# ─── Cross-schema reclassification post-passes (#111, M7) ───
+#
+# Two PURE post-passes over the orchestrator's ``results_by_code`` map, hanging
+# off the SAME dict the DQ-01 gate (#110) operates on. They encode the spec's
+# cross-schema re-attribution: a *symptom* finding (low capture / seasonal skew)
+# whose true *cause* is high cannibalisation should NOT surface as an independent
+# actionable finding — the price-cannibalisation MKT-03 finding already explains
+# (and owns) it.
+#
+# Replaces the buried ``ci > MKT03_CI_CONFIRMED → return None`` short-circuit that
+# used to live INLINE in ``mkt01_low_capture_contracting.detect`` (#94 carried it
+# forward verbatim; #111 lifts it out so ALL cross-schema logic lives here, in one
+# auditable place over the full result set rather than inside one detector that
+# cannot see the others' outcomes).
+#
+# Mechanism (chosen deliberately — documented for #112 and the admin UI):
+#   * The reclassified finding's ``severity`` is rewritten to
+#     :attr:`Severity.SUPPRESSED` and its ``suppression_reason`` set to the
+#     human-readable redirect string. This MIRRORS the DQ-01 gate's
+#     mute-but-persist contract (``severity=SUPPRESSED, status=ACTIVE`` — see the
+#     SUPPRESSED-storage decision in the plan): the row is still PERSISTED so the
+#     reclassification is fully auditable (an analyst sees the MKT-01 row, muted,
+#     with "reclassified → MKT-03"), but it no longer publishes as an independent
+#     actionable finding — the same NET outcome the old ``return None`` produced
+#     for the live detector path (no actionable MKT-01), now expressed uniformly.
+#   * The owning MKT-03 finding is annotated: its ``data_slots["reclassified_from"]``
+#     accumulates the reclassified schema codes (e.g. ``["MKT_01", "OPS_02"]``) so
+#     the cannibalisation finding records exactly which symptoms it absorbed.
+#
+# Why SUPPRESSED rather than dropping the row from the dict: dropping MKT-01 would
+# orphan its dependent MKT-02 (which is gated on MKT-01 via SCHEMA_DEPENDENCIES and
+# wires ``triggered_by_id`` off the persisted MKT-01 row). Keeping the MKT-01 row
+# present-but-suppressed preserves that wiring and keeps the post-pass a pure,
+# local severity/annotation rewrite with no dependency-graph surgery. MKT-02
+# (storage upside) is intentionally left untouched: the storage opportunity is
+# independent of *why* the capture gap exists.
+#
+# "CI-dominant" predicate — MKT-03 is the dominant driver when it fired AND is at
+# its CONFIRMED tier, OR (equivalently, for a result built before the trend
+# downgrade) its observed cannibalisation index exceeds the MKT-03 CONFIRMED CI
+# floor (1.20). A SUPPRESSED MKT-03 (e.g. already muted by a data gap) is NOT
+# dominant — there is nothing to reclassify into. This matches the legacy inline
+# rule (``ci > MKT03_CI_CONFIRMED``) while also honouring a CONFIRMED MKT-03 whose
+# CI sits exactly at the floor.
+
+_RECLASSIFY_MKT01_REASON = (
+    "MKT-01 reclassified to MKT-03: capture gap explained by high cannibalisation"
+)
+_RECLASSIFY_OPS02_REASON = (
+    "OPS-02 reclassified to MKT-03: seasonal skew explained by high cannibalisation"
+)
+
+
+def _mkt03_is_ci_dominant(mkt03: DetectorResult) -> bool:
+    """True when the MKT-03 result is the dominant (CI-driven) explanation.
+
+    Dominant iff MKT-03 fired AND is either CONFIRMED, or its observed
+    cannibalisation index exceeds the MKT-03 CONFIRMED CI floor (1.20). A
+    SUPPRESSED MKT-03 (e.g. data-gap muted) is never dominant.
+    """
+    if mkt03.severity == Severity.SUPPRESSED:
+        return False
+    if mkt03.severity == Severity.CONFIRMED:
+        return True
+    ci = mkt03.data_slots.get("cannibalisation_index")
+    return ci is not None and ci > mkt03_high_cannibalisation.MKT03_CI_CONFIRMED
+
+
+def _annotate_reclassified_into(mkt03: DetectorResult, reclassified_code: SchemaCode) -> None:
+    """Record on MKT-03 that it absorbed ``reclassified_code`` (idempotent)."""
+    absorbed = mkt03.data_slots.setdefault("reclassified_from", [])
+    code_value = reclassified_code.value
+    if code_value not in absorbed:
+        absorbed.append(code_value)
+
+
+def reclassify_capture_to_cannibalisation(
+    results: Dict[SchemaCode, DetectorResult],
+) -> Dict[SchemaCode, DetectorResult]:
+    """Reclassify MKT-01 (low capture) into MKT-03 when CI is the dominant driver.
+
+    PURE post-pass over ``results_by_code``. When BOTH MKT-01 fired (and is not
+    already suppressed) AND MKT-03 is CI-dominant (see :func:`_mkt03_is_ci_dominant`),
+    the low-capture finding is a *symptom* of cannibalisation, not an independent
+    contracting problem: MKT-01 is muted (``severity=SUPPRESSED`` + redirect
+    reason) and MKT-03 records the absorbed code in
+    ``data_slots["reclassified_from"]``.
+
+    No-op (the ``results`` map is returned unchanged) when MKT-01 did not fire,
+    MKT-03 did not fire, MKT-03 is not CI-dominant, or MKT-01 is already SUPPRESSED.
+    This is exactly the no-op the legacy / normal-CI scenarios rely on for snapshot
+    stability — it replaces the old inline ``ci > MKT03_CI_CONFIRMED → None``
+    short-circuit in ``mkt01_low_capture_contracting.detect``.
+
+    Args:
+        results: ``SchemaCode -> DetectorResult`` (mutated in place AND returned
+            for chaining with the other Phase-2 post-passes).
+
+    Returns:
+        The same ``results`` mapping.
+    """
+    mkt01 = results.get(SchemaCode.MKT_01)
+    mkt03 = results.get(SchemaCode.MKT_03)
+    if mkt01 is None or mkt03 is None:
+        return results
+    if mkt01.severity == Severity.SUPPRESSED:
+        return results
+    if not _mkt03_is_ci_dominant(mkt03):
+        return results
+
+    mkt01.severity = Severity.SUPPRESSED
+    mkt01.suppression_reason = _RECLASSIFY_MKT01_REASON
+    _annotate_reclassified_into(mkt03, SchemaCode.MKT_01)
+    return results
+
+
+def reclassify_seasonality_to_cannibalisation(
+    results: Dict[SchemaCode, DetectorResult],
+) -> Dict[SchemaCode, DetectorResult]:
+    """Reclassify OPS-02 (seasonality) into MKT-03 when CI explains the seasonal skew.
+
+    PURE post-pass over ``results_by_code``. When BOTH OPS-02 fired (and is not
+    already suppressed) AND MKT-03 is CI-dominant (see :func:`_mkt03_is_ci_dominant`),
+    the high-wind-season decline is explained by cannibalisation eating into the
+    high-output season's price profile rather than by an operational seasonality
+    problem: OPS-02 is muted (``severity=SUPPRESSED`` + redirect reason) and MKT-03
+    records the absorbed code in ``data_slots["reclassified_from"]``.
+
+    No-op (returned unchanged) when OPS-02 did not fire, MKT-03 did not fire,
+    MKT-03 is not CI-dominant, or OPS-02 is already SUPPRESSED.
+
+    Args:
+        results: ``SchemaCode -> DetectorResult`` (mutated in place AND returned).
+
+    Returns:
+        The same ``results`` mapping.
+    """
+    ops02 = results.get(SchemaCode.OPS_02)
+    mkt03 = results.get(SchemaCode.MKT_03)
+    if ops02 is None or mkt03 is None:
+        return results
+    if ops02.severity == Severity.SUPPRESSED:
+        return results
+    if not _mkt03_is_ci_dominant(mkt03):
+        return results
+
+    ops02.severity = Severity.SUPPRESSED
+    ops02.suppression_reason = _RECLASSIFY_OPS02_REASON
+    _annotate_reclassified_into(mkt03, SchemaCode.OPS_02)
+    return results
+
+
 async def run_for_windfarm(
     ctx: DetectionContext,
     *,
@@ -266,13 +418,18 @@ async def run_for_windfarm(
             the registry is dependency-ordered, prerequisites are evaluated
             first.)
           - Calls ``await detect(ctx)``; ``None`` means "no finding".
-      * **DQ-01 suppression gate** (#110) — a PURE post-pass: ``gap_present`` is
-        ``True`` iff DQ-01 produced a finding this run; :func:`apply_data_gap_gate`
-        then rewrites every generation-dependent result's severity to
-        ``SUPPRESSED`` (no-op when there is no gap). Runs AFTER detection collects
-        all results and BEFORE any ``Opportunity`` is built, so the suppressed
-        severities are what get persisted. (Co-firing / reclassification
-        post-passes #111/#112 will hang off the same ``results_by_code`` here.)
+      * **Cross-schema post-passes** (PURE functions over ``results_by_code``,
+        run AFTER detection collects all results and BEFORE any ``Opportunity`` is
+        built, in this deliberate order):
+          - **Reclassification** (#111) — :func:`reclassify_capture_to_cannibalisation`
+            and :func:`reclassify_seasonality_to_cannibalisation` mute MKT-01 /
+            OPS-02 to ``SUPPRESSED`` (with a redirect reason) and annotate MKT-03's
+            ``reclassified_from`` when cannibalisation is the dominant driver. Run
+            first, on the detectors' real severities.
+          - **DQ-01 suppression gate** (#110) — :func:`apply_data_gap_gate` rewrites
+            every generation-dependent result's severity to ``SUPPRESSED`` when a
+            gap is present (no-op otherwise). Run last (a data-quality veto).
+        The rewritten severities / annotations are what get persisted.
       * **Persist phase** — builds one ``Opportunity`` per surviving
         ``DetectorResult`` (the only ORM-build point), copying ``severity`` /
         ``branch`` / ``data_slots`` / ``missing_slots`` / ``suppression_reason``,
@@ -327,11 +484,32 @@ async def run_for_windfarm(
         results_by_code[schema_code] = result
         ordered_codes.append(schema_code)
 
-    # ── Phase 2: DQ-01 suppression gate (#110) ──
-    # A pure post-pass over results_by_code: if DQ-01 produced a finding this run,
-    # downgrade every generation-dependent result's severity to SUPPRESSED so the
-    # suppressed severity is what gets persisted below. No-op when no gap fired
-    # (the legacy / no-gap scenarios), keeping the M1 snapshot byte-identical.
+    # ── Phase 2: pure cross-schema post-passes over results_by_code ──
+    # All of these are PURE functions over the collected dict[SchemaCode,
+    # DetectorResult]; they run AFTER detection has gathered every result and
+    # BEFORE anything is persisted, so the rewritten severities / annotations are
+    # what Phase 3 writes. ORDER (deliberate, #111 + #110):
+    #
+    #   1. Reclassification (#111) — re-attribute symptom findings (MKT-01 low
+    #      capture, OPS-02 seasonal skew) to MKT-03 when cannibalisation is the
+    #      dominant driver. These run FIRST, on the detectors' REAL severities, so
+    #      they reason about the true signal — never about a severity another pass
+    #      has already mutated. (The #110 agent noted any pass after the gap gate
+    #      sees already-SUPPRESSED severities; reclassification deliberately runs
+    #      before it for exactly that reason — a data gap is a data-quality veto
+    #      applied last, not an input to cross-schema re-attribution.)
+    #   2. DQ-01 suppression gate (#110) — applied LAST: if DQ-01 fired, every
+    #      generation-dependent result (including a still-active MKT-03, and any
+    #      already-reclassified MKT-01/OPS-02 — re-suppressing is idempotent) is
+    #      muted to SUPPRESSED. No-op when no gap fired.
+    #
+    # All four are no-ops on the legacy / no-gap / normal-CI scenarios, keeping the
+    # M1 characterization snapshot byte-identical. (#112 will add its
+    # overlap-downgrade passes into THIS block — they should slot in after
+    # reclassification and before the gap gate, alongside the #111 passes.)
+    reclassify_capture_to_cannibalisation(results_by_code)
+    reclassify_seasonality_to_cannibalisation(results_by_code)
+
     gap_present = SchemaCode.DQ_01 in results_by_code
     apply_data_gap_gate(results_by_code, gap_present)
 

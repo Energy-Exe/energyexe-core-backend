@@ -5,8 +5,14 @@ Each test builds a DB-free ``DetectionContext`` via ``prefetched`` (keys
 ``await detect(ctx)`` matches the legacy ``_detect_mkt01`` outcome — proving the
 migration is verbatim, INCLUDING:
 
-* the never-fires zone-average bug (``capture_rate`` is ``None`` → ``None``); and
-* the MKT-03 reclassification short-circuit (``ci > MKT03_CI_CONFIRMED`` → ``None``).
+* the never-fires zone-average bug (``capture_rate`` is ``None`` → ``None``).
+
+NOTE (#111): the inline MKT-03 reclassification short-circuit
+(``ci > MKT03_CI_CONFIRMED`` → ``None``) has been REMOVED from the detector — the
+cross-schema redirect now lives in the ``reclassify_capture_to_cannibalisation``
+registry post-pass (tested in ``test_reclassification.py``). The two tests below
+that used to assert the short-circuit now assert the detector FIRES regardless of
+CI.
 
 Cache-key note: a key present with value ``None`` (e.g. ``capture_rate=None``)
 short-circuits the accessor to ``None`` without touching the DB — mirroring the
@@ -130,30 +136,43 @@ async def test_gap_below_watch_threshold_returns_none():
 
 
 @pytest.mark.asyncio
-async def test_reclassification_short_circuit_when_ci_high():
-    """MKT-01→MKT-03 reclassification: ci_latest > MKT03_CI_CONFIRMED (1.20) makes
-    MKT-01 return ``None`` (MKT-03 handles it; proper hook is #111) — even though
-    the gap alone would be CONFIRMED.
+async def test_detector_still_fires_when_ci_high_reclassification_moved_to_registry():
+    """CHANGED #111: the inline MKT-01→MKT-03 short-circuit
+    (``ci > MKT03_CI_CONFIRMED → None``) has been REMOVED from the detector.
+
+    MKT-01 now ALWAYS fires on its own capture-gap signal even when ci_latest is
+    high (1.25 > 1.20): the cross-schema redirect to MKT-03 is now the
+    ``reclassify_capture_to_cannibalisation`` registry post-pass (over the full
+    result set), NOT a buried ``return None`` here. So the detector returns a
+    CONFIRMED finding (gap 20pp → CONFIRMED, ci >= MKT03_CI_WATCH → branch A);
+    whether it ends up SUPPRESSED-into-MKT-03 is decided by the registry pass,
+    tested in ``tests/opportunity_schemas/test_reclassification.py``.
     """
     result = await detect(
         _ctx(
             capture_gap={
                 "capture_rate": 0.50,
                 "zone_avg": 0.70,
-                "gap_pp": 20.0,  # would be CONFIRMED on gap alone
+                "gap_pp": 20.0,  # CONFIRMED on gap alone
                 "bidzone_code": "NO2",
             },
-            cannibalisation={"ci_latest": 1.25},  # > MKT03_CI_CONFIRMED → reclassify
+            cannibalisation={"ci_latest": 1.25},  # high CI — no longer short-circuits here
             ppa={},
         )
     )
-    assert result is None
+    assert result is not None
+    assert result.schema_code == SchemaCode.MKT_01
+    assert result.severity == Severity.CONFIRMED
+    assert result.branch == "A"  # ci >= MKT03_CI_WATCH
 
 
 @pytest.mark.asyncio
-async def test_ci_at_confirmed_threshold_does_not_short_circuit():
-    """Reclassification is strict ``>``: ci_latest == 1.20 does NOT short-circuit;
-    MKT-01 still fires (and ci >= MKT03_CI_WATCH → branch A)."""
+async def test_ci_at_confirmed_threshold_fires_branch_a():
+    """ci_latest == 1.20 → MKT-01 fires CONFIRMED, branch A (ci >= MKT03_CI_WATCH).
+
+    Unchanged by #111 (this never hit the old short-circuit, which was strict
+    ``>``); retained as a branch-selection lock.
+    """
     result = await detect(
         _ctx(
             capture_gap={
