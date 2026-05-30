@@ -139,57 +139,17 @@ class OpportunityDetectionService:
         period_end: datetime,
         detection_run_id: Optional[int],
     ) -> List[Opportunity]:
-        """Run all schemas for a single windfarm in dependency order."""
-        opps: List[Opportunity] = []
+        """Run all schemas for a single windfarm in dependency order.
 
-        # Load PPA info for suppression checks
-        ppa_info = await self._load_ppa_info(windfarm_id)
-
-        # OPS-01: Volatile disruptions
-        ops01 = await self._detect_ops01(
-            windfarm_id, period_start, period_end, ppa_info, detection_run_id
-        )
-        if ops01:
-            opps.append(ops01)
-
-        # OPS-02: Performance seasonality
-        ops02 = await self._detect_ops02(
-            windfarm_id, period_start, period_end, ppa_info, detection_run_id
-        )
-        if ops02:
-            opps.append(ops02)
-
-        # OPS-03: Misaligned contracting (only if OPS-01 triggered)
-        if ops01:
-            ops03 = await self._detect_ops03(
-                windfarm_id, period_start, period_end, ppa_info, ops01, detection_run_id
-            )
-            if ops03:
-                opps.append(ops03)
-
-        # MKT-01: Low capture rates
-        mkt01 = await self._detect_mkt01(
-            windfarm_id, period_start, period_end, ppa_info, detection_run_id
-        )
-        if mkt01:
-            opps.append(mkt01)
-
-        # MKT-03: High cannibalisation (independent of MKT-01)
-        mkt03 = await self._detect_mkt03(
-            windfarm_id, period_start, period_end, ppa_info, detection_run_id
-        )
-        if mkt03:
-            opps.append(mkt03)
-
-        # MKT-02: Storage opportunity (only if MKT-01 triggered)
-        if mkt01:
-            mkt02 = await self._detect_mkt02(
-                windfarm_id, period_start, period_end, ppa_info, mkt01, detection_run_id
-            )
-            if mkt02:
-                opps.append(mkt02)
-
-        return opps
+        LIVE PATH (cut over in #93): delegates to ``_run_registry`` →
+        ``run_for_windfarm``, the registry-driven orchestrator and sole
+        ORM-build / persist point. All six detectors (OPS-01/02/03 + MKT-01/02/03)
+        now live as modules in ``app/services/opportunity_schemas/`` and are
+        registered in ``SCHEMA_REGISTRY`` (dependency-ordered). The legacy inline
+        ``_detect_opsXX`` / ``_detect_mktXX`` methods below are retained (no longer
+        the live path) so the #91 characterization harness can still drive them.
+        """
+        return await self._run_registry(windfarm_id, period_start, period_end, detection_run_id)
 
     async def _run_registry(
         self,
@@ -198,14 +158,14 @@ class OpportunityDetectionService:
         period_end: datetime,
         detection_run_id: Optional[int],
     ) -> List[Opportunity]:
-        """Registry-based detection seam (NOT the live path yet — see #90/#93).
+        """Registry-based detection — the LIVE detection path (cut over in #93).
 
         Builds a ``DetectionContext`` and delegates to ``run_for_windfarm``, the
-        single ORM-build / persist point. With the registry empty (#90) this is a
-        tested no-op returning ``[]``; #92/#93 register the six detectors here and
-        flip ``_detect_windfarm`` to call this instead of the legacy inline
-        detectors. Kept separate so that cutover is a one-line change and the
-        characterization snapshot (#91) stays byte-identical until then.
+        single ORM-build / persist point. The six detectors are registered in
+        ``SCHEMA_REGISTRY`` in dependency order; ``run_for_windfarm`` runs them,
+        gates dependents, wires ``triggered_by_id``, and persists ACTIVE rows.
+        ``detect_all`` still supersedes prior ACTIVE rows once per run before
+        invoking ``_detect_windfarm`` per windfarm.
         """
         from app.services.opportunity_schemas.context import DetectionContext
         from app.services.opportunity_schemas.registry import run_for_windfarm

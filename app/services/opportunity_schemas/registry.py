@@ -39,6 +39,9 @@ from typing import Awaitable, Callable, Dict, List, Optional
 
 from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode
 from app.services.opportunity_schemas import (
+    mkt01_low_capture_contracting,
+    mkt02_low_capture_storage,
+    mkt03_high_cannibalisation,
     ops01_volatile_disruption,
     ops02_performance_seasonality,
     ops03_misaligned_contracting,
@@ -66,13 +69,17 @@ Detector = Callable[[DetectionContext], Awaitable[Optional[DetectorResult]]]
 # dependents).
 #
 # #92 registers OPS_01, OPS_02, OPS_03 (in that order — OPS_01 before its
-# dependent OPS_03). NOTE: registering them here has NO live effect yet — the
-# live detection path is still the legacy inline ``_detect_windfarm``; #93 adds
-# MKT_01/02/03 and flips the live path over to ``run_for_windfarm``.
+# dependent OPS_03). #93 appends MKT_01, MKT_03, MKT_02 (MKT_03 is independent of
+# MKT_01; MKT_02 depends on MKT_01, so MKT_01 must precede it) AND flips the live
+# detection path over to ``run_for_windfarm`` (see ``_detect_windfarm`` in
+# ``opportunity_detection_service.py``).
 SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {
     SchemaCode.OPS_01: ops01_volatile_disruption.detect,
     SchemaCode.OPS_02: ops02_performance_seasonality.detect,
     SchemaCode.OPS_03: ops03_misaligned_contracting.detect,
+    SchemaCode.MKT_01: mkt01_low_capture_contracting.detect,
+    SchemaCode.MKT_03: mkt03_high_cannibalisation.detect,
+    SchemaCode.MKT_02: mkt02_low_capture_storage.detect,
 }
 
 
@@ -83,7 +90,7 @@ SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {
 # here as detectors land (keep this the single source of dependency truth).
 SCHEMA_DEPENDENCIES: Dict[SchemaCode, List[SchemaCode]] = {
     SchemaCode.OPS_03: [SchemaCode.OPS_01],
-    # SchemaCode.MKT_02: [SchemaCode.MKT_01],   # added by #93
+    SchemaCode.MKT_02: [SchemaCode.MKT_01],
 }
 
 

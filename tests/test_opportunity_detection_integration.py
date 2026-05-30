@@ -80,6 +80,8 @@ import pytest
 
 from app.models.opportunity import OpportunityStatus, SchemaCode, Severity
 from app.services.opportunity_detection_service import OpportunityDetectionService
+from app.services.opportunity_schemas.context import DetectionContext
+from app.services.opportunity_schemas.registry import run_for_windfarm
 
 # Fixed detection window used for every scenario (period string is part of the
 # data_slots but NOT part of the snapshot tuple, so its exact value is irrelevant
@@ -166,31 +168,100 @@ def _outcome_tuple(opp) -> Tuple[str, str, Optional[str], str, tuple, tuple]:
 
 
 async def _run_legacy(svc: OpportunityDetectionService) -> List:
-    """Run the LIVE legacy detection path for one windfarm.
+    """Run the LEGACY inline detection assembly for one windfarm.
 
-    This is the ``_detect_windfarm`` the service uses in production today. After
-    #93 cuts the live path over to ``run_for_windfarm`` this helper stays valid
-    (it still exercises the legacy inline detectors, kept in place behind the
-    registry seam), and #92/#93 add a second parametrization over the registry
-    path asserting identical tuples — see ``_run_registry_when_available``.
+    Before #93, this *was* the live ``_detect_windfarm`` body. #93 cut the live
+    path over to the registry (``_detect_windfarm`` → ``_run_registry`` →
+    ``run_for_windfarm``), but the legacy ``_detect_opsXX`` / ``_detect_mktXX``
+    methods were RETAINED. This helper drives those retained methods directly
+    (reproducing the pre-cutover ``_detect_windfarm`` assembly: same order, same
+    dependency gating) so the characterization snapshot still locks the legacy
+    behaviour byte-for-byte. The companion :func:`_run_registry` runs the SAME
+    scenario inputs through the new registry path; both must yield identical
+    tuples (see ``test_characterization_snapshot_current_six_schemas``).
     """
-    return await svc._detect_windfarm(WINDFARM_ID, START, END, DETECTION_RUN_ID)
+    wf, ps, pe, rid = WINDFARM_ID, START, END, DETECTION_RUN_ID
+    opps: List = []
+
+    ppa_info = await svc._load_ppa_info(wf)
+
+    ops01 = await svc._detect_ops01(wf, ps, pe, ppa_info, rid)
+    if ops01:
+        opps.append(ops01)
+
+    ops02 = await svc._detect_ops02(wf, ps, pe, ppa_info, rid)
+    if ops02:
+        opps.append(ops02)
+
+    if ops01:
+        ops03 = await svc._detect_ops03(wf, ps, pe, ppa_info, ops01, rid)
+        if ops03:
+            opps.append(ops03)
+
+    mkt01 = await svc._detect_mkt01(wf, ps, pe, ppa_info, rid)
+    if mkt01:
+        opps.append(mkt01)
+
+    mkt03 = await svc._detect_mkt03(wf, ps, pe, ppa_info, rid)
+    if mkt03:
+        opps.append(mkt03)
+
+    if mkt01:
+        mkt02 = await svc._detect_mkt02(wf, ps, pe, ppa_info, mkt01, rid)
+        if mkt02:
+            opps.append(mkt02)
+
+    return opps
 
 
-# ─── #92/#93 cutover seam (documented, not yet active) ───
+# ─── #93 cutover: the registry runner ───
 #
-# When the six detectors are registered (#92/#93), the same scenarios can be run
-# through the registry path by building a DetectionContext whose ``prefetched``
-# cache is the scenario inputs (keys: "monthly_performance", "capture_rate",
-# "cannibalisation_index", "ppa_info") and calling ``run_for_windfarm(ctx)``.
-# Because the detectors consume the same dicts and call the same pure functions,
-# the resulting tuples MUST equal ``EXPECTED_SNAPSHOT``. #92/#93 should add:
+# The data-access methods mocked by ``_make_service`` map 1:1 onto the
+# ``DetectionContext`` accessors that the registry detectors call after the
+# cutover:
 #
-#     @pytest.mark.parametrize("runner", [_run_legacy, _run_registry])
+#     legacy ``_calc_monthly_availability``  →  ctx cache key "monthly_performance"
+#     legacy ``_calc_seasonal_capture``      →  ctx cache key "seasonal_capture"
+#     legacy ``_calc_capture_rate_gap``      →  ctx cache key "capture_rate"
+#     legacy ``_calc_cannibalisation_index`` →  ctx cache key "cannibalisation_index"
+#     legacy ``_load_ppa_info``              →  ctx cache key "ppa_info"
 #
-# to ``test_characterization_snapshot_current_six_schemas`` and keep this file's
-# EXPECTED_SNAPSHOT byte-identical. (Left as a comment to avoid importing an
-# empty registry path that would currently return [].)
+# So the SAME scenario input dicts can be injected straight into a
+# ``DetectionContext(prefetched=...)``; ``run_for_windfarm`` then runs the exact
+# same pure functions the legacy methods do. The tuples MUST equal
+# ``EXPECTED_SNAPSHOT`` — the snapshot is path-independent.
+
+
+def _ctx_from_scenario(scenario_name: str) -> DetectionContext:
+    """Build a DB-free DetectionContext from a scenario's injected accessor data.
+
+    Keys present (even with a ``None`` value) short-circuit the DB query in the
+    matching accessor, so ``db`` is never touched — exactly mirroring the legacy
+    ``_calc_*`` mocks. Note: a key whose scenario value is ``None`` (e.g.
+    ``capture_gap=None``) is still inserted so the accessor returns ``None``
+    without hitting Postgres.
+    """
+    inputs = SCENARIO_INPUTS[scenario_name]
+    prefetched: Dict[str, Any] = {
+        "monthly_performance": inputs.get("monthly"),
+        "seasonal_capture": inputs.get("seasonal"),
+        "capture_rate": inputs.get("capture_gap"),
+        "cannibalisation_index": inputs.get("cannibalisation"),
+        "ppa_info": inputs["ppa"] if inputs.get("ppa") is not None else {},
+    }
+    return DetectionContext(
+        db=_FakeSession(),
+        windfarm=WINDFARM_ID,
+        period_start=START,
+        period_end=END,
+        prefetched=prefetched,
+    )
+
+
+async def _run_registry(scenario_name: str) -> List:
+    """Run a scenario through the LIVE registry path (``run_for_windfarm``)."""
+    ctx = _ctx_from_scenario(scenario_name)
+    return await run_for_windfarm(ctx, detection_run_id=DETECTION_RUN_ID)
 
 
 # ──────────────────────────── Scenario inputs ───────────────────────────────
@@ -507,37 +578,57 @@ EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
 }
 
 
-async def _compute_outcomes(scenario_name: str) -> Tuple[tuple, ...]:
-    """Run one scenario through the live legacy path and reduce to tuples."""
+async def _compute_outcomes_legacy(scenario_name: str) -> Tuple[tuple, ...]:
+    """Run one scenario through the retained legacy assembly and reduce to tuples."""
     svc = _make_service(**SCENARIO_INPUTS[scenario_name])
     opps = await _run_legacy(svc)
     return tuple(_outcome_tuple(o) for o in opps)
+
+
+async def _compute_outcomes_registry(scenario_name: str) -> Tuple[tuple, ...]:
+    """Run one scenario through the live registry path and reduce to tuples."""
+    opps = await _run_registry(scenario_name)
+    return tuple(_outcome_tuple(o) for o in opps)
+
+
+# Both runners (legacy retained assembly + live registry path) must reproduce the
+# frozen snapshot byte-for-byte. Parametrising over both is the #93 behaviour-
+# preservation gate: the cutover changed which path is live but NOT the output.
+_RUNNERS = {
+    "legacy": _compute_outcomes_legacy,
+    "registry": _compute_outcomes_registry,
+}
 
 
 # ───────────────────────────── The lock test ────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_characterization_snapshot_current_six_schemas():
-    """Every scenario's computed outcome equals the frozen EXPECTED_SNAPSHOT.
+@pytest.mark.parametrize("runner_name", list(_RUNNERS))
+async def test_characterization_snapshot_current_six_schemas(runner_name):
+    """Every scenario's computed outcome equals the frozen EXPECTED_SNAPSHOT, for
+    BOTH the retained legacy assembly and the live registry path.
 
     This is the M1 behaviour-preservation gate. If this fails after #92/#93, the
-    verbatim migration changed behaviour — investigate, do NOT edit the snapshot.
-    Only #94–#98 update EXPECTED_SNAPSHOT, each with a documented delta.
+    verbatim migration / cutover changed behaviour — investigate, do NOT edit the
+    snapshot. Only #94–#98 update EXPECTED_SNAPSHOT, each with a documented delta.
     """
+    compute = _RUNNERS[runner_name]
     computed: Dict[str, Tuple[tuple, ...]] = {}
     for name in SCENARIO_INPUTS:
-        computed[name] = await _compute_outcomes(name)
+        computed[name] = await compute(name)
 
     # Compare the whole mapping at once for a single, legible diff on failure.
     assert computed == EXPECTED_SNAPSHOT
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("runner_name", list(_RUNNERS))
 @pytest.mark.parametrize("scenario_name", list(SCENARIO_INPUTS))
-async def test_each_scenario_matches_snapshot(scenario_name):
+async def test_each_scenario_matches_snapshot(scenario_name, runner_name):
     """Per-scenario lock (sharper failure messages than the aggregate test)."""
-    assert await _compute_outcomes(scenario_name) == EXPECTED_SNAPSHOT[scenario_name]
+    compute = _RUNNERS[runner_name]
+    assert await compute(scenario_name) == EXPECTED_SNAPSHOT[scenario_name]
 
 
 # ─────────────────── Explicit "the bug is present" asserts ───────────────────
