@@ -519,8 +519,18 @@ EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
             ),
         ),
     ),
-    # MKT-03 CONFIRMED, branch A. POST-FIX(#98): recalibrated thresholds + trend
-    # downgrade rules may change tier/branch for some CI inputs.
+    # MKT-03 CONFIRMED, branch A.
+    # CHANGED #98: recalibrated to the new local helpers in
+    #   mkt03_high_cannibalisation.py — WATCH entry 1.05→1.08, CONFIRMED now
+    #   requires CI≥1.20 AND ≥2 sustained years AND rising penetration (proxied
+    #   by a positive outlier-excluded YoY CI trend), with a one-tier downgrade
+    #   when that trend is ≤ -0.08. For THIS scenario the recalibration is a
+    #   no-op on the observed tuple: ci_by_year {2024:1.22, 2025:1.25} → both
+    #   ≥1.08 so years_sustained=2; compute_ci_trend=+0.03 (>0 → rising, and
+    #   > -0.08 → no downgrade) → CONFIRMED retained; legacy ci_trend 0.03>0.02 →
+    #   branch A retained. Tuple is therefore byte-identical to #93's snapshot.
+    #   (data_slots["ci_trend_yoy"] now carries the recomputed YoY mean instead
+    #   of the legacy first→last delta, but only data_slots KEYS are snapshotted.)
     "mkt03_confirmed": (
         (
             "MKT_03",
@@ -544,7 +554,15 @@ EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
             ),
         ),
     ),
-    # MKT-03 CONFIRMED→INDICATIVE via no-trend graceful degradation, branch C.
+    # MKT-03 INDICATIVE, branch C.
+    # CHANGED #98: previously the legacy CONFIRMED→INDICATIVE no-trend
+    #   graceful-degradation step produced this tuple. Under the recalibration
+    #   the same INDICATIVE/C outcome is reached more directly: ci_by_year
+    #   {2025:1.25} is a single-year series → years_sustained=1 and
+    #   compute_ci_trend=None (penetration_rising=False), so CONFIRMED is never
+    #   reached (needs ≥2 yrs + rising); CI 1.25 ≥ 1.10 → INDICATIVE; legacy
+    #   ci_trend None → branch C. Tuple is byte-identical to #93's snapshot;
+    #   only the path to it changed.
     "mkt03_confirmed_downgraded_no_trend": (
         (
             "MKT_03",
