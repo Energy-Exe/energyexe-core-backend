@@ -40,16 +40,30 @@ def _get_cron_kwargs() -> dict:
 
 
 async def run_pipeline_job() -> None:
-    """One full pipeline pass over all operational windfarms.
+    """One full pipeline pass + opportunity detection over all operational windfarms.
 
-    Failure of one windfarm does not abort the rest — the orchestrator wraps
-    each windfarm in its own try/except. Job-level failures are logged and
-    the alert_service is notified.
+    Sequence:
+      1. ``PerformancePipelineService.run_pipeline_batch()`` — the 6-module
+         performance pipeline. Failure of one windfarm does not abort the rest;
+         the orchestrator wraps each windfarm in its own try/except.
+      2. ``OpportunityDetectionService.run_detection_job()`` — opportunity
+         detection, run *after* the batch so it consumes fresh performance data.
+
+    Error handling:
+      * A *batch* failure is the job-level failure: it is logged as
+        ``pipeline_daily_job_failed`` and the alert_service is notified.
+        Detection is **skipped** in that case (it depends on batch output).
+      * A *detection* failure does NOT mask a successful batch. It is logged as
+        ``pipeline_daily_detection_failed`` and best-effort alerted, but the
+        batch's success reporting still stands. The CLI backstop
+        (``scripts/jobs/run_detection_jobs.py opportunity-detection``) remains
+        available for a manual re-run.
     """
     job_started = datetime.now(timezone.utc)
     logger.info("pipeline_daily_job_started", at=job_started.isoformat())
 
     from app.core.database import get_session_factory
+    from app.services.opportunity_detection_service import OpportunityDetectionService
     from app.services.performance_pipeline_service import PerformancePipelineService
 
     session_factory = get_session_factory()
@@ -59,7 +73,7 @@ async def run_pipeline_job() -> None:
             svc = PerformancePipelineService(db)
             result = await svc.run_pipeline_batch()
         logger.info(
-            "pipeline_daily_job_complete",
+            "pipeline_daily_batch_complete",
             duration_s=(datetime.now(timezone.utc) - job_started).total_seconds(),
             **result,
         )
@@ -86,6 +100,47 @@ async def run_pipeline_job() -> None:
                     )
         except Exception as alert_exc:
             logger.warning("pipeline_alert_send_failed", error=str(alert_exc))
+        # Batch failed: skip detection (it depends on the batch's output).
+        return
+
+    # ── Opportunity detection (runs only after a successful batch) ────────
+    # Isolated from the batch result: a detection failure is logged + alerted
+    # but does NOT mask the batch's success reporting. The CLI backstop
+    # (scripts/jobs/run_detection_jobs.py opportunity-detection) covers re-runs.
+    detection_started = datetime.now(timezone.utc)
+    try:
+        async with session_factory() as db:
+            detection_svc = OpportunityDetectionService(db)
+            detection_result = await detection_svc.run_detection_job()
+        logger.info(
+            "pipeline_daily_detection_complete",
+            duration_s=(datetime.now(timezone.utc) - detection_started).total_seconds(),
+            **detection_result,
+        )
+    except Exception as exc:
+        logger.error(
+            "pipeline_daily_detection_failed",
+            duration_s=(datetime.now(timezone.utc) - detection_started).total_seconds(),
+            error=str(exc),
+        )
+        try:
+            async with session_factory() as db:
+                from app.services.alert_service import AlertService
+
+                alert_svc = AlertService(db) if hasattr(AlertService, "__init__") else None
+                if alert_svc is not None and hasattr(alert_svc, "create_system_alert"):
+                    await alert_svc.create_system_alert(
+                        title="Opportunity detection (daily) failed",
+                        message=str(exc),
+                        severity="HIGH",
+                    )
+        except Exception as alert_exc:
+            logger.warning("detection_alert_send_failed", error=str(alert_exc))
+
+    logger.info(
+        "pipeline_daily_job_complete",
+        duration_s=(datetime.now(timezone.utc) - job_started).total_seconds(),
+    )
 
 
 def start_pipeline_scheduler() -> None:
@@ -107,8 +162,8 @@ def start_pipeline_scheduler() -> None:
         id="pipeline_daily",
         name="Daily performance pipeline",
         replace_existing=True,
-        max_instances=1,         # never overlap two pipeline runs
-        coalesce=True,           # if the process was down, run once not N times
+        max_instances=1,  # never overlap two pipeline runs
+        coalesce=True,  # if the process was down, run once not N times
         misfire_grace_time=3600,
     )
     _scheduler.start()
