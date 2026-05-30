@@ -35,7 +35,8 @@ entirely. So a DB-free test does::
 
 Cache keys (stable — downstream tests depend on these):
     "ppa_info", "monthly_performance", "capture_rate", "cannibalisation_index",
-    "seasonal_capture", "curtailment_pct", "degradation_result".
+    "seasonal_capture", "curtailment_pct", "degradation_result",
+    "norm_index_series".
 """
 
 from __future__ import annotations
@@ -231,6 +232,62 @@ class DetectionContext:
             for r in rows
         ]
         return self._cache["monthly_performance"]
+
+    async def load_norm_index_series(self) -> Optional[List[dict]]:
+        """Monthly empirical-P50 normalised-index series (issue #101, OPS-06).
+
+        Reads ``performance_summaries.norm_index_p50`` (the Module 4 wind-normalised
+        index, where 100 means "performing exactly at the empirical P50 reference")
+        for this windfarm, ordered chronologically. Each row is::
+
+            {"month": "YYYY-MM", "norm_index_p50": float}
+
+        Rows whose ``norm_index_p50`` is ``NULL`` or ``0`` are **dropped**: a zero /
+        missing index is a data gap (no usable normalisation that month), not
+        underperformance, per the OPS-06 spec. The remaining rows preserve
+        chronological order so OPS-06 can count consecutive months.
+
+        Returns ``None`` when no usable rows exist (so OPS-06 simply does not fire).
+        Cache key: ``"norm_index_series"`` (inject via ``prefetched`` for DB-free
+        tests). The injected value may be either the list-of-dicts shape above OR a
+        bare list of floats — :func:`ops06_persistent_underperformance.detect`
+        normalises both.
+        """
+        if "norm_index_series" in self._cache:
+            return self._cache["norm_index_series"]
+
+        self._cache["norm_index_series"] = await self._compute_norm_index_series()
+        return self._cache["norm_index_series"]
+
+    async def _compute_norm_index_series(self) -> Optional[List[dict]]:
+        try:
+            from app.models.performance_summary import PerformanceSummary
+
+            result = await self.db.execute(
+                select(PerformanceSummary)
+                .where(
+                    PerformanceSummary.windfarm_id == self.windfarm_id,
+                    PerformanceSummary.period_type == "month",
+                    PerformanceSummary.norm_index_p50.isnot(None),
+                )
+                .order_by(PerformanceSummary.year, PerformanceSummary.month)
+            )
+            summaries = result.scalars().all()
+        except Exception:
+            return None
+
+        rows = [
+            {
+                "month": f"{s.year}-{s.month:02d}",
+                "norm_index_p50": float(s.norm_index_p50),
+            }
+            for s in summaries
+            # 0 / NULL = data gap, not underperformance (OPS-06 spec).
+            if s.norm_index_p50 is not None and float(s.norm_index_p50) != 0.0
+        ]
+        if not rows:
+            return None
+        return rows
 
     async def load_capture_rate(self) -> Optional[dict]:
         """Capture rate gap vs zone average (mirrors ``_calc_capture_rate_gap``).
