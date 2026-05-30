@@ -46,6 +46,7 @@ from app.services.opportunity_schemas import (
     ops02_performance_seasonality,
     ops03_misaligned_contracting,
     ops04_turbine_degradation,
+    ops05_grid_curtailment,
 )
 from app.services.opportunity_schemas.context import DetectionContext, DetectorResult
 
@@ -83,6 +84,7 @@ SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {
     SchemaCode.MKT_02: mkt02_low_capture_storage.detect,
     # M3 — new operational detectors (no cross-schema dependency).
     SchemaCode.OPS_04: ops04_turbine_degradation.detect,  # #99
+    SchemaCode.OPS_05: ops05_grid_curtailment.detect,  # #100
 }
 
 
