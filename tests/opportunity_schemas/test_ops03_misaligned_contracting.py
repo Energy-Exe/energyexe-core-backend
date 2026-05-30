@@ -12,7 +12,10 @@ import pytest
 
 from app.models.opportunity import SchemaCode, Severity
 from app.services.opportunity_schemas.context import DetectionContext
-from app.services.opportunity_schemas.ops03_misaligned_contracting import detect
+from app.services.opportunity_schemas.ops03_misaligned_contracting import (
+    classify_contracting_severity,
+    detect,
+)
 
 START = datetime(2024, 1, 1)
 END = datetime(2026, 1, 1)
@@ -138,3 +141,135 @@ async def test_detect_returns_none_when_no_finding():
     healthy = _months(("2024-06", 99.0), ("2025-06", 100.0))
     assert await detect(_ctx(monthly=healthy, ppa={})) is None
     assert await detect(_ctx(monthly=[], ppa={})) is None
+
+
+# ─── #97 · classify_contracting_severity (pure helper) ───────────────────────
+
+
+def test_classify_confirmed_requires_ops01_confirmed():
+    """OPS-01 CONFIRMED + known contract + no penalties → CONFIRMED. CONFIRMED is
+    only reachable once OPS-01 itself can reach CONFIRMED (post-#95)."""
+    assert (
+        classify_contracting_severity(Severity.CONFIRMED, "merchant", False) == Severity.CONFIRMED
+    )
+    # OPS-01 only INDICATIVE → cannot reach CONFIRMED, drops to INDICATIVE.
+    assert (
+        classify_contracting_severity(Severity.INDICATIVE, "merchant", False) == Severity.INDICATIVE
+    )
+
+
+def test_classify_indicative_inherits_ops01_indicative():
+    """OPS-01 INDICATIVE + known contract → INDICATIVE (inherited tier)."""
+    assert (
+        classify_contracting_severity(Severity.INDICATIVE, "merchant", None) == Severity.INDICATIVE
+    )
+    # OPS-01 CONFIRMED but penalties unknown → no CONFIRMED bar → INDICATIVE.
+    assert (
+        classify_contracting_severity(Severity.CONFIRMED, "merchant", None) == Severity.INDICATIVE
+    )
+
+
+def test_classify_suppressed_when_penalties_true():
+    """ODI-linked availability penalties suppress the finding regardless of the
+    OPS-01 tier or contract type."""
+    assert classify_contracting_severity(Severity.CONFIRMED, "merchant", True) is None
+    assert classify_contracting_severity(Severity.INDICATIVE, "fixed_price", True) is None
+    assert classify_contracting_severity(Severity.WATCH, None, True) is None
+
+
+def test_classify_suppressed_when_ops01_absent():
+    """No OPS-01 finding → nothing to inherit → suppressed (None)."""
+    assert classify_contracting_severity(None, "merchant", False) is None
+
+
+def test_classify_watch_when_contract_unknown():
+    """Unknown contract type → WATCH (data-limited), even with OPS-01 CONFIRMED."""
+    assert classify_contracting_severity(Severity.CONFIRMED, None, False) == Severity.WATCH
+    assert classify_contracting_severity(Severity.INDICATIVE, None, None) == Severity.WATCH
+    # OPS-01 only WATCH with a known contract also degrades to WATCH.
+    assert classify_contracting_severity(Severity.WATCH, "merchant", False) == Severity.WATCH
+
+
+# ─── #97 · detect() end-to-end (OPS-01 inheritance through the registry seam) ─
+
+
+def _confirmed_months():
+    """9 months, 8 below the 95% ODI threshold over 2 years, avg ODI 81.0% (< the
+    97% soft cap) → OPS-01 classifies CONFIRMED post-#95."""
+    return _months(
+        ("2024-01", 80.0),
+        ("2024-02", 82.0),
+        ("2024-03", 70.0),
+        ("2024-11", 88.0),
+        ("2025-01", 79.0),
+        ("2025-02", 81.0),
+        ("2025-03", 60.0),
+        ("2025-11", 90.0),
+        ("2025-12", 99.0),
+    )
+
+
+def _indicative_months():
+    """6 months, 4 below the 95% ODI threshold (non-consecutive, single soft-cap
+    miss) → OPS-01 classifies INDICATIVE (>=4, <8 low months)."""
+    return _months(
+        ("2024-01", 80.0),
+        ("2024-03", 70.0),
+        ("2024-05", 99.0),
+        ("2025-01", 79.0),
+        ("2025-03", 60.0),
+        ("2025-12", 99.0),
+    )
+
+
+@pytest.mark.asyncio
+async def test_confirmed_requires_ops01_confirmed():
+    """OPS-01 CONFIRMED + known output-agnostic contract, no penalties → OPS-03
+    CONFIRMED (now reachable post-#95), branch A."""
+    ppa = {
+        "ppa_status": "active",
+        "contract_type": "merchant",
+        "has_availability_penalties": False,
+        "ppa_duration_years": 3,
+    }
+    result = await detect(_ctx(monthly=_confirmed_months(), ppa=ppa))
+    assert result is not None
+    assert result.schema_code == SchemaCode.OPS_03
+    assert result.severity == Severity.CONFIRMED
+    assert result.branch == "A"
+
+
+@pytest.mark.asyncio
+async def test_indicative_inherits_ops01_indicative():
+    """OPS-01 INDICATIVE + known contract → OPS-03 INDICATIVE (inherits the tier)."""
+    ppa = {
+        "ppa_status": "active",
+        "contract_type": "merchant",
+        "has_availability_penalties": False,
+        "ppa_duration_years": 3,
+    }
+    result = await detect(_ctx(monthly=_indicative_months(), ppa=ppa))
+    assert result is not None
+    assert result.severity == Severity.INDICATIVE
+
+
+@pytest.mark.asyncio
+async def test_suppressed_when_penalties_true():
+    """has_availability_penalties=True suppresses OPS-03 even when OPS-01 CONFIRMED."""
+    ppa = {
+        "ppa_status": "active",
+        "contract_type": "merchant",
+        "has_availability_penalties": True,
+        "ppa_duration_years": 3,
+    }
+    assert await detect(_ctx(monthly=_confirmed_months(), ppa=ppa)) is None
+
+
+@pytest.mark.asyncio
+async def test_watch_when_contract_unknown():
+    """contract_type None (no PPA) → OPS-03 WATCH, branch C, even with OPS-01
+    CONFIRMED upstream."""
+    result = await detect(_ctx(monthly=_confirmed_months(), ppa={}))
+    assert result is not None
+    assert result.severity == Severity.WATCH
+    assert result.branch == "C"

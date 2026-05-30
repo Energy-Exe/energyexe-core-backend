@@ -430,6 +430,14 @@ EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
     #   severity). The dependent OPS-03 row is UNCHANGED here: with no PPA,
     #   contract_type is None so OPS-03's severity logic still yields WATCH,
     #   branch C regardless of the OPS-01 tier (#97 revisits OPS-03 inheritance).
+    # CHANGED #97: OPS-03 row reviewed under the new named
+    #   ``classify_contracting_severity`` helper (OPS-01 tier inheritance). With
+    #   OPS-01 now CONFIRMED (post-#95) the helper CAN reach CONFIRMED, but only
+    #   for a KNOWN, no-penalty contract. This scenario has no PPA →
+    #   contract_type is None → the unknown-contract branch yields WATCH, branch
+    #   C — so this OPS-03 tuple is DELIBERATELY unchanged (byte-identical). No
+    #   other scenario pairs a CONFIRMED OPS-01 with a known no-penalty contract,
+    #   so no EXPECTED_SNAPSHOT OPS-03 entry changes value under #97.
     "ops01_should_be_confirmed_is_indicative": (
         (
             "OPS_01",
