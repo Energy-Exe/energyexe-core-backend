@@ -85,11 +85,15 @@ async def test_no_ppa_watch_branch_c_when_ops01_fires():
 
 @pytest.mark.asyncio
 async def test_merchant_ppa_no_penalties_watch_branch_a():
-    """OPS-01 WATCH (1 low month) + merchant PPA, no penalties → OPS-03 WATCH,
-    branch A (incentive misalignment). contract_type known → not in missing_slots.
-    Matches the OPS-03 row in snapshot 'ops01_watch_with_ops03_followon'.
+    """OPS-01 WATCH + merchant PPA, no penalties → OPS-03 WATCH, branch A
+    (incentive misalignment). contract_type known → not in missing_slots.
+
+    Input updated for #95: OPS-01's WATCH tier now needs 2 (non-consecutive) low
+    months (was 1 under the legacy 1/2/3-month bands). Two non-adjacent low months
+    (Mar + Jun) keep ``max_consecutive < 2`` so OPS-01 stays WATCH (no escalation),
+    which keeps OPS-03 at WATCH, branch A — the original assertion intent.
     """
-    monthly = _months(("2025-03", 80.0), ("2025-12", 99.0))
+    monthly = _months(("2025-03", 80.0), ("2025-06", 82.0), ("2025-12", 99.0))
     ppa = {
         "ppa_status": "active",
         "contract_type": "merchant",

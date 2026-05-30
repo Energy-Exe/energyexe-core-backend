@@ -397,14 +397,18 @@ SCENARIO_INPUTS: Dict[str, Dict[str, Any]] = {
 # byte-identical. Only #94–#98 update entries, each with a one-line "POST-FIX"
 # delta noted inline. Captured bugs are annotated [BUG n].
 EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
-    # [BUG 1] OPS-01 force-downgraded CONFIRMED→INDICATIVE; wind_resource_index
-    # always in missing_slots. POST-FIX(#95): OPS-01 severity becomes CONFIRMED and
-    # wind_resource_index stays listed in missing_slots (no longer caps severity);
-    # the dependent OPS-03 row (no PPA → WATCH, branch C) may then re-tier (#97).
+    # [BUG 1 — FIXED #95] OPS-01 no longer force-downgraded; reaches CONFIRMED.
+    # CHANGED #95: OPS_01 "INDICATIVE" -> "CONFIRMED" (reason: the
+    #   wind_resource_index force-downgrade is removed — 8 low months over 2 years
+    #   classifies as CONFIRMED and avg ODI 81.0% is below the 97% soft cap.
+    #   wind_resource_index STAYS in missing_slots, it just no longer caps
+    #   severity). The dependent OPS-03 row is UNCHANGED here: with no PPA,
+    #   contract_type is None so OPS-03's severity logic still yields WATCH,
+    #   branch C regardless of the OPS-01 tier (#97 revisits OPS-03 inheritance).
     "ops01_should_be_confirmed_is_indicative": (
         (
             "OPS_01",
-            "INDICATIVE",
+            "CONFIRMED",
             "C",
             "ACTIVE",
             ("maintenance_schedule", "peer_odi_p50", "ppa_status", "wind_resource_index"),
@@ -437,39 +441,14 @@ EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
             ("contract_type", "has_availability_penalties", "odi_pct", "period", "ppa_status"),
         ),
     ),
-    # OPS-01 WATCH + dependent OPS-03 WATCH (triggered_by OPS-01). POST-FIX(#97):
-    # OPS-03 severity logic changes (inherits OPS-01), but WATCH here is unchanged.
-    "ops01_watch_with_ops03_followon": (
-        (
-            "OPS_01",
-            "WATCH",
-            "A",
-            "ACTIVE",
-            ("maintenance_schedule", "peer_odi_p50", "wind_resource_index"),
-            (
-                "disruption_month_list",
-                "odi_months_below_threshold",
-                "odi_pct",
-                "odi_threshold",
-                "period",
-                "ppa_status",
-            ),
-        ),
-        (
-            "OPS_03",
-            "WATCH",
-            "A",
-            "ACTIVE",
-            (
-                "am_location",
-                "asset_age_years",
-                "insource_benchmark",
-                "oem_response_time",
-                "peer_odi_p50",
-            ),
-            ("contract_type", "has_availability_penalties", "odi_pct", "period", "ppa_status"),
-        ),
-    ),
+    # CHANGED #95: old ((OPS_01 WATCH A ...), (OPS_03 WATCH A ...)) -> () (reason:
+    #   the scenario has only ONE month below the ODI threshold; under the new spec
+    #   thresholds 1 low month is no longer a finding (WATCH now starts at 2 low
+    #   months), so OPS-01 returns None and its dependent OPS-03 is gated out. The
+    #   single-low-month WATCH tier was an artifact of the old 1/2/3-month bands.
+    #   The legacy runner still produces the WATCH+followon pair against the frozen
+    #   1/2/3 thresholds — see M1_LEGACY_BASELINE, which stays byte-identical.
+    "ops01_watch_with_ops03_followon": (),
     # [BUG 2] OPS-02 forced to WATCH despite CONFIRMED-eligible gap+years.
     # POST-FIX(#96): full HODI+SSR rewrite — severity reaches CONFIRMED, the
     # inversion-only firing condition is removed, data_slots/missing_slots change.
@@ -676,11 +655,87 @@ M1_LEGACY_INPUTS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# Frozen pre-#94 legacy outputs. Identical to EXPECTED_SNAPSHOT at the #93 freeze
-# EXCEPT ``mkt01_never_fires_no_opportunities`` stays () (the never-fires bug).
+# Frozen pre-#94 legacy outputs. This baseline is the completed #93
+# proof-of-cutover artifact and MUST stay byte-identical: the legacy ``_detect_*``
+# staticmethods keep the M1 (pre-fix) behaviour so the 57 legacy unit tests stay
+# green. As later M2 issues bump EXPECTED_SNAPSHOT (the live path) the two
+# snapshots diverge, so every scenario the live path changes must be PINNED here
+# to its original frozen tuple (overriding the ``**EXPECTED_SNAPSHOT`` spread).
+# Differences from the live EXPECTED_SNAPSHOT, by issue:
+#   #94: ``mkt01_never_fires_no_opportunities`` stays () (the never-fires bug — the
+#        legacy data layer returns capture_gap=None per M1_LEGACY_INPUTS).
+#   #95: ``ops01_should_be_confirmed_is_indicative`` keeps the OPS-01 force-downgrade
+#        (INDICATIVE, not CONFIRMED); ``ops01_watch_with_ops03_followon`` keeps the
+#        old 1-low-month WATCH + OPS-03 WATCH pair (legacy 1/2/3-month thresholds).
 M1_LEGACY_BASELINE: Dict[str, Tuple[tuple, ...]] = {
     **EXPECTED_SNAPSHOT,
     "mkt01_never_fires_no_opportunities": (),
+    # #95: legacy OPS-01 force-downgrade (CONFIRMED→INDICATIVE) preserved.
+    "ops01_should_be_confirmed_is_indicative": (
+        (
+            "OPS_01",
+            "INDICATIVE",
+            "C",
+            "ACTIVE",
+            ("maintenance_schedule", "peer_odi_p50", "ppa_status", "wind_resource_index"),
+            (
+                "disruption_month_list",
+                "odi_months_below_threshold",
+                "odi_pct",
+                "odi_threshold",
+                "period",
+                "ppa_status",
+            ),
+        ),
+        (
+            "OPS_03",
+            "WATCH",
+            "C",
+            "ACTIVE",
+            (
+                "am_location",
+                "asset_age_years",
+                "contract_penalty_clauses",
+                "contract_type",
+                "insource_benchmark",
+                "oem_response_time",
+                "peer_odi_p50",
+            ),
+            ("contract_type", "has_availability_penalties", "odi_pct", "period", "ppa_status"),
+        ),
+    ),
+    # #95: legacy OPS-01 1-low-month WATCH (legacy thresholds) + dependent OPS-03.
+    "ops01_watch_with_ops03_followon": (
+        (
+            "OPS_01",
+            "WATCH",
+            "A",
+            "ACTIVE",
+            ("maintenance_schedule", "peer_odi_p50", "wind_resource_index"),
+            (
+                "disruption_month_list",
+                "odi_months_below_threshold",
+                "odi_pct",
+                "odi_threshold",
+                "period",
+                "ppa_status",
+            ),
+        ),
+        (
+            "OPS_03",
+            "WATCH",
+            "A",
+            "ACTIVE",
+            (
+                "am_location",
+                "asset_age_years",
+                "insource_benchmark",
+                "oem_response_time",
+                "peer_odi_p50",
+            ),
+            ("contract_type", "has_availability_penalties", "odi_pct", "period", "ppa_status"),
+        ),
+    ),
 }
 
 
