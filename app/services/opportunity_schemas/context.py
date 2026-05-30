@@ -36,7 +36,7 @@ entirely. So a DB-free test does::
 Cache keys (stable — downstream tests depend on these):
     "ppa_info", "monthly_performance", "capture_rate", "cannibalisation_index",
     "seasonal_capture", "curtailment_pct", "degradation_result",
-    "norm_index_series", "turbine_start_dates".
+    "norm_index_series", "turbine_start_dates", "negative_price_hours".
 """
 
 from __future__ import annotations
@@ -415,6 +415,38 @@ class DetectionContext:
         if denominator <= 0:
             return None
         return curtailed / denominator * 100
+
+    async def load_negative_price_hours(self) -> Optional[int]:
+        """Count of hours the farm generates at a negative day-ahead price (MKT-06).
+
+        Wraps :meth:`PriceAnalyticsService.count_negative_price_hours` over the
+        detection window — hours where net generation > 0 AND
+        ``day_ahead_price < 0`` (non-generating hours excluded, since there is no
+        curtailment-avoided exposure when idle).
+
+        None/0-safe: the underlying method already returns ``0`` (never ``None``)
+        for "no qualifying hours"; any access failure (no session / DB-free
+        harness whose ``execute`` stub returns no row) also resolves to ``0`` via
+        the service, and a hard error here is swallowed to ``None`` so a missing
+        accessor never crashes the run — MKT-06 treats both ``None`` and ``0`` as
+        "no finding". Cache key: ``"negative_price_hours"`` (inject via
+        ``prefetched`` for DB-free tests).
+        """
+        if "negative_price_hours" in self._cache:
+            return self._cache["negative_price_hours"]
+
+        self._cache["negative_price_hours"] = await self._compute_negative_price_hours()
+        return self._cache["negative_price_hours"]
+
+    async def _compute_negative_price_hours(self) -> Optional[int]:
+        try:
+            return await self._price_analytics().count_negative_price_hours(
+                windfarm_id=self.windfarm_id,
+                start=self.period_start,
+                end=self.period_end,
+            )
+        except Exception:
+            return None
 
     async def load_cannibalisation_index(self) -> Optional[dict]:
         """Cannibalisation index = 1/capture_rate per year.

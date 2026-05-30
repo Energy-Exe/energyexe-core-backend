@@ -876,6 +876,69 @@ class PriceAnalyticsService:
             "axes": axes,
         }
 
+    async def count_negative_price_hours(
+        self,
+        windfarm_id: int,
+        start: datetime,
+        end: datetime,
+    ) -> int:
+        """Count hours in ``[start, end)`` where the farm generates at a negative price.
+
+        Powers MKT-06 (negative-price-hours exposure, issue #105). A negative
+        day-ahead price is only a *commercial* problem when the asset is actually
+        producing into it — when the turbine is curtailed/idle there is no
+        curtailment-avoided exposure, so non-generating hours are explicitly
+        EXCLUDED. The count is therefore::
+
+            COUNT(DISTINCT g.hour)
+            WHERE net_generation > 0  AND  p.day_ahead_price < 0
+
+        where ``net_generation = generation_mwh - COALESCE(consumption_mwh, 0)``
+        (matching the net-of-consumption convention used by the capture-rate
+        queries, so French units with both directions are not double-counted).
+
+        The price is joined per ``(windfarm_id, hour, source)`` using the farm's
+        preferred price source (ELEXON for GB, ENTSOE otherwise) — the same join
+        shape as ``calculate_capture_rate`` — and ``COUNT(DISTINCT g.hour)`` so a
+        windfarm with multiple generation-unit rows per hour still counts each
+        clock-hour once.
+
+        Returns ``0`` (never ``None``) when no qualifying hours exist or no data
+        is reachable, so callers can treat the result as a plain count.
+        """
+        price_source = await self._get_preferred_price_source(windfarm_id)
+
+        query = text(
+            """
+            SELECT COUNT(DISTINCT g.hour) AS negative_hours
+            FROM generation_data g
+            JOIN price_data p
+                ON g.windfarm_id = p.windfarm_id
+               AND g.hour = p.hour
+               AND p.source = :price_source
+            WHERE g.windfarm_id = :windfarm_id
+              AND g.hour >= :start
+              AND g.hour < :end
+              AND p.day_ahead_price IS NOT NULL
+              AND p.day_ahead_price < 0
+              AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+        """
+        )
+
+        result = await self.db.execute(
+            query,
+            {
+                "windfarm_id": windfarm_id,
+                "start": start,
+                "end": end,
+                "price_source": price_source,
+            },
+        )
+        row = result.fetchone()
+        if row is None or row.negative_hours is None:
+            return 0
+        return int(row.negative_hours)
+
     async def _get_preferred_price_source(self, windfarm_id: int) -> str:
         """Resolve preferred price source: ELEXON for GB windfarms, ENTSOE for all others."""
         query = text(
