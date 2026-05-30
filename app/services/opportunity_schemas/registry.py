@@ -38,6 +38,11 @@ from __future__ import annotations
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode
+from app.services.opportunity_schemas import (
+    ops01_volatile_disruption,
+    ops02_performance_seasonality,
+    ops03_misaligned_contracting,
+)
 from app.services.opportunity_schemas.context import DetectionContext, DetectorResult
 
 # A detector is an async callable: ``detect(ctx) -> Optional[DetectorResult]``.
@@ -59,7 +64,16 @@ Detector = Callable[[DetectionContext], Awaitable[Optional[DetectorResult]]]
 # order *is* the detection order. New detectors must be appended in an order
 # consistent with SCHEMA_DEPENDENCIES (a prerequisite must appear before its
 # dependents).
-SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {}
+#
+# #92 registers OPS_01, OPS_02, OPS_03 (in that order — OPS_01 before its
+# dependent OPS_03). NOTE: registering them here has NO live effect yet — the
+# live detection path is still the legacy inline ``_detect_windfarm``; #93 adds
+# MKT_01/02/03 and flips the live path over to ``run_for_windfarm``.
+SCHEMA_REGISTRY: Dict[SchemaCode, Detector] = {
+    SchemaCode.OPS_01: ops01_volatile_disruption.detect,
+    SchemaCode.OPS_02: ops02_performance_seasonality.detect,
+    SchemaCode.OPS_03: ops03_misaligned_contracting.detect,
+}
 
 
 # ─── Hard dependencies: schema -> list of prerequisite schemas ───

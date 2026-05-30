@@ -34,7 +34,8 @@ entirely. So a DB-free test does::
     result = await ctx.load_capture_rate()   # returns the injected dict, no DB
 
 Cache keys (stable — downstream tests depend on these):
-    "ppa_info", "monthly_performance", "capture_rate", "cannibalisation_index".
+    "ppa_info", "monthly_performance", "capture_rate", "cannibalisation_index",
+    "seasonal_capture".
 """
 
 from __future__ import annotations
@@ -382,6 +383,90 @@ class DetectionContext:
             "ci_trend": ci_trend,
             "years_above_threshold": years_above,
             "bidzone_code": bz_code,
+        }
+
+    async def load_seasonal_capture(self) -> Optional[dict]:
+        """High-wind vs low-wind season capacity factors.
+
+        Mirrors legacy ``_calc_seasonal_capture``. Returns ``None`` unless both a
+        high-wind ('high') and low-wind ('low') seasonal average exist; otherwise
+        a dict with ``high_wind_cf``, ``low_wind_cf``, ``years_with_inversion``.
+
+        Cache key: ``"seasonal_capture"`` (inject via ``prefetched`` for DB-free
+        tests). Copied verbatim from the legacy ``_calc_seasonal_capture`` query
+        text / result shape; OPS-02 is the sole consumer.
+        """
+        if "seasonal_capture" in self._cache:
+            return self._cache["seasonal_capture"]
+
+        self._cache["seasonal_capture"] = await self._compute_seasonal_capture()
+        return self._cache["seasonal_capture"]
+
+    async def _compute_seasonal_capture(self) -> Optional[dict]:
+        windfarm_id = self.windfarm_id
+        start = self.period_start
+        end = self.period_end
+
+        # High-wind months: Oct-Mar, Low-wind: Apr-Sep (Northern hemisphere default)
+        query = text(
+            """
+            WITH seasonal AS (
+                SELECT
+                    EXTRACT(YEAR FROM hour) as year,
+                    CASE
+                        WHEN EXTRACT(MONTH FROM hour) IN (10,11,12,1,2,3) THEN 'high'
+                        ELSE 'low'
+                    END as season,
+                    AVG(capacity_factor) as avg_cf
+                FROM generation_data
+                WHERE windfarm_id = :wf_id
+                  AND hour >= :start AND hour < :end
+                  AND capacity_factor IS NOT NULL
+                  AND is_ramp_up = false
+                GROUP BY EXTRACT(YEAR FROM hour),
+                    CASE WHEN EXTRACT(MONTH FROM hour) IN (10,11,12,1,2,3) THEN 'high' ELSE 'low' END
+            )
+            SELECT season, AVG(avg_cf) as overall_cf,
+                   COUNT(*) FILTER (WHERE season = 'high') as high_count
+            FROM seasonal
+            GROUP BY season
+        """
+        )
+        result = await self.db.execute(query, {"wf_id": windfarm_id, "start": start, "end": end})
+        rows = {r.season: float(r.overall_cf) if r.overall_cf else None for r in result.fetchall()}
+
+        if "high" not in rows or "low" not in rows:
+            return None
+
+        # Count years where inversion exists (low > high)
+        inv_query = text(
+            """
+            WITH yearly_seasonal AS (
+                SELECT
+                    EXTRACT(YEAR FROM hour) as year,
+                    AVG(capacity_factor) FILTER (WHERE EXTRACT(MONTH FROM hour) IN (10,11,12,1,2,3)) as high_cf,
+                    AVG(capacity_factor) FILTER (WHERE EXTRACT(MONTH FROM hour) IN (4,5,6,7,8,9)) as low_cf
+                FROM generation_data
+                WHERE windfarm_id = :wf_id
+                  AND hour >= :start AND hour < :end
+                  AND capacity_factor IS NOT NULL
+                  AND is_ramp_up = false
+                GROUP BY EXTRACT(YEAR FROM hour)
+            )
+            SELECT COUNT(*) as years_inverted
+            FROM yearly_seasonal
+            WHERE low_cf > high_cf
+        """
+        )
+        inv_result = await self.db.execute(
+            inv_query, {"wf_id": windfarm_id, "start": start, "end": end}
+        )
+        inv_row = inv_result.fetchone()
+
+        return {
+            "high_wind_cf": rows.get("high"),
+            "low_wind_cf": rows.get("low"),
+            "years_with_inversion": inv_row.years_inverted if inv_row else 0,
         }
 
     # ─── Accessors deferred to later issues ────────────────────────────────
