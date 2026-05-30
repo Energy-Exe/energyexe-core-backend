@@ -19,14 +19,18 @@ import pytest
 
 from app.models.opportunity import SchemaCode, Severity
 from app.services.opportunity_schemas.context import DetectionContext
-from app.services.opportunity_schemas.mkt01_low_capture_contracting import detect
+from app.services.opportunity_schemas.mkt01_low_capture_contracting import (
+    check_capture_suppression,
+    classify_capture_gap_severity,
+    detect,
+)
 
 START = datetime(2024, 1, 1)
 END = datetime(2026, 1, 1)
 WF_ID = 101
 
 
-def _ctx(capture_gap=None, cannibalisation=None, ppa=None):
+def _ctx(capture_gap=None, cannibalisation=None, ppa=None, curtailment_pct=None):
     return DetectionContext(
         db=None,
         windfarm=WF_ID,
@@ -36,6 +40,9 @@ def _ctx(capture_gap=None, cannibalisation=None, ppa=None):
             "capture_rate": capture_gap,
             "cannibalisation_index": cannibalisation,
             "ppa_info": ppa if ppa is not None else {},
+            # #94: present so the detector's load_curtailment_pct() short-circuits
+            # without touching the DB (db=None here).
+            "curtailment_pct": curtailment_pct,
         },
     )
 
@@ -183,6 +190,79 @@ async def test_suppressed_by_long_fixed_ppa_returns_none():
                 "ppa_duration_years": 7,
                 "ppa_status": "active",
             },
+        )
+    )
+    assert result is None
+
+
+# ─────────────────────── #94 corrected pure helpers ─────────────────────────
+
+
+def test_classify_capture_gap_severity_boundaries():
+    """Recalibrated thresholds (issue #94), strictly-greater-than: >10/>6/>3 pp.
+
+    Boundary values land on the LOWER tier (strict ``>``); just-above values land
+    on the HIGHER tier.
+    """
+    assert classify_capture_gap_severity(10.0) == Severity.INDICATIVE  # not >10
+    assert classify_capture_gap_severity(10.01) == Severity.CONFIRMED
+    assert classify_capture_gap_severity(6.0) == Severity.WATCH  # not >6
+    assert classify_capture_gap_severity(6.01) == Severity.INDICATIVE
+    assert classify_capture_gap_severity(3.0) is None  # not >3
+    assert classify_capture_gap_severity(3.01) == Severity.WATCH
+
+
+def test_suppressed_when_curtailment_above_15pct():
+    """Curtailment >15% suppresses MKT-01 (grid-driven loss); 15.0 exactly does
+    not (strict ``>``). PPA empty so only the curtailment rule is exercised."""
+    assert check_capture_suppression({}, 15.0) is None  # boundary: not suppressed
+    reason = check_capture_suppression({}, 15.01)
+    assert reason == "MKT-01 suppressed: curtailment >15% — capture loss is grid-driven"
+    # None curtailment (data unavailable) never triggers.
+    assert check_capture_suppression({}, None) is None
+
+
+@pytest.mark.asyncio
+async def test_mkt01_fires_after_zone_average_fix():
+    """End-to-end (DB-free): a 7pp gap now yields a MKT-01 INDICATIVE row.
+
+    Pre-#94 the zone-average bug made ``load_capture_rate`` return None and this
+    detector returned None. With the data-layer fix, a 7pp gap (>6 → INDICATIVE)
+    and no curtailment / locked-PPA suppression now produces a finding.
+    """
+    result = await detect(
+        _ctx(
+            capture_gap={
+                "capture_rate": 0.62,
+                "zone_avg": 0.69,
+                "gap_pp": 7.0,
+                "bidzone_code": "NO2",
+            },
+            cannibalisation=None,
+            ppa={"ppa_status": "active"},
+            curtailment_pct=None,
+        )
+    )
+    assert result is not None
+    assert result.schema_code == SchemaCode.MKT_01
+    assert result.severity == Severity.INDICATIVE
+    assert result.branch == "C"
+
+
+@pytest.mark.asyncio
+async def test_mkt01_suppressed_when_curtailment_high_returns_none():
+    """A confirmed-tier gap is suppressed when curtailment >15% (grid-driven)."""
+    result = await detect(
+        _ctx(
+            capture_gap={
+                "capture_rate": 0.50,
+                "zone_avg": 0.70,
+                "gap_pp": 20.0,  # would be CONFIRMED on gap alone
+                "bidzone_code": "NO2",
+            },
+            cannibalisation=None,
+            ppa={"ppa_status": "active"},
+            curtailment_pct=18.0,
         )
     )
     assert result is None

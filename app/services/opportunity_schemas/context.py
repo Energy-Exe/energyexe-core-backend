@@ -35,7 +35,7 @@ entirely. So a DB-free test does::
 
 Cache keys (stable — downstream tests depend on these):
     "ppa_info", "monthly_performance", "capture_rate", "cannibalisation_index",
-    "seasonal_capture".
+    "seasonal_capture", "curtailment_pct".
 """
 
 from __future__ import annotations
@@ -305,6 +305,59 @@ class DetectionContext:
             "gap_pp": round(gap_pp, 2),
             "bidzone_code": bz_code,
         }
+
+    async def load_curtailment_pct(self) -> Optional[float]:
+        """Grid-curtailment percentage over the detection window (issue #94).
+
+        Used by MKT-01 suppression: a capture-rate shortfall driven by grid
+        curtailment (>15%) is grid-driven, not a contracting problem.
+
+        Defined as::
+
+            curtailment_pct = curtailed / (curtailed + generation) * 100
+
+        where ``curtailed`` = ``SUM(generation_data.curtailed_mwh)`` and
+        ``generation`` = ``SUM(generation_data.generation_mwh)`` over the window.
+        Returns ``None`` when no clean curtailment data is reachable (no rows, or
+        ``curtailed + generation == 0``); a ``None`` simply means suppression
+        won't trigger. Cache key: ``"curtailment_pct"`` (inject via
+        ``prefetched`` for DB-free tests).
+        """
+        if "curtailment_pct" in self._cache:
+            return self._cache["curtailment_pct"]
+
+        self._cache["curtailment_pct"] = await self._compute_curtailment_pct()
+        return self._cache["curtailment_pct"]
+
+    async def _compute_curtailment_pct(self) -> Optional[float]:
+        query = text(
+            """
+            SELECT
+                COALESCE(SUM(curtailed_mwh), 0) AS curtailed,
+                COALESCE(SUM(generation_mwh), 0) AS generation
+            FROM generation_data
+            WHERE windfarm_id = :wf_id
+              AND hour >= :start AND hour < :end
+        """
+        )
+        try:
+            result = await self.db.execute(
+                query,
+                {"wf_id": self.windfarm_id, "start": self.period_start, "end": self.period_end},
+            )
+            row = result.fetchone()
+        except Exception:
+            return None
+
+        if row is None:
+            return None
+
+        curtailed = float(row.curtailed or 0)
+        generation = float(row.generation or 0)
+        denominator = curtailed + generation
+        if denominator <= 0:
+            return None
+        return curtailed / denominator * 100
 
     async def load_cannibalisation_index(self) -> Optional[dict]:
         """Cannibalisation index = 1/capture_rate per year.

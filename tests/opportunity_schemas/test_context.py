@@ -67,6 +67,62 @@ async def test_prefetched_values_are_returned_without_db():
 
 
 @pytest.mark.asyncio
+async def test_load_curtailment_pct_prefetched_short_circuits():
+    """#94: a prefetched curtailment_pct short-circuits the DB query."""
+    db = _make_db()
+    ctx = DetectionContext(
+        db=db,
+        windfarm=1,
+        period_start=START,
+        period_end=END,
+        prefetched={"curtailment_pct": 18.0},
+    )
+    assert await ctx.load_curtailment_pct() == 18.0
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_curtailment_pct_formula_from_db_row():
+    """#94: curtailment_pct = curtailed / (curtailed + generation) * 100.
+
+    curtailed=100, generation=900 → 100/1000*100 = 10.0 (memoized: one query).
+    """
+    db = _make_db()
+    row = SimpleNamespace(curtailed=100, generation=900)
+    result_obj = MagicMock()
+    result_obj.fetchone.return_value = row
+    db.execute.return_value = result_obj
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_curtailment_pct() == pytest.approx(10.0)
+    assert await ctx.load_curtailment_pct() == pytest.approx(10.0)  # memoized
+    assert db.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_load_curtailment_pct_none_when_zero_total():
+    """#94: zero curtailed + generation → None (suppression won't trigger)."""
+    db = _make_db()
+    row = SimpleNamespace(curtailed=0, generation=0)
+    result_obj = MagicMock()
+    result_obj.fetchone.return_value = row
+    db.execute.return_value = result_obj
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_curtailment_pct() is None
+
+
+@pytest.mark.asyncio
+async def test_load_curtailment_pct_none_on_db_error():
+    """#94: an unreachable/failing query degrades to None, not an exception."""
+    db = _make_db()
+    db.execute.side_effect = RuntimeError("no such table: generation_data")
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_curtailment_pct() is None
+
+
+@pytest.mark.asyncio
 async def test_load_capture_rate_is_memoized():
     """Two load_capture_rate() calls hit the DB exactly once."""
     db = _make_db()

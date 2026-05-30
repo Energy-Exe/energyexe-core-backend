@@ -44,15 +44,19 @@ accessors that the registry detectors will call after the cutover:
     legacy ``_load_ppa_info``              →  ``ctx.load_ppa_info()``
     legacy ``_calc_seasonal_capture``      →  (OPS-02's accessor; same row shape)
 
-Both the legacy inline detectors and the post-cutover registry detectors consume
-the *same* injected dicts and run the *same* pure functions. The two harness
-helpers below — :func:`_run_legacy` (live path today) and the documented
-:func:`_run_registry_when_available` seam — produce the same tuples. #92/#93 add
-a parametrization over both paths and assert identical results; until then we
-lock the legacy path, which is the live one.
+Through #92/#93 both the legacy inline detectors and the post-cutover registry
+detectors consumed the *same* injected dicts and ran the *same* pure functions,
+so a SINGLE path-independent ``EXPECTED_SNAPSHOT`` locked both. From **#94** the
+M2 fixes land on the LIVE registry path only — the retained legacy ``_detect_*``
+staticmethods deliberately keep the buggy M1 behaviour (so the 57 legacy unit
+tests stay green). The two snapshots therefore split:
 
-The frozen snapshot itself (``EXPECTED_SNAPSHOT``) is path-independent: it is a
-plain mapping of scenario-name → tuple, so it does not change at cutover.
+    * ``EXPECTED_SNAPSHOT``  — the EVOLVING live (registry) snapshot; #94–#98 each
+      bump the entries they change with an inline ``# CHANGED #<n>`` delta.
+    * ``M1_LEGACY_BASELINE`` — a FROZEN snapshot of pre-#94 legacy behaviour, run
+      against ``M1_LEGACY_INPUTS``; the completed #93 proof-of-cutover artifact.
+
+See the "Snapshot-evolution pattern (established #94)" block below for details.
 
 The three bugs locked here (each gets an explicit ``test_bug_*``)
 -----------------------------------------------------------------
@@ -248,6 +252,11 @@ def _ctx_from_scenario(scenario_name: str) -> DetectionContext:
         "capture_rate": inputs.get("capture_gap"),
         "cannibalisation_index": inputs.get("cannibalisation"),
         "ppa_info": inputs["ppa"] if inputs.get("ppa") is not None else {},
+        # #94: MKT-01 reads curtailment for grid-driven suppression. No scenario
+        # exercises it (suppression is unit-tested in the MKT-01 module tests), so
+        # inject None — the accessor short-circuits without touching the DB and
+        # suppression never triggers.
+        "curtailment_pct": inputs.get("curtailment_pct"),
     }
     return DetectionContext(
         db=_FakeSession(),
@@ -339,14 +348,21 @@ SCENARIO_INPUTS: Dict[str, Dict[str, Any]] = {
         },
         "ppa": {},
     },
-    # MKT-01 "never fires" (BUG 3) — modelled at the data layer: with the real
-    # buggy ``compare_capture_rates_by_bidzone`` the gap comes back None, so
-    # ``_calc_capture_rate_gap`` returns None and MKT-01 (and dependent MKT-02)
-    # produce NO rows. Here capture_gap=None reproduces that at the assembly
-    # level; ``test_bug_mkt01_never_fires_via_real_calc`` proves it from the real
-    # query-shape source. No CI either → no MKT-03. Result: ZERO opportunities.
+    # MKT-01 fires after the #94 zone-average fix. PRE-#94 this scenario had
+    # ``capture_gap=None`` (the never-fires bug surfacing at the data layer) and
+    # produced ZERO opportunities; ``test_bug_mkt01_never_fires_via_real_calc``
+    # still proves the bug from the real query-shape source. POST-#94 the data
+    # layer resolves a 7pp gap → MKT-01 INDICATIVE branch C + dependent MKT-02
+    # WATCH. No CI → no MKT-03. The inputs below mirror
+    # ``mkt01_would_fire_if_zone_average_present`` (the would-be target #94 flips
+    # toward).
     "mkt01_never_fires_no_opportunities": {
-        "capture_gap": None,
+        "capture_gap": {
+            "capture_rate": 0.62,
+            "zone_avg": 0.69,
+            "gap_pp": 7.0,
+            "bidzone_code": "NO2",
+        },
         "cannibalisation": None,
         "ppa": {"ppa_status": "active"},
     },
@@ -528,10 +544,54 @@ EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
             ),
         ),
     ),
-    # [BUG 3] MKT-01 never fires → no MKT-01, no dependent MKT-02, no MKT-03.
-    # ZERO opportunities. POST-FIX(#94): the zone-average fix makes MKT-01 fire;
-    # this scenario's inputs + expected tuple are updated to the would-fire shape.
-    "mkt01_never_fires_no_opportunities": (),
+    # [BUG 3 — FIXED #94] MKT-01 now fires after the zone-average fix.
+    # CHANGED #94: old () -> new ((MKT_01 INDICATIVE C ...), (MKT_02 WATCH C ...))
+    #   (reason: compare_capture_rates_by_bidzone now returns
+    #    zone_average_capture_rate, so ctx.load_capture_rate() resolves a 7pp gap
+    #    instead of None; gap 7pp > MKT01_GAP_INDICATIVE_PP(6.0) → INDICATIVE
+    #    branch C (no CI), and the dependent MKT-02 follows at WATCH branch C).
+    # This is now identical to the would-fire reference scenario below; the legacy
+    # runner's frozen M1 baseline for THIS scenario stays () (see M1_LEGACY_BASELINE).
+    "mkt01_never_fires_no_opportunities": (
+        (
+            "MKT_01",
+            "INDICATIVE",
+            "C",
+            "ACTIVE",
+            (
+                "cannibalisation_index",
+                "high_wind_capture_delta",
+                "pcc_slope",
+                "peer_capture_p50",
+                "ppa_expiry_date",
+                "revenue_impact_eur",
+            ),
+            (
+                "cannibalisation_index",
+                "capture_rate",
+                "gap_pp",
+                "period",
+                "ppa_expiry_date",
+                "ppa_status",
+                "price_zone",
+                "zone_avg_capture",
+            ),
+        ),
+        (
+            "MKT_02",
+            "WATCH",
+            "C",
+            "ACTIVE",
+            (
+                "bess_revenue_potential_eur",
+                "grid_headroom_mw",
+                "intraday_price_spread",
+                "mfrr_eligible",
+                "optimal_bess_size_mwh",
+            ),
+            ("mkt01_severity", "period", "ppa_status", "price_zone", "storage_present"),
+        ),
+    ),
     # Documented would-be behaviour (NOT live today; the bug blocks it). MKT-01
     # INDICATIVE branch C + dependent MKT-02 WATCH branch C. #94 uses this as the
     # target shape when flipping the bug scenario above.
@@ -578,9 +638,55 @@ EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
 }
 
 
+# ───────────────── Snapshot-evolution pattern (established #94) ──────────────
+#
+# Through #92/#93 a SINGLE frozen snapshot served BOTH runners (the legacy
+# retained assembly and the live registry path) because the cutover changed which
+# path is live but NOT the output. From #94 on the two paths legitimately diverge:
+# the live registry detectors carry the M2 fixes, while the retained legacy
+# ``_detect_*`` staticmethods deliberately keep the buggy M1 behaviour (so the 57
+# legacy unit tests stay green). So we split into:
+#
+#   * EXPECTED_SNAPSHOT  — the EVOLVING **live (registry)** snapshot. Each M2
+#     issue (#94–#98) updates the entries it changes, with an inline
+#     ``# CHANGED #<n>: old -> new (reason)`` delta. Non-changed scenarios stay
+#     byte-identical.
+#   * M1_LEGACY_BASELINE — a FROZEN snapshot of the pre-#94 legacy behaviour,
+#     run against M1_LEGACY_INPUTS (the original pre-#94 scenario inputs). This
+#     keeps the legacy retained assembly under test as a regression guard WITHOUT
+#     forcing it to track the live fixes. It is the completed proof-of-cutover
+#     artifact from #93; do NOT evolve it.
+#
+# #94's only divergence is MKT-01/02: the legacy MKT-01 still uses the legacy
+# thresholds AND the never-fires inputs, so its M1 baseline for
+# ``mkt01_never_fires_no_opportunities`` stays () while the live path now fires.
+# (#95–#98 will diverge on OPS-01/02/03 + MKT-03 the same way: bump
+# EXPECTED_SNAPSHOT for the live path, leave M1_LEGACY_BASELINE frozen.)
+
+# Frozen pre-#94 inputs for the legacy runner. Identical to SCENARIO_INPUTS at
+# the #93 freeze EXCEPT ``mkt01_never_fires_no_opportunities`` keeps its original
+# ``capture_gap=None`` (the data-layer never-fires bug) — the one input #94 flips
+# for the live path.
+M1_LEGACY_INPUTS: Dict[str, Dict[str, Any]] = {
+    **SCENARIO_INPUTS,
+    "mkt01_never_fires_no_opportunities": {
+        "capture_gap": None,
+        "cannibalisation": None,
+        "ppa": {"ppa_status": "active"},
+    },
+}
+
+# Frozen pre-#94 legacy outputs. Identical to EXPECTED_SNAPSHOT at the #93 freeze
+# EXCEPT ``mkt01_never_fires_no_opportunities`` stays () (the never-fires bug).
+M1_LEGACY_BASELINE: Dict[str, Tuple[tuple, ...]] = {
+    **EXPECTED_SNAPSHOT,
+    "mkt01_never_fires_no_opportunities": (),
+}
+
+
 async def _compute_outcomes_legacy(scenario_name: str) -> Tuple[tuple, ...]:
     """Run one scenario through the retained legacy assembly and reduce to tuples."""
-    svc = _make_service(**SCENARIO_INPUTS[scenario_name])
+    svc = _make_service(**M1_LEGACY_INPUTS[scenario_name])
     opps = await _run_legacy(svc)
     return tuple(_outcome_tuple(o) for o in opps)
 
@@ -591,44 +697,51 @@ async def _compute_outcomes_registry(scenario_name: str) -> Tuple[tuple, ...]:
     return tuple(_outcome_tuple(o) for o in opps)
 
 
-# Both runners (legacy retained assembly + live registry path) must reproduce the
-# frozen snapshot byte-for-byte. Parametrising over both is the #93 behaviour-
-# preservation gate: the cutover changed which path is live but NOT the output.
-_RUNNERS = {
-    "legacy": _compute_outcomes_legacy,
-    "registry": _compute_outcomes_registry,
-}
-
-
-# ───────────────────────────── The lock test ────────────────────────────────
+# ───────────────────────────── The lock tests ───────────────────────────────
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("runner_name", list(_RUNNERS))
-async def test_characterization_snapshot_current_six_schemas(runner_name):
-    """Every scenario's computed outcome equals the frozen EXPECTED_SNAPSHOT, for
-    BOTH the retained legacy assembly and the live registry path.
+async def test_characterization_snapshot_live_registry_path():
+    """The LIVE registry path reproduces the EVOLVING EXPECTED_SNAPSHOT.
 
-    This is the M1 behaviour-preservation gate. If this fails after #92/#93, the
-    verbatim migration / cutover changed behaviour — investigate, do NOT edit the
-    snapshot. Only #94–#98 update EXPECTED_SNAPSHOT, each with a documented delta.
+    This is the post-#93 behaviour gate for the live path. #94–#98 each update the
+    entries they change (with an inline ``# CHANGED #<n>`` delta); non-changed
+    scenarios MUST stay byte-identical.
     """
-    compute = _RUNNERS[runner_name]
     computed: Dict[str, Tuple[tuple, ...]] = {}
     for name in SCENARIO_INPUTS:
-        computed[name] = await compute(name)
+        computed[name] = await _compute_outcomes_registry(name)
 
-    # Compare the whole mapping at once for a single, legible diff on failure.
     assert computed == EXPECTED_SNAPSHOT
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("runner_name", list(_RUNNERS))
+async def test_characterization_snapshot_frozen_m1_legacy_baseline():
+    """The retained legacy assembly reproduces the FROZEN M1_LEGACY_BASELINE.
+
+    The legacy ``_detect_*`` staticmethods keep the M1 (pre-fix) behaviour so the
+    57 legacy unit tests stay green; this locks them as a regression guard. Do NOT
+    evolve M1_LEGACY_BASELINE — it is the completed #93 proof-of-cutover artifact.
+    """
+    computed: Dict[str, Tuple[tuple, ...]] = {}
+    for name in M1_LEGACY_INPUTS:
+        computed[name] = await _compute_outcomes_legacy(name)
+
+    assert computed == M1_LEGACY_BASELINE
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("scenario_name", list(SCENARIO_INPUTS))
-async def test_each_scenario_matches_snapshot(scenario_name, runner_name):
-    """Per-scenario lock (sharper failure messages than the aggregate test)."""
-    compute = _RUNNERS[runner_name]
-    assert await compute(scenario_name) == EXPECTED_SNAPSHOT[scenario_name]
+async def test_each_scenario_matches_live_snapshot(scenario_name):
+    """Per-scenario live-path lock (sharper failure messages than the aggregate)."""
+    assert await _compute_outcomes_registry(scenario_name) == EXPECTED_SNAPSHOT[scenario_name]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario_name", list(M1_LEGACY_INPUTS))
+async def test_each_scenario_matches_legacy_baseline(scenario_name):
+    """Per-scenario frozen-legacy lock (sharper failure messages than aggregate)."""
+    assert await _compute_outcomes_legacy(scenario_name) == M1_LEGACY_BASELINE[scenario_name]
 
 
 # ─────────────────── Explicit "the bug is present" asserts ───────────────────
@@ -722,9 +835,11 @@ async def test_bug_mkt01_never_fires_via_real_calc():
 
 @pytest.mark.asyncio
 async def test_bug_mkt01_absent_from_detect_windfarm():
-    """BUG 3 at the assembly level: with capture_gap None (the bug's effect),
-    ``_detect_windfarm`` emits NO MKT-01 row — and therefore no dependent MKT-02."""
-    svc = _make_service(**SCENARIO_INPUTS["mkt01_never_fires_no_opportunities"])
+    """BUG 3 at the assembly level (legacy path): with the frozen pre-#94
+    ``capture_gap=None`` input, the legacy ``_detect_windfarm`` assembly emits NO
+    MKT-01 row — and therefore no dependent MKT-02. The LIVE path is fixed in #94
+    (see ``test_characterization_snapshot_live_registry_path``)."""
+    svc = _make_service(**M1_LEGACY_INPUTS["mkt01_never_fires_no_opportunities"])
     opps = await _run_legacy(svc)
     codes = {o.schema_code for o in opps}
     assert SchemaCode.MKT_01 not in codes
@@ -749,8 +864,8 @@ async def test_ops03_triggered_by_ops01_row_id():
 async def test_all_produced_rows_are_active():
     """Every produced opportunity is ACTIVE (supersede is handled in detect_all,
     not in _detect_windfarm)."""
-    for name in SCENARIO_INPUTS:
-        svc = _make_service(**SCENARIO_INPUTS[name])
+    for name in M1_LEGACY_INPUTS:
+        svc = _make_service(**M1_LEGACY_INPUTS[name])
         opps = await _run_legacy(svc)
         for o in opps:
             assert o.status == OpportunityStatus.ACTIVE

@@ -1,27 +1,35 @@
-"""MKT-01 · Low capture rates (contracting) — verbatim migration (issue #93).
+"""MKT-01 · Low capture rates (contracting) — corrected detector (issue #94).
 
-Reproduces the legacy ``OpportunityDetectionService._detect_mkt01`` assembly
-**byte-for-byte**, including the two known characteristics this migration must
-preserve untouched (the fixes land in M2 / #94 and the proper reclassification
-hook in #111):
+History
+=======
+* #93 migrated the legacy ``_detect_mkt01`` assembly **verbatim** (Approach A:
+  the pure helpers were re-exported from ``OpportunityDetectionService`` and
+  reproduced the current behaviour, INCLUDING the two known bugs).
+* #94 (this module) lands the M2 fixes and now **owns** the corrected pure
+  helpers locally:
 
-* the MKT-03 reclassification short-circuit — when the cannibalisation index
-  ``ci > MKT03_CI_CONFIRMED`` the detector returns ``None`` (so MKT-03 "handles
-  it"); the proper reclassification hook is #111; and
-* MKT-01 **never fires in production today** because the zone-average bug in
-  ``compare_capture_rates_by_bidzone`` makes ``ctx.load_capture_rate()`` return
-  ``None`` → this detector returns ``None`` (the data-layer fix is #94).
+  - the never-fires zone-average bug is fixed at the data layer
+    (``price_analytics_service.compare_capture_rates_by_bidzone`` now returns
+    ``zone_average_capture_rate``), so ``ctx.load_capture_rate()`` resolves and
+    this detector can fire; and
+  - the gap-severity thresholds are recalibrated to the spec
+    (``>10 / >6 / >3 pp`` → CONFIRMED / INDICATIVE / WATCH, up from the legacy
+    ``>10 / >5 / >2``); and
+  - curtailment suppression is wired in: a farm whose capture loss is driven by
+    grid curtailment (>15%) is suppressed because the loss is grid-driven, not a
+    contracting problem.
 
-Approach for pure helpers: **(A)** — the pure severity / branch / suppression
-functions are *not* moved here. They stay on ``OpportunityDetectionService`` (so
-the existing tests in ``tests/test_opportunity_detection.py`` keep
-importing/calling them unchanged) and are imported and reused below. M2 (#94)
-introduces corrected logic in this module.
+The legacy ``OpportunityDetectionService.determine_mkt01_severity`` /
+``select_mkt01_branch`` / ``check_mkt01_suppression`` staticmethods are left
+UNTOUCHED — the 57 legacy unit tests in ``tests/test_opportunity_detection.py``
+still import and assert against them. The corrected logic lives here.
+
+The MKT-03 reclassification short-circuit (``ci > MKT03_CI_CONFIRMED`` → ``None``)
+is preserved as-is; the proper reclassification hook is #111.
 
 Data is obtained exclusively through ``DetectionContext`` accessors
-(``load_capture_rate`` / ``load_cannibalisation_index`` / ``load_ppa_info``)
-which mirror the legacy ``_calc_capture_rate_gap`` / ``_calc_cannibalisation_index``
-/ ``_load_ppa_info`` queries. The detector returns a ``DetectorResult`` (or
+(``load_capture_rate`` / ``load_cannibalisation_index`` / ``load_ppa_info`` /
+``load_curtailment_pct``). The detector returns a ``DetectorResult`` (or
 ``None``); persistence + ``triggered_by_id`` wiring is the orchestrator's job
 (``run_for_windfarm``).
 """
@@ -30,28 +38,90 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.models.opportunity import SchemaCode
+from app.models.opportunity import SchemaCode, Severity
 from app.services.opportunity_detection_service import (
+    LONG_PPA_YEARS,
     MKT03_CI_CONFIRMED,
     OpportunityDetectionService,
 )
 from app.services.opportunity_schemas.context import DetectionContext, DetectorResult
 
-# ─── Pure helpers (Approach A: re-used from the legacy service, verbatim) ─────
-# Re-exported names so this module is a self-contained surface and so M2 (#94)
-# can swap in corrected implementations without touching call sites.
-classify_capture_gap_severity = OpportunityDetectionService.determine_mkt01_severity
+# ─── Recalibrated thresholds (issue #94 — spec 15 May 2026) ──────────────────
+# Strictly-greater-than gap-in-percentage-points → severity tier.
+MKT01_GAP_CONFIRMED_PP = 10.0
+MKT01_GAP_INDICATIVE_PP = 6.0  # was 5.0 (legacy)
+MKT01_GAP_WATCH_PP = 3.0  # was 2.0 (legacy)
+
+# Curtailment above this % means the capture loss is grid-driven, not a
+# contracting problem → suppress MKT-01 (revives the dead legacy
+# ``CURTAILMENT_SUPPRESSION_PCT=15.0`` constant as a live suppression rule).
+CURTAILMENT_SUPPRESSION_PCT = 15.0
+
+_CURTAILMENT_SUPPRESSION_REASON = (
+    "MKT-01 suppressed: curtailment >15% — capture loss is grid-driven"
+)
+
+
+def classify_capture_gap_severity(gap_pp: float) -> Optional[Severity]:
+    """Map a capture-rate gap (percentage points) to a severity tier.
+
+    Recalibrated thresholds (issue #94), strictly-greater-than::
+
+        gap > 10  → CONFIRMED
+        gap > 6   → INDICATIVE
+        gap > 3   → WATCH
+        else      → None  (no finding)
+
+    ``gap_pp`` is positive when the windfarm under-captures vs the zone average.
+    """
+    if gap_pp > MKT01_GAP_CONFIRMED_PP:
+        return Severity.CONFIRMED
+    if gap_pp > MKT01_GAP_INDICATIVE_PP:
+        return Severity.INDICATIVE
+    if gap_pp > MKT01_GAP_WATCH_PP:
+        return Severity.WATCH
+    return None
+
+
+# Branch selection is unchanged from the legacy logic; re-export for a
+# self-contained module surface.
 select_capture_branch = OpportunityDetectionService.select_mkt01_branch
-check_capture_suppression = OpportunityDetectionService.check_mkt01_suppression
+
+
+def check_capture_suppression(ppa_info: dict, curtailment_pct: Optional[float]) -> Optional[str]:
+    """Return a suppression reason for MKT-01, or ``None`` to not suppress.
+
+    Two independent suppression conditions (issue #94):
+
+    1. **Grid-driven capture loss** — ``curtailment_pct > 15.0``: the capture
+       shortfall is caused by grid curtailment, not by contracting, so MKT-01 is
+       not actionable. (``curtailment_pct=None`` — data unavailable — never
+       triggers this.)
+    2. **Locked market exposure** — a fixed-price PPA with ≥5yr duration that is
+       currently active locks the farm out of market exposure, so the gap is not
+       actionable. This preserves the legacy
+       ``check_mkt01_suppression`` behaviour.
+    """
+    if curtailment_pct is not None and curtailment_pct > CURTAILMENT_SUPPRESSION_PCT:
+        return _CURTAILMENT_SUPPRESSION_REASON
+
+    if (
+        ppa_info.get("contract_type") == "fixed_price"
+        and ppa_info.get("ppa_duration_years", 0) >= LONG_PPA_YEARS
+        and ppa_info.get("ppa_status") == "active"
+    ):
+        return "Fixed-price PPA with >5yr duration — market exposure locked"
+
+    return None
 
 
 async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     """MKT-01: Low capture rates — contracting.
 
-    Verbatim reproduction of legacy ``_detect_mkt01``. Returns ``None`` when the
-    legacy method would not produce a row (incl. the never-fires zone-average bug
-    when ``load_capture_rate`` is ``None`` and the MKT-03 reclassification
-    short-circuit when ``ci > MKT03_CI_CONFIRMED``).
+    Returns ``None`` when there is no finding: no zone benchmark
+    (``load_capture_rate`` is ``None``), gap below the WATCH threshold,
+    suppressed (curtailment >15% or locked fixed-price PPA), or the MKT-03
+    reclassification short-circuit (``ci > MKT03_CI_CONFIRMED``).
     """
     gap_data = await ctx.load_capture_rate()
     if gap_data is None:
@@ -63,9 +133,10 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
         return None
 
     ppa_info = await ctx.load_ppa_info()
+    curtailment_pct = await ctx.load_curtailment_pct()
 
-    # Suppression
-    suppression = check_capture_suppression(ppa_info, gap_data)
+    # Suppression (curtailment >15% OR locked long fixed-price PPA)
+    suppression = check_capture_suppression(ppa_info, curtailment_pct)
     if suppression:
         return None
 
