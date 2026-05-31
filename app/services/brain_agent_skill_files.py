@@ -1,11 +1,16 @@
 """Skill file templates — written to the agent sandbox for lazy-loading via `cat`."""
 
-from app.services.opportunity_schemas.schema_names import format_schema_catalogue
+from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES, format_schema_catalogue
 
 # Generated from SCHEMA_NAMES / SCHEMA_ONE_LINERS (single source of truth) so the
 # agent always sees the full, current schema set by NAME rather than a hand-kept
 # divergent list. Interpolated into SKILL_DOMAIN below.
 _SCHEMA_CATALOGUE = format_schema_catalogue()
+
+# Slash-joined list of every SchemaCode value (OPS_01/.../DQ_01), generated from
+# the same single source so the opportunities-table reference in SKILL_SCHEMA can
+# never go stale (it previously hard-listed only the original 6 schemas).
+_SCHEMA_CODES = "/".join(code.value for code in SCHEMA_NAMES)
 
 SKILL_SCHEMA = """# Database Schema Reference
 
@@ -33,7 +38,8 @@ SKILL_SCHEMA = """# Database Schema Reference
 **windfarm_owners**: windfarm_id, owner_id, ownership_percentage
 **owners**: id, code, name, type (energy/institutional_investor/community_investors/municipality/private_individual/supply_chain_oem/other/unknown)
 **ppas**: windfarm_id, ppa_buyer, ppa_size_mw, ppa_duration_years, ppa_start_date, ppa_end_date, ppa_notes, contract_type (fixed_price/indexed/hybrid/merchant), ppa_status (active/expired/renegotiating), ppa_price_eur_mwh, has_availability_penalties (bool)
-**opportunities**: windfarm_id, schema_code (OPS_01/OPS_02/OPS_03/MKT_01/MKT_02/MKT_03), severity (CONFIRMED/INDICATIVE/WATCH), branch (A/B/C), status (ACTIVE/ACKNOWLEDGED/RESOLVED/SUPERSEDED), data_slots (JSONB), missing_slots (JSONB list), triggered_by_id, detection_period_start, detection_period_end
+**opportunities**: windfarm_id, schema_code (all 19: __OPPORTUNITY_SCHEMA_CODES__), severity (CONFIRMED/INDICATIVE/WATCH/SUPPRESSED), branch (A/B/C), status (ACTIVE/ACKNOWLEDGED/RESOLVED/SUPERSEDED/INACTIVE), data_slots (JSONB), missing_slots (JSONB list), suppression_reason, triggered_by_id, detection_period_start, detection_period_end
+- LIVE findings = `status='ACTIVE' AND severity != 'SUPPRESSED'`. A SUPPRESSED severity means the finding was gated off by a DQ-01 data gap — do NOT surface it as actionable. A schema with status INACTIVE is data-blocked (e.g. MKT_05/MKT_07) and produces no real findings. Resolve schema_code → human name via the catalogue in skill_domain.md.
 **power_curve_bins**: windfarm_id, year (NULL=overall_clean), curve_type (raw/capability/overall_clean), wind_bin (Numeric 2.0-25.0 in 1.0 steps), q50_pu (median P50), q90_pu (90th pct P10), mean_pu, mad_pu, sample_count. Unique: (windfarm_id, year, curve_type, wind_bin)
 **performance_anomalies**: windfarm_id, hour, anomaly_type (underperformance/overperformance), actual_p_pu, expected_p_pu, wind_speed, wind_bin, lost_mwh, lost_eur, market_price, run_id. Unique: (windfarm_id, hour)
 **performance_summaries**: windfarm_id, period_type (month/year), year, month. ODI: odi_pct_underperf, lost_mwh, expected_mwh, odi_pct_loss_mwh, lost_eur, odi_pct_loss_eur, long_run_count, max_run_hours. Norm: norm_ratio_p50, norm_index_p50, norm_ratio_p10, norm_index_p10. Commercial: constraint_proxy_mwh, lost_value_eur
@@ -353,6 +359,10 @@ Use `peer_group_aggregates` (metric keys `concentration_capture_ratio`, `concent
 # skill file. Done via replace (not an f-string) because SKILL_DOMAIN contains
 # literal `{...}` JSON examples that would break str.format.
 SKILL_DOMAIN = SKILL_DOMAIN.replace("__SCHEMA_CATALOGUE__", _SCHEMA_CATALOGUE)
+
+# Inject the full schema_code list (by CODE) into the opportunities-table row of
+# SKILL_SCHEMA, same single-source generation so it can't drift to a stale subset.
+SKILL_SCHEMA = SKILL_SCHEMA.replace("__OPPORTUNITY_SCHEMA_CODES__", _SCHEMA_CODES)
 
 SKILL_SOURCES = """# Data Source Capabilities
 

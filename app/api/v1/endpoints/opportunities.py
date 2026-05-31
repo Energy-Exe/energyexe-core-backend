@@ -66,13 +66,33 @@ async def _run_detection_in_background(
     try:
         async with session_factory() as db:
             service = OpportunityDetectionService(db)
+            # Reuse the polled row (job_id) instead of creating a duplicate, so the
+            # caller's handle is the one driven RUNNING→SUCCESS/FAILED.
             await service.run_detection_job(
                 windfarm_ids=None,
                 period_months=period_months,
                 schema_codes=schema_codes,
+                job_id=job_id,
             )
     except Exception as exc:  # pragma: no cover - defensive background guard
         logger.error("opportunity_detection_background_failed", job_id=job_id, error=str(exc))
+        # Backstop: ensure the polled row never hangs in RUNNING/PENDING if the
+        # run blew up before it could mark itself FAILED.
+        try:
+            async with session_factory() as db:
+                job = await db.get(ImportJobExecution, job_id)
+                if job is not None and job.status not in (
+                    ImportJobStatus.SUCCESS,
+                    ImportJobStatus.FAILED,
+                ):
+                    job.mark_failed(str(exc))
+                    await db.commit()
+        except Exception as mark_exc:  # pragma: no cover - defensive
+            logger.error(
+                "opportunity_detection_background_mark_failed_error",
+                job_id=job_id,
+                error=str(mark_exc),
+            )
 
 
 def _to_response(opp: Opportunity, windfarm_name: Optional[str] = None) -> OpportunityResponse:
@@ -272,9 +292,9 @@ async def trigger_detection(
 
     # ── Fleet-wide background path ──
     # Create + commit the tracking row synchronously so the returned job_id is
-    # real and immediately pollable; the background task reports a fresh run into
-    # its own job row (run_detection_job creates one), but this row is the handle
-    # the caller gets back without waiting.
+    # real and immediately pollable; the background task REUSES this exact row
+    # (passed as job_id) and drives it RUNNING→SUCCESS/FAILED, so the handle the
+    # caller polls is the one that actually reports the run's outcome.
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     job = ImportJobExecution(
         job_name="opportunity-detection",

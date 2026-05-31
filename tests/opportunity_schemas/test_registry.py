@@ -113,6 +113,37 @@ async def test_results_persisted_as_active_opportunity_rows():
 
 
 @pytest.mark.asyncio
+async def test_one_detector_exception_does_not_abort_others():
+    """A detector that raises is skipped + logged; the others still persist.
+
+    Reliability guard (B1): before the per-detector try/except, a single detector
+    raising propagated out of ``run_for_windfarm`` and aborted ALL schemas for the
+    windfarm (zero rows). Now the bad schema is dropped and the good ones survive.
+    """
+    ctx = _make_ctx()
+
+    async def boom(c):
+        raise RuntimeError("detector blew up")
+
+    registry = {
+        SchemaCode.OPS_01: _detector(
+            DetectorResult(schema_code=SchemaCode.OPS_01, severity=Severity.CONFIRMED)
+        ),
+        SchemaCode.OPS_04: boom,  # raises mid-run
+        SchemaCode.MKT_01: _detector(
+            DetectorResult(schema_code=SchemaCode.MKT_01, severity=Severity.WATCH)
+        ),
+    }
+
+    created = await run_for_windfarm(ctx, registry=registry, dependencies={})
+
+    codes = {o.schema_code for o in created}
+    assert codes == {SchemaCode.OPS_01, SchemaCode.MKT_01}
+    assert SchemaCode.OPS_04 not in codes
+    assert len(created) == 2
+
+
+@pytest.mark.asyncio
 async def test_dependent_detector_skipped_when_prerequisite_absent():
     """OPS_03 (dep OPS_01) is not run when OPS_01 returns None."""
     ctx = _make_ctx()
