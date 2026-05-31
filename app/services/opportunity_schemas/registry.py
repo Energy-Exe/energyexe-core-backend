@@ -37,6 +37,8 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable, Dict, List, Optional
 
+import structlog
+
 from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode, Severity
 from app.services.opportunity_schemas import (
     dq01_data_gaps,
@@ -60,6 +62,8 @@ from app.services.opportunity_schemas import (
     ops08_structural_constraint,
 )
 from app.services.opportunity_schemas.context import DetectionContext, DetectorResult
+
+logger = structlog.get_logger(__name__)
 
 # A detector is an async callable: ``detect(ctx) -> Optional[DetectorResult]``.
 Detector = Callable[[DetectionContext], Awaitable[Optional[DetectorResult]]]
@@ -643,7 +647,21 @@ async def run_for_windfarm(
         if prereqs and any(p not in results_by_code for p in prereqs):
             continue
 
-        result = await detect(ctx)
+        # Per-detector isolation: a single detector raising must not abort the
+        # other schemas for this windfarm. Log and skip just this schema. (Safe:
+        # the detect phase only reads — context accessors swallow their own query
+        # errors — so a raise here leaves no partial writes; the persist phase
+        # below is where rows are built/flushed.)
+        try:
+            result = await detect(ctx)
+        except Exception as exc:  # noqa: BLE001 - intentional per-detector guard
+            logger.error(
+                "opportunity_detector_error",
+                schema_code=getattr(schema_code, "value", str(schema_code)),
+                windfarm_id=ctx.windfarm_id,
+                error=str(exc),
+            )
+            continue
         if result is None:
             continue
 

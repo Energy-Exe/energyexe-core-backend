@@ -96,6 +96,26 @@ def test_brain_agent_skill_lists_19_schemas():
     assert "SUPPRESSED" in SKILL_DOMAIN
 
 
+def test_schema_file_opportunities_row_lists_all_19_codes():
+    """The opportunities-table reference in SKILL_SCHEMA lists every schema_code.
+
+    Reliability/linkage fix: this row used to hard-list only the original 6 codes
+    (OPS_01/02/03 + MKT_01/02/03), so an agent reading it believed only 6 schemas
+    existed. It's now generated from SCHEMA_NAMES, so it can never go stale again.
+    """
+    from app.models.opportunity import SchemaCode
+    from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES
+
+    for code in SchemaCode:
+        assert code.value in SKILL_SCHEMA, f"{code.value} missing from SKILL_SCHEMA"
+    # The placeholder must have been interpolated (no literal token left behind).
+    assert "__OPPORTUNITY_SCHEMA_CODES__" not in SKILL_SCHEMA
+    # Newer tiers the row previously omitted.
+    assert "SUPPRESSED" in SKILL_SCHEMA
+    assert "INACTIVE" in SKILL_SCHEMA
+    assert len(SCHEMA_NAMES) == 19
+
+
 def test_brain_agent_system_prompts_list_all_19_schema_names():
     """Both system-prompt markdown files surface every schema by name."""
     from pathlib import Path

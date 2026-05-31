@@ -40,6 +40,10 @@ class OpportunityDetectionService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.price_analytics = PriceAnalyticsService(db)
+        # Per-run windfarm outcome counters, populated by ``detect_all`` and read
+        # by ``run_detection_job`` to decide SUCCESS vs FAILED + job_metadata.
+        self._last_succeeded = 0
+        self._last_failed = 0
 
     # ─── Job runner ────────────────────────────────────────────────
 
@@ -48,26 +52,42 @@ class OpportunityDetectionService:
         windfarm_ids: Optional[List[int]] = None,
         period_months: int = 24,
         schema_codes: Optional[List[SchemaCode]] = None,
+        job_id: Optional[int] = None,
     ) -> dict:
         """Run opportunity detection as a tracked import job.
 
         ``schema_codes`` (#114) optionally restricts the run to a subset of
         schemas; ``None`` (the default) runs every registered schema. The default
         no-arg call — used by the daily cron (#113) — is unchanged.
+
+        ``job_id`` (reliability fix): when supplied, REUSE that existing
+        ``import_job_executions`` row instead of creating a new one. The fleet-wide
+        endpoint creates the row the caller polls and passes its id here; reusing it
+        drives that exact row RUNNING→SUCCESS/FAILED, so it never gets stuck PENDING
+        (the old behaviour created a *second*, invisible row, leaving the polled one
+        a zombie). When ``None`` (cron / CLI) a fresh row is created as before.
         """
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-        job = ImportJobExecution(
-            job_name="opportunity-detection",
-            source="SYSTEM",
-            job_type="scheduled",
-            import_start_date=now - timedelta(days=period_months * 30),
-            import_end_date=now,
-            status=ImportJobStatus.RUNNING,
-            started_at=now,
-        )
-        self.db.add(job)
-        await self.db.flush()
+        if job_id is not None:
+            job = await self.db.get(ImportJobExecution, job_id)
+            if job is None:
+                raise ValueError(f"ImportJobExecution {job_id} not found")
+            job.mark_running()
+        else:
+            job = ImportJobExecution(
+                job_name="opportunity-detection",
+                source="SYSTEM",
+                job_type="scheduled",
+                import_start_date=now - timedelta(days=period_months * 30),
+                import_end_date=now,
+                status=ImportJobStatus.RUNNING,
+                started_at=now,
+            )
+            self.db.add(job)
+        # Commit the RUNNING state up front so it survives the per-windfarm
+        # rollbacks inside detect_all (each windfarm is its own transaction now).
+        await self.db.commit()
 
         try:
             if not windfarm_ids:
@@ -79,22 +99,40 @@ class OpportunityDetectionService:
             opportunities = await self.detect_all(
                 windfarm_ids, period_months, job.id, schema_codes=schema_codes
             )
+            succeeded = self._last_succeeded
+            failed = self._last_failed
 
-            job.mark_success(records_imported=len(opportunities))
+            # Don't report SUCCESS when every windfarm errored — that masked a
+            # total failure as "ran, found nothing". Mark FAILED instead.
+            if windfarm_ids and succeeded == 0 and failed > 0:
+                job.mark_failed(f"all {failed} windfarm(s) errored during detection")
+            else:
+                job.mark_success(records_imported=len(opportunities))
+            job.job_metadata = {
+                **(job.job_metadata or {}),
+                "succeeded": succeeded,
+                "failed": failed,
+            }
             await self.db.commit()
 
             logger.info(
                 "opportunity_detection_complete",
                 windfarms=len(windfarm_ids),
                 opportunities=len(opportunities),
+                succeeded=succeeded,
+                failed=failed,
             )
             return {
                 "job_id": job.id,
                 "windfarms_scanned": len(windfarm_ids),
+                "windfarms_failed": failed,
                 "opportunities_created": len(opportunities),
             }
 
         except Exception as e:
+            # Clear any failed transaction before touching the (already-committed)
+            # job row, then mark it FAILED so the polled row never hangs.
+            await self.db.rollback()
             job.mark_failed(str(e))
             await self.db.commit()
             logger.error("opportunity_detection_failed", error=str(e))
@@ -118,33 +156,43 @@ class OpportunityDetectionService:
         period_start = now - timedelta(days=period_months * 30)
         period_end = now
 
-        # Supersede previous ACTIVE opportunities for these windfarms
-        await self.db.execute(
-            update(Opportunity)
-            .where(
-                and_(
-                    Opportunity.windfarm_id.in_(windfarm_ids),
-                    Opportunity.status == OpportunityStatus.ACTIVE,
-                )
-            )
-            .values(status=OpportunityStatus.SUPERSEDED, updated_at=now)
-        )
-
         all_opportunities: List[Opportunity] = []
+        succeeded = 0
+        failed = 0
 
+        # Each windfarm is its own atomic transaction: supersede its prior ACTIVE
+        # rows, detect, then commit. A failure rolls back ONLY that windfarm and
+        # restores the shared session, so one bad windfarm can neither poison the
+        # session for the rest nor discard the work already committed for earlier
+        # windfarms (the old single-end-commit lost everything on a mid-run crash).
         for wf_id in windfarm_ids:
             try:
+                await self.db.execute(
+                    update(Opportunity)
+                    .where(
+                        and_(
+                            Opportunity.windfarm_id == wf_id,
+                            Opportunity.status == OpportunityStatus.ACTIVE,
+                        )
+                    )
+                    .values(status=OpportunityStatus.SUPERSEDED, updated_at=now)
+                )
                 wf_opps = await self._detect_windfarm(
                     wf_id, period_start, period_end, detection_run_id, schema_codes
                 )
+                await self.db.commit()
                 all_opportunities.extend(wf_opps)
+                succeeded += 1
             except Exception as e:
+                await self.db.rollback()
+                failed += 1
                 logger.error(
                     "opportunity_detection_windfarm_error", windfarm_id=wf_id, error=str(e)
                 )
                 continue
 
-        await self.db.flush()
+        self._last_succeeded = succeeded
+        self._last_failed = failed
         return all_opportunities
 
     async def _detect_windfarm(
