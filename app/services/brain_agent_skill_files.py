@@ -1,5 +1,12 @@
 """Skill file templates — written to the agent sandbox for lazy-loading via `cat`."""
 
+from app.services.opportunity_schemas.schema_names import format_schema_catalogue
+
+# Generated from SCHEMA_NAMES / SCHEMA_ONE_LINERS (single source of truth) so the
+# agent always sees the full, current schema set by NAME rather than a hand-kept
+# divergent list. Interpolated into SKILL_DOMAIN below.
+_SCHEMA_CATALOGUE = format_schema_catalogue()
+
 SKILL_SCHEMA = """# Database Schema Reference
 
 ## Core Tables
@@ -260,22 +267,40 @@ Don't default to CF alone.
 
 ## Opportunity Schemas
 
-The platform detects 6 opportunity types for wind farms. When presenting opportunity findings, calibrate tone by severity:
+The platform's opportunity-detection engine evaluates a fixed catalogue of
+analytical schemas for each wind farm. **Always refer to a finding by its
+human NAME, never by its code** (say "Volatile Disruption Periods", not
+"OPS_01"). Each opportunity row carries `schema_code`, `severity`, `branch`,
+`status`, `data_slots`, and `missing_slots`; the API also returns a
+`schema_name` field with the human name below.
+
+When presenting opportunity findings, calibrate tone by severity:
 - **CONFIRMED**: Be direct — name specifics, quantify impact where data allows.
 - **INDICATIVE**: Be conditional — "pattern warrants investigation", "estimated at...".
 - **WATCH**: Be tentative — "early signal", "recommend monitoring over next 2 quarters".
+- **SUPPRESSED**: A finding gated off by the DQ-01 data-gap detector — the
+  underlying signal exists but a generation-data gap makes it unreliable. Do
+  NOT report SUPPRESSED rows as active findings; mention the data gap instead.
 
-**OPS-01 Volatile Disruption Periods**: Low availability months (ODI proxy). Branch A = event-driven (concentrated in 1-2 months), B = structural/recurring across years, C = spot exposure amplifies cost.
+The full schema catalogue (resolve any `schema_code` to the bold NAME):
 
-**OPS-02 Performance Seasonality**: High-wind season capacity factor worse than low-wind season. Indicates mechanical stress, maintenance timing, or cannibalisation. Branch A = mechanical stress, B = maintenance timing, C = data-limited.
+__SCHEMA_CATALOGUE__
 
-**OPS-03 Misaligned Contracting**: OEM/AM contract doesn't incentivize uptime. Only fires when OPS-01 exists. Branch A = incentive misalignment (no penalties), B = geographic friction (remote teams), C = contract details unknown.
+**Branches (root-cause sub-type, where present):** OPS-01 A=event-driven /
+B=structural-recurring / C=spot-exposure; OPS-02 A=mechanical-stress /
+B=maintenance-timing / C=data-limited; OPS-03 A=incentive-misalignment /
+B=geographic-friction / C=contract-unknown; MKT-01 A=profile-mismatch /
+B=PPA-structure / C=zone-dynamics; MKT-03 A=zone-structural / B=portfolio-
+concentration / C=asset-anomaly.
 
-**MKT-01 Low Capture Rates**: Capture rate gap vs zone average. >10pp = CONFIRMED, 5-10pp = INDICATIVE, 2-5pp = WATCH. Branch A = profile mismatch (high cannibalisation index), B = PPA structure (expiry within 24mo), C = zone dynamics.
-
-**MKT-02 Storage Opportunity**: Downstream of MKT-01. Evaluates BESS potential for energy shifting or MFRR revenue. Currently data-limited for most assets.
-
-**MKT-03 High Cannibalisation**: CI = 1/capture_rate. CI >1.20 for 2+ years = CONFIRMED. Prices depressed when asset generates. Branch A = zone structural (penetration rising), B = portfolio concentration, C = asset-level anomaly.
+**Status semantics — read before narrating "active findings":**
+- A schema marked **INACTIVE** (currently *PPA Underpricing* and *Forecast
+  Deviation*) is blocked on missing data and emits NO per-windfarm rows — never
+  imply such a finding exists.
+- Rows with `status` ∈ {`ACKNOWLEDGED`, `RESOLVED`, `SUPERSEDED`} or
+  `severity = SUPPRESSED` are NOT active findings — exclude them from
+  active-findings narratives (query `status = 'ACTIVE'` and
+  `severity <> 'SUPPRESSED'`).
 
 When `missing_slots` is populated, acknowledge the data gaps explicitly. Never present uncertain findings as definitive.
 
@@ -323,6 +348,11 @@ Use `peer_group_aggregates` (metric keys `concentration_capture_ratio`, `concent
 - Columns: `avg_value`, `p10_value`, `p50_value`, `p90_value`, `windfarm_count`. Quote `p50_value` if the user asks for "typical peer"; quote `avg_value` with `windfarm_count` for "average".
 - Join pattern: `ON pa.group_type = 'bidzone' AND pa.group_id = w.bidzone_id AND pa.metric_key = :metric AND pa.period_type = ps.period_type AND pa.year = ps.year AND pa.month IS NOT DISTINCT FROM ps.month`. Fall back to `group_type = 'country'` if the bidzone row is missing.
 """
+
+# Inject the generated schema catalogue (all schemas, by NAME) into the domain
+# skill file. Done via replace (not an f-string) because SKILL_DOMAIN contains
+# literal `{...}` JSON examples that would break str.format.
+SKILL_DOMAIN = SKILL_DOMAIN.replace("__SCHEMA_CATALOGUE__", _SCHEMA_CATALOGUE)
 
 SKILL_SOURCES = """# Data Source Capabilities
 

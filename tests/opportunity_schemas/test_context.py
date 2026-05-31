@@ -1,0 +1,307 @@
+"""Tests for DetectionContext + DetectorResult.
+
+All tests are DB-free: ``db`` is an AsyncMock and any query result is faked via
+``execute(...)`` return values. These tests also pin the test-injection contract
+(``prefetched=...``) that every downstream detector test (#92–#112) relies on.
+"""
+
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from app.models.opportunity import SchemaCode, Severity
+from app.services.opportunity_schemas.context import DetectionContext, DetectorResult
+
+START = datetime(2024, 1, 1)
+END = datetime(2026, 1, 1)
+
+
+def _make_db():
+    """An AsyncMock session whose ``execute`` is awaitable."""
+    db = MagicMock()
+    db.execute = AsyncMock()
+    return db
+
+
+def test_detector_result_defaults():
+    """DetectorResult exposes the agreed field surface with safe defaults."""
+    r = DetectorResult(schema_code=SchemaCode.OPS_01, severity=Severity.WATCH)
+    assert r.schema_code is SchemaCode.OPS_01
+    assert r.severity is Severity.WATCH
+    assert r.branch is None
+    assert r.data_slots == {}
+    assert r.missing_slots == []
+    assert r.suppression_reason is None
+
+
+def test_windfarm_id_accepts_object_or_int():
+    """windfarm_id normalizes either a bare int or an ORM-like object."""
+    ctx_int = DetectionContext(db=_make_db(), windfarm=42, period_start=START, period_end=END)
+    assert ctx_int.windfarm_id == 42
+
+    ctx_obj = DetectionContext(
+        db=_make_db(), windfarm=SimpleNamespace(id=7), period_start=START, period_end=END
+    )
+    assert ctx_obj.windfarm_id == 7
+
+
+@pytest.mark.asyncio
+async def test_prefetched_values_are_returned_without_db():
+    """prefetched short-circuits the accessor — proves the injection contract."""
+    db = _make_db()
+    sentinel = {"capture_rate": 0.62, "zone_avg": 0.69, "gap_pp": 7.0, "bidzone_code": "NO2"}
+    ctx = DetectionContext(
+        db=db,
+        windfarm=1,
+        period_start=START,
+        period_end=END,
+        prefetched={"capture_rate": sentinel},
+    )
+
+    result = await ctx.load_capture_rate()
+
+    assert result is sentinel
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_curtailment_pct_prefetched_short_circuits():
+    """#94: a prefetched curtailment_pct short-circuits the DB query."""
+    db = _make_db()
+    ctx = DetectionContext(
+        db=db,
+        windfarm=1,
+        period_start=START,
+        period_end=END,
+        prefetched={"curtailment_pct": 18.0},
+    )
+    assert await ctx.load_curtailment_pct() == 18.0
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_curtailment_pct_formula_from_db_row():
+    """#94: curtailment_pct = curtailed / (curtailed + generation) * 100.
+
+    curtailed=100, generation=900 → 100/1000*100 = 10.0 (memoized: one query).
+    """
+    db = _make_db()
+    row = SimpleNamespace(curtailed=100, generation=900)
+    result_obj = MagicMock()
+    result_obj.fetchone.return_value = row
+    db.execute.return_value = result_obj
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_curtailment_pct() == pytest.approx(10.0)
+    assert await ctx.load_curtailment_pct() == pytest.approx(10.0)  # memoized
+    assert db.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_load_curtailment_pct_none_when_zero_total():
+    """#94: zero curtailed + generation → None (suppression won't trigger)."""
+    db = _make_db()
+    row = SimpleNamespace(curtailed=0, generation=0)
+    result_obj = MagicMock()
+    result_obj.fetchone.return_value = row
+    db.execute.return_value = result_obj
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_curtailment_pct() is None
+
+
+@pytest.mark.asyncio
+async def test_load_curtailment_pct_none_on_db_error():
+    """#94: an unreachable/failing query degrades to None, not an exception."""
+    db = _make_db()
+    db.execute.side_effect = RuntimeError("no such table: generation_data")
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_curtailment_pct() is None
+
+
+@pytest.mark.asyncio
+async def test_load_capture_rate_is_memoized():
+    """Two load_capture_rate() calls hit the DB exactly once."""
+    db = _make_db()
+
+    # Fake the PriceAnalyticsService so no real query is built.
+    fake_pa = MagicMock()
+    fake_pa.calculate_capture_rate = AsyncMock(
+        return_value={"overall": {"capture_rate": 0.60}, "periods": []}
+    )
+    fake_pa.compare_capture_rates_by_bidzone = AsyncMock(
+        return_value={"zone_average_capture_rate": 0.70}
+    )
+
+    # db.execute returns: bidzone_id lookup, then bidzone code lookup.
+    bidzone_row = MagicMock()
+    bidzone_row.scalar_one_or_none.return_value = 99
+    code_row = MagicMock()
+    code_row.scalar_one_or_none.return_value = "NO2"
+    db.execute.side_effect = [bidzone_row, code_row]
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    ctx._price_analytics_svc = fake_pa  # inject fake analytics
+
+    first = await ctx.load_capture_rate()
+    second = await ctx.load_capture_rate()
+
+    assert first == second
+    assert first == {
+        "capture_rate": 0.6,
+        "zone_avg": 0.7,
+        "gap_pp": 10.0,
+        "bidzone_code": "NO2",
+    }
+    # Underlying DB call ran exactly once across the two accessor calls.
+    assert db.execute.await_count == 2  # one bidzone lookup + one code lookup, total
+    assert fake_pa.calculate_capture_rate.await_count == 1
+    assert fake_pa.compare_capture_rates_by_bidzone.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_load_monthly_performance_matches_legacy_calc():
+    """Accessor returns the normalized monthly rows from canned proxy rows.
+
+    The legacy ``_calc_monthly_availability`` first tries the
+    ``performance_summaries`` ORM query, then falls back to the raw-SQL
+    availability proxy. Faking the ORM path against a mock session is brittle, so
+    we drive the documented fallback path: the ORM query returns no rows and the
+    proxy SQL returns canned rows. We assert the accessor produces the same
+    shape/keys the legacy method produces for those same rows.
+    """
+    db = _make_db()
+
+    # 1st execute() = performance_summaries ORM query -> no summaries (fallback).
+    empty_summaries = MagicMock()
+    empty_summaries.scalars.return_value.all.return_value = []
+
+    # 2nd execute() = proxy SQL -> canned rows.
+    proxy_result = MagicMock()
+    proxy_result.fetchall.return_value = [
+        SimpleNamespace(month="2024-01", gen_hours=700, total_hours=744, availability_pct=94.09),
+        SimpleNamespace(month="2024-02", gen_hours=690, total_hours=696, availability_pct=99.14),
+    ]
+    db.execute.side_effect = [empty_summaries, proxy_result]
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    rows = await ctx.load_monthly_performance()
+
+    assert rows == [
+        {"month": "2024-01", "gen_hours": 700, "total_hours": 744, "availability_pct": 94.09},
+        {"month": "2024-02", "gen_hours": 690, "total_hours": 696, "availability_pct": 99.14},
+    ]
+    # Each row carries exactly the legacy keys.
+    for row in rows:
+        assert set(row.keys()) == {"month", "gen_hours", "total_hours", "availability_pct"}
+
+    # Memoized: a second call does not re-query.
+    db.execute.reset_mock()
+    rows_again = await ctx.load_monthly_performance()
+    assert rows_again == rows
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_degradation_result_prefetched_short_circuits():
+    """#99: a prefetched degradation_result short-circuits the DB query."""
+    db = _make_db()
+    sentinel = {"slope_pct_per_year": -4.0, "p_value": 0.04, "reference_curve": "q50"}
+    ctx = DetectionContext(
+        db=db,
+        windfarm=1,
+        period_start=START,
+        period_end=END,
+        prefetched={"degradation_result": sentinel},
+    )
+    assert await ctx.load_degradation_result() is sentinel
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_degradation_result_none_when_no_row():
+    """#99: no degradation row → None, and the result is memoized."""
+    db = _make_db()
+    empty = MagicMock()
+    empty.scalars.return_value.first.return_value = None
+    db.execute.return_value = empty
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_degradation_result() is None
+
+    db.execute.reset_mock()
+    assert await ctx.load_degradation_result() is None  # memoized
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_degradation_result_none_on_db_error():
+    """#99: a failing query degrades to None, not an exception."""
+    db = _make_db()
+    db.execute.side_effect = RuntimeError("no such table: degradation_results")
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_degradation_result() is None
+
+
+@pytest.mark.asyncio
+async def test_load_ppa_info_empty_when_no_ppa():
+    """load_ppa_info returns {} when no PPA row exists, and memoizes."""
+    db = _make_db()
+    ppa_result = MagicMock()
+    ppa_result.scalars.return_value.first.return_value = None
+    db.execute.return_value = ppa_result
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_ppa_info() == {}
+
+    db.execute.reset_mock()
+    assert await ctx.load_ppa_info() == {}
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_compute_zone_opex_median_prefetched_short_circuits():
+    """#108: a prefetched per-location-type median short-circuits the DB query."""
+    db = _make_db()
+    ctx = DetectionContext(
+        db=db,
+        windfarm=SimpleNamespace(id=1, bidzone_id=5),
+        period_start=START,
+        period_end=END,
+        prefetched={"zone_opex_median:onshore": 31.8},
+    )
+    assert await ctx.compute_zone_opex_median("onshore") == 31.8
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_compute_zone_opex_median_none_when_location_type_missing():
+    """#108: unknown location_type → None (no defined cohort), no DB access."""
+    db = _make_db()
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.compute_zone_opex_median(None) is None
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_own_opex_financials_prefetched_short_circuits():
+    """#108: a prefetched own_opex_financials dict short-circuits the DB query."""
+    db = _make_db()
+    sentinel = {
+        "total_opex_eur": 60e6,
+        "generation_gwh": 1000.0,
+        "full_years": 2,
+        "relationship_type": "primary_asset",
+    }
+    ctx = DetectionContext(
+        db=db,
+        windfarm=1,
+        period_start=START,
+        period_end=END,
+        prefetched={"own_opex_financials": sentinel},
+    )
+    assert await ctx.load_own_opex_financials() is sentinel
+    db.execute.assert_not_called()

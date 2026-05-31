@@ -22,6 +22,12 @@ class DataAnomaly(Base):
     severity: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
 
+    # DQ-01 (issue #109): number of consecutive missing-generation hours that
+    # produced a ``missing_generation_data`` anomaly. Typed so the DQ-01 gap
+    # detector can read/aggregate it directly instead of digging into
+    # ``anomaly_metadata``. Nullable — other anomaly types do not set it.
+    gap_hours: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     # Relationships
     windfarm_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("windfarms.id"), nullable=True, index=True
@@ -31,8 +37,12 @@ class DataAnomaly(Base):
     )
 
     # Time period affected
-    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    period_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    period_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
     # Additional details
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -40,7 +50,9 @@ class DataAnomaly(Base):
 
     # Resolution tracking
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    resolved_by: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    resolved_by: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
     resolution_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Audit fields
@@ -61,9 +73,9 @@ class DataAnomaly(Base):
     resolver = relationship("User", foreign_keys=[resolved_by])
 
     __table_args__ = (
-        Index('idx_anomaly_windfarm_status', 'windfarm_id', 'status'),
-        Index('idx_anomaly_period', 'period_start', 'period_end'),
-        Index('idx_anomaly_type_status', 'anomaly_type', 'status'),
+        Index("idx_anomaly_windfarm_status", "windfarm_id", "status"),
+        Index("idx_anomaly_period", "period_start", "period_end"),
+        Index("idx_anomaly_type_status", "anomaly_type", "status"),
     )
 
     def __repr__(self) -> str:
@@ -77,6 +89,7 @@ class DataAnomaly(Base):
 # Anomaly type constants
 class AnomalyType:
     """Constants for anomaly types."""
+
     CAPACITY_FACTOR_OVER_LIMIT = "capacity_factor_over_limit"
     NEGATIVE_GENERATION = "negative_generation"
     MISSING_DATA = "missing_data"
@@ -84,11 +97,17 @@ class AnomalyType:
     DATA_GAP = "data_gap"
     INVALID_CAPACITY = "invalid_capacity"
     GEN_CONSUMPTION_SWAPPED = "gen_consumption_swapped"
+    # DQ-01 (issue #109): a consecutive run of missing hourly generation data on a
+    # windfarm, severe enough (>= 24h) to log as a data-quality anomaly. Distinct
+    # from the per-unit ``DATA_GAP`` produced by ``DataAnomalyService`` — this one
+    # is windfarm-level and carries a typed ``gap_hours``.
+    MISSING_GENERATION_DATA = "missing_generation_data"
 
 
 # Anomaly status constants
 class AnomalyStatus:
     """Constants for anomaly statuses."""
+
     PENDING = "pending"
     INVESTIGATING = "investigating"
     RESOLVED = "resolved"
@@ -99,6 +118,7 @@ class AnomalyStatus:
 # Severity constants
 class AnomalySeverity:
     """Constants for anomaly severity levels."""
+
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"

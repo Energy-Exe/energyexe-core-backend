@@ -4,17 +4,17 @@ Runs all detection logic, calculations, and job execution in a single service.
 Static methods for severity/branch/suppression are pure functions for easy testing.
 """
 
-from datetime import datetime, timezone, timedelta, date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
-from sqlalchemy import select, update, text, and_, func
+from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode, Severity
 from app.models.import_job_execution import ImportJobExecution, ImportJobStatus
-from app.models.windfarm import Windfarm
+from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode, Severity
 from app.models.ppa import PPA
+from app.models.windfarm import Windfarm
 from app.services.price_analytics_service import PriceAnalyticsService
 
 logger = structlog.get_logger(__name__)
@@ -44,9 +44,17 @@ class OpportunityDetectionService:
     # ─── Job runner ────────────────────────────────────────────────
 
     async def run_detection_job(
-        self, windfarm_ids: Optional[List[int]] = None, period_months: int = 24
+        self,
+        windfarm_ids: Optional[List[int]] = None,
+        period_months: int = 24,
+        schema_codes: Optional[List[SchemaCode]] = None,
     ) -> dict:
-        """Run opportunity detection as a tracked import job."""
+        """Run opportunity detection as a tracked import job.
+
+        ``schema_codes`` (#114) optionally restricts the run to a subset of
+        schemas; ``None`` (the default) runs every registered schema. The default
+        no-arg call — used by the daily cron (#113) — is unchanged.
+        """
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         job = ImportJobExecution(
@@ -68,7 +76,9 @@ class OpportunityDetectionService:
                 )
                 windfarm_ids = [r[0] for r in result.fetchall()]
 
-            opportunities = await self.detect_all(windfarm_ids, period_months, job.id)
+            opportunities = await self.detect_all(
+                windfarm_ids, period_months, job.id, schema_codes=schema_codes
+            )
 
             job.mark_success(records_imported=len(opportunities))
             await self.db.commit()
@@ -97,8 +107,13 @@ class OpportunityDetectionService:
         windfarm_ids: List[int],
         period_months: int = 24,
         detection_run_id: Optional[int] = None,
+        schema_codes: Optional[List[SchemaCode]] = None,
     ) -> List[Opportunity]:
-        """Run all 6 schemas for given windfarms, respecting dependency order."""
+        """Run all schemas for given windfarms, respecting dependency order.
+
+        ``schema_codes`` (#114) optionally restricts the run to a subset of
+        schemas; ``None`` (the default) runs every registered schema unchanged.
+        """
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         period_start = now - timedelta(days=period_months * 30)
         period_end = now
@@ -120,11 +135,13 @@ class OpportunityDetectionService:
         for wf_id in windfarm_ids:
             try:
                 wf_opps = await self._detect_windfarm(
-                    wf_id, period_start, period_end, detection_run_id
+                    wf_id, period_start, period_end, detection_run_id, schema_codes
                 )
                 all_opportunities.extend(wf_opps)
             except Exception as e:
-                logger.error("opportunity_detection_windfarm_error", windfarm_id=wf_id, error=str(e))
+                logger.error(
+                    "opportunity_detection_windfarm_error", windfarm_id=wf_id, error=str(e)
+                )
                 continue
 
         await self.db.flush()
@@ -136,52 +153,61 @@ class OpportunityDetectionService:
         period_start: datetime,
         period_end: datetime,
         detection_run_id: Optional[int],
+        schema_codes: Optional[List[SchemaCode]] = None,
     ) -> List[Opportunity]:
-        """Run all schemas for a single windfarm in dependency order."""
-        opps: List[Opportunity] = []
+        """Run all schemas for a single windfarm in dependency order.
 
-        # Load PPA info for suppression checks
-        ppa_info = await self._load_ppa_info(windfarm_id)
+        LIVE PATH (cut over in #93): delegates to ``_run_registry`` →
+        ``run_for_windfarm``, the registry-driven orchestrator and sole
+        ORM-build / persist point. All six detectors (OPS-01/02/03 + MKT-01/02/03)
+        now live as modules in ``app/services/opportunity_schemas/`` and are
+        registered in ``SCHEMA_REGISTRY`` (dependency-ordered). The legacy inline
+        ``_detect_opsXX`` / ``_detect_mktXX`` methods below are retained (no longer
+        the live path) so the #91 characterization harness can still drive them.
+        """
+        return await self._run_registry(
+            windfarm_id, period_start, period_end, detection_run_id, schema_codes
+        )
 
-        # OPS-01: Volatile disruptions
-        ops01 = await self._detect_ops01(windfarm_id, period_start, period_end, ppa_info, detection_run_id)
-        if ops01:
-            opps.append(ops01)
+    async def _run_registry(
+        self,
+        windfarm_id: int,
+        period_start: datetime,
+        period_end: datetime,
+        detection_run_id: Optional[int],
+        schema_codes: Optional[List[SchemaCode]] = None,
+    ) -> List[Opportunity]:
+        """Registry-based detection — the LIVE detection path (cut over in #93).
 
-        # OPS-02: Performance seasonality
-        ops02 = await self._detect_ops02(windfarm_id, period_start, period_end, ppa_info, detection_run_id)
-        if ops02:
-            opps.append(ops02)
+        Builds a ``DetectionContext`` and delegates to ``run_for_windfarm``, the
+        single ORM-build / persist point. The six detectors are registered in
+        ``SCHEMA_REGISTRY`` in dependency order; ``run_for_windfarm`` runs them,
+        gates dependents, wires ``triggered_by_id``, and persists ACTIVE rows.
+        ``detect_all`` still supersedes prior ACTIVE rows once per run before
+        invoking ``_detect_windfarm`` per windfarm.
+        """
+        from app.services.opportunity_schemas.context import DetectionContext
+        from app.services.opportunity_schemas.registry import run_for_windfarm
 
-        # OPS-03: Misaligned contracting (only if OPS-01 triggered)
-        if ops01:
-            ops03 = await self._detect_ops03(windfarm_id, period_start, period_end, ppa_info, ops01, detection_run_id)
-            if ops03:
-                opps.append(ops03)
-
-        # MKT-01: Low capture rates
-        mkt01 = await self._detect_mkt01(windfarm_id, period_start, period_end, ppa_info, detection_run_id)
-        if mkt01:
-            opps.append(mkt01)
-
-        # MKT-03: High cannibalisation (independent of MKT-01)
-        mkt03 = await self._detect_mkt03(windfarm_id, period_start, period_end, ppa_info, detection_run_id)
-        if mkt03:
-            opps.append(mkt03)
-
-        # MKT-02: Storage opportunity (only if MKT-01 triggered)
-        if mkt01:
-            mkt02 = await self._detect_mkt02(windfarm_id, period_start, period_end, ppa_info, mkt01, detection_run_id)
-            if mkt02:
-                opps.append(mkt02)
-
-        return opps
+        ctx = DetectionContext(
+            db=self.db,
+            windfarm=windfarm_id,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        return await run_for_windfarm(
+            ctx, detection_run_id=detection_run_id, schema_codes=schema_codes
+        )
 
     # ─── Schema detectors ──────────────────────────────────────────
 
     async def _detect_ops01(
-        self, windfarm_id: int, period_start: datetime, period_end: datetime,
-        ppa_info: dict, detection_run_id: Optional[int],
+        self,
+        windfarm_id: int,
+        period_start: datetime,
+        period_end: datetime,
+        ppa_info: dict,
+        detection_run_id: Optional[int],
     ) -> Optional[Opportunity]:
         """OPS-01: Volatile disruption periods."""
         monthly = await self._calc_monthly_availability(windfarm_id, period_start, period_end)
@@ -195,7 +221,9 @@ class OpportunityDetectionService:
 
         # Gather data slots
         data_slots = {
-            "odi_pct": round(sum(m["availability_pct"] for m in monthly) / len(monthly), 2) if monthly else None,
+            "odi_pct": round(sum(m["availability_pct"] for m in monthly) / len(monthly), 2)
+            if monthly
+            else None,
             "odi_months_below_threshold": len(low_months),
             "odi_threshold": ODI_THRESHOLD_PCT,
             "period": f"{period_start.date()} to {period_end.date()}",
@@ -238,12 +266,20 @@ class OpportunityDetectionService:
         return opp
 
     async def _detect_ops02(
-        self, windfarm_id: int, period_start: datetime, period_end: datetime,
-        ppa_info: dict, detection_run_id: Optional[int],
+        self,
+        windfarm_id: int,
+        period_start: datetime,
+        period_end: datetime,
+        ppa_info: dict,
+        detection_run_id: Optional[int],
     ) -> Optional[Opportunity]:
         """OPS-02: Performance seasonality."""
         seasonal = await self._calc_seasonal_capture(windfarm_id, period_start, period_end)
-        if not seasonal or seasonal.get("high_wind_cf") is None or seasonal.get("low_wind_cf") is None:
+        if (
+            not seasonal
+            or seasonal.get("high_wind_cf") is None
+            or seasonal.get("low_wind_cf") is None
+        ):
             return None
 
         gap_pp = (seasonal["low_wind_cf"] - seasonal["high_wind_cf"]) * 100
@@ -262,9 +298,13 @@ class OpportunityDetectionService:
             "years_with_inversion": years_observed,
             "period": f"{period_start.date()} to {period_end.date()}",
         }
-        missing = ["wind_resource_index_monthly", "turbine_scatter_spread",
-                    "cannibalisation_index_seasonal", "maintenance_calendar",
-                    "revenue_uplift_potential_eur"]
+        missing = [
+            "wind_resource_index_monthly",
+            "turbine_scatter_spread",
+            "cannibalisation_index_seasonal",
+            "maintenance_calendar",
+            "revenue_uplift_potential_eur",
+        ]
 
         # Without wind resource index, can't confirm operational cause
         if "wind_resource_index_monthly" in missing and severity != Severity.WATCH:
@@ -294,8 +334,13 @@ class OpportunityDetectionService:
         return opp
 
     async def _detect_ops03(
-        self, windfarm_id: int, period_start: datetime, period_end: datetime,
-        ppa_info: dict, ops01: Opportunity, detection_run_id: Optional[int],
+        self,
+        windfarm_id: int,
+        period_start: datetime,
+        period_end: datetime,
+        ppa_info: dict,
+        ops01: Opportunity,
+        detection_run_id: Optional[int],
     ) -> Optional[Opportunity]:
         """OPS-03: Misaligned contracting strategies. Only fires if OPS-01 triggered."""
         contract_type = ppa_info.get("contract_type")
@@ -313,8 +358,15 @@ class OpportunityDetectionService:
             missing.append("contract_type")
         if has_penalties is None:
             missing.append("contract_penalty_clauses")
-        missing.extend(["oem_response_time", "am_location", "peer_odi_p50",
-                         "insource_benchmark", "asset_age_years"])
+        missing.extend(
+            [
+                "oem_response_time",
+                "am_location",
+                "peer_odi_p50",
+                "insource_benchmark",
+                "asset_age_years",
+            ]
+        )
 
         # Suppression: if contract has ODI-linked availability guarantees
         if has_penalties is True:
@@ -354,8 +406,12 @@ class OpportunityDetectionService:
         return opp
 
     async def _detect_mkt01(
-        self, windfarm_id: int, period_start: datetime, period_end: datetime,
-        ppa_info: dict, detection_run_id: Optional[int],
+        self,
+        windfarm_id: int,
+        period_start: datetime,
+        period_end: datetime,
+        ppa_info: dict,
+        detection_run_id: Optional[int],
     ) -> Optional[Opportunity]:
         """MKT-01: Low capture rates — contracting."""
         gap_data = await self._calc_capture_rate_gap(windfarm_id, period_start, period_end)
@@ -383,13 +439,17 @@ class OpportunityDetectionService:
             "price_zone": gap_data.get("bidzone_code"),
             "ppa_status": ppa_info.get("ppa_status"),
             "cannibalisation_index": round(ci, 4) if ci else None,
-            "ppa_expiry_date": str(ppa_info.get("ppa_end_date")) if ppa_info.get("ppa_end_date") else None,
+            "ppa_expiry_date": str(ppa_info.get("ppa_end_date"))
+            if ppa_info.get("ppa_end_date")
+            else None,
             "period": f"{period_start.date()} to {period_end.date()}",
         }
         missing = []
         if ci is None:
             missing.append("cannibalisation_index")
-        missing.extend(["pcc_slope", "peer_capture_p50", "revenue_impact_eur", "high_wind_capture_delta"])
+        missing.extend(
+            ["pcc_slope", "peer_capture_p50", "revenue_impact_eur", "high_wind_capture_delta"]
+        )
         if not ppa_info.get("ppa_end_date"):
             missing.append("ppa_expiry_date")
 
@@ -418,8 +478,13 @@ class OpportunityDetectionService:
         return opp
 
     async def _detect_mkt02(
-        self, windfarm_id: int, period_start: datetime, period_end: datetime,
-        ppa_info: dict, mkt01: Opportunity, detection_run_id: Optional[int],
+        self,
+        windfarm_id: int,
+        period_start: datetime,
+        period_end: datetime,
+        ppa_info: dict,
+        mkt01: Opportunity,
+        detection_run_id: Optional[int],
     ) -> Optional[Opportunity]:
         """MKT-02: Low capture rates — storage. Only fires if MKT-01 triggered."""
         # We don't have BESS/MFRR data yet, so this fires at WATCH with graceful degradation
@@ -430,8 +495,13 @@ class OpportunityDetectionService:
             "ppa_status": ppa_info.get("ppa_status"),
             "period": f"{period_start.date()} to {period_end.date()}",
         }
-        missing = ["intraday_price_spread", "mfrr_eligible", "grid_headroom_mw",
-                    "bess_revenue_potential_eur", "optimal_bess_size_mwh"]
+        missing = [
+            "intraday_price_spread",
+            "mfrr_eligible",
+            "grid_headroom_mw",
+            "bess_revenue_potential_eur",
+            "optimal_bess_size_mwh",
+        ]
 
         # Severity follows MKT-01 but capped due to missing data
         if mkt01.severity == Severity.CONFIRMED:
@@ -459,8 +529,12 @@ class OpportunityDetectionService:
         return opp
 
     async def _detect_mkt03(
-        self, windfarm_id: int, period_start: datetime, period_end: datetime,
-        ppa_info: dict, detection_run_id: Optional[int],
+        self,
+        windfarm_id: int,
+        period_start: datetime,
+        period_end: datetime,
+        ppa_info: dict,
+        detection_run_id: Optional[int],
     ) -> Optional[Opportunity]:
         """MKT-03: High cannibalisation rates."""
         ci_data = await self._calc_cannibalisation_index(windfarm_id, period_start, period_end)
@@ -485,9 +559,13 @@ class OpportunityDetectionService:
             "ppa_status": ppa_info.get("ppa_status"),
             "period": f"{period_start.date()} to {period_end.date()}",
         }
-        missing = ["zone_renewable_penetration_pct", "peer_zone_ci",
-                    "portfolio_zone_correlation", "revenue_impact_eur",
-                    "alternative_zone_assets"]
+        missing = [
+            "zone_renewable_penetration_pct",
+            "peer_zone_ci",
+            "portfolio_zone_correlation",
+            "revenue_impact_eur",
+            "alternative_zone_assets",
+        ]
 
         # Graceful degradation: without CI trend, downgrade
         if ci_data.get("ci_trend") is None and severity == Severity.CONFIRMED:
@@ -526,14 +604,17 @@ class OpportunityDetectionService:
         # Try real ODI from performance pipeline
         try:
             from app.models.performance_summary import PerformanceSummary
+
             result = await self.db.execute(
-                select(PerformanceSummary).where(
+                select(PerformanceSummary)
+                .where(
                     PerformanceSummary.windfarm_id == windfarm_id,
                     PerformanceSummary.period_type == "month",
                     PerformanceSummary.year >= start.year,
                     PerformanceSummary.year <= end.year,
                     PerformanceSummary.odi_pct_underperf.isnot(None),
-                ).order_by(PerformanceSummary.year, PerformanceSummary.month)
+                )
+                .order_by(PerformanceSummary.year, PerformanceSummary.month)
             )
             summaries = result.scalars().all()
             if summaries:
@@ -550,7 +631,8 @@ class OpportunityDetectionService:
             pass  # Fall back to proxy
 
         # Fallback: simple availability proxy (hours with generation > 0)
-        query = text("""
+        query = text(
+            """
             WITH monthly AS (
                 SELECT
                     TO_CHAR(hour, 'YYYY-MM') as month,
@@ -566,7 +648,8 @@ class OpportunityDetectionService:
             SELECT month, gen_hours, total_hours,
                    ROUND(gen_hours * 100.0 / NULLIF(total_hours, 0), 2) as availability_pct
             FROM monthly
-        """)
+        """
+        )
         result = await self.db.execute(query, {"wf_id": windfarm_id, "start": start, "end": end})
         rows = result.fetchall()
         return [
@@ -624,6 +707,7 @@ class OpportunityDetectionService:
 
         # Get bidzone code for data_slots
         from app.models.bidzone import Bidzone
+
         bz_result = await self.db.execute(select(Bidzone.code).where(Bidzone.id == bidzone_id))
         bz_code = bz_result.scalar_one_or_none()
 
@@ -676,11 +760,14 @@ class OpportunityDetectionService:
         years_above = sum(1 for v in ci_by_year.values() if v >= MKT03_CI_WATCH)
 
         # Get bidzone code
-        wf_result = await self.db.execute(select(Windfarm.bidzone_id).where(Windfarm.id == windfarm_id))
+        wf_result = await self.db.execute(
+            select(Windfarm.bidzone_id).where(Windfarm.id == windfarm_id)
+        )
         bidzone_id = wf_result.scalar_one_or_none()
         bz_code = None
         if bidzone_id:
             from app.models.bidzone import Bidzone
+
             bz_result = await self.db.execute(select(Bidzone.code).where(Bidzone.id == bidzone_id))
             bz_code = bz_result.scalar_one_or_none()
 
@@ -697,7 +784,8 @@ class OpportunityDetectionService:
     ) -> Optional[dict]:
         """Compare high-wind vs low-wind season capacity factors."""
         # High-wind months: Oct-Mar, Low-wind: Apr-Sep (Northern hemisphere default)
-        query = text("""
+        query = text(
+            """
             WITH seasonal AS (
                 SELECT
                     EXTRACT(YEAR FROM hour) as year,
@@ -718,7 +806,8 @@ class OpportunityDetectionService:
                    COUNT(*) FILTER (WHERE season = 'high') as high_count
             FROM seasonal
             GROUP BY season
-        """)
+        """
+        )
         result = await self.db.execute(query, {"wf_id": windfarm_id, "start": start, "end": end})
         rows = {r.season: float(r.overall_cf) if r.overall_cf else None for r in result.fetchall()}
 
@@ -726,7 +815,8 @@ class OpportunityDetectionService:
             return None
 
         # Count years where inversion exists (low > high)
-        inv_query = text("""
+        inv_query = text(
+            """
             WITH yearly_seasonal AS (
                 SELECT
                     EXTRACT(YEAR FROM hour) as year,
@@ -742,8 +832,11 @@ class OpportunityDetectionService:
             SELECT COUNT(*) as years_inverted
             FROM yearly_seasonal
             WHERE low_cf > high_cf
-        """)
-        inv_result = await self.db.execute(inv_query, {"wf_id": windfarm_id, "start": start, "end": end})
+        """
+        )
+        inv_result = await self.db.execute(
+            inv_query, {"wf_id": windfarm_id, "start": start, "end": end}
+        )
         inv_row = inv_result.fetchone()
 
         return {
@@ -755,7 +848,9 @@ class OpportunityDetectionService:
     async def _load_ppa_info(self, windfarm_id: int) -> dict:
         """Load PPA info for suppression and branch selection."""
         result = await self.db.execute(
-            select(PPA).where(PPA.windfarm_id == windfarm_id).order_by(PPA.ppa_end_date.desc().nullslast())
+            select(PPA)
+            .where(PPA.windfarm_id == windfarm_id)
+            .order_by(PPA.ppa_end_date.desc().nullslast())
         )
         ppa = result.scalars().first()
         if not ppa:
@@ -859,7 +954,10 @@ class OpportunityDetectionService:
     def check_ops01_suppression(ppa_info: dict, data_slots: dict) -> Optional[str]:
         """Check OPS-01 suppression conditions."""
         # Downgrade if fixed PPA limits revenue impact
-        if ppa_info.get("contract_type") == "fixed_price" and ppa_info.get("ppa_duration_years", 0) >= LONG_PPA_YEARS:
+        if (
+            ppa_info.get("contract_type") == "fixed_price"
+            and ppa_info.get("ppa_duration_years", 0) >= LONG_PPA_YEARS
+        ):
             return None  # Don't suppress but would downgrade — handled in detector
         return None
 
@@ -867,17 +965,21 @@ class OpportunityDetectionService:
     def check_mkt01_suppression(ppa_info: dict, gap_data: dict) -> Optional[str]:
         """Check MKT-01 suppression conditions."""
         # Suppress if PPA is fixed-price and long-dated
-        if (ppa_info.get("contract_type") == "fixed_price"
-                and ppa_info.get("ppa_duration_years", 0) >= LONG_PPA_YEARS
-                and ppa_info.get("ppa_status") == "active"):
+        if (
+            ppa_info.get("contract_type") == "fixed_price"
+            and ppa_info.get("ppa_duration_years", 0) >= LONG_PPA_YEARS
+            and ppa_info.get("ppa_status") == "active"
+        ):
             return "Fixed-price PPA with >5yr duration — market exposure locked"
         return None
 
     @staticmethod
     def check_mkt03_suppression(ppa_info: dict) -> bool:
         """Check MKT-03 suppression: long-dated fixed PPA."""
-        if (ppa_info.get("contract_type") == "fixed_price"
-                and ppa_info.get("ppa_duration_years", 0) >= LONG_PPA_YEARS
-                and ppa_info.get("ppa_status") == "active"):
+        if (
+            ppa_info.get("contract_type") == "fixed_price"
+            and ppa_info.get("ppa_duration_years", 0) >= LONG_PPA_YEARS
+            and ppa_info.get("ppa_status") == "active"
+        ):
             return True
         return False

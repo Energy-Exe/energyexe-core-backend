@@ -1,17 +1,17 @@
 """Service for price analytics including capture rate calculations."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Dict, List, Any, Optional, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 import structlog
-from sqlalchemy import select, and_, func, text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.price_data import PriceData
-from app.models.generation_data import GenerationData
-from app.models.windfarm import Windfarm
 from app.models.bidzone import Bidzone
+from app.models.generation_data import GenerationData
+from app.models.price_data import PriceData
+from app.models.windfarm import Windfarm
 
 logger = structlog.get_logger()
 
@@ -55,7 +55,8 @@ class PriceAnalyticsService:
         ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
         # SQL query for capture rate calculation
-        query = text(f"""
+        query = text(
+            f"""
             WITH windfarm_metrics AS (
                 SELECT
                     DATE_TRUNC(:aggregation, g.hour) as period,
@@ -104,7 +105,8 @@ class PriceAnalyticsService:
             FROM windfarm_metrics w
             JOIN market_metrics m ON w.period = m.period
             ORDER BY w.period
-        """)
+        """
+        )
 
         result = await self.db.execute(
             query,
@@ -114,7 +116,7 @@ class PriceAnalyticsService:
                 "end_date": end_date,
                 "aggregation": aggregation,
                 "price_source": price_source,
-            }
+            },
         )
         rows = result.fetchall()
 
@@ -128,10 +130,14 @@ class PriceAnalyticsService:
         for row in rows:
             period_data = {
                 "period": row.period.isoformat() if row.period else None,
-                "total_generation_mwh": float(row.total_generation_mwh) if row.total_generation_mwh else 0,
+                "total_generation_mwh": float(row.total_generation_mwh)
+                if row.total_generation_mwh
+                else 0,
                 "revenue_eur": float(row.revenue_eur) if row.revenue_eur else 0,
                 "achieved_price": float(row.achieved_price) if row.achieved_price else None,
-                "market_average_price": float(row.market_average_price) if row.market_average_price else None,
+                "market_average_price": float(row.market_average_price)
+                if row.market_average_price
+                else None,
                 "hours_in_period": row.hours_in_period,
                 "capture_rate": float(row.capture_rate) if row.capture_rate else None,
             }
@@ -143,10 +149,13 @@ class PriceAnalyticsService:
                 total_revenue += Decimal(str(row.revenue_eur))
 
         # Calculate overall metrics
-        overall_achieved_price = float(total_revenue / total_generation) if total_generation > 0 else None
+        overall_achieved_price = (
+            float(total_revenue / total_generation) if total_generation > 0 else None
+        )
 
         # Get overall market average
-        market_avg_query = text(f"""
+        market_avg_query = text(
+            f"""
             SELECT AVG({price_column}) as market_average
             FROM price_data
             WHERE bidzone_id = (SELECT bidzone_id FROM windfarms WHERE id = :windfarm_id)
@@ -154,7 +163,8 @@ class PriceAnalyticsService:
               AND hour < :end_date
               AND {price_column} IS NOT NULL
               AND source = :price_source
-        """)
+        """
+        )
         market_avg_result = await self.db.execute(
             market_avg_query,
             {
@@ -162,10 +172,14 @@ class PriceAnalyticsService:
                 "start_date": start_date,
                 "end_date": end_date,
                 "price_source": price_source,
-            }
+            },
         )
         market_avg_row = market_avg_result.fetchone()
-        overall_market_average = float(market_avg_row.market_average) if market_avg_row and market_avg_row.market_average else None
+        overall_market_average = (
+            float(market_avg_row.market_average)
+            if market_avg_row and market_avg_row.market_average
+            else None
+        )
 
         overall_capture_rate = (
             overall_achieved_price / overall_market_average
@@ -213,7 +227,8 @@ class PriceAnalyticsService:
         price_source = await self._get_preferred_price_source(windfarm_id)
         ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
-        query = text(f"""
+        query = text(
+            f"""
             SELECT
                 DATE_TRUNC(:aggregation, g.hour) as period,
                 SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation_mwh,
@@ -231,7 +246,8 @@ class PriceAnalyticsService:
               {ramp_up_clause}
             GROUP BY DATE_TRUNC(:aggregation, g.hour)
             ORDER BY period
-        """)
+        """
+        )
 
         result = await self.db.execute(
             query,
@@ -241,7 +257,7 @@ class PriceAnalyticsService:
                 "end_date": end_date,
                 "aggregation": aggregation,
                 "price_source": price_source,
-            }
+            },
         )
         rows = result.fetchall()
 
@@ -249,15 +265,25 @@ class PriceAnalyticsService:
 
         periods = []
         for row in rows:
-            periods.append({
-                "period": row.period.isoformat() if row.period else None,
-                "total_generation_mwh": float(row.total_generation_mwh) if row.total_generation_mwh else 0,
-                "day_ahead_revenue_eur": float(row.day_ahead_revenue) if row.day_ahead_revenue else 0,
-                "total_revenue_eur": float(row.total_revenue) if row.total_revenue else 0,
-                "avg_day_ahead_price": float(row.avg_day_ahead_price) if row.avg_day_ahead_price else None,
-                "avg_intraday_price": float(row.avg_intraday_price) if row.avg_intraday_price else None,
-                "hours_with_generation": row.hours_with_generation,
-            })
+            periods.append(
+                {
+                    "period": row.period.isoformat() if row.period else None,
+                    "total_generation_mwh": float(row.total_generation_mwh)
+                    if row.total_generation_mwh
+                    else 0,
+                    "day_ahead_revenue_eur": float(row.day_ahead_revenue)
+                    if row.day_ahead_revenue
+                    else 0,
+                    "total_revenue_eur": float(row.total_revenue) if row.total_revenue else 0,
+                    "avg_day_ahead_price": float(row.avg_day_ahead_price)
+                    if row.avg_day_ahead_price
+                    else None,
+                    "avg_intraday_price": float(row.avg_intraday_price)
+                    if row.avg_intraday_price
+                    else None,
+                    "hours_with_generation": row.hours_with_generation,
+                }
+            )
 
         return {
             "windfarm_id": windfarm_id,
@@ -304,13 +330,15 @@ class PriceAnalyticsService:
                 exclude_ramp_up=exclude_ramp_up,
             )
 
-            results["windfarms"].append({
-                "windfarm_id": windfarm_id,
-                "windfarm_name": capture_data.get("windfarm_name"),
-                "overall_capture_rate": capture_data["overall"]["capture_rate"],
-                "total_generation_mwh": capture_data["overall"]["total_generation_mwh"],
-                "total_revenue_eur": capture_data["overall"]["total_revenue_eur"],
-            })
+            results["windfarms"].append(
+                {
+                    "windfarm_id": windfarm_id,
+                    "windfarm_name": capture_data.get("windfarm_name"),
+                    "overall_capture_rate": capture_data["overall"]["capture_rate"],
+                    "total_generation_mwh": capture_data["overall"]["total_generation_mwh"],
+                    "total_revenue_eur": capture_data["overall"]["total_revenue_eur"],
+                }
+            )
 
         # Sort by capture rate descending
         results["windfarms"].sort(
@@ -341,7 +369,8 @@ class PriceAnalyticsService:
         """
         if aggregation == "hour":
             # Hourly profile - average by hour of day
-            query = text("""
+            query = text(
+                """
                 SELECT
                     EXTRACT(HOUR FROM hour) as hour_of_day,
                     AVG(day_ahead_price) as avg_day_ahead,
@@ -360,10 +389,12 @@ class PriceAnalyticsService:
                   END
                 GROUP BY EXTRACT(HOUR FROM hour)
                 ORDER BY hour_of_day
-            """)
+            """
+            )
         else:
             # Daily profile
-            query = text("""
+            query = text(
+                """
                 SELECT
                     EXTRACT(DOW FROM hour) as day_of_week,
                     AVG(day_ahead_price) as avg_day_ahead,
@@ -382,7 +413,8 @@ class PriceAnalyticsService:
                   END
                 GROUP BY EXTRACT(DOW FROM hour)
                 ORDER BY day_of_week
-            """)
+            """
+            )
 
         result = await self.db.execute(
             query,
@@ -390,7 +422,7 @@ class PriceAnalyticsService:
                 "bidzone_id": bidzone_id,
                 "start_date": start_date,
                 "end_date": end_date,
-            }
+            },
         )
         rows = result.fetchall()
 
@@ -400,25 +432,37 @@ class PriceAnalyticsService:
         profile = []
         for row in rows:
             if aggregation == "hour":
-                profile.append({
-                    "hour_of_day": int(row.hour_of_day),
-                    "avg_price": float(row.avg_day_ahead) if row.avg_day_ahead else None,
-                    "min_price": float(row.min_day_ahead) if row.min_day_ahead else None,
-                    "max_price": float(row.max_day_ahead) if row.max_day_ahead else None,
-                    "stddev": float(row.stddev_day_ahead) if row.stddev_day_ahead else None,
-                    "sample_count": row.sample_count,
-                })
+                profile.append(
+                    {
+                        "hour_of_day": int(row.hour_of_day),
+                        "avg_price": float(row.avg_day_ahead) if row.avg_day_ahead else None,
+                        "min_price": float(row.min_day_ahead) if row.min_day_ahead else None,
+                        "max_price": float(row.max_day_ahead) if row.max_day_ahead else None,
+                        "stddev": float(row.stddev_day_ahead) if row.stddev_day_ahead else None,
+                        "sample_count": row.sample_count,
+                    }
+                )
             else:
-                day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-                profile.append({
-                    "day_of_week": int(row.day_of_week),
-                    "day_name": day_names[int(row.day_of_week)],
-                    "avg_price": float(row.avg_day_ahead) if row.avg_day_ahead else None,
-                    "min_price": float(row.min_day_ahead) if row.min_day_ahead else None,
-                    "max_price": float(row.max_day_ahead) if row.max_day_ahead else None,
-                    "stddev": float(row.stddev_day_ahead) if row.stddev_day_ahead else None,
-                    "sample_count": row.sample_count,
-                })
+                day_names = [
+                    "Sunday",
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                ]
+                profile.append(
+                    {
+                        "day_of_week": int(row.day_of_week),
+                        "day_name": day_names[int(row.day_of_week)],
+                        "avg_price": float(row.avg_day_ahead) if row.avg_day_ahead else None,
+                        "min_price": float(row.min_day_ahead) if row.min_day_ahead else None,
+                        "max_price": float(row.max_day_ahead) if row.max_day_ahead else None,
+                        "stddev": float(row.stddev_day_ahead) if row.stddev_day_ahead else None,
+                        "sample_count": row.sample_count,
+                    }
+                )
 
         return {
             "bidzone_id": bidzone_id,
@@ -446,7 +490,8 @@ class PriceAnalyticsService:
         price_source = await self._get_preferred_price_source(windfarm_id)
         ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
-        query = text(f"""
+        query = text(
+            f"""
             SELECT
                 g.generation_mwh,
                 p.day_ahead_price
@@ -458,7 +503,8 @@ class PriceAnalyticsService:
               AND g.generation_mwh IS NOT NULL
               AND p.day_ahead_price IS NOT NULL
               {ramp_up_clause}
-        """)
+        """
+        )
 
         result = await self.db.execute(
             query,
@@ -467,7 +513,7 @@ class PriceAnalyticsService:
                 "start_date": start_date,
                 "end_date": end_date,
                 "price_source": price_source,
-            }
+            },
         )
         rows = result.fetchall()
 
@@ -495,10 +541,9 @@ class PriceAnalyticsService:
         sum_gen_price = sum(g * p for g, p in zip(generations, prices))
 
         numerator = n * sum_gen_price - sum_gen * sum_price
-        denominator = (
-            (n * sum_gen_sq - sum_gen ** 2) ** 0.5 *
-            (n * sum_price_sq - sum_price ** 2) ** 0.5
-        )
+        denominator = (n * sum_gen_sq - sum_gen**2) ** 0.5 * (
+            n * sum_price_sq - sum_price**2
+        ) ** 0.5
 
         correlation = numerator / denominator if denominator != 0 else 0
 
@@ -530,6 +575,41 @@ class PriceAnalyticsService:
             return "Moderate negative - generation tends to be low when prices are high"
         else:
             return "Strong negative - generation is typically low when prices are high"
+
+    @staticmethod
+    def compute_zone_average_capture_rate(
+        windfarms: List[Dict[str, Any]],
+    ) -> Optional[float]:
+        """Generation-weighted mean capture rate across a bidzone's windfarms.
+
+        Issue #94: the zone average that MKT-01 (low capture contracting) gates on.
+        Each entry in ``windfarms`` must carry ``capture_rate`` and
+        ``total_generation_mwh`` (the shape produced by
+        :meth:`compare_capture_rates_by_bidzone`). The average is::
+
+            sum(capture_rate_i * generation_i) / sum(generation_i)
+
+        i.e. weighted by each farm's generation so a tiny farm with an extreme
+        capture rate cannot skew the zone benchmark. Farms with a missing/None
+        ``capture_rate`` are skipped (their generation is excluded from the
+        denominator too, so they neither contribute to nor dilute the mean).
+
+        Returns ``None`` when the (effective) total generation is 0 or the list is
+        empty — there is no meaningful benchmark to compare against.
+        """
+        weighted_sum = 0.0
+        total_generation = 0.0
+        for wf in windfarms:
+            capture_rate = wf.get("capture_rate")
+            generation = wf.get("total_generation_mwh") or 0
+            if capture_rate is None or generation <= 0:
+                continue
+            weighted_sum += capture_rate * generation
+            total_generation += generation
+
+        if total_generation <= 0:
+            return None
+        return weighted_sum / total_generation
 
     async def compare_capture_rates_by_bidzone(
         self,
@@ -563,7 +643,8 @@ class PriceAnalyticsService:
         # windfarms in the zone (155x for GB), making the AVG slow on
         # large zones.  ENTSOE prices already have a single row per hour
         # so DISTINCT ON is a no-op there.
-        query = text(f"""
+        query = text(
+            f"""
             WITH market_avg AS (
                 SELECT AVG(day_ahead_price) as market_average_price
                 FROM (
@@ -609,28 +690,40 @@ class PriceAnalyticsService:
               {ramp_up_clause}
             GROUP BY g.windfarm_id, w.name, w.nameplate_capacity_mw, ma.market_average_price
             ORDER BY capture_rate DESC NULLS LAST
-        """)
+        """
+        )
 
-        result = await self.db.execute(query, {
-            "bidzone_id": bidzone_id,
-            "start_date": start_date,
-            "end_date": end_date,
-            "price_source": price_source,
-        })
+        result = await self.db.execute(
+            query,
+            {
+                "bidzone_id": bidzone_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "price_source": price_source,
+            },
+        )
         rows = result.fetchall()
 
         windfarms = []
         for row in rows:
-            windfarms.append({
-                "windfarm_id": row.windfarm_id,
-                "windfarm_name": row.windfarm_name,
-                "capacity_mw": float(row.capacity_mw) if row.capacity_mw else None,
-                "capture_rate": float(row.capture_rate) if row.capture_rate else None,
-                "achieved_price": float(row.achieved_price) if row.achieved_price else None,
-                "market_average_price": float(row.market_average_price) if row.market_average_price else None,
-                "total_generation_mwh": float(row.total_generation_mwh) if row.total_generation_mwh else 0,
-                "total_revenue_eur": float(row.total_revenue_eur) if row.total_revenue_eur else 0,
-            })
+            windfarms.append(
+                {
+                    "windfarm_id": row.windfarm_id,
+                    "windfarm_name": row.windfarm_name,
+                    "capacity_mw": float(row.capacity_mw) if row.capacity_mw else None,
+                    "capture_rate": float(row.capture_rate) if row.capture_rate else None,
+                    "achieved_price": float(row.achieved_price) if row.achieved_price else None,
+                    "market_average_price": float(row.market_average_price)
+                    if row.market_average_price
+                    else None,
+                    "total_generation_mwh": float(row.total_generation_mwh)
+                    if row.total_generation_mwh
+                    else 0,
+                    "total_revenue_eur": float(row.total_revenue_eur)
+                    if row.total_revenue_eur
+                    else 0,
+                }
+            )
 
         return {
             "bidzone_id": bidzone_id,
@@ -638,6 +731,10 @@ class PriceAnalyticsService:
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "windfarms": windfarms,
+            # Issue #94 root-cause fix: this key was previously omitted, so
+            # MKT-01's ``ctx.load_capture_rate()`` always read None and the
+            # detector exited. Generation-weighted mean over the farms above.
+            "zone_average_capture_rate": self.compute_zone_average_capture_rate(windfarms),
         }
 
     async def zone_capture_rate_by_month(
@@ -662,7 +759,8 @@ class PriceAnalyticsService:
 
         # Per-month market average (DISTINCT ON hour to avoid 155x overcounting on
         # ELEXON where price_data has one row per (hour, windfarm)).
-        query = text(f"""
+        query = text(
+            f"""
             WITH market_avg AS (
                 SELECT
                     date_trunc('month', hour)::date AS month,
@@ -720,34 +818,55 @@ class PriceAnalyticsService:
             FROM market_avg ma
             LEFT JOIN zone_revenue zr ON zr.month = ma.month
             ORDER BY ma.month
-        """)
+        """
+        )
 
-        result = await self.db.execute(query, {
-            "bidzone_id": bidzone_id,
-            "start_date": start_date,
-            "end_date": end_date,
-            "price_source": price_source,
-        })
+        result = await self.db.execute(
+            query,
+            {
+                "bidzone_id": bidzone_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "price_source": price_source,
+            },
+        )
 
         month_labels = [
-            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec",
         ]
         axes = []
         for row in result.fetchall():
             month_dt = row.month
-            axes.append({
-                "month": month_dt.month,
-                "year": month_dt.year,
-                "label": month_labels[month_dt.month - 1],
-                "capture_rate": float(row.capture_rate) if row.capture_rate is not None else None,
-                "achieved_price": float(row.achieved_price) if row.achieved_price is not None else None,
-                "market_average_price": float(row.market_average_price)
-                    if row.market_average_price is not None else None,
-                "total_generation_mwh": float(row.total_generation_mwh or 0),
-                "total_revenue": float(row.total_revenue or 0),
-                "windfarm_count": int(row.windfarm_count or 0),
-            })
+            axes.append(
+                {
+                    "month": month_dt.month,
+                    "year": month_dt.year,
+                    "label": month_labels[month_dt.month - 1],
+                    "capture_rate": float(row.capture_rate)
+                    if row.capture_rate is not None
+                    else None,
+                    "achieved_price": float(row.achieved_price)
+                    if row.achieved_price is not None
+                    else None,
+                    "market_average_price": float(row.market_average_price)
+                    if row.market_average_price is not None
+                    else None,
+                    "total_generation_mwh": float(row.total_generation_mwh or 0),
+                    "total_revenue": float(row.total_revenue or 0),
+                    "windfarm_count": int(row.windfarm_count or 0),
+                }
+            )
 
         return {
             "bidzone_id": bidzone_id,
@@ -757,14 +876,79 @@ class PriceAnalyticsService:
             "axes": axes,
         }
 
+    async def count_negative_price_hours(
+        self,
+        windfarm_id: int,
+        start: datetime,
+        end: datetime,
+    ) -> int:
+        """Count hours in ``[start, end)`` where the farm generates at a negative price.
+
+        Powers MKT-06 (negative-price-hours exposure, issue #105). A negative
+        day-ahead price is only a *commercial* problem when the asset is actually
+        producing into it — when the turbine is curtailed/idle there is no
+        curtailment-avoided exposure, so non-generating hours are explicitly
+        EXCLUDED. The count is therefore::
+
+            COUNT(DISTINCT g.hour)
+            WHERE net_generation > 0  AND  p.day_ahead_price < 0
+
+        where ``net_generation = generation_mwh - COALESCE(consumption_mwh, 0)``
+        (matching the net-of-consumption convention used by the capture-rate
+        queries, so French units with both directions are not double-counted).
+
+        The price is joined per ``(windfarm_id, hour, source)`` using the farm's
+        preferred price source (ELEXON for GB, ENTSOE otherwise) — the same join
+        shape as ``calculate_capture_rate`` — and ``COUNT(DISTINCT g.hour)`` so a
+        windfarm with multiple generation-unit rows per hour still counts each
+        clock-hour once.
+
+        Returns ``0`` (never ``None``) when no qualifying hours exist or no data
+        is reachable, so callers can treat the result as a plain count.
+        """
+        price_source = await self._get_preferred_price_source(windfarm_id)
+
+        query = text(
+            """
+            SELECT COUNT(DISTINCT g.hour) AS negative_hours
+            FROM generation_data g
+            JOIN price_data p
+                ON g.windfarm_id = p.windfarm_id
+               AND g.hour = p.hour
+               AND p.source = :price_source
+            WHERE g.windfarm_id = :windfarm_id
+              AND g.hour >= :start
+              AND g.hour < :end
+              AND p.day_ahead_price IS NOT NULL
+              AND p.day_ahead_price < 0
+              AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+        """
+        )
+
+        result = await self.db.execute(
+            query,
+            {
+                "windfarm_id": windfarm_id,
+                "start": start,
+                "end": end,
+                "price_source": price_source,
+            },
+        )
+        row = result.fetchone()
+        if row is None or row.negative_hours is None:
+            return 0
+        return int(row.negative_hours)
+
     async def _get_preferred_price_source(self, windfarm_id: int) -> str:
         """Resolve preferred price source: ELEXON for GB windfarms, ENTSOE for all others."""
-        query = text("""
+        query = text(
+            """
             SELECT CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END as source
             FROM windfarms w
             JOIN bidzones b ON w.bidzone_id = b.id
             WHERE w.id = :windfarm_id
-        """)
+        """
+        )
         result = await self.db.execute(query, {"windfarm_id": windfarm_id})
         row = result.fetchone()
         return row.source if row else "ENTSOE"

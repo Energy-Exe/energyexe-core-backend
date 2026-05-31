@@ -69,3 +69,44 @@ def test_sources_file_unchanged_sentinel():
     assert "ELEXON" in SKILL_SOURCES
     assert "EEX" in SKILL_SOURCES  # negative-list entry
     assert "Taipower" in SKILL_SOURCES
+
+
+# ── #115: schema-by-NAME surfacing in the brain-agent content ──
+
+
+def test_brain_agent_skill_lists_19_schemas():
+    """The domain skill file references every schema BY NAME (all 19).
+
+    Generated from SCHEMA_NAMES (single source of truth), so this also guards
+    against the agent reverting to a stale 6-schema or 18-vs-19 list.
+    """
+    from app.models.opportunity import SchemaCode
+    from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES
+
+    assert len(SCHEMA_NAMES) == 19
+    assert len(list(SchemaCode)) == 19
+
+    # Every human name appears verbatim in the skill file the agent reads.
+    for code, name in SCHEMA_NAMES.items():
+        assert name in SKILL_DOMAIN, f"{code.value} name '{name}' missing from SKILL_DOMAIN"
+
+    # Spec hard requirement: present by name, plus INACTIVE/SUPPRESSED semantics.
+    assert "Volatile Disruption Periods" in SKILL_DOMAIN
+    assert "INACTIVE" in SKILL_DOMAIN
+    assert "SUPPRESSED" in SKILL_DOMAIN
+
+
+def test_brain_agent_system_prompts_list_all_19_schema_names():
+    """Both system-prompt markdown files surface every schema by name."""
+    from pathlib import Path
+
+    from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES
+
+    prompts_dir = Path("app/prompts")
+    for fname in ("brain_agent_system.md", "brain_agent_system_client.md"):
+        text = (prompts_dir / fname).read_text(encoding="utf-8")
+        for code, name in SCHEMA_NAMES.items():
+            assert name in text, f"{name} missing from {fname}"
+        # INACTIVE schemas flagged so the agent excludes them from active findings.
+        assert "INACTIVE" in text, f"INACTIVE semantics missing from {fname}"
+        assert "SUPPRESSED" in text, f"SUPPRESSED semantics missing from {fname}"

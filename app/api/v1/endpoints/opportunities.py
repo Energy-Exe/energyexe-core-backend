@@ -1,37 +1,93 @@
 """API endpoints for opportunity detection and management."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, and_
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_session_factory
 from app.core.deps import get_current_active_user, get_db
-from app.models.opportunity import Opportunity, OpportunityStatus
+from app.models.import_job_execution import ImportJobExecution, ImportJobStatus
+from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode
 from app.models.portfolio import PortfolioItem
 from app.models.user import User
 from app.models.windfarm import Windfarm
-from app.services.portfolio_service import PortfolioService
 from app.schemas.opportunity import (
+    DetectionTriggerResponse,
     OpportunityDetectRequest,
     OpportunityListResponse,
     OpportunityResponse,
     OpportunityStatusUpdate,
 )
+from app.services.opportunity_schemas.schema_names import get_schema_name
+from app.services.portfolio_service import PortfolioService
 
 logger = structlog.get_logger()
 router = APIRouter()
 
 
+def _parse_schema_codes(codes: Optional[List[str]]) -> Optional[List[SchemaCode]]:
+    """Coerce request schema-code strings into ``SchemaCode`` enum members.
+
+    Returns ``None`` (run-all) when the filter is null/empty. Raises HTTP 422
+    on an unknown code so the caller gets a clear error instead of silently
+    running everything.
+    """
+    if not codes:
+        return None
+    parsed: List[SchemaCode] = []
+    for code in codes:
+        try:
+            parsed.append(SchemaCode(code))
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Unknown schema_code: {code}")
+    return parsed
+
+
+async def _run_detection_in_background(
+    job_id: int,
+    period_months: int,
+    schema_codes: Optional[List[SchemaCode]],
+) -> None:
+    """Background entrypoint for a fleet-wide detection run (#114).
+
+    Opens its OWN session (the request-scoped one is already closed by the time
+    this runs) and drives the LIVE detection path via
+    ``OpportunityDetectionService.run_detection_job`` over all operational
+    windfarms. The ``import_job_executions`` row created synchronously by the
+    endpoint (``job_id``) is the handle callers poll; this run reports into it.
+    """
+    from app.services.opportunity_detection_service import OpportunityDetectionService
+
+    session_factory = get_session_factory()
+    try:
+        async with session_factory() as db:
+            service = OpportunityDetectionService(db)
+            await service.run_detection_job(
+                windfarm_ids=None,
+                period_months=period_months,
+                schema_codes=schema_codes,
+            )
+    except Exception as exc:  # pragma: no cover - defensive background guard
+        logger.error("opportunity_detection_background_failed", job_id=job_id, error=str(exc))
+
+
 def _to_response(opp: Opportunity, windfarm_name: Optional[str] = None) -> OpportunityResponse:
-    """Convert Opportunity model to response schema."""
+    """Convert Opportunity model to response schema.
+
+    ``schema_name`` is resolved from ``SCHEMA_NAMES`` via ``get_schema_name``,
+    which returns ``None`` for an unknown/legacy ``schema_code`` (no crash); the
+    raw code remains available on ``schema_code`` for that fallback case.
+    """
     return OpportunityResponse(
         id=opp.id,
         windfarm_id=opp.windfarm_id,
         windfarm_name=windfarm_name,
         schema_code=opp.schema_code,
+        schema_name=get_schema_name(opp.schema_code),
         severity=opp.severity,
         branch=opp.branch,
         status=opp.status,
@@ -52,7 +108,10 @@ def _to_response(opp: Opportunity, windfarm_name: Optional[str] = None) -> Oppor
 @router.get("/", response_model=OpportunityListResponse)
 async def list_opportunities(
     windfarm_id: Optional[int] = Query(None),
-    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID (only opportunities for windfarms in this portfolio)"),
+    portfolio_id: Optional[int] = Query(
+        None,
+        description="Filter by portfolio ID (only opportunities for windfarms in this portfolio)",
+    ),
     schema_code: Optional[str] = Query(None),
     severity: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="Filter by status. Default: ACTIVE"),
@@ -71,9 +130,8 @@ async def list_opportunities(
     if windfarm_id:
         conditions.append(Opportunity.windfarm_id == windfarm_id)
     if portfolio_id is not None:
-        portfolio_windfarms = (
-            select(PortfolioItem.windfarm_id)
-            .where(PortfolioItem.portfolio_id == portfolio_id)
+        portfolio_windfarms = select(PortfolioItem.windfarm_id).where(
+            PortfolioItem.portfolio_id == portfolio_id
         )
         conditions.append(Opportunity.windfarm_id.in_(portfolio_windfarms))
     if schema_code:
@@ -93,9 +151,8 @@ async def list_opportunities(
     total = (await db.execute(count_q)).scalar() or 0
 
     # Get items with windfarm name
-    query = (
-        select(Opportunity, Windfarm.name.label("windfarm_name"))
-        .join(Windfarm, Opportunity.windfarm_id == Windfarm.id)
+    query = select(Opportunity, Windfarm.name.label("windfarm_name")).join(
+        Windfarm, Opportunity.windfarm_id == Windfarm.id
     )
     if conditions:
         query = query.where(and_(*conditions))
@@ -106,9 +163,8 @@ async def list_opportunities(
     items = [_to_response(r.Opportunity, r.windfarm_name) for r in rows]
 
     # Summary counts by severity (across all matching, not just this page)
-    summary_q = (
-        select(Opportunity.severity, func.count(Opportunity.id))
-        .where(Opportunity.status != OpportunityStatus.SUPERSEDED)
+    summary_q = select(Opportunity.severity, func.count(Opportunity.id)).where(
+        Opportunity.status != OpportunityStatus.SUPERSEDED
     )
     if windfarm_id:
         summary_q = summary_q.where(Opportunity.windfarm_id == windfarm_id)
@@ -178,16 +234,72 @@ async def update_opportunity_status(
 
 @router.post("/detect")
 async def trigger_detection(
+    background_tasks: BackgroundTasks,
     request: OpportunityDetectRequest = OpportunityDetectRequest(),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Manually trigger opportunity detection."""
-    from app.services.opportunity_detection_service import OpportunityDetectionService
+    """Manually trigger opportunity detection.
 
-    service = OpportunityDetectionService(db)
-    result = await service.run_detection_job(
-        windfarm_ids=request.windfarm_ids,
-        period_months=request.period_months,
+    Two branches (#114):
+
+    * **Scoped / SYNCHRONOUS** — when ``windfarm_ids`` is provided the run is
+      fast and bounded, so detection executes inline and the per-run summary
+      (``{job_id, windfarms_scanned, opportunities_created}``) is returned
+      directly. Intended for single-asset debugging.
+    * **Fleet-wide / BACKGROUND** — when ``windfarm_ids`` is empty/null running
+      all 18 schemas over every operational windfarm can take minutes, so we
+      DON'T hold the request (and a DB transaction) open. We create + commit an
+      ``import_job_executions`` row up front, schedule the detection as a
+      FastAPI ``BackgroundTasks`` job, and return a ``DetectionTriggerResponse``
+      with the ``job_id`` immediately. Poll progress via that job row / GET
+      ``/opportunities``.
+
+    ``schema_codes`` (optional) restricts either branch to the listed schemas.
+    """
+    schema_codes = _parse_schema_codes(request.schema_codes)
+
+    # ── Scoped synchronous path ──
+    if request.windfarm_ids:
+        from app.services.opportunity_detection_service import OpportunityDetectionService
+
+        service = OpportunityDetectionService(db)
+        return await service.run_detection_job(
+            windfarm_ids=request.windfarm_ids,
+            period_months=request.period_months,
+            schema_codes=schema_codes,
+        )
+
+    # ── Fleet-wide background path ──
+    # Create + commit the tracking row synchronously so the returned job_id is
+    # real and immediately pollable; the background task reports a fresh run into
+    # its own job row (run_detection_job creates one), but this row is the handle
+    # the caller gets back without waiting.
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    job = ImportJobExecution(
+        job_name="opportunity-detection",
+        source="SYSTEM",
+        job_type="manual",
+        import_start_date=now - timedelta(days=request.period_months * 30),
+        import_end_date=now,
+        status=ImportJobStatus.PENDING,
+        created_by_id=current_user.id,
     )
-    return result
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    background_tasks.add_task(
+        _run_detection_in_background,
+        job_id=job.id,
+        period_months=request.period_months,
+        schema_codes=schema_codes,
+    )
+
+    logger.info("opportunity_detection_scheduled", job_id=job.id, schema_codes=request.schema_codes)
+    return DetectionTriggerResponse(
+        job_id=job.id,
+        status="scheduled",
+        mode="background",
+        message="Fleet-wide detection scheduled; poll job_id for results.",
+    )
