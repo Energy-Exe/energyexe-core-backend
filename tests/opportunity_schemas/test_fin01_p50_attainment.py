@@ -136,15 +136,18 @@ async def test_detect_none_when_no_generation():
 
 
 @pytest.mark.asyncio
-async def test_no_sourced_target_returns_blank_finding():
-    """Generation present, target None → DetectorResult with empty attainment_pct
-    and ``p50_target_gwh`` in missing_slots (no crash)."""
+async def test_no_sourced_target_returns_none():
+    """Generation present but no sourced P50 target → None (no finding).
+
+    Previously this emitted a blank WATCH placeholder, which flooded the board
+    on low-P50-coverage fleets; attainment can't be assessed without a target,
+    so it is no longer surfaced as an opportunity.
+    """
     ctx = _ctx(annual={2025: 95.0}, target=None)
-    result = await detect(ctx)
-    assert result is not None
-    assert result.schema_code is SchemaCode.FIN_01
-    assert result.data_slots["attainment_pct"] is None
-    assert "p50_target_gwh" in result.missing_slots
+    assert await detect(ctx) is None
+    # target == 0 is treated the same (no usable target).
+    ctx0 = _ctx(annual={2025: 95.0}, target=0)
+    assert await detect(ctx0) is None
 
 
 @pytest.mark.asyncio

@@ -183,11 +183,11 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     snapshot-safety path: the M1 legacy scenarios inject no generation, so FIN-01
     fires on none of them.
 
-    When generation EXISTS but there is **no sourced P50 target**, emits the
-    *blank finding* — a ``DetectorResult`` with ``severity=WATCH`` (lowest tier,
-    surfacing the gap without a real attainment number), empty
-    ``data_slots["attainment_pct"]`` and ``missing_slots=["p50_target_gwh"]`` — so
-    the missing target is visible rather than crashing.
+    When generation EXISTS but there is **no sourced P50 target**, returns
+    ``None`` (no finding): attainment can't be computed without a target, so it
+    isn't an actionable opportunity. (This previously emitted a blank ``WATCH``
+    placeholder, which flooded the board on low-P50-coverage fleets; the
+    missing-target gap is a data-coverage concern tracked elsewhere.)
 
     Otherwise computes the latest year's attainment (and the prior year's, when
     available), excluding the COD partial year, and classifies severity per
@@ -207,18 +207,13 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
 
     target = await ctx.load_p50_target()
     if target is None or target == 0:
-        # Generation exists but no sourced target → blank finding (no crash).
-        return DetectorResult(
-            schema_code=SchemaCode.FIN_01,
-            severity=Severity.WATCH,
-            branch=None,
-            data_slots={
-                "attainment_pct": None,
-                "p50_target_gwh": None,
-                "period": f"{ctx.period_start.date()} to {ctx.period_end.date()}",
-            },
-            missing_slots=["p50_target_gwh"],
-        )
+        # No sourced P50 target → attainment cannot be computed, so there is no
+        # actionable finding. (Previously emitted a blank WATCH placeholder with
+        # missing_slots=["p50_target_gwh"]; on a fleet with low P50 coverage that
+        # flooded the board with ~1.2k no-target rows that buried the real
+        # findings. The missing-target coverage gap is a data-coverage concern,
+        # not an opportunity, so it is no longer surfaced here.)
+        return None
 
     latest_year = years[-1]
     actual_gwh = float(annual[latest_year])
