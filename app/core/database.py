@@ -43,9 +43,18 @@ def get_engine():
 
             # Connection timeout settings
             engine_kwargs["pool_timeout"] = settings.DB_POOL_TIMEOUT
+            # TCP keepalive (detect-shard branch): asyncpg is NOT libpq, so we set
+            # PostgreSQL's per-session keepalive GUCs via server_settings rather than
+            # libpq keepalives* kwargs. This keeps long-running shard connections alive
+            # across idle gaps and lets the server detect dead peers — the 2026-05-30
+            # 6-way parallel run hung on silently-dropped RDS connections without it.
+            # command_timeout still bounds any single in-query hang.
             engine_kwargs["connect_args"] = {
                 "server_settings": {
                     "application_name": "energyexe-backend",
+                    "tcp_keepalives_idle": "30",
+                    "tcp_keepalives_interval": "10",
+                    "tcp_keepalives_count": "5",
                 },
                 "command_timeout": settings.DB_COMMAND_TIMEOUT,
             }

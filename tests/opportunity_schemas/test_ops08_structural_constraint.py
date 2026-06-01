@@ -162,3 +162,18 @@ async def test_detect_dismissed_does_not_fire():
 async def test_detect_shallow_constraint_suppressed():
     """A too-shallow flag (q90 >= 0.85) → no finding even when confirmed."""
     assert await detect(_ctx(_flag("confirmed", 1000, 0.9))) is None
+
+
+@pytest.mark.asyncio
+async def test_detect_data_slots_are_json_serializable():
+    """Regression: the flag's period_start/period_end are datetimes; ``data_slots``
+    is persisted as JSONB, so they must be ISO strings — otherwise the flush fails
+    and the WHOLE windfarm rolls back (OPS-08 produced 0 findings fleet-wide until
+    fixed)."""
+    import json
+
+    result = await detect(_ctx(_flag("confirmed", 800, 0.5)))
+    assert result is not None
+    json.dumps(result.data_slots)  # must not raise
+    assert isinstance(result.data_slots["period_start"], str)
+    assert isinstance(result.data_slots["period_end"], str)
