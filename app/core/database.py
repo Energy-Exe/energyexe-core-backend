@@ -57,6 +57,7 @@ def get_engine():
                     "tcp_keepalives_count": "5",
                 },
                 "command_timeout": settings.DB_COMMAND_TIMEOUT,
+                "ssl": "require",  # Enable SSL for AWS RDS
             }
 
         _engine = create_async_engine(settings.database_url_async, **engine_kwargs)
