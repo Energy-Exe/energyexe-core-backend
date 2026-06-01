@@ -192,3 +192,5 @@ file::*
 
 *.csv
 *.xlsx
+# Local data-processing run artifacts (checkpoints/process logs) — not source
+generation_processing_logs/

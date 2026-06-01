@@ -6,6 +6,22 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+class TriggeredBySummary(BaseModel):
+    """Compact summary of the parent opportunity that triggered a dependent one.
+
+    Dependent schemas (e.g. OPS-03 → OPS-01, MKT-02 → MKT-01) only fire when a
+    parent finding exists. Surfacing the parent's name/severity here lets the UI
+    render a meaningful link ("Volatile Disruption Periods (OPS-01), Confirmed")
+    instead of a bare numeric ``triggered_by_id``.
+    """
+
+    id: int
+    schema_code: str
+    schema_name: Optional[str] = None
+    severity: str
+    status: str
+
+
 class OpportunityResponse(BaseModel):
     """Full opportunity response."""
 
@@ -21,12 +37,26 @@ class OpportunityResponse(BaseModel):
             "should fall back to schema_code in that case."
         ),
     )
+    schema_one_liner: Optional[str] = Field(
+        default=None,
+        description=(
+            "One-line analyst-facing meaning of the schema (from SCHEMA_ONE_LINERS), "
+            "for surfacing as a 'what this means' subtitle. Null for unknown codes."
+        ),
+    )
     severity: str
     branch: Optional[str] = None
     status: str
     data_slots: Dict[str, Any] = Field(default_factory=dict)
     missing_slots: List[str] = Field(default_factory=list)
     triggered_by_id: Optional[int] = None
+    triggered_by: Optional[TriggeredBySummary] = Field(
+        default=None,
+        description=(
+            "Resolved parent-opportunity summary when this finding is dependent "
+            "(triggered_by_id is set). Null for standalone findings."
+        ),
+    )
     detection_period_start: datetime
     detection_period_end: datetime
     detection_run_id: Optional[int] = None
