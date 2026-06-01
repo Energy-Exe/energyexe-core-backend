@@ -21,8 +21,9 @@ from app.schemas.opportunity import (
     OpportunityListResponse,
     OpportunityResponse,
     OpportunityStatusUpdate,
+    TriggeredBySummary,
 )
-from app.services.opportunity_schemas.schema_names import get_schema_name
+from app.services.opportunity_schemas.schema_names import get_schema_name, get_schema_one_liner
 from app.services.portfolio_service import PortfolioService
 
 logger = structlog.get_logger()
@@ -95,25 +96,45 @@ async def _run_detection_in_background(
             )
 
 
-def _to_response(opp: Opportunity, windfarm_name: Optional[str] = None) -> OpportunityResponse:
+def _to_response(
+    opp: Opportunity,
+    windfarm_name: Optional[str] = None,
+    parent: Optional[Opportunity] = None,
+) -> OpportunityResponse:
     """Convert Opportunity model to response schema.
 
-    ``schema_name`` is resolved from ``SCHEMA_NAMES`` via ``get_schema_name``,
-    which returns ``None`` for an unknown/legacy ``schema_code`` (no crash); the
-    raw code remains available on ``schema_code`` for that fallback case.
+    ``schema_name`` / ``schema_one_liner`` are resolved from the SCHEMA_NAMES /
+    SCHEMA_ONE_LINERS registries (both return ``None`` for an unknown/legacy
+    ``schema_code`` — no crash; the raw code remains on ``schema_code``).
+
+    ``parent`` is the resolved parent Opportunity for a dependent finding (i.e.
+    the row whose id equals ``opp.triggered_by_id``); when supplied it is
+    summarised into ``triggered_by`` so the UI can render the parent's name and
+    severity instead of a bare id.
     """
+    triggered_by = None
+    if parent is not None:
+        triggered_by = TriggeredBySummary(
+            id=parent.id,
+            schema_code=parent.schema_code,
+            schema_name=get_schema_name(parent.schema_code),
+            severity=parent.severity,
+            status=parent.status,
+        )
     return OpportunityResponse(
         id=opp.id,
         windfarm_id=opp.windfarm_id,
         windfarm_name=windfarm_name,
         schema_code=opp.schema_code,
         schema_name=get_schema_name(opp.schema_code),
+        schema_one_liner=get_schema_one_liner(opp.schema_code),
         severity=opp.severity,
         branch=opp.branch,
         status=opp.status,
         data_slots=opp.data_slots or {},
         missing_slots=opp.missing_slots or [],
         triggered_by_id=opp.triggered_by_id,
+        triggered_by=triggered_by,
         detection_period_start=opp.detection_period_start,
         detection_period_end=opp.detection_period_end,
         detection_run_id=opp.detection_run_id,
@@ -123,6 +144,21 @@ def _to_response(opp: Opportunity, windfarm_name: Optional[str] = None) -> Oppor
         acknowledged_at=opp.acknowledged_at,
         resolved_at=opp.resolved_at,
     )
+
+
+async def _fetch_parents(
+    db: AsyncSession, opps: List[Opportunity]
+) -> dict[int, Opportunity]:
+    """Batch-resolve parent opportunities for a set of (possibly dependent) rows.
+
+    Collects every non-null ``triggered_by_id`` and fetches the parents in ONE
+    query (avoids N+1), returning an ``{id: Opportunity}`` map for ``_to_response``.
+    """
+    parent_ids = {o.triggered_by_id for o in opps if o.triggered_by_id is not None}
+    if not parent_ids:
+        return {}
+    result = await db.execute(select(Opportunity).where(Opportunity.id.in_(parent_ids)))
+    return {p.id: p for p in result.scalars().all()}
 
 
 @router.get("/", response_model=OpportunityListResponse)
@@ -180,7 +216,15 @@ async def list_opportunities(
 
     result = await db.execute(query)
     rows = result.all()
-    items = [_to_response(r.Opportunity, r.windfarm_name) for r in rows]
+    parents = await _fetch_parents(db, [r.Opportunity for r in rows])
+    items = [
+        _to_response(
+            r.Opportunity,
+            r.windfarm_name,
+            parents.get(r.Opportunity.triggered_by_id),
+        )
+        for r in rows
+    ]
 
     # Summary counts by severity (across all matching, not just this page)
     summary_q = select(Opportunity.severity, func.count(Opportunity.id)).where(
@@ -216,7 +260,10 @@ async def get_opportunity(
     row = result.first()
     if not row:
         raise HTTPException(status_code=404, detail="Opportunity not found")
-    return _to_response(row.Opportunity, row.windfarm_name)
+    parent = None
+    if row.Opportunity.triggered_by_id is not None:
+        parent = await db.get(Opportunity, row.Opportunity.triggered_by_id)
+    return _to_response(row.Opportunity, row.windfarm_name, parent)
 
 
 @router.patch("/{opportunity_id}", response_model=OpportunityResponse)
@@ -249,7 +296,10 @@ async def update_opportunity_status(
     # Get windfarm name for response
     wf = await db.execute(select(Windfarm.name).where(Windfarm.id == opp.windfarm_id))
     wf_name = wf.scalar_one_or_none()
-    return _to_response(opp, wf_name)
+    parent = None
+    if opp.triggered_by_id is not None:
+        parent = await db.get(Opportunity, opp.triggered_by_id)
+    return _to_response(opp, wf_name, parent)
 
 
 @router.post("/detect")

@@ -120,6 +120,18 @@ def get_schema_name(schema_code: str) -> str | None:
         return None
 
 
+def get_schema_one_liner(schema_code: str) -> str | None:
+    """Resolve a raw ``schema_code`` string to its one-line analyst meaning.
+
+    Mirrors ``get_schema_name``: returns ``None`` for an unknown/legacy code so
+    callers (API serializer, admin-ui) can degrade gracefully rather than crash.
+    """
+    try:
+        return SCHEMA_ONE_LINERS[SchemaCode(schema_code)]
+    except (ValueError, KeyError):
+        return None
+
+
 def format_schema_catalogue() -> str:
     """Render the full schema catalogue as a markdown block from SCHEMA_NAMES.
 
