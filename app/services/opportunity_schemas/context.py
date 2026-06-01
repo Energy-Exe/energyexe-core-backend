@@ -56,6 +56,17 @@ from app.models.opportunity import SchemaCode, Severity
 # month > 5 (June onward) → first year is partial. Mirrors FIN-01's COD rule.
 _COD_PARTIAL_YEAR_MONTH = 5
 
+# Per-process memo of the heavy bidzone capture-rate aggregate
+# (``compare_capture_rates_by_bidzone``), keyed by (bidzone_id, hour-rounded
+# start, hour-rounded end). The zone average is identical for every windfarm in
+# the same zone over the same window, but the capture-rate accessor runs
+# per-windfarm — so a big zone (e.g. bidzone 81, 36 windfarms) re-ran the same
+# multi-million-row scan 36×, each risking the statement timeout and (on
+# timeout) leaving the connection in an aborted state. Computing it once per zone
+# per process collapses that to a single scan. Window is hour-rounded so the
+# per-windfarm second-level differences in ``now`` still hit the same entry.
+_ZONE_CAPTURE_CACHE: Dict[tuple, Any] = {}
+
 
 def _is_cod_partial_year(commercial_operational_date: Optional[date], year: int) -> bool:
     """True when ``year`` is the windfarm's first (partial) operating year.
@@ -355,15 +366,28 @@ class DetectionContext:
         if not bidzone_id:
             return None
 
-        try:
-            zone_data = await price_analytics.compare_capture_rates_by_bidzone(
-                bidzone_id=bidzone_id,
-                start_date=start,
-                end_date=end,
-            )
-        except Exception as e:
-            logger.warning("opportunity_zone_capture_error", bidzone_id=bidzone_id, error=str(e))
-            return None
+        # Memoize the heavy zone scan per (bidzone, hour-rounded window) across
+        # windfarms in this process (see _ZONE_CAPTURE_CACHE above).
+        _zk = (
+            bidzone_id,
+            start.replace(minute=0, second=0, microsecond=0),
+            end.replace(minute=0, second=0, microsecond=0),
+        )
+        if _zk in _ZONE_CAPTURE_CACHE:
+            zone_data = _ZONE_CAPTURE_CACHE[_zk]
+        else:
+            try:
+                zone_data = await price_analytics.compare_capture_rates_by_bidzone(
+                    bidzone_id=bidzone_id,
+                    start_date=start,
+                    end_date=end,
+                )
+            except Exception as e:
+                logger.warning(
+                    "opportunity_zone_capture_error", bidzone_id=bidzone_id, error=str(e)
+                )
+                return None
+            _ZONE_CAPTURE_CACHE[_zk] = zone_data
 
         zone_avg = zone_data.get("zone_average_capture_rate")
         if zone_avg is None:

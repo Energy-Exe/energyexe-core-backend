@@ -34,7 +34,7 @@ the idempotency mechanism.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence, Tuple
 
 from sqlalchemy import and_, delete
@@ -97,9 +97,21 @@ def find_generation_gaps(
         * Present hours are normalised to whole hours and de-duplicated; values
           outside ``[period_start, period_end)`` are ignored.
     """
+    # Normalise tz-awareness before any comparison. Present hours come from a
+    # ``timestamptz`` column (asyncpg returns them tz-aware, in UTC), while the
+    # period bounds are naive UTC (``detect_all`` strips tzinfo). Comparing the two
+    # raises "can't compare offset-naive and offset-aware datetimes", which the
+    # per-detector guard would swallow — silently disabling DQ-01 (and its
+    # suppression gating) fleet-wide. Coerce everything to naive UTC first.
+    p_start = _naive_utc(period_start)
+    p_end = _naive_utc(period_end)
     # Normalise to the top of the hour, de-dup, drop out-of-window hours, sort.
     cleaned = sorted(
-        {_floor_hour(h) for h in present_hours if h is not None and period_start <= h < period_end}
+        {
+            _floor_hour(_naive_utc(h))
+            for h in present_hours
+            if h is not None and p_start <= _naive_utc(h) < p_end
+        }
     )
     if len(cleaned) < 2:
         # Need at least two present hours to bracket a gap between them.
@@ -133,6 +145,17 @@ def classify_gap_severity(gap_hours: Optional[int]) -> Optional[Severity]:
     if gap_hours >= GAP_HOURS_WATCH:
         return Severity.WATCH
     return None
+
+
+def _naive_utc(dt: datetime) -> datetime:
+    """Coerce a datetime to naive UTC so naive/aware values compare safely.
+
+    tz-aware values are converted to UTC then stripped of tzinfo; naive values
+    are assumed to already be UTC and returned unchanged.
+    """
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 def _floor_hour(dt: datetime) -> datetime:

@@ -254,3 +254,24 @@ async def test_schema_codes_none_runs_all():
     created = await run_for_windfarm(ctx, registry=registry, dependencies={}, schema_codes=None)
 
     assert {o.schema_code for o in created} == {SchemaCode.OPS_01, SchemaCode.MKT_01}
+
+
+def test_json_safe_coerces_nested_datetimes():
+    """The persist-layer guard: any datetime/date anywhere in data_slots is ISO'd so
+    a stray datetime can't fail the JSONB flush and roll back the windfarm."""
+    from datetime import date
+
+    from app.services.opportunity_schemas.registry import _json_safe
+
+    out = _json_safe(
+        {
+            "a": datetime(2024, 3, 1, 5, 0),
+            "b": [date(2024, 10, 28), {"c": datetime(2025, 1, 1)}],
+            "d": "untouched",
+            "e": 42,
+        }
+    )
+    assert out["a"] == "2024-03-01T05:00:00"
+    assert out["b"][0] == "2024-10-28"
+    assert out["b"][1]["c"] == "2025-01-01T00:00:00"
+    assert out["d"] == "untouched" and out["e"] == 42

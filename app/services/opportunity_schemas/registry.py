@@ -35,6 +35,7 @@ reference its prerequisite's freshly-assigned id.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Awaitable, Callable, Dict, List, Optional
 
 import structlog
@@ -730,8 +731,8 @@ async def run_for_windfarm(
             severity=result.severity,
             branch=result.branch,
             status=OpportunityStatus.ACTIVE,
-            data_slots=result.data_slots,
-            missing_slots=result.missing_slots,
+            data_slots=_json_safe(result.data_slots),
+            missing_slots=_json_safe(result.missing_slots),
             suppression_reason=result.suppression_reason,
             triggered_by_id=triggered_by_id,
             detection_period_start=ctx.period_start,
@@ -747,6 +748,26 @@ async def run_for_windfarm(
         persisted_by_code[schema_code] = opp
 
     return created
+
+
+def _json_safe(obj):
+    """Recursively coerce a data_slots value into a JSON-serializable form.
+
+    ``Opportunity.data_slots`` / ``missing_slots`` are persisted as JSONB, so a
+    raw ``datetime``/``date`` anywhere in the structure fails the flush and rolls
+    back the entire windfarm (one detector's stray datetime takes down all 18
+    others — see the OPS-08 period-bounds bug). This is the single persist-layer
+    guard: datetimes/dates → ISO strings, dicts/lists walked recursively, scalars
+    passed through unchanged. A no-op for already-clean slots, so the M1
+    characterization snapshot stays byte-identical.
+    """
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
 
 
 def _resolve_triggered_by_id(

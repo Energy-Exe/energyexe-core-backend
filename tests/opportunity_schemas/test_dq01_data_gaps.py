@@ -308,3 +308,21 @@ def test_migration_upgrade_and_downgrade_are_callable():
     mod = _load_migration()
     assert callable(mod.upgrade)
     assert callable(mod.downgrade)
+
+
+def test_find_generation_gaps_handles_tz_aware_present_hours():
+    """Regression: present hours come from a ``timestamptz`` column (asyncpg returns
+    them tz-aware) while the period bounds are naive UTC. The comparison must not
+    raise "can't compare offset-naive and offset-aware datetimes" — that crashed
+    DQ-01 on every windfarm, silently disabling it (and its suppression gate)."""
+    from datetime import timezone
+
+    start = datetime(2024, 1, 1)
+    end = datetime(2024, 2, 1)
+    present = [
+        datetime(2024, 1, 1, 0, tzinfo=timezone.utc),
+        datetime(2024, 1, 5, 4, tzinfo=timezone.utc),  # 100h later
+    ]
+    gaps = find_generation_gaps(present, start, end)  # must not raise
+    assert len(gaps) == 1
+    assert gaps[0][2] == 99  # 100h apart → 99 missing hours bracketed between

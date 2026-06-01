@@ -39,10 +39,24 @@ orchestrator's job.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Optional
 
 from app.models.opportunity import SchemaCode, Severity
 from app.services.opportunity_schemas.context import DetectionContext, DetectorResult
+
+
+def _iso(value: object) -> Optional[str]:
+    """ISO-format a date/datetime for JSONB storage; pass through None/strings.
+
+    ``data_slots`` is persisted as JSONB, so a raw ``datetime`` (what Module 1b
+    returns for the flag's period bounds) is not serializable and would fail the
+    flush, rolling back the whole windfarm.
+    """
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value  # type: ignore[return-value]
+
 
 # Duration bars (hours). 672 = 4 weeks (CONFIRMED); 336 = 2 weeks (INDICATIVE
 # floor / Module 1b minimum detectable run).
@@ -150,8 +164,11 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
         "mean_q90_ratio": mean_q90_ratio,
         "mean_q50_ratio": flag.get("mean_q50_ratio"),
         "flag_trigger": flag.get("flag_trigger"),
-        "period_start": flag.get("period_start"),
-        "period_end": flag.get("period_end"),
+        # Serialize datetimes to ISO strings — data_slots is persisted as JSONB and
+        # a raw datetime is not JSON-serializable (it would fail the flush and roll
+        # back the whole windfarm). Module 1b returns these as datetime objects.
+        "period_start": _iso(flag.get("period_start")),
+        "period_end": _iso(flag.get("period_end")),
     }
 
     # Graceful-degradation: a confirmed root cause (which cable / which BMU) and a
