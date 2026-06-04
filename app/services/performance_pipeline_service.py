@@ -153,9 +153,17 @@ class PerformancePipelineService:
 
         # ── SINGLE DATA LOAD ── reused by all modules
         pcs = PowerCurveService(self.db)
-        df_all = await pcs._load_hourly_data(windfarm_id, start_year, end_year, float(rated_mw))
+        # Load with capacity-aware normalisation; p_pu_cap is split out below and
+        # used ONLY by Module 1b. Everything else keeps nameplate p_pu unchanged.
+        df_all = await pcs._load_hourly_data(
+            windfarm_id, start_year, end_year, float(rated_mw), include_capacity_norm=True
+        )
         if df_all.empty:
             return {"windfarm_id": windfarm_id, "error": "No hourly data"}
+        # Output normalised by the capacity online each hour — detection only, so
+        # phased windfarms aren't flagged for capacity not yet built. Popped here
+        # so curves / ODI / commercial modules see the unchanged nameplate p_pu.
+        p_pu_cap_series = df_all.pop("p_pu_cap") if "p_pu_cap" in df_all.columns else None
 
         # Module 1b: Structural constraint detection — runs BEFORE Module 2 so
         # the capability / overall_clean curves are built from constraint-
@@ -179,6 +187,11 @@ class PerformancePipelineService:
             async with self.db.begin_nested():
                 df_for_detect = df_all.copy()
                 df_for_detect["wind_bin"] = np.floor(df_for_detect["wind_speed"]).astype(float)
+                # Detect on capacity-aware output so phased windfarms aren't
+                # falsely flagged for capacity that wasn't built yet; genuine
+                # suppression still drops below the per-bin reference.
+                if p_pu_cap_series is not None:
+                    df_for_detect["p_pu"] = p_pu_cap_series
                 detect_out = await detector.detect_constraints(
                     windfarm_id, df_for_detect, pipeline_run_id=pipeline_run_id
                 )
