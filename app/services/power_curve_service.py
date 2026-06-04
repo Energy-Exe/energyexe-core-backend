@@ -106,6 +106,7 @@ class PowerCurveService:
         start_year: Optional[int],
         end_year: Optional[int],
         rated_mw: float,
+        include_capacity_norm: bool = False,
     ) -> pd.DataFrame:
         """Load and join generation + weather + price data. Compute p_pu.
 
@@ -113,6 +114,14 @@ class PowerCurveService:
         merges them in pandas. This avoids pathological query planner estimates
         caused by 3-way nested subquery joins (observed >15min query times).
         Each sub-query uses a single windfarm_id index scan.
+
+        ``p_pu`` is always generation / nameplate (``rated_mw``) — unchanged for
+        every caller. When ``include_capacity_norm`` is True the result also
+        carries ``p_pu_cap``: generation normalised by the capacity actually
+        ONLINE that hour (summed only over units that reported, backfilled from
+        each unit's registered capacity, falling back to nameplate only when no
+        capacity is known). Structural-constraint detection uses ``p_pu_cap`` so
+        phased windfarms aren't flagged for capacity that wasn't built yet.
         """
         year_filter_gen = ""
         year_filter_wx = ""
@@ -129,25 +138,39 @@ class PowerCurveService:
             year_filter_px += " AND EXTRACT(YEAR FROM hour) <= :end_year"
             gen_params["end_year"] = end_year
 
-        # 1) Generation — aggregate across units (the real multi-row case)
+        # 1) Generation — aggregate across units (the real multi-row case).
+        # online_capacity_mw is the installed capacity ONLINE that hour: summed
+        # only over units that actually reported (row-matched with the generation
+        # sum, so it cannot mask a real constraint), with a missing per-hour
+        # capacity_mw backfilled from the unit's registered capacity. Feeds the
+        # capacity-aware p_pu_cap below. The LEFT JOIN is on the units PK so it
+        # never fans out — SUM(generation_mwh) is identical to the un-joined form.
         gen_q = text(
             f"""
-            SELECT hour,
-                   SUM(generation_mwh) AS generation_mwh,
-                   BOOL_OR(is_ramp_up) AS any_ramp_up
-            FROM generation_data
-            WHERE windfarm_id = :wf_id
-              AND generation_mwh IS NOT NULL
+            SELECT gd.hour,
+                   SUM(gd.generation_mwh) AS generation_mwh,
+                   SUM(COALESCE(gd.capacity_mw, gu.capacity_mw)) AS online_capacity_mw,
+                   BOOL_OR(gd.is_ramp_up) AS any_ramp_up
+            FROM generation_data gd
+            LEFT JOIN generation_units gu ON gu.id = gd.generation_unit_id
+            WHERE gd.windfarm_id = :wf_id
+              AND gd.generation_mwh IS NOT NULL
               {year_filter_gen}
-            GROUP BY hour
-            HAVING BOOL_OR(is_ramp_up) = false
+            GROUP BY gd.hour
+            HAVING BOOL_OR(gd.is_ramp_up) = false
         """
         )
         gen_rows = (await self.db.execute(gen_q, gen_params)).fetchall()
         if not gen_rows:
             return pd.DataFrame()
-        df_gen = pd.DataFrame(gen_rows, columns=["hour", "generation_mwh", "any_ramp_up"])
+        df_gen = pd.DataFrame(
+            gen_rows,
+            columns=["hour", "generation_mwh", "online_capacity_mw", "any_ramp_up"],
+        )
         df_gen["generation_mwh"] = df_gen["generation_mwh"].astype(float)
+        df_gen["online_capacity_mw"] = pd.to_numeric(
+            df_gen["online_capacity_mw"], errors="coerce"
+        )
 
         # 2) Weather — AVG across any duplicates (usually 1 row per hour)
         wx_q = text(
@@ -207,11 +230,27 @@ class PowerCurveService:
             return pd.DataFrame()
 
         df["year"] = pd.to_datetime(df["hour"]).dt.year.astype(int)
+        # Nameplate-normalised output — unchanged for all callers.
         df["p_pu"] = df["generation_mwh"] / float(rated_mw)
         # Defensive dedup (should be unnecessary after SQL GROUP BYs)
         df = df.drop_duplicates(subset=["hour"], keep="first").reset_index(drop=True)
         df = df.sort_values("hour").reset_index(drop=True)
-        return df[["hour", "year", "generation_mwh", "wind_speed", "market_price", "p_pu"]]
+
+        cols = ["hour", "year", "generation_mwh", "wind_speed", "market_price", "p_pu"]
+        if include_capacity_norm:
+            # Capacity-aware output: normalise by the capacity online that hour so
+            # a phased windfarm producing normally at partial build-out scores
+            # near 1.0 (not a false low-output constraint), while genuine
+            # suppression still drops p_pu_cap below the per-bin reference. Fall
+            # back to nameplate when online capacity is unknown or implausibly
+            # small (<5% of nameplate) — only farms with no capacity data at all.
+            cap_floor = 0.05 * float(rated_mw)
+            eff_cap = df["online_capacity_mw"].where(
+                df["online_capacity_mw"] > cap_floor, float(rated_mw)
+            )
+            df["p_pu_cap"] = df["generation_mwh"] / eff_cap
+            cols.append("p_pu_cap")
+        return df[cols]
 
     # ─── Module 1: Hard plausibility filters ───────────────────
 
