@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.deps import exclude_deleted, get_current_user_optional
+from app.models.user import User
 from app.services.comparison_service import ComparisonService
 
 router = APIRouter()
@@ -15,11 +17,19 @@ router = APIRouter()
 
 @router.get("/windfarms")
 async def get_available_windfarms(
+    include_deleted: bool = Query(False),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    """Get list of windfarms available for comparison."""
+    """Get list of windfarms available for comparison.
+
+    Soft-deleted windfarms are excluded unless an admin requests
+    include_deleted=true (admin panel only).
+    """
     service = ComparisonService(db)
-    return await service.get_available_windfarms()
+    return await service.get_available_windfarms(
+        visible_only=exclude_deleted(current_user, include_deleted)
+    )
 
 
 @router.get("/compare")

@@ -14,8 +14,10 @@ from app.schemas.windfarm import WindfarmCreate, WindfarmUpdate
 
 class WindfarmService:
     @staticmethod
-    async def get_windfarms(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[Windfarm]:
-        result = await db.execute(
+    async def get_windfarms(
+        db: AsyncSession, skip: int = 0, limit: int = 100, visible_only: bool = False
+    ) -> List[Windfarm]:
+        stmt = (
             select(Windfarm)
             .options(
                 selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
@@ -26,6 +28,9 @@ class WindfarmService:
             .limit(limit)
             .order_by(Windfarm.created_at.desc())
         )
+        if visible_only:
+            stmt = stmt.where(Windfarm.is_deleted == False)  # noqa: E712
+        result = await db.execute(stmt)
         return result.scalars().all()
 
     @staticmethod
@@ -98,14 +103,14 @@ class WindfarmService:
 
     @staticmethod
     async def search_windfarms(
-        db: AsyncSession, query: str, skip: int = 0, limit: int = 100
+        db: AsyncSession, query: str, skip: int = 0, limit: int = 100, visible_only: bool = False
     ) -> List[Windfarm]:
         search_pattern = f"%{query}%"
         # Item #4 — search across name, country, and owner names (not just name).
         from app.models.country import Country
         from app.models.owner import Owner
 
-        result = await db.execute(
+        stmt = (
             select(Windfarm)
             .options(
                 selectinload(Windfarm.windfarm_owners).selectinload(WindfarmOwner.owner),
@@ -128,6 +133,9 @@ class WindfarmService:
             .limit(limit)
             .order_by(Windfarm.created_at.desc())
         )
+        if visible_only:
+            stmt = stmt.where(Windfarm.is_deleted == False)  # noqa: E712
+        result = await db.execute(stmt)
         return result.scalars().all()
 
     @staticmethod

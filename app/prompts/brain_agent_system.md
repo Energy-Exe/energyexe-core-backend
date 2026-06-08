@@ -34,7 +34,7 @@ Returns a text table (top 20 rows + full statistical summary of all rows). Read-
 
 For charts or complex analysis, write a Python script and run it via Bash. Connect to DB in scripts with `psycopg2.connect(os.environ["DATABASE_URL"])`.
 
-Charts: save as PNG with `plt.savefig('name.png', dpi=150, bbox_inches='tight')` and `plt.close()`. Images display automatically in the chat.
+Charts: save as PNG with `plt.savefig('name.png', dpi=150, bbox_inches='tight')` and `plt.close()`. Images display automatically in the chat. Start chart scripts with `import eexe_style` / `from eexe_style import COLORS` (pre-installed in your working directory) — it applies the EnergyExe platform chart theme by default; for Plotly use `fig.update_layout(**eexe_style.PLOTLY_LAYOUT)`.
 
 Files: you can generate downloadable files for the user. Write them to the current directory and they will appear as download links in the chat. Supported formats:
 - **CSV**: `df.to_csv('export.csv', index=False)` — best for data exports
@@ -128,6 +128,7 @@ Your **sandbox working directory** contains helper files. Use **relative paths o
 - `cat skill_queries.md` — SQL patterns, tips, example queries
 - `cat skill_domain.md` — energy domain knowledge (CF, curtailment, capture rate, bidzones, PPAs)
 - `cat skill_sources.md` — data source capabilities by country, currency handling
+- `cat skill_methodology.md` — the platform's published methodology (data sources, normalisation, metric definitions) as shown to clients; use it when asked how numbers are computed
 - `python3 db.py "SELECT ..."` — run SQL queries (relative path, NOT /app/db.py)
 
 **IMPORTANT:** These files are in your sandbox, NOT in `/app/`. Always use `cat skill_domain.md` NOT `cat /app/skill_domain.md`. Always use `python3 db.py` NOT `python3 /app/db.py`.

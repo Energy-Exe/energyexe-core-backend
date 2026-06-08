@@ -1,0 +1,864 @@
+{
+  "Belwind 1": {
+    "code": "BELWIND_1",
+    "country": "Belgium",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "171.0",
+    "lat": "51.668763",
+    "lng": "2.804548",
+    "cod": "2010-12-01",
+    "n_flags": 4,
+    "periods": [
+      {
+        "flag_id": 11584,
+        "start": "2021-05-03 04:00",
+        "end": "2021-09-29 01:00",
+        "dur_h": 945,
+        "trigger": "both",
+        "q50r": "0.193",
+        "q90r": "0.536"
+      },
+      {
+        "flag_id": 11585,
+        "start": "2022-03-01 00:00",
+        "end": "2022-04-30 04:00",
+        "dur_h": 769,
+        "trigger": "both",
+        "q50r": "0.221",
+        "q90r": "0.656"
+      },
+      {
+        "flag_id": 11586,
+        "start": "2023-06-01 00:00",
+        "end": "2023-06-30 19:00",
+        "dur_h": 373,
+        "trigger": "both",
+        "q50r": "0.247",
+        "q90r": "0.537"
+      },
+      {
+        "flag_id": 11587,
+        "start": "2025-03-04 20:00",
+        "end": "2025-04-30 23:00",
+        "dur_h": 816,
+        "trigger": "both",
+        "q50r": "0.168",
+        "q90r": "0.489"
+      }
+    ]
+  },
+  "Nobelwind": {
+    "code": "NOBELWIND",
+    "country": "Belgium",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "165.0",
+    "lat": "51.66359",
+    "lng": "2.816143",
+    "cod": "2017-12-01",
+    "n_flags": 5,
+    "periods": [
+      {
+        "flag_id": 11500,
+        "start": "2016-11-28 00:00",
+        "end": "2017-06-27 17:00",
+        "dur_h": 2583,
+        "trigger": "both",
+        "q50r": "0.136",
+        "q90r": "0.578"
+      },
+      {
+        "flag_id": 11501,
+        "start": "2021-05-02 22:00",
+        "end": "2021-06-30 23:00",
+        "dur_h": 445,
+        "trigger": "q50_ratio",
+        "q50r": "0.161",
+        "q90r": "0.438"
+      },
+      {
+        "flag_id": 11502,
+        "start": "2022-03-01 00:00",
+        "end": "2022-04-30 03:00",
+        "dur_h": 564,
+        "trigger": "both",
+        "q50r": "0.264",
+        "q90r": "0.717"
+      },
+      {
+        "flag_id": 11503,
+        "start": "2023-06-01 00:00",
+        "end": "2023-06-30 22:00",
+        "dur_h": 372,
+        "trigger": "q50_ratio",
+        "q50r": "0.352",
+        "q90r": "0.749"
+      },
+      {
+        "flag_id": 11504,
+        "start": "2025-03-04 20:00",
+        "end": "2025-04-30 22:00",
+        "dur_h": 705,
+        "trigger": "both",
+        "q50r": "0.263",
+        "q90r": "0.697"
+      }
+    ]
+  },
+  "Northwester 2": {
+    "code": "NORTHWESTER_2",
+    "country": "Belgium",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "216.0",
+    "lat": "51.686537",
+    "lng": "2.752631",
+    "cod": "2020-05-01",
+    "n_flags": 6,
+    "periods": [
+      {
+        "flag_id": 11484,
+        "start": "2019-10-08 00:00",
+        "end": "2020-04-30 17:00",
+        "dur_h": 3692,
+        "trigger": "both",
+        "q50r": "0.036",
+        "q90r": "0.353"
+      },
+      {
+        "flag_id": 11485,
+        "start": "2022-03-01 00:00",
+        "end": "2022-04-30 00:00",
+        "dur_h": 590,
+        "trigger": "both",
+        "q50r": "0.286",
+        "q90r": "0.704"
+      },
+      {
+        "flag_id": 11486,
+        "start": "2023-05-03 16:00",
+        "end": "2023-06-30 19:00",
+        "dur_h": 517,
+        "trigger": "both",
+        "q50r": "0.344",
+        "q90r": "0.601"
+      },
+      {
+        "flag_id": 11488,
+        "start": "2024-09-01 00:00",
+        "end": "2024-10-29 09:00",
+        "dur_h": 485,
+        "trigger": "both",
+        "q50r": "0.267",
+        "q90r": "0.667"
+      },
+      {
+        "flag_id": 11489,
+        "start": "2024-12-01 17:00",
+        "end": "2025-01-30 11:00",
+        "dur_h": 392,
+        "trigger": "both",
+        "q50r": "0.688",
+        "q90r": "0.779"
+      },
+      {
+        "flag_id": 11490,
+        "start": "2025-03-04 20:00",
+        "end": "2025-04-30 22:00",
+        "dur_h": 725,
+        "trigger": "both",
+        "q50r": "0.175",
+        "q90r": "0.510"
+      }
+    ]
+  },
+  "Northwind": {
+    "code": "NORTHWIND",
+    "country": "Belgium",
+    "location_type": "offshore",
+    "foundation_type": "Offshore Monopile",
+    "capacity_mw": "216.0",
+    "lat": "51.615959",
+    "lng": "2.90515",
+    "cod": "2014-05-01",
+    "n_flags": 7,
+    "periods": [
+      {
+        "flag_id": 11270,
+        "start": "2021-05-02 22:00",
+        "end": "2021-09-28 11:00",
+        "dur_h": 1025,
+        "trigger": "both",
+        "q50r": "0.215",
+        "q90r": "0.624"
+      },
+      {
+        "flag_id": 11271,
+        "start": "2022-03-01 00:00",
+        "end": "2022-08-31 23:00",
+        "dur_h": 1518,
+        "trigger": "both",
+        "q50r": "0.253",
+        "q90r": "0.727"
+      },
+      {
+        "flag_id": 11272,
+        "start": "2023-05-02 01:00",
+        "end": "2023-06-30 23:00",
+        "dur_h": 896,
+        "trigger": "both",
+        "q50r": "0.290",
+        "q90r": "0.625"
+      },
+      {
+        "flag_id": 11273,
+        "start": "2024-02-01 04:00",
+        "end": "2024-03-31 16:00",
+        "dur_h": 415,
+        "trigger": "both",
+        "q50r": "0.299",
+        "q90r": "0.672"
+      },
+      {
+        "flag_id": 11274,
+        "start": "2024-05-01 00:00",
+        "end": "2024-07-31 21:00",
+        "dur_h": 613,
+        "trigger": "q50_ratio",
+        "q50r": "0.175",
+        "q90r": "0.455"
+      },
+      {
+        "flag_id": 11275,
+        "start": "2024-09-01 00:00",
+        "end": "2024-10-29 09:00",
+        "dur_h": 468,
+        "trigger": "both",
+        "q50r": "0.337",
+        "q90r": "0.731"
+      },
+      {
+        "flag_id": 11276,
+        "start": "2025-03-05 05:00",
+        "end": "2025-04-30 23:00",
+        "dur_h": 797,
+        "trigger": "both",
+        "q50r": "0.196",
+        "q90r": "0.632"
+      }
+    ]
+  },
+  "Rentel": {
+    "code": "RENTEL",
+    "country": "Belgium",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "309.0",
+    "lat": "51.591401",
+    "lng": "2.944545",
+    "cod": "2018-11-20",
+    "n_flags": 6,
+    "periods": [
+      {
+        "flag_id": 11538,
+        "start": "2020-07-01 00:00",
+        "end": "2020-08-30 20:00",
+        "dur_h": 384,
+        "trigger": "both",
+        "q50r": "0.375",
+        "q90r": "0.818"
+      },
+      {
+        "flag_id": 11539,
+        "start": "2021-05-03 07:00",
+        "end": "2021-08-30 21:00",
+        "dur_h": 747,
+        "trigger": "both",
+        "q50r": "0.306",
+        "q90r": "0.637"
+      },
+      {
+        "flag_id": 11540,
+        "start": "2022-03-01 00:00",
+        "end": "2022-04-30 03:00",
+        "dur_h": 533,
+        "trigger": "both",
+        "q50r": "0.215",
+        "q90r": "0.561"
+      },
+      {
+        "flag_id": 11541,
+        "start": "2023-05-02 01:00",
+        "end": "2023-06-30 22:00",
+        "dur_h": 695,
+        "trigger": "both",
+        "q50r": "0.345",
+        "q90r": "0.682"
+      },
+      {
+        "flag_id": 11542,
+        "start": "2024-09-01 00:00",
+        "end": "2024-10-29 10:00",
+        "dur_h": 500,
+        "trigger": "both",
+        "q50r": "0.281",
+        "q90r": "0.619"
+      },
+      {
+        "flag_id": 11543,
+        "start": "2025-03-04 20:00",
+        "end": "2025-04-30 23:00",
+        "dur_h": 744,
+        "trigger": "both",
+        "q50r": "0.216",
+        "q90r": "0.565"
+      }
+    ]
+  },
+  "SeaMade": {
+    "code": "SEAMADE",
+    "country": "Belgium",
+    "location_type": "offshore",
+    "foundation_type": "",
+    "capacity_mw": "487.0",
+    "lat": "51.674339",
+    "lng": "2.804045",
+    "cod": "2021-10-20",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 11478,
+        "start": "2020-05-27 19:00",
+        "end": "2020-11-30 23:00",
+        "dur_h": 2191,
+        "trigger": "both",
+        "q50r": "0.192",
+        "q90r": "0.678"
+      },
+      {
+        "flag_id": 11479,
+        "start": "2022-03-01 00:00",
+        "end": "2022-04-30 03:00",
+        "dur_h": 512,
+        "trigger": "q50_ratio",
+        "q50r": "0.233",
+        "q90r": "0.640"
+      },
+      {
+        "flag_id": 11480,
+        "start": "2025-03-06 16:00",
+        "end": "2025-04-30 22:00",
+        "dur_h": 371,
+        "trigger": "q50_ratio",
+        "q50r": "0.305",
+        "q90r": "0.669"
+      }
+    ]
+  },
+  "Thornton Bank": {
+    "code": "THORNTON_BANK",
+    "country": "Belgium",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "325.2",
+    "lat": "51.550226",
+    "lng": "2.951084",
+    "cod": "2012-07-27",
+    "n_flags": 4,
+    "periods": [
+      {
+        "flag_id": 11596,
+        "start": "2021-03-01 00:00",
+        "end": "2021-09-28 11:00",
+        "dur_h": 1316,
+        "trigger": "both",
+        "q50r": "0.208",
+        "q90r": "0.579"
+      },
+      {
+        "flag_id": 11597,
+        "start": "2022-03-01 00:00",
+        "end": "2022-04-30 03:00",
+        "dur_h": 557,
+        "trigger": "both",
+        "q50r": "0.253",
+        "q90r": "0.628"
+      },
+      {
+        "flag_id": 11598,
+        "start": "2023-05-02 01:00",
+        "end": "2023-06-30 23:00",
+        "dur_h": 686,
+        "trigger": "both",
+        "q50r": "0.275",
+        "q90r": "0.577"
+      },
+      {
+        "flag_id": 11599,
+        "start": "2025-03-05 05:00",
+        "end": "2025-05-31 23:00",
+        "dur_h": 898,
+        "trigger": "both",
+        "q50r": "0.189",
+        "q90r": "0.599"
+      }
+    ]
+  },
+  "Horns Rev 1": {
+    "code": "HORNS_REV_1",
+    "country": "Denmark",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "160.0",
+    "lat": "55.486139",
+    "lng": "7.840551",
+    "cod": "2002-12-01",
+    "n_flags": 4,
+    "periods": [
+      {
+        "flag_id": 11571,
+        "start": "2020-02-01 00:00",
+        "end": "2020-02-29 23:00",
+        "dur_h": 600,
+        "trigger": "both",
+        "q50r": "0.182",
+        "q90r": "0.756"
+      },
+      {
+        "flag_id": 11572,
+        "start": "2020-06-03 12:00",
+        "end": "2020-08-30 17:00",
+        "dur_h": 409,
+        "trigger": "both",
+        "q50r": "0.667",
+        "q90r": "0.750"
+      },
+      {
+        "flag_id": 11573,
+        "start": "2020-11-01 00:00",
+        "end": "2020-12-31 20:00",
+        "dur_h": 1070,
+        "trigger": "both",
+        "q50r": "0.056",
+        "q90r": "0.449"
+      },
+      {
+        "flag_id": 11574,
+        "start": "2021-08-01 00:00",
+        "end": "2021-08-31 06:00",
+        "dur_h": 455,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.691"
+      }
+    ]
+  },
+  "Horns Rev 2": {
+    "code": "HORNS_REV_2",
+    "country": "Denmark",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "209.0",
+    "lat": "55.600165",
+    "lng": "7.582755",
+    "cod": "2009-12-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11560,
+        "start": "2023-09-02 23:00",
+        "end": "2023-10-31 07:00",
+        "dur_h": 561,
+        "trigger": "both",
+        "q50r": "0.579",
+        "q90r": "0.849"
+      },
+      {
+        "flag_id": 11561,
+        "start": "2024-04-03 17:00",
+        "end": "2024-06-30 06:00",
+        "dur_h": 745,
+        "trigger": "both",
+        "q50r": "0.540",
+        "q90r": "0.870"
+      }
+    ]
+  },
+  "Horns Rev 3": {
+    "code": "HORNS_REV_3",
+    "country": "Denmark",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "407.0",
+    "lat": "55.694833",
+    "lng": "7.659058",
+    "cod": "2019-08-01",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11551,
+        "start": "2024-12-01 00:00",
+        "end": "2024-12-31 23:00",
+        "dur_h": 459,
+        "trigger": "both",
+        "q50r": "0.750",
+        "q90r": "0.797"
+      }
+    ]
+  },
+  "Kriegers Flak": {
+    "code": "KRIEGERS_FLAK",
+    "country": "Denmark",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "605.0",
+    "lat": "55.025769",
+    "lng": "12.932268",
+    "cod": "2021-09-01",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11548,
+        "start": "2022-10-01 00:00",
+        "end": "2022-11-29 09:00",
+        "dur_h": 695,
+        "trigger": "both",
+        "q50r": "0.618",
+        "q90r": "0.829"
+      }
+    ]
+  },
+  "Nysted": {
+    "code": "NYSTED",
+    "country": "Denmark",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "166.0",
+    "lat": "54.549301",
+    "lng": "11.714846",
+    "cod": "2003-12-01",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11525,
+        "start": "2020-09-01 23:00",
+        "end": "2020-10-31 23:00",
+        "dur_h": 508,
+        "trigger": "both",
+        "q50r": "0.346",
+        "q90r": "0.803"
+      }
+    ]
+  },
+  "R\u00f8dsand II": {
+    "code": "R\u00d8DSAND_II",
+    "country": "Denmark",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "207.0",
+    "lat": "54.554669",
+    "lng": "11.549101",
+    "cod": "2010-10-26",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11518,
+        "start": "2023-09-03 04:00",
+        "end": "2023-11-28 10:00",
+        "dur_h": 968,
+        "trigger": "both",
+        "q50r": "0.424",
+        "q90r": "0.823"
+      },
+      {
+        "flag_id": 11519,
+        "start": "2024-11-01 00:00",
+        "end": "2025-01-31 19:00",
+        "dur_h": 993,
+        "trigger": "both",
+        "q50r": "0.456",
+        "q90r": "0.817"
+      }
+    ]
+  },
+  "Vesterhav Syd & Nord": {
+    "code": "VESTERHAV_SYD_&_NORD",
+    "country": "Denmark",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "344.0",
+    "lat": "56.375984",
+    "lng": "8.02214",
+    "cod": "2024-03-08",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11508,
+        "start": "2025-01-01 08:00",
+        "end": "2025-02-24 16:00",
+        "dur_h": 352,
+        "trigger": "both",
+        "q50r": "0.523",
+        "q90r": "0.969"
+      },
+      {
+        "flag_id": 11509,
+        "start": "2025-05-01 06:00",
+        "end": "2025-05-31 23:00",
+        "dur_h": 416,
+        "trigger": "both",
+        "q50r": "0.265",
+        "q90r": "0.595"
+      }
+    ]
+  },
+  "Saint Brieuc": {
+    "code": "SAINT_BRIEUC",
+    "country": "France",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "496.0",
+    "lat": "48.84955",
+    "lng": "-2.532867",
+    "cod": "2024-05-29",
+    "n_flags": 4,
+    "periods": [
+      {
+        "flag_id": 11474,
+        "start": "2024-07-28 18:00",
+        "end": "2024-08-31 10:00",
+        "dur_h": 501,
+        "trigger": "both",
+        "q50r": "0.190",
+        "q90r": "0.645"
+      },
+      {
+        "flag_id": 11475,
+        "start": "2024-10-01 00:00",
+        "end": "2024-11-30 16:00",
+        "dur_h": 496,
+        "trigger": "both",
+        "q50r": "0.174",
+        "q90r": "0.749"
+      },
+      {
+        "flag_id": 11476,
+        "start": "2025-01-01 07:00",
+        "end": "2025-03-30 06:00",
+        "dur_h": 633,
+        "trigger": "both",
+        "q50r": "0.180",
+        "q90r": "0.966"
+      },
+      {
+        "flag_id": 11477,
+        "start": "2025-05-01 11:00",
+        "end": "2025-08-31 22:00",
+        "dur_h": 1206,
+        "trigger": "both",
+        "q50r": "0.132",
+        "q90r": "0.701"
+      }
+    ]
+  },
+  "METCentre Karm\u00f8y": {
+    "code": "METCentre_Karm\u00f8y",
+    "country": "Norway",
+    "location_type": "offshore",
+    "foundation_type": "floating",
+    "capacity_mw": "5.9",
+    "lat": "59.14022",
+    "lng": "5.0296",
+    "cod": "2009-10-08",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 11327,
+        "start": "2022-11-01 00:00",
+        "end": "2022-11-30 18:00",
+        "dur_h": 372,
+        "trigger": "q90_ratio",
+        "q50r": "0.341",
+        "q90r": "0.371"
+      },
+      {
+        "flag_id": 11328,
+        "start": "2024-03-01 12:00",
+        "end": "2024-04-30 23:00",
+        "dur_h": 364,
+        "trigger": "q90_ratio",
+        "q50r": "0.549",
+        "q90r": "0.551"
+      },
+      {
+        "flag_id": 11329,
+        "start": "2024-12-01 00:00",
+        "end": "2024-12-31 22:00",
+        "dur_h": 435,
+        "trigger": "q50_ratio",
+        "q50r": "0.000",
+        "q90r": "0.598"
+      }
+    ]
+  },
+  "Formosa 2": {
+    "code": "FORMOSA_2",
+    "country": "Taiwan",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "376.0",
+    "lat": "24.735268",
+    "lng": "120.773574",
+    "cod": "2024-03-26",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11673,
+        "start": "2024-05-27 03:00",
+        "end": "2024-09-29 11:00",
+        "dur_h": 696,
+        "trigger": "both",
+        "q50r": "0.470",
+        "q90r": "0.780"
+      }
+    ]
+  },
+  "Chang Kong": {
+    "code": "CHANG_KONG",
+    "country": "Taiwan",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "86.0",
+    "lat": "24.158222",
+    "lng": "120.441167",
+    "cod": "2007-12-31",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11264,
+        "start": "2024-06-02 02:00",
+        "end": "2024-08-27 19:00",
+        "dur_h": 466,
+        "trigger": "both",
+        "q50r": "0.174",
+        "q90r": "0.517"
+      }
+    ]
+  },
+  "Chungwei": {
+    "code": "CHUNGWEI",
+    "country": "Taiwan",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "125.1",
+    "lat": "24.368957",
+    "lng": "120.580442",
+    "cod": "2009-02-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11237,
+        "start": "2020-12-01 00:00",
+        "end": "2021-01-29 18:00",
+        "dur_h": 484,
+        "trigger": "both",
+        "q50r": "0.376",
+        "q90r": "0.695"
+      },
+      {
+        "flag_id": 11238,
+        "start": "2024-01-01 00:00",
+        "end": "2024-01-30 01:00",
+        "dur_h": 491,
+        "trigger": "both",
+        "q50r": "0.288",
+        "q90r": "0.352"
+      }
+    ]
+  },
+  "Guanwei-Guanyin&Taowei-Xinwu": {
+    "code": "GUANWEI-GUANYIN&TAOWEI-XINWU",
+    "country": "Taiwan",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "48.3",
+    "lat": "25.02635",
+    "lng": "121.04275",
+    "cod": "2009-12-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11763,
+        "start": "2024-06-01 02:00",
+        "end": "2024-09-30 18:00",
+        "dur_h": 559,
+        "trigger": "both",
+        "q50r": "0.083",
+        "q90r": "0.497"
+      },
+      {
+        "flag_id": 11764,
+        "start": "2025-02-01 06:00",
+        "end": "2025-05-12 14:00",
+        "dur_h": 1049,
+        "trigger": "both",
+        "q50r": "0.207",
+        "q90r": "0.538"
+      }
+    ]
+  },
+  "Guanyuan": {
+    "code": "GUANYUAN",
+    "country": "Taiwan",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "30.0",
+    "lat": "25.06804",
+    "lng": "121.11287",
+    "cod": "2005-12-31",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11243,
+        "start": "2020-11-21 00:00",
+        "end": "2021-01-29 23:00",
+        "dur_h": 520,
+        "trigger": "both",
+        "q50r": "0.500",
+        "q90r": "0.600"
+      }
+    ]
+  },
+  "Mailiao": {
+    "code": "MAILIAO",
+    "country": "Taiwan",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "36.0",
+    "lat": "23.8167",
+    "lng": "120.263599999999",
+    "cod": "2000-12-27",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 5124,
+        "start": "2022-12-11 04:00",
+        "end": "2024-11-29 06:00",
+        "dur_h": 2083,
+        "trigger": "both",
+        "q50r": "0.306",
+        "q90r": "0.583"
+      },
+      {
+        "flag_id": 5125,
+        "start": "2025-01-02 02:00",
+        "end": "2025-03-31 21:00",
+        "dur_h": 708,
+        "trigger": "both",
+        "q50r": "0.417",
+        "q90r": "0.611"
+      }
+    ]
+  }
+}

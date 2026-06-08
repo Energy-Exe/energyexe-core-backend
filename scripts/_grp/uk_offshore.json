@@ -1,0 +1,1076 @@
+{
+  "Aberdeen": {
+    "code": "ABERDEEN",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "96.8",
+    "lat": "57.225694",
+    "lng": "-1.996571",
+    "cod": "2018-09-07",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11345,
+        "start": "2018-03-13 23:00",
+        "end": "2018-06-30 23:00",
+        "dur_h": 1230,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      },
+      {
+        "flag_id": 11346,
+        "start": "2024-08-02 12:00",
+        "end": "2025-06-30 23:00",
+        "dur_h": 3842,
+        "trigger": "both",
+        "q50r": "0.467",
+        "q90r": "0.647"
+      }
+    ]
+  },
+  "Barrow": {
+    "code": "BARROW",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "90.0",
+    "lat": "53.991471",
+    "lng": "-3.295966",
+    "cod": "2006-09-01",
+    "n_flags": 7,
+    "periods": [
+      {
+        "flag_id": 11366,
+        "start": "2015-01-01 03:00",
+        "end": "2015-01-31 21:00",
+        "dur_h": 336,
+        "trigger": "both",
+        "q50r": "0.513",
+        "q90r": "0.891"
+      },
+      {
+        "flag_id": 11367,
+        "start": "2020-01-01 00:00",
+        "end": "2020-03-29 09:00",
+        "dur_h": 973,
+        "trigger": "both",
+        "q50r": "0.519",
+        "q90r": "0.755"
+      },
+      {
+        "flag_id": 11368,
+        "start": "2020-08-01 00:00",
+        "end": "2020-09-30 23:00",
+        "dur_h": 592,
+        "trigger": "both",
+        "q50r": "0.211",
+        "q90r": "0.697"
+      },
+      {
+        "flag_id": 11369,
+        "start": "2022-03-01 20:00",
+        "end": "2022-05-28 00:00",
+        "dur_h": 381,
+        "trigger": "both",
+        "q50r": "0.435",
+        "q90r": "0.725"
+      },
+      {
+        "flag_id": 11370,
+        "start": "2023-12-02 21:00",
+        "end": "2024-01-31 23:00",
+        "dur_h": 541,
+        "trigger": "both",
+        "q50r": "0.639",
+        "q90r": "0.820"
+      },
+      {
+        "flag_id": 11371,
+        "start": "2024-07-01 14:00",
+        "end": "2025-02-26 07:00",
+        "dur_h": 1703,
+        "trigger": "both",
+        "q50r": "0.442",
+        "q90r": "0.727"
+      },
+      {
+        "flag_id": 11372,
+        "start": "2025-04-01 12:00",
+        "end": "2025-12-31 23:00",
+        "dur_h": 3039,
+        "trigger": "both",
+        "q50r": "0.412",
+        "q90r": "0.602"
+      }
+    ]
+  },
+  "Beatrice": {
+    "code": "BEATRICE",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "588.0",
+    "lat": "58.254059",
+    "lng": "-2.884547",
+    "cod": "2019-08-05",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 11376,
+        "start": "2023-12-04 03:00",
+        "end": "2023-12-31 06:00",
+        "dur_h": 461,
+        "trigger": "both",
+        "q50r": "0.496",
+        "q90r": "0.496"
+      },
+      {
+        "flag_id": 11377,
+        "start": "2024-04-01 16:00",
+        "end": "2024-05-31 23:00",
+        "dur_h": 634,
+        "trigger": "both",
+        "q50r": "0.464",
+        "q90r": "0.921"
+      },
+      {
+        "flag_id": 11378,
+        "start": "2025-03-01 00:00",
+        "end": "2025-08-31 10:00",
+        "dur_h": 1186,
+        "trigger": "both",
+        "q50r": "0.483",
+        "q90r": "0.790"
+      }
+    ]
+  },
+  "Burbo Bank": {
+    "code": "BURBO_BANK",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "90.0",
+    "lat": "53.488666",
+    "lng": "-3.187252",
+    "cod": "2007-10-18",
+    "n_flags": 5,
+    "periods": [
+      {
+        "flag_id": 11333,
+        "start": "2017-10-01 08:00",
+        "end": "2017-11-30 23:00",
+        "dur_h": 1043,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.210"
+      },
+      {
+        "flag_id": 11334,
+        "start": "2019-04-01 00:00",
+        "end": "2019-05-31 21:00",
+        "dur_h": 442,
+        "trigger": "both",
+        "q50r": "0.304",
+        "q90r": "0.626"
+      },
+      {
+        "flag_id": 11335,
+        "start": "2021-06-01 07:00",
+        "end": "2021-09-30 09:00",
+        "dur_h": 346,
+        "trigger": "both",
+        "q50r": "0.082",
+        "q90r": "0.594"
+      },
+      {
+        "flag_id": 11336,
+        "start": "2021-12-01 01:00",
+        "end": "2022-03-20 01:00",
+        "dur_h": 1036,
+        "trigger": "both",
+        "q50r": "0.700",
+        "q90r": "0.755"
+      },
+      {
+        "flag_id": 11337,
+        "start": "2023-09-01 20:00",
+        "end": "2023-10-31 23:00",
+        "dur_h": 766,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.119"
+      }
+    ]
+  },
+  "Burbo Bank Extension": {
+    "code": "BURBO_BANK_EXTENSION",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "258.0",
+    "lat": "53.4863",
+    "lng": "-3.27515",
+    "cod": "2017-04-27",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11728,
+        "start": "2016-10-05 23:00",
+        "end": "2016-11-20 11:00",
+        "dur_h": 595,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      },
+      {
+        "flag_id": 11729,
+        "start": "2018-04-01 21:00",
+        "end": "2018-06-30 23:00",
+        "dur_h": 433,
+        "trigger": "both",
+        "q50r": "0.409",
+        "q90r": "0.844"
+      }
+    ]
+  },
+  "Dudgeon": {
+    "code": "DUDGEON",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "402.0",
+    "lat": "53.265355",
+    "lng": "1.380715",
+    "cod": "2017-10-15",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11400,
+        "start": "2017-01-04 00:00",
+        "end": "2017-02-08 17:00",
+        "dur_h": 559,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      },
+      {
+        "flag_id": 11401,
+        "start": "2018-12-01 00:00",
+        "end": "2019-01-31 23:00",
+        "dur_h": 755,
+        "trigger": "both",
+        "q50r": "0.679",
+        "q90r": "0.762"
+      }
+    ]
+  },
+  "East Anglia One": {
+    "code": "EAST_ANGLIA_ONE",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "714.0",
+    "lat": "52.237348",
+    "lng": "2.503505",
+    "cod": "2020-07-28",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11759,
+        "start": "2022-05-06 14:00",
+        "end": "2022-06-25 21:00",
+        "dur_h": 463,
+        "trigger": "both",
+        "q50r": "0.473",
+        "q90r": "0.547"
+      }
+    ]
+  },
+  "Galloper": {
+    "code": "GALLOPER",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "352.8",
+    "lat": "51.893151",
+    "lng": "2.034508",
+    "cod": "2018-04-17",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11415,
+        "start": "2017-09-18 23:00",
+        "end": "2018-06-30 16:00",
+        "dur_h": 957,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      }
+    ]
+  },
+  "Greater Gabbard": {
+    "code": "GREATER_GABBARD",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "504.0",
+    "lat": "51.883984",
+    "lng": "1.935838",
+    "cod": "2012-09-07",
+    "n_flags": 7,
+    "periods": [
+      {
+        "flag_id": 11419,
+        "start": "2013-03-30 03:00",
+        "end": "2015-03-31 23:00",
+        "dur_h": 10132,
+        "trigger": "both",
+        "q50r": "0.723",
+        "q90r": "0.945"
+      },
+      {
+        "flag_id": 11420,
+        "start": "2016-04-02 01:00",
+        "end": "2016-05-31 22:00",
+        "dur_h": 625,
+        "trigger": "q90_ratio",
+        "q50r": "0.705",
+        "q90r": "0.954"
+      },
+      {
+        "flag_id": 11421,
+        "start": "2018-07-01 00:00",
+        "end": "2018-08-30 00:00",
+        "dur_h": 617,
+        "trigger": "both",
+        "q50r": "0.382",
+        "q90r": "0.844"
+      },
+      {
+        "flag_id": 11422,
+        "start": "2019-10-01 00:00",
+        "end": "2019-10-31 23:00",
+        "dur_h": 507,
+        "trigger": "both",
+        "q50r": "0.671",
+        "q90r": "0.864"
+      },
+      {
+        "flag_id": 11423,
+        "start": "2020-04-02 08:00",
+        "end": "2020-05-31 23:00",
+        "dur_h": 813,
+        "trigger": "both",
+        "q50r": "0.467",
+        "q90r": "0.897"
+      },
+      {
+        "flag_id": 11424,
+        "start": "2020-10-01 00:00",
+        "end": "2020-12-31 21:00",
+        "dur_h": 1455,
+        "trigger": "both",
+        "q50r": "0.817",
+        "q90r": "0.907"
+      },
+      {
+        "flag_id": 11425,
+        "start": "2021-06-01 00:00",
+        "end": "2025-12-31 23:00",
+        "dur_h": 25832,
+        "trigger": "both",
+        "q50r": "0.541",
+        "q90r": "0.880"
+      }
+    ]
+  },
+  "Gunfleet Sands 1 & 2": {
+    "code": "GUNFLEET_SANDS_1_&_2",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "172.8",
+    "lat": "51.729867",
+    "lng": "1.238283",
+    "cod": "2010-07-24",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11429,
+        "start": "2013-04-01 10:00",
+        "end": "2013-05-31 09:00",
+        "dur_h": 354,
+        "trigger": "both",
+        "q50r": "0.561",
+        "q90r": "0.861"
+      }
+    ]
+  },
+  "Gwynt Y Mor": {
+    "code": "GWYNT_Y_MOR",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "576.0",
+    "lat": "53.45882",
+    "lng": "-3.584269",
+    "cod": "2015-06-18",
+    "n_flags": 4,
+    "periods": [
+      {
+        "flag_id": 11433,
+        "start": "2015-10-05 00:00",
+        "end": "2016-02-29 23:00",
+        "dur_h": 1745,
+        "trigger": "both",
+        "q50r": "0.699",
+        "q90r": "0.730"
+      },
+      {
+        "flag_id": 11434,
+        "start": "2020-11-01 02:00",
+        "end": "2021-02-24 04:00",
+        "dur_h": 882,
+        "trigger": "both",
+        "q50r": "0.711",
+        "q90r": "0.733"
+      },
+      {
+        "flag_id": 11435,
+        "start": "2023-12-06 18:00",
+        "end": "2024-06-28 12:00",
+        "dur_h": 1722,
+        "trigger": "both",
+        "q50r": "0.668",
+        "q90r": "0.723"
+      },
+      {
+        "flag_id": 11436,
+        "start": "2024-08-02 17:00",
+        "end": "2024-10-28 07:00",
+        "dur_h": 619,
+        "trigger": "both",
+        "q50r": "0.550",
+        "q90r": "0.730"
+      }
+    ]
+  },
+  "Hornsea 1": {
+    "code": "HORNSEA_1",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "1218.0",
+    "lat": "53.884413",
+    "lng": "1.895389",
+    "cod": "2020-06-02",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11443,
+        "start": "2018-11-01 00:00",
+        "end": "2018-12-31 23:00",
+        "dur_h": 1233,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      },
+      {
+        "flag_id": 11444,
+        "start": "2024-01-01 00:00",
+        "end": "2024-05-31 23:00",
+        "dur_h": 2258,
+        "trigger": "both",
+        "q50r": "0.473",
+        "q90r": "0.667"
+      }
+    ]
+  },
+  "Hornsea 2": {
+    "code": "HORNSEA_2",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "1386.0",
+    "lat": "53.940235",
+    "lng": "1.687663",
+    "cod": "2022-08-31",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11457,
+        "start": "2024-04-01 00:00",
+        "end": "2024-06-28 16:00",
+        "dur_h": 774,
+        "trigger": "both",
+        "q50r": "0.584",
+        "q90r": "0.746"
+      },
+      {
+        "flag_id": 11458,
+        "start": "2025-04-01 18:00",
+        "end": "2025-06-30 23:00",
+        "dur_h": 667,
+        "trigger": "both",
+        "q50r": "0.579",
+        "q90r": "0.624"
+      }
+    ]
+  },
+  "Humber Gateway": {
+    "code": "HUMBER_GATEWAY",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "219.0",
+    "lat": "53.644288",
+    "lng": "0.293123",
+    "cod": "2015-05-30",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11449,
+        "start": "2018-02-01 00:00",
+        "end": "2018-03-31 02:00",
+        "dur_h": 679,
+        "trigger": "both",
+        "q50r": "0.471",
+        "q90r": "0.824"
+      }
+    ]
+  },
+  "Hywind Scotland": {
+    "code": "HYWIND_SCOTLAND",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "floating",
+    "capacity_mw": "30.0",
+    "lat": "57.484485",
+    "lng": "-1.360403",
+    "cod": "2017-10-27",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 11593,
+        "start": "2017-08-13 23:00",
+        "end": "2017-09-10 17:00",
+        "dur_h": 368,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      },
+      {
+        "flag_id": 11594,
+        "start": "2022-10-01 00:00",
+        "end": "2022-11-30 23:00",
+        "dur_h": 910,
+        "trigger": "both",
+        "q50r": "0.728",
+        "q90r": "0.744"
+      },
+      {
+        "flag_id": 11595,
+        "start": "2025-09-01 00:00",
+        "end": "2025-09-30 23:00",
+        "dur_h": 453,
+        "trigger": "both",
+        "q50r": "0.579",
+        "q90r": "0.915"
+      }
+    ]
+  },
+  "Lincs": {
+    "code": "LINCS",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "270.0",
+    "lat": "53.190474",
+    "lng": "0.491603",
+    "cod": "2013-08-01",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11696,
+        "start": "2022-07-01 04:00",
+        "end": "2022-07-31 19:00",
+        "dur_h": 352,
+        "trigger": "both",
+        "q50r": "0.070",
+        "q90r": "0.681"
+      }
+    ]
+  },
+  "London Array": {
+    "code": "LONDON_ARRAY",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "630.0",
+    "lat": "51.62556",
+    "lng": "1.496324",
+    "cod": "2013-04-06",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 11606,
+        "start": "2018-09-05 00:00",
+        "end": "2018-11-30 17:00",
+        "dur_h": 603,
+        "trigger": "both",
+        "q50r": "0.647",
+        "q90r": "0.837"
+      },
+      {
+        "flag_id": 11607,
+        "start": "2019-01-01 20:00",
+        "end": "2019-02-28 18:00",
+        "dur_h": 487,
+        "trigger": "both",
+        "q50r": "0.744",
+        "q90r": "0.773"
+      },
+      {
+        "flag_id": 11608,
+        "start": "2019-04-01 00:00",
+        "end": "2019-08-31 21:00",
+        "dur_h": 1229,
+        "trigger": "both",
+        "q50r": "0.438",
+        "q90r": "0.674"
+      }
+    ]
+  },
+  "Moray East": {
+    "code": "MORAY_EAST",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "950.0",
+    "lat": "58.188679",
+    "lng": "-2.720726",
+    "cod": "2022-04-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11668,
+        "start": "2023-03-03 21:00",
+        "end": "2024-04-30 19:00",
+        "dur_h": 4693,
+        "trigger": "both",
+        "q50r": "0.464",
+        "q90r": "0.687"
+      },
+      {
+        "flag_id": 11669,
+        "start": "2024-06-02 14:00",
+        "end": "2024-09-30 08:00",
+        "dur_h": 834,
+        "trigger": "both",
+        "q50r": "0.510",
+        "q90r": "0.781"
+      }
+    ]
+  },
+  "Neart na Gaoithe (NnG)": {
+    "code": "NEART_NA_GAOITHE_(NNG)",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "448.0",
+    "lat": "56.268029",
+    "lng": "-2.249493",
+    "cod": "2025-07-24",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11691,
+        "start": "2023-06-23 00:00",
+        "end": "2024-09-30 17:00",
+        "dur_h": 7116,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      }
+    ]
+  },
+  "Ormonde": {
+    "code": "ORMONDE",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "150.0",
+    "lat": "54.08827",
+    "lng": "-3.437041",
+    "cod": "2011-08-01",
+    "n_flags": 4,
+    "periods": [
+      {
+        "flag_id": 11700,
+        "start": "2017-06-01 07:00",
+        "end": "2017-10-29 04:00",
+        "dur_h": 1762,
+        "trigger": "both",
+        "q50r": "0.080",
+        "q90r": "0.679"
+      },
+      {
+        "flag_id": 11701,
+        "start": "2019-08-01 00:00",
+        "end": "2019-09-30 22:00",
+        "dur_h": 694,
+        "trigger": "both",
+        "q50r": "0.305",
+        "q90r": "0.831"
+      },
+      {
+        "flag_id": 11702,
+        "start": "2023-07-01 00:00",
+        "end": "2023-09-30 20:00",
+        "dur_h": 960,
+        "trigger": "both",
+        "q50r": "0.437",
+        "q90r": "0.714"
+      },
+      {
+        "flag_id": 11703,
+        "start": "2024-01-01 02:00",
+        "end": "2024-04-30 16:00",
+        "dur_h": 1510,
+        "trigger": "both",
+        "q50r": "0.163",
+        "q90r": "0.721"
+      }
+    ]
+  },
+  "Race Bank": {
+    "code": "RACE_BANK",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "573.0",
+    "lat": "53.276579",
+    "lng": "0.841377",
+    "cod": "2018-02-01",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 11612,
+        "start": "2016-12-20 05:00",
+        "end": "2017-05-17 22:00",
+        "dur_h": 2656,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      },
+      {
+        "flag_id": 11613,
+        "start": "2019-04-01 00:00",
+        "end": "2019-04-28 14:00",
+        "dur_h": 433,
+        "trigger": "q50_ratio",
+        "q50r": "0.270",
+        "q90r": "0.781"
+      },
+      {
+        "flag_id": 11614,
+        "start": "2024-02-01 00:00",
+        "end": "2024-03-31 22:00",
+        "dur_h": 780,
+        "trigger": "both",
+        "q50r": "0.489",
+        "q90r": "0.847"
+      }
+    ]
+  },
+  "Rampion": {
+    "code": "RAMPION",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "400.0",
+    "lat": "50.668853",
+    "lng": "-0.276357",
+    "cod": "2018-04-01",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 11682,
+        "start": "2017-11-09 10:00",
+        "end": "2018-07-31 07:00",
+        "dur_h": 779,
+        "trigger": "both",
+        "q50r": "0.199",
+        "q90r": "0.500"
+      },
+      {
+        "flag_id": 11683,
+        "start": "2018-09-09 15:00",
+        "end": "2018-11-30 23:00",
+        "dur_h": 662,
+        "trigger": "both",
+        "q50r": "0.500",
+        "q90r": "0.834"
+      },
+      {
+        "flag_id": 11684,
+        "start": "2019-08-05 06:00",
+        "end": "2020-01-31 23:00",
+        "dur_h": 2072,
+        "trigger": "both",
+        "q50r": "0.380",
+        "q90r": "0.606"
+      }
+    ]
+  },
+  "Robin Rigg": {
+    "code": "ROBIN_RIGG",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "174.0",
+    "lat": "54.755914",
+    "lng": "-3.712177",
+    "cod": "2010-04-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11734,
+        "start": "2015-12-01 06:00",
+        "end": "2016-01-31 20:00",
+        "dur_h": 413,
+        "trigger": "both",
+        "q50r": "0.204",
+        "q90r": "0.684"
+      },
+      {
+        "flag_id": 11735,
+        "start": "2025-01-01 00:00",
+        "end": "2025-01-31 08:00",
+        "dur_h": 400,
+        "trigger": "both",
+        "q50r": "0.351",
+        "q90r": "0.479"
+      }
+    ]
+  },
+  "Seagreen": {
+    "code": "SEAGREEN",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "1075.0",
+    "lat": "56.597866",
+    "lng": "-1.718219",
+    "cod": "2023-10-17",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11623,
+        "start": "2022-07-13 00:00",
+        "end": "2023-12-30 22:00",
+        "dur_h": 6595,
+        "trigger": "both",
+        "q50r": "0.137",
+        "q90r": "0.339"
+      }
+    ]
+  },
+  "Sheringham Shoal": {
+    "code": "SHERINGHAM_SHOAL",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "317.0",
+    "lat": "53.135574",
+    "lng": "1.14748",
+    "cod": "2012-10-29",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11624,
+        "start": "2016-09-03 17:00",
+        "end": "2016-10-28 07:00",
+        "dur_h": 379,
+        "trigger": "both",
+        "q50r": "0.501",
+        "q90r": "0.501"
+      },
+      {
+        "flag_id": 11625,
+        "start": "2023-06-01 00:00",
+        "end": "2023-07-31 16:00",
+        "dur_h": 453,
+        "trigger": "both",
+        "q50r": "0.496",
+        "q90r": "0.636"
+      }
+    ]
+  },
+  "Thanet": {
+    "code": "THANET",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "300.0",
+    "lat": "51.430406",
+    "lng": "1.633708",
+    "cod": "2010-09-16",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11629,
+        "start": "2017-05-01 05:00",
+        "end": "2017-08-30 15:00",
+        "dur_h": 569,
+        "trigger": "both",
+        "q50r": "0.507",
+        "q90r": "0.514"
+      },
+      {
+        "flag_id": 11630,
+        "start": "2025-12-01 00:00",
+        "end": "2025-12-31 23:00",
+        "dur_h": 629,
+        "trigger": "both",
+        "q50r": "0.057",
+        "q90r": "0.689"
+      }
+    ]
+  },
+  "Walney 1&2": {
+    "code": "WALNEY_1&2",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "367.0",
+    "lat": "54.065397",
+    "lng": "-3.574918",
+    "cod": "2012-04-06",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11635,
+        "start": "2024-03-01 01:00",
+        "end": "2024-03-31 22:00",
+        "dur_h": 458,
+        "trigger": "both",
+        "q50r": "0.436",
+        "q90r": "0.791"
+      },
+      {
+        "flag_id": 11636,
+        "start": "2025-04-01 00:00",
+        "end": "2025-04-28 07:00",
+        "dur_h": 387,
+        "trigger": "both",
+        "q50r": "0.267",
+        "q90r": "0.836"
+      }
+    ]
+  },
+  "Walney Extension": {
+    "code": "WALNEY_EXTENSION",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "659.0",
+    "lat": "54.065498",
+    "lng": "-3.688519",
+    "cod": "2018-09-13",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11710,
+        "start": "2017-08-01 00:00",
+        "end": "2017-09-03 17:00",
+        "dur_h": 506,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      },
+      {
+        "flag_id": 11711,
+        "start": "2021-03-09 11:00",
+        "end": "2021-04-28 22:00",
+        "dur_h": 382,
+        "trigger": "both",
+        "q50r": "0.487",
+        "q90r": "0.921"
+      }
+    ]
+  },
+  "West of Duddon Sands": {
+    "code": "WEST_OF_DUDDON_SANDS",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "389.0",
+    "lat": "53.984065",
+    "lng": "-3.464375",
+    "cod": "2014-10-30",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11641,
+        "start": "2015-10-04 18:00",
+        "end": "2015-12-31 23:00",
+        "dur_h": 1211,
+        "trigger": "both",
+        "q50r": "0.641",
+        "q90r": "0.819"
+      },
+      {
+        "flag_id": 11642,
+        "start": "2019-05-01 23:00",
+        "end": "2019-07-31 23:00",
+        "dur_h": 753,
+        "trigger": "both",
+        "q50r": "0.403",
+        "q90r": "0.793"
+      }
+    ]
+  },
+  "Westermost Rough": {
+    "code": "WESTERMOST_ROUGH",
+    "country": "United Kingdom",
+    "location_type": "offshore",
+    "foundation_type": "fixed",
+    "capacity_mw": "210.0",
+    "lat": "53.805882",
+    "lng": "0.149824",
+    "cod": "2015-05-26",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 11647,
+        "start": "2014-08-02 08:00",
+        "end": "2015-08-29 01:00",
+        "dur_h": 672,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.625"
+      },
+      {
+        "flag_id": 11648,
+        "start": "2015-11-05 03:00",
+        "end": "2015-11-30 23:00",
+        "dur_h": 502,
+        "trigger": "both",
+        "q50r": "0.744",
+        "q90r": "0.807"
+      },
+      {
+        "flag_id": 11649,
+        "start": "2024-09-01 03:00",
+        "end": "2024-10-28 07:00",
+        "dur_h": 399,
+        "trigger": "both",
+        "q50r": "0.682",
+        "q90r": "0.790"
+      }
+    ]
+  }
+}

@@ -1,5 +1,7 @@
 """Dependency injection utilities."""
 
+from typing import Optional
+
 import structlog
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -13,6 +15,7 @@ from app.services.user import UserService
 
 logger = structlog.get_logger()
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 
 
 async def get_db() -> AsyncSession:
@@ -64,6 +67,52 @@ async def get_current_user(
         raise AuthenticationException("Account pending approval")
 
     return user
+
+
+async def get_current_user_optional(
+    db: AsyncSession = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
+) -> Optional[User]:
+    """Get the current user if a valid token is supplied, otherwise None.
+
+    Never raises on missing/invalid credentials — used by endpoints that are
+    readable without auth but apply role-based filtering (e.g. windfarm
+    client-visibility).
+    """
+    if credentials is None:
+        return None
+
+    username = verify_token(credentials.credentials)
+    if username is None:
+        return None
+
+    user_service = UserService(db)
+    user = await user_service.get_by_username(username)
+
+    if user is None or not user.is_active:
+        return None
+
+    return user
+
+
+def is_client_request(user: Optional[User]) -> bool:
+    """Whether the requester should be treated as a client for visibility filtering.
+
+    Unauthenticated requests are treated as clients (safe default); admin-ui
+    always sends a token, so internal users are unaffected.
+    """
+    if user is None:
+        return True
+    return not user.is_superuser and user.role != "admin"
+
+
+def exclude_deleted(user: Optional[User], include_deleted: bool) -> bool:
+    """Soft-deleted windfarms are excluded for EVERYONE by default — even admins
+    (so an admin browsing the client portal sees what clients see). Only an
+    explicit include_deleted=true from an admin requester returns them
+    (used by the admin panel).
+    """
+    return not (include_deleted and not is_client_request(user))
 
 
 async def get_current_user_basic(

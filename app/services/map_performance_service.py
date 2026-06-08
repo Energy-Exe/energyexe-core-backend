@@ -286,7 +286,12 @@ class MapPerformanceService:
         if windfarm_ids is not None:
             stmt = stmt.where(Windfarm.id.in_(windfarm_ids))
         else:
-            stmt = stmt.where(Windfarm.status == "operational")
+            # Map endpoints are client-facing — the default-all branch must not
+            # surface soft-deleted windfarms.
+            stmt = stmt.where(
+                Windfarm.status == "operational",
+                Windfarm.is_deleted == False,  # noqa: E712
+            )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 

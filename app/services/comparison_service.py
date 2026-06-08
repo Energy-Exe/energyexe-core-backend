@@ -5,11 +5,17 @@ Service for windfarm generation data comparisons.
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, case, exists
+from sqlalchemy import select, func, and_, case, exists, text
 from sqlalchemy.orm import joinedload
 
 from app.models.generation_data import GenerationData
 from app.models.windfarm import Windfarm
+
+# Sources that report ONE generation_data row per month (the whole month's MWh
+# stored at a single hour). Their rows must be weighted by hours-in-month when
+# computing capacity factors — treating them as one hour inflates CF ~720x
+# (client-ui #27/#112: 35,727% CF on USA/Denmark charts).
+MONTHLY_SOURCES = ("EIA", "ENERGISTYRELSEN")
 
 
 class ComparisonService:
@@ -49,6 +55,20 @@ class ComparisonService:
         # (e.g. Raggovidda 45+51.6 MW) — averaging per-row CF would under-weight
         # the larger unit because each row's CF is gen/(its-own-unit-cap).
         net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
+
+        # Hours of real time each row represents: 1 for hourly sources, the
+        # full month's hours for monthly sources (EIA/Energistyrelsen store
+        # one row per month). Needed so CF denominators are MW × hours covered,
+        # not MW × row-count. (#112)
+        month_start = func.date_trunc('month', GenerationData.hour)
+        hours_in_month = func.extract(
+            'epoch', month_start + text("interval '1 month'") - month_start
+        ) / 3600.0
+        row_hours = case(
+            (GenerationData.source.in_(MONTHLY_SOURCES), hours_in_month),
+            else_=1.0,
+        )
+
         hourly_subq = (
             select(
                 GenerationData.hour.label('h'),
@@ -56,6 +76,7 @@ class ComparisonService:
                 func.sum(net_gen).label('h_gen'),
                 func.sum(GenerationData.capacity_mw).label('h_cap'),
                 func.sum(GenerationData.raw_capacity_mw).label('h_raw_cap'),
+                func.max(row_hours).label('h_hours'),
                 func.sum(func.coalesce(GenerationData.metered_mwh, GenerationData.generation_mwh)).label('h_metered'),
                 func.sum(func.coalesce(GenerationData.curtailed_mwh, 0)).label('h_curtailed'),
                 func.bool_or(GenerationData.is_ramp_up == True).label('h_ramp_up'),
@@ -65,16 +86,23 @@ class ComparisonService:
             .subquery()
         )
 
-        h_cf = hourly_subq.c.h_gen / func.nullif(hourly_subq.c.h_cap, 0)
-        h_raw_cf = hourly_subq.c.h_gen / func.nullif(hourly_subq.c.h_raw_cap, 0)
+        # Per-bucket CF is energy-weighted: SUM(gen) / SUM(cap × hours covered).
+        # Equivalent to (or better than) the old AVG of per-hour CFs for hourly
+        # sources (sum-gen/sum-cap is the correct multi-unit definition), and
+        # correct for monthly sources where the denominator must be a whole
+        # month of MW-hours, not one. (#112)
+        cap_hours = hourly_subq.c.h_cap * hourly_subq.c.h_hours
+        raw_cap_hours = hourly_subq.c.h_raw_cap * hourly_subq.c.h_hours
         if exclude_ramp_up:
-            h_cf_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=h_cf)
-            h_raw_cf_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=h_raw_cf)
+            cf_gen_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=hourly_subq.c.h_gen)
+            cap_hours_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=cap_hours)
+            raw_cap_hours_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=raw_cap_hours)
             h_cap_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=hourly_subq.c.h_cap)
             h_raw_cap_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=hourly_subq.c.h_raw_cap)
         else:
-            h_cf_safe = h_cf
-            h_raw_cf_safe = h_raw_cf
+            cf_gen_safe = hourly_subq.c.h_gen
+            cap_hours_safe = cap_hours
+            raw_cap_hours_safe = raw_cap_hours
             h_cap_safe = hourly_subq.c.h_cap
             h_raw_cap_safe = hourly_subq.c.h_raw_cap
 
@@ -89,8 +117,8 @@ class ComparisonService:
                 func.avg(hourly_subq.c.h_gen).label('avg_generation'),
                 func.max(hourly_subq.c.h_gen).label('max_generation'),
                 func.min(hourly_subq.c.h_gen).label('min_generation'),
-                func.avg(h_cf_safe).label('avg_capacity_factor'),
-                func.avg(h_raw_cf_safe).label('avg_raw_capacity_factor'),
+                (func.sum(cf_gen_safe) / func.nullif(func.sum(cap_hours_safe), 0)).label('avg_capacity_factor'),
+                (func.sum(cf_gen_safe) / func.nullif(func.sum(raw_cap_hours_safe), 0)).label('avg_raw_capacity_factor'),
                 func.avg(h_raw_cap_safe).label('avg_raw_capacity'),
                 func.avg(h_cap_safe).label('avg_capacity'),
                 func.count().label('data_points'),
@@ -270,7 +298,7 @@ class ComparisonService:
             'summary': summary
         }
 
-    async def get_available_windfarms(self) -> List[Dict[str, Any]]:
+    async def get_available_windfarms(self, visible_only: bool = False) -> List[Dict[str, Any]]:
         """Get list of all windfarms with data availability flag (lightweight)."""
 
         has_data_subq = exists().where(
@@ -283,6 +311,9 @@ class ComparisonService:
             Windfarm.nameplate_capacity_mw,
             has_data_subq.label('has_data'),
         ).order_by(Windfarm.name)
+
+        if visible_only:
+            query = query.where(Windfarm.is_deleted == False)  # noqa: E712
 
         result = await self.db.execute(query)
         rows = result.all()

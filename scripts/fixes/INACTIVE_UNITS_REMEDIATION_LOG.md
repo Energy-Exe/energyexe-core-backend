@@ -64,6 +64,34 @@ Also: 346 stale `performance_summaries` rows on the 5 victim windfarms (Hornsea 
 - Aberdeen 2019–2021: ELEXON 0.90 + ENTSOE 0.50 GWh ✅ (gained parallel ENTSOE)
 - Galloper Jan–May 2021: ELEXON 0.64 + ENTSOE 0.51 GWh ✅ (near-identical per-unit match)
 
+### 6. Final 8-unit unlink (committed 2026-05-20)
+
+Source: team follow-up — clarified they want ELEXON only on these UK offshore
+windfarms, not the ENTSOE parallel feed we'd reconnected on 2026-05-12.
+
+ELEXON-vs-ENTSOE coverage analysis (`scripts/fixes/compare_entsoe_vs_elexon.py`)
+confirmed ELEXON is fuller on every wf — ENTSOE adds essentially no unique data
+(only EAOne pre-COD commissioning + a few hundred ELEXON gap-fills on
+Hornsea 1 / Ormonde, all preserved on the unit row via unlink rather than delete).
+
+Script: `scripts/fixes/unlink_8_entsoe_team_final.py`
+
+8 units unlinked (same pattern as the 28 D1 units in #5):
+- 12328 ABRB0-1                 → was wf 7350 Aberdeen
+- 12346 East Anglia One         → was wf 7371 East Anglia One
+- 12348-12351 Galloper GAOFO-1..4 → was wf 7373 Galloper
+- 12361 Hornsea 1               → was wf 7384 Hornsea 1
+- 12385 Ormonde Eng Ltd         → was wf 7404 Ormonde
+
+Effects:
+- 84,051 `generation_data` rows updated (`windfarm_id` → NULL)
+- 8 `generation_units` rows updated (`windfarm_id` → NULL)
+- 8 `generation_unit_mapping` rows deactivated
+- 533 `performance_summaries` rows deleted across 5 windfarms
+
+The data is preserved on the unit rows for audit (accessible by direct unit-id
+query). Reversal: single UPDATE per unit to restore `windfarm_id`.
+
 ### 5. Team-list 88-action execution (committed 2026-05-19)
 
 Source: Prioritisation 2026-05-18.docx (first table), 96 rows → 88 actions

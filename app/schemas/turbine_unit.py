@@ -20,6 +20,10 @@ class TurbineModelBasic(BaseModel):
     model: str
     supplier: str
     rated_power_kw: Optional[int] = None
+    # Surfaced for the client Overview "Turbine Fleet" Model Breakdown (rotor was
+    # previously dropped from this nested payload, showing as N/A). float (not
+    # Decimal) so it serialises as a JSON number, matching the frontend type.
+    rotor_diameter_m: Optional[float] = None
 
     class Config:
         from_attributes = True
