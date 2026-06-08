@@ -61,6 +61,10 @@ class Windfarm(Base):
     notes = Column(String(300), nullable=True)
     alternate_name = Column(String(255), nullable=True)
 
+    # Soft delete — hides the windfarm from the client-facing platform without
+    # removing it from the DB. Admin always sees all; admin Delete stays a hard delete.
+    is_deleted = Column(Boolean, default=False, server_default="false", nullable=False)
+
     # Environmental and regulatory
     environmental_assessment_status = Column(String(100), nullable=True)
     permits_obtained = Column(Boolean, default=False, nullable=False)

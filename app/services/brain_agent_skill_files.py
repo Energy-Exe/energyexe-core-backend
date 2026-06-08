@@ -16,7 +16,7 @@ SKILL_SCHEMA = """# Database Schema Reference
 
 ## Core Tables
 
-**windfarms**: id, name, code, nameplate_capacity_mw (Float), location_type (onshore/offshore), foundation_type (fixed/floating), status (operational/decommissioned/under_installation/expanded), country_id, state_id, region_id, bidzone_id, lat, lng, commercial_operational_date, ramp_up_end_date
+**windfarms**: id, name, code, nameplate_capacity_mw (Float), location_type (onshore/offshore), foundation_type (fixed/floating), status (operational/decommissioned/under_installation/expanded), country_id, state_id, region_id, bidzone_id, lat, lng, commercial_operational_date, ramp_up_end_date, is_deleted (bool — soft-deleted windfarms, hidden from the client platform)
 
 **generation_data**: hour (timestamptz), windfarm_id, generation_unit_id, generation_mwh (Numeric 12,3), metered_mwh (Numeric 12,3), curtailed_mwh (Numeric 12,3), capacity_mw, capacity_factor (0-1 decimal), consumption_mwh, is_ramp_up (bool), source (ENTSOE/ELEXON/EIA/NVE), quality_flag, completeness
 - Unique: (hour, generation_unit_id, source)
@@ -363,6 +363,94 @@ SKILL_DOMAIN = SKILL_DOMAIN.replace("__SCHEMA_CATALOGUE__", _SCHEMA_CATALOGUE)
 # Inject the full schema_code list (by CODE) into the opportunities-table row of
 # SKILL_SCHEMA, same single-source generation so it can't drift to a stale subset.
 SKILL_SCHEMA = SKILL_SCHEMA.replace("__OPPORTUNITY_SCHEMA_CODES__", _SCHEMA_CODES)
+
+# EnergyExe chart theme — seeded into the agent sandbox as eexe_style.py so
+# agent-generated matplotlib/Plotly charts come out on-brand by default (#161,
+# supersedes the prompt-only palette from #50). The tokens mirror the May-2026
+# rebrand in energyexe-client-ui/src/styles.css (dark theme: the agent page
+# renders charts on navy card surfaces) plus the in-app Recharts accent set.
+# Keep in sync with the FE tokens if the design system changes again.
+CHART_STYLE_PY = '''"""EnergyExe platform chart theme — applies automatically on import.
+
+Usage in any chart script:
+
+    import eexe_style                      # rcParams applied on import
+    from eexe_style import COLORS          # series palette, index by series
+
+    # Plotly:
+    fig.update_layout(**eexe_style.PLOTLY_LAYOUT)
+"""
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
+from cycler import cycler
+
+# --- EnergyExe design tokens (dark theme, May-2026 rebrand) ---
+BG = "#0F1B2D"        # card surface the chart sits on
+FG = "#FFFFFF"        # titles
+TEXT = "#CBD5E1"      # labels / annotations
+MUTED = "#94A3B8"     # ticks, secondary text
+GRID = "#28395A"      # gridlines / spines / borders
+
+# Series palette, in order: brand electric blue first, then the accent set
+# used by the platform's own charts.
+COLORS = [
+    "#4D96FF",  # brand electric blue (dark-theme primary)
+    "#22D3EE",  # cyan
+    "#10B981",  # emerald
+    "#F59E0B",  # amber
+    "#A855F7",  # violet
+    "#14B8A6",  # teal
+    "#EC4899",  # pink
+    "#EF4444",  # red
+]
+
+plt.rcParams.update({
+    "figure.facecolor": BG,
+    "axes.facecolor": BG,
+    "savefig.facecolor": BG,
+    "savefig.dpi": 150,
+    "savefig.bbox": "tight",
+    "figure.figsize": (10, 5.5),
+    "text.color": TEXT,
+    "axes.labelcolor": MUTED,
+    "axes.titlecolor": FG,
+    "axes.titleweight": "bold",
+    "xtick.color": MUTED,
+    "ytick.color": MUTED,
+    "axes.edgecolor": GRID,
+    "axes.linewidth": 0.8,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.grid": True,
+    "grid.color": GRID,
+    "grid.alpha": 0.7,
+    "grid.linestyle": "--",
+    "grid.linewidth": 0.6,
+    "axes.prop_cycle": cycler(color=COLORS),
+    "lines.linewidth": 2,
+    "lines.markersize": 4,
+    "legend.frameon": False,
+    "legend.labelcolor": TEXT,
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Geist", "Inter", "DejaVu Sans", "sans-serif"],
+})
+
+# For Plotly figures: fig.update_layout(**PLOTLY_LAYOUT) then color by COLORS.
+PLOTLY_LAYOUT = {
+    "paper_bgcolor": BG,
+    "plot_bgcolor": BG,
+    "font": {"color": TEXT, "family": "Geist, Inter, sans-serif"},
+    "title": {"font": {"color": FG}},
+    "colorway": COLORS,
+    "xaxis": {"gridcolor": GRID, "zerolinecolor": GRID, "tickfont": {"color": MUTED}},
+    "yaxis": {"gridcolor": GRID, "zerolinecolor": GRID, "tickfont": {"color": MUTED}},
+    "legend": {"font": {"color": TEXT}},
+}
+'''
 
 SKILL_SOURCES = """# Data Source Capabilities
 

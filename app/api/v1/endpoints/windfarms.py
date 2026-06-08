@@ -1,10 +1,12 @@
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import DEFAULT_PAGINATION_LIMIT, MAX_PAGINATION_LIMIT, MIN_PAGINATION_LIMIT
 from app.core.database import get_db
+from app.core.deps import exclude_deleted, get_current_user_optional
+from app.models.user import User
 from app.schemas.windfarm import (
     Windfarm,
     WindfarmCreate,
@@ -23,16 +25,32 @@ from app.services.windfarm_owner import WindfarmOwnerService
 
 router = APIRouter()
 
+# Soft-deleted windfarms are excluded for everyone by default (even admins, so
+# the client portal looks the same regardless of who's logged in); only the
+# admin panel passes include_deleted=true. Logic lives in deps.exclude_deleted.
+_exclude_deleted = exclude_deleted
+
 
 @router.get("", response_model=List[WindfarmListItem])
 @router.get("/", response_model=List[WindfarmListItem])
 async def get_windfarms(
     skip: int = Query(0, ge=0),
     limit: int = Query(DEFAULT_PAGINATION_LIMIT, ge=MIN_PAGINATION_LIMIT, le=MAX_PAGINATION_LIMIT),
+    include_deleted: bool = Query(False),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
-    """Get all windfarms with pagination and owner information"""
-    windfarms = await WindfarmService.get_windfarms(db, skip=skip, limit=limit)
+    """Get all windfarms with pagination and owner information.
+
+    Soft-deleted windfarms are excluded unless an admin requests
+    include_deleted=true (admin panel only).
+    """
+    windfarms = await WindfarmService.get_windfarms(
+        db,
+        skip=skip,
+        limit=limit,
+        visible_only=_exclude_deleted(current_user, include_deleted),
+    )
     latest_by_id = await WindfarmService.get_latest_generation_per_windfarm(
         db, (wf.id for wf in windfarms)
     )
@@ -44,10 +62,18 @@ async def search_windfarms(
     q: str = Query(..., min_length=1),
     skip: int = Query(0, ge=0),
     limit: int = Query(DEFAULT_PAGINATION_LIMIT, ge=MIN_PAGINATION_LIMIT, le=MAX_PAGINATION_LIMIT),
+    include_deleted: bool = Query(False),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Search windfarms by name with owner information"""
-    windfarms = await WindfarmService.search_windfarms(db, query=q, skip=skip, limit=limit)
+    windfarms = await WindfarmService.search_windfarms(
+        db,
+        query=q,
+        skip=skip,
+        limit=limit,
+        visible_only=_exclude_deleted(current_user, include_deleted),
+    )
     latest_by_id = await WindfarmService.get_latest_generation_per_windfarm(
         db, (wf.id for wf in windfarms)
     )
@@ -86,32 +112,56 @@ def _to_list_item(wf, latest_generation_data_at):
 
 
 @router.get("/names")
-async def get_windfarm_names(db: AsyncSession = Depends(get_db)):
+async def get_windfarm_names(
+    include_deleted: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """Get all windfarms with only id, name, code - lightweight endpoint for dropdowns"""
     from sqlalchemy import select as sa_select
     from app.models.windfarm import Windfarm as WindfarmModel
 
-    result = await db.execute(
-        sa_select(WindfarmModel.id, WindfarmModel.name, WindfarmModel.code)
-        .order_by(WindfarmModel.name)
+    stmt = sa_select(WindfarmModel.id, WindfarmModel.name, WindfarmModel.code).order_by(
+        WindfarmModel.name
     )
+    if _exclude_deleted(current_user, include_deleted):
+        stmt = stmt.where(WindfarmModel.is_deleted == False)  # noqa: E712
+    result = await db.execute(stmt)
     return [{"id": row.id, "name": row.name, "code": row.code} for row in result.all()]
 
 
 @router.get("/{windfarm_id}", response_model=Windfarm)
-async def get_windfarm(windfarm_id: int, db: AsyncSession = Depends(get_db)):
+async def get_windfarm(
+    windfarm_id: int,
+    include_deleted: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """Get a specific windfarm by ID"""
     windfarm = await WindfarmService.get_windfarm(db, windfarm_id)
-    if not windfarm:
+    # Soft-deleted farms 404 unless an admin explicitly includes them —
+    # same message as genuine not-found
+    if not windfarm or (
+        windfarm.is_deleted and _exclude_deleted(current_user, include_deleted)
+    ):
         raise HTTPException(status_code=404, detail="Windfarm not found")
     return windfarm
 
 
 @router.get("/{windfarm_id}/with-owners")
-async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(get_db)):
+async def get_windfarm_with_owners(
+    windfarm_id: int,
+    include_deleted: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """Get a specific windfarm by ID with owners"""
     windfarm = await WindfarmService.get_windfarm_with_owners(db, windfarm_id)
-    if not windfarm:
+    # Soft-deleted farms 404 unless an admin explicitly includes them —
+    # same message as genuine not-found
+    if not windfarm or (
+        windfarm.is_deleted and _exclude_deleted(current_user, include_deleted)
+    ):
         raise HTTPException(status_code=404, detail="Windfarm not found")
 
     # Convert ORM objects to dictionaries for JSON serialization
@@ -143,6 +193,7 @@ async def get_windfarm_with_owners(windfarm_id: int, db: AsyncSession = Depends(
         "alternate_name": windfarm.alternate_name,
         "environmental_assessment_status": windfarm.environmental_assessment_status,
         "permits_obtained": windfarm.permits_obtained,
+        "is_deleted": windfarm.is_deleted,
         "grid_connection_status": windfarm.grid_connection_status,
         "total_investment_amount": str(windfarm.total_investment_amount)
         if windfarm.total_investment_amount
@@ -320,6 +371,7 @@ async def get_windfarm_with_generation_units(
         "alternate_name": windfarm.alternate_name,
         "environmental_assessment_status": windfarm.environmental_assessment_status,
         "permits_obtained": windfarm.permits_obtained,
+        "is_deleted": windfarm.is_deleted,
         "grid_connection_status": windfarm.grid_connection_status,
         "total_investment_amount": str(windfarm.total_investment_amount)
         if windfarm.total_investment_amount
@@ -403,10 +455,19 @@ async def get_windfarm_with_generation_units(
 
 
 @router.get("/code/{code}", response_model=Windfarm)
-async def get_windfarm_by_code(code: str, db: AsyncSession = Depends(get_db)):
+async def get_windfarm_by_code(
+    code: str,
+    include_deleted: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """Get a windfarm by its code"""
     windfarm = await WindfarmService.get_windfarm_by_code(db, code)
-    if not windfarm:
+    # Soft-deleted farms 404 unless an admin explicitly includes them —
+    # same message as genuine not-found
+    if not windfarm or (
+        windfarm.is_deleted and _exclude_deleted(current_user, include_deleted)
+    ):
         raise HTTPException(status_code=404, detail="Windfarm not found")
     return windfarm
 
@@ -472,6 +533,7 @@ async def create_windfarm_with_owners(
         "alternate_name": windfarm_with_owners.alternate_name,
         "environmental_assessment_status": windfarm_with_owners.environmental_assessment_status,
         "permits_obtained": windfarm_with_owners.permits_obtained,
+        "is_deleted": windfarm_with_owners.is_deleted,
         "grid_connection_status": windfarm_with_owners.grid_connection_status,
         "total_investment_amount": str(windfarm_with_owners.total_investment_amount)
         if windfarm_with_owners.total_investment_amount
@@ -712,6 +774,11 @@ async def get_windfarm_turbine_units(windfarm_id: int, db: AsyncSession = Depend
                 "model": unit.turbine_model.model,
                 "supplier": unit.turbine_model.supplier,
                 "rated_power_kw": unit.turbine_model.rated_power_kw,
+                # Rotor diameter for the client Overview "Turbine Fleet" Model
+                # Breakdown (was missing → showed N/A). Decimal → float.
+                "rotor_diameter_m": float(unit.turbine_model.rotor_diameter_m)
+                if unit.turbine_model.rotor_diameter_m is not None
+                else None,
             }
             if unit.turbine_model
             else None,

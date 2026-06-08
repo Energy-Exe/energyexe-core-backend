@@ -32,6 +32,7 @@ from .generation_unit import GenerationUnit
 from .import_job_execution import ImportJobExecution
 from .invitation import Invitation
 from .market_balance_area import MarketBalanceArea
+from .methodology_section import MethodologySection
 from .opportunity import Branch, Opportunity, OpportunityStatus, SchemaCode, Severity
 from .owner import Owner
 from .p50_target import P50Target
@@ -77,6 +78,7 @@ __all__ = [
     "GenerationUnit",
     "Invitation",
     "MarketBalanceArea",
+    "MethodologySection",
     "Owner",
     "PriceDataRaw",
     "PriceData",

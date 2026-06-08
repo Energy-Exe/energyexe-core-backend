@@ -1,0 +1,864 @@
+{
+  "Clachan Flats": {
+    "code": "CLACHAN_FLATS",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "15.0",
+    "lat": "56.286523",
+    "lng": "-4.951321",
+    "cod": "2009-05-01",
+    "n_flags": 9,
+    "periods": [
+      {
+        "flag_id": 10744,
+        "start": "2016-01-01 18:00",
+        "end": "2016-03-23 17:00",
+        "dur_h": 490,
+        "trigger": "both",
+        "q50r": "-0.003",
+        "q90r": "0.343"
+      },
+      {
+        "flag_id": 10745,
+        "start": "2020-02-01 00:00",
+        "end": "2020-03-25 04:00",
+        "dur_h": 476,
+        "trigger": "both",
+        "q50r": "0.267",
+        "q90r": "0.517"
+      },
+      {
+        "flag_id": 10746,
+        "start": "2021-01-10 20:00",
+        "end": "2021-05-25 09:00",
+        "dur_h": 814,
+        "trigger": "both",
+        "q50r": "0.173",
+        "q90r": "0.529"
+      },
+      {
+        "flag_id": 10747,
+        "start": "2021-09-11 13:00",
+        "end": "2021-10-31 14:00",
+        "dur_h": 437,
+        "trigger": "both",
+        "q50r": "0.164",
+        "q90r": "0.364"
+      },
+      {
+        "flag_id": 10748,
+        "start": "2021-12-01 06:00",
+        "end": "2022-03-20 15:00",
+        "dur_h": 1321,
+        "trigger": "both",
+        "q50r": "0.161",
+        "q90r": "0.336"
+      },
+      {
+        "flag_id": 10749,
+        "start": "2022-07-03 19:00",
+        "end": "2023-06-29 16:00",
+        "dur_h": 2261,
+        "trigger": "both",
+        "q50r": "0.153",
+        "q90r": "0.370"
+      },
+      {
+        "flag_id": 10750,
+        "start": "2023-08-01 23:00",
+        "end": "2024-08-29 23:00",
+        "dur_h": 3209,
+        "trigger": "both",
+        "q50r": "0.135",
+        "q90r": "0.328"
+      },
+      {
+        "flag_id": 10751,
+        "start": "2024-10-03 20:00",
+        "end": "2025-03-30 12:00",
+        "dur_h": 1559,
+        "trigger": "both",
+        "q50r": "0.176",
+        "q90r": "0.392"
+      },
+      {
+        "flag_id": 10752,
+        "start": "2025-05-02 12:00",
+        "end": "2025-08-31 23:00",
+        "dur_h": 633,
+        "trigger": "both",
+        "q50r": "0.173",
+        "q90r": "0.384"
+      }
+    ]
+  },
+  "Clashindarroch (Vattenfall)": {
+    "code": "CLASHINDARROCH_(VATTENFALL)",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "36.9",
+    "lat": "57.363965",
+    "lng": "-2.963646",
+    "cod": "2015-06-01",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 10758,
+        "start": "2014-12-09 03:00",
+        "end": "2015-02-28 22:00",
+        "dur_h": 1379,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.458"
+      }
+    ]
+  },
+  "Clyde": {
+    "code": "CLYDE",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "521.8",
+    "lat": "55.4416",
+    "lng": "-3.5427",
+    "cod": "2012-09-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11723,
+        "start": "2013-04-01 09:00",
+        "end": "2016-03-21 17:00",
+        "dur_h": 12375,
+        "trigger": "both",
+        "q50r": "0.239",
+        "q90r": "0.374"
+      },
+      {
+        "flag_id": 11724,
+        "start": "2016-06-01 05:00",
+        "end": "2017-08-28 15:00",
+        "dur_h": 4113,
+        "trigger": "both",
+        "q50r": "0.242",
+        "q90r": "0.430"
+      }
+    ]
+  },
+  "Coire Na Cloiche": {
+    "code": "COIRE_NA_CLOICHE",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "29.9",
+    "lat": "57.789734",
+    "lng": "-4.380611",
+    "cod": "2020-03-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 10777,
+        "start": "2021-05-03 10:00",
+        "end": "2021-09-30 19:00",
+        "dur_h": 400,
+        "trigger": "both",
+        "q50r": "0.307",
+        "q90r": "0.571"
+      },
+      {
+        "flag_id": 10778,
+        "start": "2025-10-01 00:00",
+        "end": "2025-10-31 23:00",
+        "dur_h": 339,
+        "trigger": "both",
+        "q50r": "0.256",
+        "q90r": "0.717"
+      }
+    ]
+  },
+  "Corriegarth": {
+    "code": "CORRIEGARTH",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "69.5",
+    "lat": "57.1901",
+    "lng": "-4.3596",
+    "cod": "2017-04-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 10781,
+        "start": "2017-11-01 06:00",
+        "end": "2017-12-31 17:00",
+        "dur_h": 372,
+        "trigger": "both",
+        "q50r": "0.299",
+        "q90r": "0.608"
+      },
+      {
+        "flag_id": 10782,
+        "start": "2021-02-04 20:00",
+        "end": "2021-05-23 16:00",
+        "dur_h": 453,
+        "trigger": "both",
+        "q50r": "0.519",
+        "q90r": "0.713"
+      }
+    ]
+  },
+  "Corriemoillie": {
+    "code": "CORRIEMOILLIE",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "47.5",
+    "lat": "57.6687",
+    "lng": "-4.773",
+    "cod": "2017-07-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 10857,
+        "start": "2017-10-01 13:00",
+        "end": "2017-12-23 22:00",
+        "dur_h": 452,
+        "trigger": "both",
+        "q50r": "0.330",
+        "q90r": "0.869"
+      },
+      {
+        "flag_id": 10858,
+        "start": "2018-07-14 09:00",
+        "end": "2018-11-30 23:00",
+        "dur_h": 618,
+        "trigger": "both",
+        "q50r": "0.253",
+        "q90r": "0.864"
+      }
+    ]
+  },
+  "Cour": {
+    "code": "COUR",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "20.5",
+    "lat": "55.67303",
+    "lng": "-5.517726",
+    "cod": "2016-12-01",
+    "n_flags": 6,
+    "periods": [
+      {
+        "flag_id": 10798,
+        "start": "2016-10-18 23:00",
+        "end": "2017-03-31 11:00",
+        "dur_h": 879,
+        "trigger": "both",
+        "q50r": "0.409",
+        "q90r": "0.814"
+      },
+      {
+        "flag_id": 10799,
+        "start": "2018-12-01 01:00",
+        "end": "2019-02-27 06:00",
+        "dur_h": 490,
+        "trigger": "both",
+        "q50r": "0.248",
+        "q90r": "0.712"
+      },
+      {
+        "flag_id": 10800,
+        "start": "2019-07-01 04:00",
+        "end": "2020-02-29 21:00",
+        "dur_h": 3492,
+        "trigger": "both",
+        "q50r": "0.299",
+        "q90r": "0.716"
+      },
+      {
+        "flag_id": 10801,
+        "start": "2024-10-02 08:00",
+        "end": "2025-03-31 21:00",
+        "dur_h": 2135,
+        "trigger": "both",
+        "q50r": "0.465",
+        "q90r": "0.749"
+      },
+      {
+        "flag_id": 10802,
+        "start": "2025-06-01 00:00",
+        "end": "2025-06-30 21:00",
+        "dur_h": 376,
+        "trigger": "both",
+        "q50r": "0.427",
+        "q90r": "0.700"
+      },
+      {
+        "flag_id": 10803,
+        "start": "2025-08-01 06:00",
+        "end": "2025-12-31 14:00",
+        "dur_h": 1031,
+        "trigger": "both",
+        "q50r": "0.330",
+        "q90r": "0.730"
+      }
+    ]
+  },
+  "Craig II": {
+    "code": "CRAIG II",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "5.0",
+    "lat": "55.1641",
+    "lng": "-3.069",
+    "cod": "2018-06-13",
+    "n_flags": 4,
+    "periods": [
+      {
+        "flag_id": 11752,
+        "start": "2020-02-01 13:00",
+        "end": "2020-03-28 20:00",
+        "dur_h": 611,
+        "trigger": "both",
+        "q50r": "0.452",
+        "q90r": "0.881"
+      },
+      {
+        "flag_id": 11753,
+        "start": "2021-02-01 21:00",
+        "end": "2021-05-26 09:00",
+        "dur_h": 826,
+        "trigger": "both",
+        "q50r": "0.158",
+        "q90r": "0.767"
+      },
+      {
+        "flag_id": 11754,
+        "start": "2022-08-01 13:00",
+        "end": "2022-10-31 23:00",
+        "dur_h": 493,
+        "trigger": "both",
+        "q50r": "0.198",
+        "q90r": "0.635"
+      },
+      {
+        "flag_id": 11755,
+        "start": "2023-12-04 03:00",
+        "end": "2024-01-31 18:00",
+        "dur_h": 589,
+        "trigger": "both",
+        "q50r": "0.444",
+        "q90r": "0.917"
+      }
+    ]
+  },
+  "Creag Riabhach": {
+    "code": "CREAG_RIABHACH",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "92.4",
+    "lat": "58.2193",
+    "lng": "-4.5112",
+    "cod": "2023-01-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 10813,
+        "start": "2022-10-17 02:00",
+        "end": "2022-11-24 17:00",
+        "dur_h": 498,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      },
+      {
+        "flag_id": 10814,
+        "start": "2024-01-02 06:00",
+        "end": "2024-02-29 19:00",
+        "dur_h": 486,
+        "trigger": "both",
+        "q50r": "0.560",
+        "q90r": "0.883"
+      }
+    ]
+  },
+  "Crossdykes 1 & 2": {
+    "code": "CROSSDYKES_1&2",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "46.0",
+    "lat": "55.183318",
+    "lng": "-3.160023",
+    "cod": "2021-06-01",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11664,
+        "start": "2024-05-02 04:00",
+        "end": "2024-08-29 16:00",
+        "dur_h": 530,
+        "trigger": "both",
+        "q50r": "0.366",
+        "q90r": "0.856"
+      }
+    ]
+  },
+  "Crystal Rig 2": {
+    "code": "CRYSTAL_RIG_2",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "138.0",
+    "lat": "55.9129",
+    "lng": "-2.5455",
+    "cod": "2010-06-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 10818,
+        "start": "2017-06-06 21:00",
+        "end": "2017-08-28 17:00",
+        "dur_h": 410,
+        "trigger": "both",
+        "q50r": "0.374",
+        "q90r": "0.724"
+      },
+      {
+        "flag_id": 10819,
+        "start": "2022-09-02 15:00",
+        "end": "2022-11-27 09:00",
+        "dur_h": 745,
+        "trigger": "both",
+        "q50r": "0.550",
+        "q90r": "0.598"
+      }
+    ]
+  },
+  "Cumberhead": {
+    "code": "CUMBERHEAD",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "50.0",
+    "lat": "55.5718",
+    "lng": "-3.9589",
+    "cod": "2023-09-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11314,
+        "start": "2022-12-04 05:00",
+        "end": "2023-01-31 17:00",
+        "dur_h": 803,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      },
+      {
+        "flag_id": 11315,
+        "start": "2024-08-02 04:00",
+        "end": "2024-08-31 21:00",
+        "dur_h": 469,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.562"
+      }
+    ]
+  },
+  "Dalquhandy": {
+    "code": "DALQUHANDY",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "42.0",
+    "lat": "55.5784",
+    "lng": "-3.91639",
+    "cod": "2023-01-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 10515,
+        "start": "2022-08-03 00:00",
+        "end": "2022-09-30 17:00",
+        "dur_h": 355,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      },
+      {
+        "flag_id": 10516,
+        "start": "2024-07-01 12:00",
+        "end": "2024-08-31 21:00",
+        "dur_h": 582,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.502"
+      }
+    ]
+  },
+  "Dalswinton": {
+    "code": "DALSWINTON",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "30.0",
+    "lat": "55.18441",
+    "lng": "-3.663065",
+    "cod": "2008-06-01",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 10828,
+        "start": "2018-07-14 12:00",
+        "end": "2018-09-30 15:00",
+        "dur_h": 454,
+        "trigger": "both",
+        "q50r": "0.267",
+        "q90r": "0.541"
+      },
+      {
+        "flag_id": 10829,
+        "start": "2020-01-01 15:00",
+        "end": "2020-03-28 21:00",
+        "dur_h": 896,
+        "trigger": "both",
+        "q50r": "0.428",
+        "q90r": "0.663"
+      },
+      {
+        "flag_id": 10830,
+        "start": "2023-11-01 03:00",
+        "end": "2023-12-31 07:00",
+        "dur_h": 611,
+        "trigger": "both",
+        "q50r": "0.323",
+        "q90r": "0.629"
+      }
+    ]
+  },
+  "Dersalloch": {
+    "code": "DERSALLOCH",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "69.0",
+    "lat": "55.3043",
+    "lng": "-4.4882",
+    "cod": "2016-11-01",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 10912,
+        "start": "2017-06-01 00:00",
+        "end": "2017-10-29 02:00",
+        "dur_h": 786,
+        "trigger": "both",
+        "q50r": "0.059",
+        "q90r": "0.736"
+      },
+      {
+        "flag_id": 10913,
+        "start": "2018-06-13 11:00",
+        "end": "2018-10-26 02:00",
+        "dur_h": 717,
+        "trigger": "both",
+        "q50r": "0.145",
+        "q90r": "0.764"
+      },
+      {
+        "flag_id": 10914,
+        "start": "2019-03-02 11:00",
+        "end": "2019-04-28 00:00",
+        "dur_h": 429,
+        "trigger": "both",
+        "q50r": "0.165",
+        "q90r": "0.843"
+      }
+    ]
+  },
+  "Dorenell 1&2": {
+    "code": "DORENELL 1&2",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "177.0",
+    "lat": "57.3509",
+    "lng": "-3.1317",
+    "cod": "2019-03-01",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11692,
+        "start": "2018-07-01 05:00",
+        "end": "2018-09-16 17:00",
+        "dur_h": 520,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.000"
+      }
+    ]
+  },
+  "Douglas West": {
+    "code": "DOUGLAS_WEST",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "45.0",
+    "lat": "55.571",
+    "lng": "-3.87137",
+    "cod": "2021-09-30",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11350,
+        "start": "2024-07-01 13:00",
+        "end": "2024-09-30 23:00",
+        "dur_h": 818,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.416"
+      }
+    ]
+  },
+  "Dun Law 2": {
+    "code": "DUN_LAW_2",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "29.75",
+    "lat": "55.7868",
+    "lng": "-2.8423",
+    "cod": "2009-11-01",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 10924,
+        "start": "2015-10-05 09:00",
+        "end": "2015-12-31 23:00",
+        "dur_h": 987,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.698"
+      },
+      {
+        "flag_id": 10925,
+        "start": "2016-11-04 22:00",
+        "end": "2016-12-31 19:00",
+        "dur_h": 403,
+        "trigger": "both",
+        "q50r": "0.306",
+        "q90r": "0.771"
+      },
+      {
+        "flag_id": 10926,
+        "start": "2018-08-01 00:00",
+        "end": "2018-09-30 23:00",
+        "dur_h": 381,
+        "trigger": "both",
+        "q50r": "0.222",
+        "q90r": "0.668"
+      }
+    ]
+  },
+  "Dunmaglass": {
+    "code": "DUNMAGLASS",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "94.0",
+    "lat": "57.24338",
+    "lng": "-4.260684",
+    "cod": "2017-12-01",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 10946,
+        "start": "2018-09-02 11:00",
+        "end": "2019-06-30 23:00",
+        "dur_h": 1383,
+        "trigger": "both",
+        "q50r": "0.053",
+        "q90r": "0.872"
+      }
+    ]
+  },
+  "Edinbane": {
+    "code": "EDINBANE",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "41.4",
+    "lat": "57.428646",
+    "lng": "-6.415558",
+    "cod": "2010-07-01",
+    "n_flags": 8,
+    "periods": [
+      {
+        "flag_id": 10955,
+        "start": "2013-04-13 16:00",
+        "end": "2013-05-28 11:00",
+        "dur_h": 563,
+        "trigger": "both",
+        "q50r": "0.224",
+        "q90r": "0.705"
+      },
+      {
+        "flag_id": 10956,
+        "start": "2014-12-01 04:00",
+        "end": "2015-03-31 22:00",
+        "dur_h": 961,
+        "trigger": "both",
+        "q50r": "0.228",
+        "q90r": "0.721"
+      },
+      {
+        "flag_id": 10957,
+        "start": "2017-05-01 03:00",
+        "end": "2017-06-30 05:00",
+        "dur_h": 436,
+        "trigger": "both",
+        "q50r": "0.117",
+        "q90r": "0.481"
+      },
+      {
+        "flag_id": 10958,
+        "start": "2018-08-01 00:00",
+        "end": "2018-11-30 17:00",
+        "dur_h": 949,
+        "trigger": "both",
+        "q50r": "0.360",
+        "q90r": "0.752"
+      },
+      {
+        "flag_id": 10959,
+        "start": "2019-06-01 00:00",
+        "end": "2019-06-30 23:00",
+        "dur_h": 390,
+        "trigger": "both",
+        "q50r": "0.013",
+        "q90r": "0.475"
+      },
+      {
+        "flag_id": 10960,
+        "start": "2021-08-03 13:00",
+        "end": "2021-09-30 20:00",
+        "dur_h": 433,
+        "trigger": "both",
+        "q50r": "0.049",
+        "q90r": "0.317"
+      },
+      {
+        "flag_id": 10961,
+        "start": "2024-03-01 21:00",
+        "end": "2024-08-30 01:00",
+        "dur_h": 1330,
+        "trigger": "both",
+        "q50r": "0.307",
+        "q90r": "0.604"
+      },
+      {
+        "flag_id": 10962,
+        "start": "2024-10-04 00:00",
+        "end": "2024-12-31 18:00",
+        "dur_h": 785,
+        "trigger": "both",
+        "q50r": "0.358",
+        "q90r": "0.862"
+      }
+    ]
+  },
+  "Ewe Hill 2": {
+    "code": "EWE_HILL_2",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "36.8",
+    "lat": "55.162406",
+    "lng": "-3.141506",
+    "cod": "2017-07-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 10978,
+        "start": "2016-12-06 18:00",
+        "end": "2017-12-31 15:00",
+        "dur_h": 1351,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.735"
+      },
+      {
+        "flag_id": 10979,
+        "start": "2020-11-01 00:00",
+        "end": "2020-11-30 21:00",
+        "dur_h": 377,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.677"
+      }
+    ]
+  },
+  "Fallago Rig": {
+    "code": "FALLAGO_RIG",
+    "country": "United Kingdom",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "144.0",
+    "lat": "55.828647",
+    "lng": "-2.666518",
+    "cod": "2013-05-01",
+    "n_flags": 5,
+    "periods": [
+      {
+        "flag_id": 10839,
+        "start": "2015-10-05 09:00",
+        "end": "2016-03-23 23:00",
+        "dur_h": 1230,
+        "trigger": "both",
+        "q50r": "0.411",
+        "q90r": "0.918"
+      },
+      {
+        "flag_id": 10840,
+        "start": "2016-08-01 01:00",
+        "end": "2016-09-30 02:00",
+        "dur_h": 377,
+        "trigger": "both",
+        "q50r": "0.179",
+        "q90r": "0.657"
+      },
+      {
+        "flag_id": 10841,
+        "start": "2017-06-01 10:00",
+        "end": "2017-10-31 23:00",
+        "dur_h": 892,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.639"
+      },
+      {
+        "flag_id": 10842,
+        "start": "2018-09-02 10:00",
+        "end": "2018-10-27 18:00",
+        "dur_h": 530,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.852"
+      },
+      {
+        "flag_id": 10843,
+        "start": "2019-02-03 10:00",
+        "end": "2019-03-29 05:00",
+        "dur_h": 474,
+        "trigger": "both",
+        "q50r": "0.158",
+        "q90r": "0.893"
+      }
+    ]
+  }
+}

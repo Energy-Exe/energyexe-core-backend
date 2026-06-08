@@ -36,6 +36,7 @@ class WindfarmBase(BaseModel):
     alternate_name: Optional[str] = Field(None, max_length=255)
     environmental_assessment_status: Optional[str] = Field(None, max_length=100)
     permits_obtained: bool = False
+    is_deleted: bool = False
     grid_connection_status: Optional[str] = Field(None, max_length=100)
     total_investment_amount: Optional[Decimal] = None
     investment_currency: Optional[str] = Field(None, max_length=3)
@@ -76,6 +77,7 @@ class WindfarmUpdate(BaseModel):
     alternate_name: Optional[str] = Field(None, max_length=255)
     environmental_assessment_status: Optional[str] = Field(None, max_length=100)
     permits_obtained: Optional[bool] = None
+    is_deleted: Optional[bool] = None
     grid_connection_status: Optional[str] = Field(None, max_length=100)
     total_investment_amount: Optional[Decimal] = None
     investment_currency: Optional[str] = Field(None, max_length=3)

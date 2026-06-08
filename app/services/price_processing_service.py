@@ -132,17 +132,25 @@ class PriceProcessingService:
 
                         logger.info(f"Processed {created + updated} price records for {windfarm.name}")
 
-                        # Commit after each windfarm to prevent data loss on errors
-                        await self.db.commit()
+                        # Commit every 10 windfarms to balance performance and data safety
+                        if results["windfarms_processed"] % 10 == 0:
+                            await self.db.commit()
+                            logger.info(f"Committed batch at {results['windfarms_processed']} windfarms")
 
                     except Exception as e:
                         error_msg = f"Error processing prices for {windfarm.name}: {str(e)}"
                         logger.error(error_msg)
                         results["errors"].append(error_msg)
                         # Rollback the failed transaction
-                        await self.db.rollback()
+                        try:
+                            await self.db.rollback()
+                        except:
+                            pass  # Ignore rollback errors
                         # Continue processing next windfarm instead of crashing
                         continue
+
+                # Final commit for this bidzone
+                await self.db.commit()
 
         except Exception as e:
             error_msg = f"Error processing price data: {str(e)}"

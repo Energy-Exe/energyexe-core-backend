@@ -31,7 +31,13 @@ from claude_agent_sdk.types import StreamEvent
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
-from app.services.brain_agent_skill_files import SKILL_SCHEMA, SKILL_QUERIES, SKILL_DOMAIN, SKILL_SOURCES
+from app.services.brain_agent_skill_files import (
+    CHART_STYLE_PY,
+    SKILL_DOMAIN,
+    SKILL_QUERIES,
+    SKILL_SCHEMA,
+    SKILL_SOURCES,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -79,7 +85,7 @@ class SSEEvent:
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
 
 # Files placed in the sandbox at session creation — skip when scanning for agent output
-SANDBOX_SEED_FILES = {"db.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md"}
+SANDBOX_SEED_FILES = {"db.py", "eexe_style.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md", "skill_methodology.md"}
 
 # Working file extensions — scripts the agent writes to execute, not user-facing output
 WORKING_FILE_EXTENSIONS = {".py", ".sh", ".bash", ".sql"}
@@ -553,10 +559,30 @@ class BrainAgentService:
 
         # Write db.py helper script and skill files to sandbox
         (work_dir / "db.py").write_text(DB_HELPER_SCRIPT)
+        # #161 — platform chart theme module; `import eexe_style` in any chart
+        # script applies the EnergyExe palette/design automatically.
+        (work_dir / "eexe_style.py").write_text(CHART_STYLE_PY)
         (work_dir / "skill_schema.md").write_text(SKILL_SCHEMA)
         (work_dir / "skill_queries.md").write_text(SKILL_QUERIES)
         (work_dir / "skill_domain.md").write_text(SKILL_DOMAIN)
         (work_dir / "skill_sources.md").write_text(SKILL_SOURCES)
+
+        # DB-driven methodology (client-ui #177): compose the admin-editable
+        # methodology sections into a skill file so the agent answers
+        # "how is X computed?" from the same text shown to clients. Best
+        # effort — agent startup must never fail on this.
+        try:
+            from app.services.methodology_section import MethodologySectionService
+
+            methodology_md = await MethodologySectionService.compose_markdown(self.db)
+            if methodology_md:
+                (work_dir / "skill_methodology.md").write_text(methodology_md)
+        except Exception as exc:
+            logger.warning(
+                "brain_agent_methodology_skill_failed",
+                session_id=session_id,
+                error=str(exc),
+            )
 
         def _on_stderr(line: str):
             logger.warning("brain_agent_stderr", session_id=session_id, line=line.rstrip())

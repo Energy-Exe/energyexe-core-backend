@@ -28,6 +28,7 @@ from app.api.v1.endpoints import (
 from app.api.v1.endpoints import map as map_endpoints
 from app.api.v1.endpoints import (
     market_balance_areas,
+    methodology_sections,
     opportunities,
     owners,
     p50_targets,
@@ -165,6 +166,13 @@ api_router.include_router(
     agent_question_templates.router,
     prefix="/agent-question-templates",
     tags=["agent-question-templates"],
+)
+
+# Methodology sections (client-ui #177 — admin-editable methodology, also fed to brain-agent)
+api_router.include_router(
+    methodology_sections.router,
+    prefix="/methodology-sections",
+    tags=["methodology-sections"],
 )
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints

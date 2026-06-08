@@ -1,0 +1,1088 @@
+{
+  "Midtfjellet": {
+    "code": "MIDTFJELLET",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "149.6",
+    "lat": "59.92933",
+    "lng": "5.3797",
+    "cod": "2012-09-22",
+    "n_flags": 6,
+    "periods": [
+      {
+        "flag_id": 10054,
+        "start": "2012-11-22 05:00",
+        "end": "2015-07-31 04:00",
+        "dur_h": 7172,
+        "trigger": "both",
+        "q50r": "0.348",
+        "q90r": "0.686"
+      },
+      {
+        "flag_id": 10055,
+        "start": "2015-09-01 18:00",
+        "end": "2017-05-31 23:00",
+        "dur_h": 4231,
+        "trigger": "both",
+        "q50r": "0.422",
+        "q90r": "0.693"
+      },
+      {
+        "flag_id": 10056,
+        "start": "2017-10-01 11:00",
+        "end": "2018-03-25 02:00",
+        "dur_h": 836,
+        "trigger": "both",
+        "q50r": "0.674",
+        "q90r": "0.718"
+      },
+      {
+        "flag_id": 10057,
+        "start": "2018-05-02 00:00",
+        "end": "2018-07-31 12:00",
+        "dur_h": 603,
+        "trigger": "both",
+        "q50r": "0.272",
+        "q90r": "0.681"
+      },
+      {
+        "flag_id": 10058,
+        "start": "2025-04-03 19:00",
+        "end": "2025-05-31 23:00",
+        "dur_h": 350,
+        "trigger": "both",
+        "q50r": "0.351",
+        "q90r": "0.727"
+      },
+      {
+        "flag_id": 10059,
+        "start": "2025-07-01 00:00",
+        "end": "2025-08-31 19:00",
+        "dur_h": 433,
+        "trigger": "both",
+        "q50r": "0.219",
+        "q90r": "0.654"
+      }
+    ]
+  },
+  "Nye Sand\u00f8y": {
+    "code": "NYE_SAND\u00d8Y",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "4.3",
+    "lat": "62.76386",
+    "lng": "6.44558",
+    "cod": "2023-09-20",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 10530,
+        "start": "2024-12-01 00:00",
+        "end": "2025-05-30 09:00",
+        "dur_h": 2006,
+        "trigger": "both",
+        "q50r": "0.265",
+        "q90r": "0.588"
+      }
+    ]
+  },
+  "Odal": {
+    "code": "ODAL",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "163.2",
+    "lat": "60.34523",
+    "lng": "11.51172",
+    "cod": "2022-09-12",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 10159,
+        "start": "2023-11-02 06:00",
+        "end": "2024-04-29 21:00",
+        "dur_h": 788,
+        "trigger": "both",
+        "q50r": "0.367",
+        "q90r": "0.541"
+      },
+      {
+        "flag_id": 10160,
+        "start": "2024-06-03 15:00",
+        "end": "2024-11-30 14:00",
+        "dur_h": 627,
+        "trigger": "both",
+        "q50r": "0.187",
+        "q90r": "0.460"
+      }
+    ]
+  },
+  "Okla": {
+    "code": "OKLA",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "21.0",
+    "lat": "62.15911",
+    "lng": "5.24388",
+    "cod": "2021-11-30",
+    "n_flags": 4,
+    "periods": [
+      {
+        "flag_id": 9949,
+        "start": "2023-02-01 12:00",
+        "end": "2023-02-25 17:00",
+        "dur_h": 449,
+        "trigger": "both",
+        "q50r": "0.390",
+        "q90r": "0.927"
+      },
+      {
+        "flag_id": 9950,
+        "start": "2023-04-02 14:00",
+        "end": "2023-09-30 23:00",
+        "dur_h": 997,
+        "trigger": "both",
+        "q50r": "0.468",
+        "q90r": "0.765"
+      },
+      {
+        "flag_id": 9951,
+        "start": "2024-02-01 00:00",
+        "end": "2024-03-30 21:00",
+        "dur_h": 339,
+        "trigger": "both",
+        "q50r": "0.522",
+        "q90r": "0.784"
+      },
+      {
+        "flag_id": 9952,
+        "start": "2025-07-01 03:00",
+        "end": "2025-08-31 22:00",
+        "dur_h": 497,
+        "trigger": "both",
+        "q50r": "0.455",
+        "q90r": "0.728"
+      }
+    ]
+  },
+  "Raggovidda": {
+    "code": "RAGGOVIDDA",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "96.6",
+    "lat": "70.75455",
+    "lng": "29.04287",
+    "cod": "2014-09-11",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 10039,
+        "start": "2024-08-09 08:00",
+        "end": "2024-09-30 16:00",
+        "dur_h": 363,
+        "trigger": "both",
+        "q50r": "0.580",
+        "q90r": "0.580"
+      }
+    ]
+  },
+  "Raudfjell": {
+    "code": "RAUDFJELL",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "84.0",
+    "lat": "69.58565",
+    "lng": "18.21969",
+    "cod": "2020-11-03",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 9864,
+        "start": "2021-05-09 22:00",
+        "end": "2021-08-31 11:00",
+        "dur_h": 588,
+        "trigger": "both",
+        "q50r": "0.171",
+        "q90r": "0.624"
+      },
+      {
+        "flag_id": 9865,
+        "start": "2022-06-04 09:00",
+        "end": "2022-10-30 01:00",
+        "dur_h": 473,
+        "trigger": "both",
+        "q50r": "0.362",
+        "q90r": "0.928"
+      }
+    ]
+  },
+  "Roan": {
+    "code": "ROAN",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "255.6",
+    "lat": "64.13956",
+    "lng": "10.29909",
+    "cod": "2018-11-20",
+    "n_flags": 4,
+    "periods": [
+      {
+        "flag_id": 10161,
+        "start": "2022-06-03 15:00",
+        "end": "2022-08-30 16:00",
+        "dur_h": 380,
+        "trigger": "both",
+        "q50r": "0.359",
+        "q90r": "0.763"
+      },
+      {
+        "flag_id": 10162,
+        "start": "2024-04-01 05:00",
+        "end": "2024-06-30 23:00",
+        "dur_h": 459,
+        "trigger": "both",
+        "q50r": "0.250",
+        "q90r": "0.688"
+      },
+      {
+        "flag_id": 10163,
+        "start": "2024-10-01 00:00",
+        "end": "2024-11-30 23:00",
+        "dur_h": 421,
+        "trigger": "both",
+        "q50r": "0.001",
+        "q90r": "0.854"
+      },
+      {
+        "flag_id": 10164,
+        "start": "2025-05-01 05:00",
+        "end": "2025-08-31 19:00",
+        "dur_h": 871,
+        "trigger": "both",
+        "q50r": "0.011",
+        "q90r": "0.630"
+      }
+    ]
+  },
+  "R\u00f8yrmyra": {
+    "code": "R\u00d8YRMYRA",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "2.4",
+    "lat": "58.58966",
+    "lng": "5.72652",
+    "cod": "2015-10-01",
+    "n_flags": 6,
+    "periods": [
+      {
+        "flag_id": 10424,
+        "start": "2015-12-01 00:00",
+        "end": "2016-02-29 23:00",
+        "dur_h": 673,
+        "trigger": "both",
+        "q50r": "0.407",
+        "q90r": "0.994"
+      },
+      {
+        "flag_id": 10425,
+        "start": "2019-09-02 19:00",
+        "end": "2019-09-30 19:00",
+        "dur_h": 342,
+        "trigger": "both",
+        "q50r": "0.597",
+        "q90r": "0.833"
+      },
+      {
+        "flag_id": 10426,
+        "start": "2020-01-01 00:00",
+        "end": "2020-05-25 03:00",
+        "dur_h": 1629,
+        "trigger": "both",
+        "q50r": "0.492",
+        "q90r": "0.727"
+      },
+      {
+        "flag_id": 10427,
+        "start": "2021-01-09 16:00",
+        "end": "2021-04-25 23:00",
+        "dur_h": 1063,
+        "trigger": "both",
+        "q50r": "0.428",
+        "q90r": "0.845"
+      },
+      {
+        "flag_id": 10428,
+        "start": "2023-12-03 02:00",
+        "end": "2024-03-31 20:00",
+        "dur_h": 879,
+        "trigger": "both",
+        "q50r": "0.435",
+        "q90r": "0.883"
+      },
+      {
+        "flag_id": 10429,
+        "start": "2025-10-01 00:00",
+        "end": "2025-11-30 23:00",
+        "dur_h": 896,
+        "trigger": "both",
+        "q50r": "0.423",
+        "q90r": "0.671"
+      }
+    ]
+  },
+  "Skinansfjellet og Gravdal": {
+    "code": "SKINANSFJELLET_OG_GRAVDAL",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "138.6",
+    "lat": "58.57302",
+    "lng": "5.88571",
+    "cod": "2020-07-14",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 10179,
+        "start": "2020-10-01 22:00",
+        "end": "2020-11-30 01:00",
+        "dur_h": 429,
+        "trigger": "both",
+        "q50r": "0.260",
+        "q90r": "0.862"
+      }
+    ]
+  },
+  "Skomakerfjellet": {
+    "code": "SKOMAKERFJELLET",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "13.2",
+    "lat": "64.21556",
+    "lng": "10.41675",
+    "cod": "2016-01-12",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 10180,
+        "start": "2017-11-01 01:00",
+        "end": "2017-12-31 05:00",
+        "dur_h": 432,
+        "trigger": "q50_ratio",
+        "q50r": "0.351",
+        "q90r": "0.840"
+      },
+      {
+        "flag_id": 10181,
+        "start": "2023-12-02 16:00",
+        "end": "2024-02-29 17:00",
+        "dur_h": 654,
+        "trigger": "both",
+        "q50r": "0.230",
+        "q90r": "0.731"
+      },
+      {
+        "flag_id": 10182,
+        "start": "2024-06-02 21:00",
+        "end": "2025-06-30 23:00",
+        "dur_h": 2626,
+        "trigger": "both",
+        "q50r": "0.394",
+        "q90r": "0.704"
+      }
+    ]
+  },
+  "Skurvenuten": {
+    "code": "SKURVENUTEN",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "6.9",
+    "lat": "58.74734",
+    "lng": "5.90939",
+    "cod": "2018-11-19",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 10184,
+        "start": "2025-12-01 01:00",
+        "end": "2025-12-31 23:00",
+        "dur_h": 452,
+        "trigger": "q50_ratio",
+        "q50r": "0.449",
+        "q90r": "0.925"
+      }
+    ]
+  },
+  "Storheia": {
+    "code": "STORHEIA",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "288.0",
+    "lat": "63.88215",
+    "lng": "10.13695",
+    "cod": "2019-11-15",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 9901,
+        "start": "2025-05-01 20:00",
+        "end": "2025-08-30 22:00",
+        "dur_h": 588,
+        "trigger": "both",
+        "q50r": "0.320",
+        "q90r": "0.791"
+      }
+    ]
+  },
+  "Stor\u00f8y": {
+    "code": "STOR\u00d8Y",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "6.4",
+    "lat": "59.4154",
+    "lng": "5.22739",
+    "cod": "2018-09-19",
+    "n_flags": 5,
+    "periods": [
+      {
+        "flag_id": 10531,
+        "start": "2019-02-01 00:00",
+        "end": "2019-02-28 23:00",
+        "dur_h": 402,
+        "trigger": "both",
+        "q50r": "0.055",
+        "q90r": "0.474"
+      },
+      {
+        "flag_id": 10532,
+        "start": "2021-03-03 09:00",
+        "end": "2021-04-25 23:00",
+        "dur_h": 797,
+        "trigger": "both",
+        "q50r": "0.471",
+        "q90r": "0.501"
+      },
+      {
+        "flag_id": 10533,
+        "start": "2022-05-02 12:00",
+        "end": "2022-12-31 11:00",
+        "dur_h": 2864,
+        "trigger": "both",
+        "q50r": "0.411",
+        "q90r": "0.499"
+      },
+      {
+        "flag_id": 10534,
+        "start": "2024-01-01 04:00",
+        "end": "2024-01-31 22:00",
+        "dur_h": 354,
+        "trigger": "both",
+        "q50r": "0.498",
+        "q90r": "0.843"
+      },
+      {
+        "flag_id": 10535,
+        "start": "2025-06-01 00:00",
+        "end": "2025-12-31 23:00",
+        "dur_h": 2830,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.109"
+      }
+    ]
+  },
+  "Sv\u00e5heia": {
+    "code": "SV\u00c5HEIA",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "25.2",
+    "lat": "58.38267",
+    "lng": "6.09429",
+    "cod": "2018-02-12",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 10540,
+        "start": "2022-07-07 01:00",
+        "end": "2022-10-30 12:00",
+        "dur_h": 803,
+        "trigger": "both",
+        "q50r": "0.593",
+        "q90r": "0.776"
+      }
+    ]
+  },
+  "S\u00f8rmarkfjellet": {
+    "code": "S\u00d8RMARKFJELLET",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "130.2",
+    "lat": "64.39453",
+    "lng": "10.70703",
+    "cod": "2021-10-16",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 9878,
+        "start": "2023-09-03 06:00",
+        "end": "2023-10-26 07:00",
+        "dur_h": 494,
+        "trigger": "both",
+        "q50r": "0.148",
+        "q90r": "0.823"
+      }
+    ]
+  },
+  "Tellenes": {
+    "code": "TELLENES",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "168.0",
+    "lat": "58.34518",
+    "lng": "6.44978",
+    "cod": "2017-08-26",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 11354,
+        "start": "2018-06-03 11:00",
+        "end": "2018-07-31 09:00",
+        "dur_h": 402,
+        "trigger": "q50_ratio",
+        "q50r": "0.385",
+        "q90r": "0.771"
+      }
+    ]
+  },
+  "Tindafjellet": {
+    "code": "TINDAFJELLET",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "10.35",
+    "lat": "58.72862",
+    "lng": "5.94345",
+    "cod": "2018-03-01",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 10547,
+        "start": "2023-10-01 14:00",
+        "end": "2023-11-28 10:00",
+        "dur_h": 792,
+        "trigger": "both",
+        "q50r": "0.559",
+        "q90r": "0.657"
+      },
+      {
+        "flag_id": 10548,
+        "start": "2025-06-01 00:00",
+        "end": "2025-12-31 23:00",
+        "dur_h": 1963,
+        "trigger": "both",
+        "q50r": "0.526",
+        "q90r": "0.659"
+      }
+    ]
+  },
+  "Tysv\u00e6r": {
+    "code": "TYSV\u00c6R",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "47.3",
+    "lat": "59.30624",
+    "lng": "5.56523",
+    "cod": "2021-12-09",
+    "n_flags": 1,
+    "periods": [
+      {
+        "flag_id": 10369,
+        "start": "2025-10-01 08:00",
+        "end": "2025-12-31 23:00",
+        "dur_h": 409,
+        "trigger": "both",
+        "q50r": "0.662",
+        "q90r": "0.845"
+      }
+    ]
+  },
+  "Utsira": {
+    "code": "UTSIRA",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "1.2",
+    "lat": "59.31316",
+    "lng": "4.90549",
+    "cod": "2010-12-01",
+    "n_flags": 15,
+    "periods": [
+      {
+        "flag_id": 10339,
+        "start": "2011-02-01 00:00",
+        "end": "2011-02-26 14:00",
+        "dur_h": 416,
+        "trigger": "both",
+        "q50r": "0.412",
+        "q90r": "0.438"
+      },
+      {
+        "flag_id": 10340,
+        "start": "2011-12-01 00:00",
+        "end": "2011-12-31 23:00",
+        "dur_h": 564,
+        "trigger": "both",
+        "q50r": "0.250",
+        "q90r": "0.492"
+      },
+      {
+        "flag_id": 10341,
+        "start": "2012-03-01 15:00",
+        "end": "2012-06-30 23:00",
+        "dur_h": 737,
+        "trigger": "both",
+        "q50r": "0.314",
+        "q90r": "0.749"
+      },
+      {
+        "flag_id": 10342,
+        "start": "2013-12-01 00:00",
+        "end": "2014-02-28 04:00",
+        "dur_h": 1584,
+        "trigger": "both",
+        "q50r": "0.438",
+        "q90r": "0.602"
+      },
+      {
+        "flag_id": 10343,
+        "start": "2015-08-01 11:00",
+        "end": "2015-09-29 11:00",
+        "dur_h": 412,
+        "trigger": "both",
+        "q50r": "0.413",
+        "q90r": "0.818"
+      },
+      {
+        "flag_id": 10344,
+        "start": "2016-01-01 00:00",
+        "end": "2016-03-31 16:00",
+        "dur_h": 1156,
+        "trigger": "both",
+        "q50r": "0.082",
+        "q90r": "0.478"
+      },
+      {
+        "flag_id": 10345,
+        "start": "2018-01-01 00:00",
+        "end": "2018-04-30 19:00",
+        "dur_h": 1328,
+        "trigger": "both",
+        "q50r": "0.187",
+        "q90r": "0.413"
+      },
+      {
+        "flag_id": 10346,
+        "start": "2019-01-02 04:00",
+        "end": "2019-02-28 23:00",
+        "dur_h": 823,
+        "trigger": "both",
+        "q50r": "0.408",
+        "q90r": "0.766"
+      },
+      {
+        "flag_id": 10347,
+        "start": "2020-01-01 00:00",
+        "end": "2020-08-31 06:00",
+        "dur_h": 3516,
+        "trigger": "both",
+        "q50r": "0.239",
+        "q90r": "0.413"
+      },
+      {
+        "flag_id": 10348,
+        "start": "2021-03-03 08:00",
+        "end": "2021-03-31 23:00",
+        "dur_h": 520,
+        "trigger": "both",
+        "q50r": "0.122",
+        "q90r": "0.661"
+      },
+      {
+        "flag_id": 10349,
+        "start": "2022-10-01 00:00",
+        "end": "2022-11-29 02:00",
+        "dur_h": 847,
+        "trigger": "both",
+        "q50r": "0.378",
+        "q90r": "0.576"
+      },
+      {
+        "flag_id": 10350,
+        "start": "2023-09-01 09:00",
+        "end": "2023-09-30 21:00",
+        "dur_h": 476,
+        "trigger": "both",
+        "q50r": "0.175",
+        "q90r": "0.462"
+      },
+      {
+        "flag_id": 10351,
+        "start": "2023-12-03 06:00",
+        "end": "2024-07-31 07:00",
+        "dur_h": 3287,
+        "trigger": "both",
+        "q50r": "0.250",
+        "q90r": "0.492"
+      },
+      {
+        "flag_id": 10352,
+        "start": "2024-10-05 08:00",
+        "end": "2025-03-31 04:00",
+        "dur_h": 2036,
+        "trigger": "both",
+        "q50r": "0.409",
+        "q90r": "0.536"
+      },
+      {
+        "flag_id": 10353,
+        "start": "2025-10-01 00:00",
+        "end": "2025-11-30 23:00",
+        "dur_h": 937,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.328"
+      }
+    ]
+  },
+  "Valsneset": {
+    "code": "VALSNESET",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "11.5",
+    "lat": "63.81986",
+    "lng": "9.62999",
+    "cod": "2006-10-27",
+    "n_flags": 17,
+    "periods": [
+      {
+        "flag_id": 10455,
+        "start": "2006-12-26 18:00",
+        "end": "2007-01-30 22:00",
+        "dur_h": 407,
+        "trigger": "both",
+        "q50r": "0.570",
+        "q90r": "0.588"
+      },
+      {
+        "flag_id": 10456,
+        "start": "2007-05-15 04:00",
+        "end": "2007-07-31 22:00",
+        "dur_h": 361,
+        "trigger": "both",
+        "q50r": "0.324",
+        "q90r": "0.689"
+      },
+      {
+        "flag_id": 10457,
+        "start": "2010-05-01 00:00",
+        "end": "2010-08-31 02:00",
+        "dur_h": 541,
+        "trigger": "both",
+        "q50r": "0.219",
+        "q90r": "0.533"
+      },
+      {
+        "flag_id": 10458,
+        "start": "2010-11-01 08:00",
+        "end": "2010-12-31 23:00",
+        "dur_h": 364,
+        "trigger": "q50_ratio",
+        "q50r": "0.321",
+        "q90r": "0.800"
+      },
+      {
+        "flag_id": 10459,
+        "start": "2011-04-01 19:00",
+        "end": "2011-06-28 15:00",
+        "dur_h": 368,
+        "trigger": "both",
+        "q50r": "0.280",
+        "q90r": "0.620"
+      },
+      {
+        "flag_id": 10460,
+        "start": "2013-07-01 19:00",
+        "end": "2013-08-31 10:00",
+        "dur_h": 349,
+        "trigger": "both",
+        "q50r": "0.281",
+        "q90r": "0.712"
+      },
+      {
+        "flag_id": 10461,
+        "start": "2014-06-03 20:00",
+        "end": "2014-09-30 23:00",
+        "dur_h": 555,
+        "trigger": "both",
+        "q50r": "0.250",
+        "q90r": "0.715"
+      },
+      {
+        "flag_id": 10462,
+        "start": "2015-06-01 04:00",
+        "end": "2015-09-30 16:00",
+        "dur_h": 758,
+        "trigger": "both",
+        "q50r": "0.260",
+        "q90r": "0.605"
+      },
+      {
+        "flag_id": 10463,
+        "start": "2016-01-01 00:00",
+        "end": "2016-01-31 23:00",
+        "dur_h": 344,
+        "trigger": "both",
+        "q50r": "0.400",
+        "q90r": "0.932"
+      },
+      {
+        "flag_id": 10464,
+        "start": "2018-06-03 14:00",
+        "end": "2018-08-30 17:00",
+        "dur_h": 533,
+        "trigger": "both",
+        "q50r": "0.262",
+        "q90r": "0.628"
+      },
+      {
+        "flag_id": 10465,
+        "start": "2019-06-01 01:00",
+        "end": "2019-09-29 22:00",
+        "dur_h": 638,
+        "trigger": "both",
+        "q50r": "0.301",
+        "q90r": "0.650"
+      },
+      {
+        "flag_id": 10466,
+        "start": "2020-05-01 11:00",
+        "end": "2020-08-25 21:00",
+        "dur_h": 768,
+        "trigger": "both",
+        "q50r": "0.249",
+        "q90r": "0.588"
+      },
+      {
+        "flag_id": 10467,
+        "start": "2021-05-04 16:00",
+        "end": "2021-08-31 23:00",
+        "dur_h": 555,
+        "trigger": "both",
+        "q50r": "0.241",
+        "q90r": "0.610"
+      },
+      {
+        "flag_id": 10468,
+        "start": "2022-04-01 22:00",
+        "end": "2022-08-27 23:00",
+        "dur_h": 984,
+        "trigger": "both",
+        "q50r": "0.262",
+        "q90r": "0.662"
+      },
+      {
+        "flag_id": 10469,
+        "start": "2023-03-01 00:00",
+        "end": "2023-11-30 14:00",
+        "dur_h": 1940,
+        "trigger": "both",
+        "q50r": "0.230",
+        "q90r": "0.596"
+      },
+      {
+        "flag_id": 10470,
+        "start": "2024-05-01 00:00",
+        "end": "2024-11-30 23:00",
+        "dur_h": 1683,
+        "trigger": "both",
+        "q50r": "0.362",
+        "q90r": "0.650"
+      },
+      {
+        "flag_id": 10471,
+        "start": "2025-04-01 00:00",
+        "end": "2025-12-31 23:00",
+        "dur_h": 3052,
+        "trigger": "both",
+        "q50r": "0.243",
+        "q90r": "0.479"
+      }
+    ]
+  },
+  "Valsneset vindkraftverk": {
+    "code": "VALSNESET_VINDKRAFTVERK",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "12.6",
+    "lat": "63.81985",
+    "lng": "9.62999",
+    "cod": "2020-01-15",
+    "n_flags": 3,
+    "periods": [
+      {
+        "flag_id": 10335,
+        "start": "2020-09-02 12:00",
+        "end": "2020-11-30 23:00",
+        "dur_h": 1146,
+        "trigger": "both",
+        "q50r": "0.606",
+        "q90r": "0.654"
+      },
+      {
+        "flag_id": 10336,
+        "start": "2023-05-01 00:00",
+        "end": "2023-08-29 07:00",
+        "dur_h": 383,
+        "trigger": "both",
+        "q50r": "0.405",
+        "q90r": "0.916"
+      },
+      {
+        "flag_id": 10337,
+        "start": "2023-11-01 00:00",
+        "end": "2023-12-31 19:00",
+        "dur_h": 472,
+        "trigger": "both",
+        "q50r": "0.406",
+        "q90r": "0.979"
+      }
+    ]
+  },
+  "Vardafjellet": {
+    "code": "VARDAFJELLET",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "30.1",
+    "lat": "58.83332",
+    "lng": "5.89499",
+    "cod": "2020-08-17",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 10570,
+        "start": "2020-11-01 00:00",
+        "end": "2021-02-26 11:00",
+        "dur_h": 1209,
+        "trigger": "both",
+        "q50r": "0.000",
+        "q90r": "0.559"
+      },
+      {
+        "flag_id": 10571,
+        "start": "2021-06-02 13:00",
+        "end": "2021-09-30 23:00",
+        "dur_h": 763,
+        "trigger": "both",
+        "q50r": "0.114",
+        "q90r": "0.423"
+      }
+    ]
+  },
+  "Ytre Vikna": {
+    "code": "YTRE_VIKNA",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "39.1",
+    "lat": "64.90151",
+    "lng": "10.88898",
+    "cod": "2012-09-15",
+    "n_flags": 2,
+    "periods": [
+      {
+        "flag_id": 11305,
+        "start": "2002-05-21 15:00",
+        "end": "2012-06-26 09:00",
+        "dur_h": 52779,
+        "trigger": "both",
+        "q50r": "0.016",
+        "q90r": "0.038"
+      },
+      {
+        "flag_id": 11306,
+        "start": "2025-10-01 21:00",
+        "end": "2025-11-30 04:00",
+        "dur_h": 452,
+        "trigger": "both",
+        "q50r": "0.498",
+        "q90r": "0.672"
+      }
+    ]
+  },
+  "\u00c5sen II": {
+    "code": "\u00c5SEN_II",
+    "country": "Norway",
+    "location_type": "onshore",
+    "foundation_type": "Onshore",
+    "capacity_mw": "1.6",
+    "lat": "58.73636",
+    "lng": "5.75375",
+    "cod": "2012-03-07",
+    "n_flags": 4,
+    "periods": [
+      {
+        "flag_id": 10397,
+        "start": "2015-07-01 19:00",
+        "end": "2015-10-31 23:00",
+        "dur_h": 782,
+        "trigger": "both",
+        "q50r": "0.208",
+        "q90r": "0.790"
+      },
+      {
+        "flag_id": 10398,
+        "start": "2018-11-01 05:00",
+        "end": "2018-12-31 23:00",
+        "dur_h": 387,
+        "trigger": "both",
+        "q50r": "0.440",
+        "q90r": "0.758"
+      },
+      {
+        "flag_id": 10399,
+        "start": "2020-08-01 00:00",
+        "end": "2020-10-31 23:00",
+        "dur_h": 1036,
+        "trigger": "both",
+        "q50r": "0.228",
+        "q90r": "0.517"
+      },
+      {
+        "flag_id": 10400,
+        "start": "2025-05-01 08:00",
+        "end": "2025-12-31 23:00",
+        "dur_h": 3256,
+        "trigger": "both",
+        "q50r": "0.196",
+        "q90r": "0.459"
+      }
+    ]
+  }
+}
