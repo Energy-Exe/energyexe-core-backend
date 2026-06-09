@@ -61,7 +61,9 @@ async def compare_windfarms(
 @router.get("/statistics")
 async def get_windfarm_statistics(
     windfarm_ids: List[int] = Query(..., description="List of windfarm IDs"),
-    period_days: int = Query(30, description="Number of days for statistics"),
+    period_days: int = Query(30, description="Number of days for statistics (fallback when no explicit date range is given)"),
+    start_date: Optional[date] = Query(None, description="Explicit window start (overrides period_days when paired with end_date)"),
+    end_date: Optional[date] = Query(None, description="Explicit window end (overrides period_days when paired with start_date)"),
     exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records from results"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -76,5 +78,7 @@ async def get_windfarm_statistics(
     return await service.get_windfarm_statistics(
         windfarm_ids=windfarm_ids,
         period_days=period_days,
+        start_date=start_date,
+        end_date=end_date,
         exclude_ramp_up=exclude_ramp_up
     )

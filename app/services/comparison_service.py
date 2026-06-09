@@ -332,59 +332,114 @@ class ComparisonService:
         self,
         windfarm_ids: List[int],
         period_days: int = 30,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
         exclude_ramp_up: bool = True
     ) -> List[Dict[str, Any]]:
-        """Get detailed statistics for selected windfarms."""
+        """Get detailed statistics for selected windfarms.
 
-        end_date = date.today()
-        start_date = end_date - timedelta(days=period_days)
+        When an explicit ``start_date``/``end_date`` pair is supplied the stats
+        are computed over exactly that window (and ``period_days`` is derived
+        from its span). Otherwise we fall back to a rolling window of the last
+        ``period_days`` ending today.
+        """
 
-        # When excluding ramp-up, null out capacity factor fields but keep generation rows.
-        if exclude_ramp_up:
-            cf_expr = case((GenerationData.is_ramp_up == True, None), else_=GenerationData.capacity_factor)
-            raw_cf_expr = case((GenerationData.is_ramp_up == True, None), else_=GenerationData.raw_capacity_factor)
-            raw_cap_expr = case((GenerationData.is_ramp_up == True, None), else_=GenerationData.raw_capacity_mw)
+        if start_date is not None and end_date is not None:
+            # Use the caller's selected range verbatim; derive period_days from
+            # its span so period_days / data_completeness stay consistent.
+            # Inclusive day count: Jan 1 – Dec 31 is 365 days, not 364.
+            period_days = max((end_date - start_date).days + 1, 1)
         else:
-            cf_expr = GenerationData.capacity_factor
-            raw_cf_expr = GenerationData.raw_capacity_factor
-            raw_cap_expr = GenerationData.raw_capacity_mw
+            end_date = date.today()
+            start_date = end_date - timedelta(days=period_days)
 
-        query = select(
-            Windfarm.id,
-            Windfarm.name,
-            Windfarm.nameplate_capacity_mw,
-            func.sum(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('total_generation'),
-            func.avg(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('avg_generation'),
-            func.max(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('peak_generation'),
-            func.min(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('min_generation'),
-            func.stddev(GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)).label('stddev_generation'),
-            func.avg(cf_expr).label('avg_capacity_factor'),
-            func.max(cf_expr).label('max_capacity_factor'),
-            func.min(cf_expr).label('min_capacity_factor'),
-            func.avg(raw_cf_expr).label('avg_raw_capacity_factor'),
-            func.max(raw_cf_expr).label('max_raw_capacity_factor'),
-            func.min(raw_cf_expr).label('min_raw_capacity_factor'),
-            func.avg(raw_cap_expr).label('avg_raw_capacity'),
-            func.count(GenerationData.id).label('data_points'),
-            func.count(case((GenerationData.generation_mwh > 0, 1))).label('active_hours'),
-            # Curtailment data — fall back to generation_mwh when metered_mwh is NULL
-            func.sum(func.coalesce(GenerationData.metered_mwh, GenerationData.generation_mwh)).label('total_metered'),
-            func.sum(func.coalesce(GenerationData.curtailed_mwh, 0)).label('total_curtailed'),
-        ).join(
-            GenerationData, GenerationData.windfarm_id == Windfarm.id
+        # Hour-first rollup: a windfarm has one generation_data row per
+        # (hour, generation_unit_id, source), so aggregating raw rows reports a
+        # single unit for MAX/AVG/MIN and double-counts COUNT on multi-unit or
+        # multi-source farms (e.g. East Anglia One's two BMUs halved peak/avg).
+        # Sum across units per hour first (same pattern as get_windfarm_comparison),
+        # then aggregate the hourly windfarm totals.
+        net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
+
+        # Monthly sources (EIA/Energistyrelsen) store a whole month's MWh at one
+        # hour; weight their CF denominator by hours-in-month, not 1. (#112)
+        month_start = func.date_trunc('month', GenerationData.hour)
+        hours_in_month = func.extract(
+            'epoch', month_start + text("interval '1 month'") - month_start
+        ) / 3600.0
+        row_hours = case(
+            (GenerationData.source.in_(MONTHLY_SOURCES), hours_in_month),
+            else_=1.0,
         )
 
-        # Build WHERE conditions
         stat_conditions = [
-            Windfarm.id.in_(windfarm_ids),
+            GenerationData.windfarm_id.in_(windfarm_ids),
             GenerationData.hour >= datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc),
-            GenerationData.hour <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
+            GenerationData.hour <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc),
         ]
 
-        query = query.where(and_(*stat_conditions)).group_by(
-            Windfarm.id,
-            Windfarm.name,
-            Windfarm.nameplate_capacity_mw
+        hourly_subq = (
+            select(
+                GenerationData.hour.label('h'),
+                GenerationData.windfarm_id.label('wf'),
+                func.sum(net_gen).label('h_gen'),
+                func.sum(GenerationData.capacity_mw).label('h_cap'),
+                func.sum(GenerationData.raw_capacity_mw).label('h_raw_cap'),
+                func.max(row_hours).label('h_hours'),
+                func.bool_or(GenerationData.is_ramp_up == True).label('h_ramp_up'),
+                func.sum(func.coalesce(GenerationData.metered_mwh, GenerationData.generation_mwh)).label('h_metered'),
+                func.sum(func.coalesce(GenerationData.curtailed_mwh, 0)).label('h_curtailed'),
+            )
+            .where(and_(*stat_conditions))
+            .group_by(GenerationData.hour, GenerationData.windfarm_id)
+            .subquery()
+        )
+
+        # Capacity factor is energy-weighted (SUM(gen) / SUM(cap × hours)) — the
+        # correct multi-unit definition, consistent with the /compare chart and
+        # the Methodology page (never an average of per-hour CFs). Ramp-up hours
+        # are nulled out of CF only; generation totals keep every hour.
+        cap_hours = hourly_subq.c.h_cap * hourly_subq.c.h_hours
+        raw_cap_hours = hourly_subq.c.h_raw_cap * hourly_subq.c.h_hours
+        if exclude_ramp_up:
+            cf_gen_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=hourly_subq.c.h_gen)
+            cap_hours_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=cap_hours)
+            raw_cap_hours_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=raw_cap_hours)
+            h_raw_cap_safe = case((hourly_subq.c.h_ramp_up == True, None), else_=hourly_subq.c.h_raw_cap)
+        else:
+            cf_gen_safe = hourly_subq.c.h_gen
+            cap_hours_safe = cap_hours
+            raw_cap_hours_safe = raw_cap_hours
+            h_raw_cap_safe = hourly_subq.c.h_raw_cap
+
+        # Per-hour CF for the max/min extremes.
+        hour_cf = cf_gen_safe / func.nullif(cap_hours_safe, 0)
+        hour_raw_cf = cf_gen_safe / func.nullif(raw_cap_hours_safe, 0)
+
+        query = (
+            select(
+                Windfarm.id,
+                Windfarm.name,
+                Windfarm.nameplate_capacity_mw,
+                func.sum(hourly_subq.c.h_gen).label('total_generation'),
+                func.avg(hourly_subq.c.h_gen).label('avg_generation'),
+                func.max(hourly_subq.c.h_gen).label('peak_generation'),
+                func.min(hourly_subq.c.h_gen).label('min_generation'),
+                func.stddev(hourly_subq.c.h_gen).label('stddev_generation'),
+                (func.sum(cf_gen_safe) / func.nullif(func.sum(cap_hours_safe), 0)).label('avg_capacity_factor'),
+                func.max(hour_cf).label('max_capacity_factor'),
+                func.min(hour_cf).label('min_capacity_factor'),
+                (func.sum(cf_gen_safe) / func.nullif(func.sum(raw_cap_hours_safe), 0)).label('avg_raw_capacity_factor'),
+                func.max(hour_raw_cf).label('max_raw_capacity_factor'),
+                func.min(hour_raw_cf).label('min_raw_capacity_factor'),
+                func.avg(h_raw_cap_safe).label('avg_raw_capacity'),
+                func.count().label('data_points'),
+                func.count(case((hourly_subq.c.h_gen > 0, 1))).label('active_hours'),
+                func.sum(hourly_subq.c.h_metered).label('total_metered'),
+                func.sum(hourly_subq.c.h_curtailed).label('total_curtailed'),
+            )
+            .join(Windfarm, hourly_subq.c.wf == Windfarm.id)
+            .group_by(Windfarm.id, Windfarm.name, Windfarm.nameplate_capacity_mw)
         )
 
         result = await self.db.execute(query)

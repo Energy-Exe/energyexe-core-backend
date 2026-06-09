@@ -65,6 +65,9 @@ Examples:
                         help='Start date YYYY-MM-DD')
     parser.add_argument('--end', type=str, required=True,
                         help='End date YYYY-MM-DD')
+    parser.add_argument('--source', type=str, default='ELEXON',
+                        choices=['ENTSOE', 'ELEXON', 'TAIPOWER', 'NVE', 'ENERGISTYRELSEN'],
+                        help='Data source to re-aggregate (default: ELEXON)')
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what would be done without making changes')
     return parser.parse_args()
@@ -94,7 +97,7 @@ async def get_windfarm_id_from_bmu(bmu_code: str) -> tuple:
         await conn.close()
 
 
-async def run_aggregation(start_date: str, end_date: str, windfarm_id: int, dry_run: bool) -> dict:
+async def run_aggregation(start_date: str, end_date: str, windfarm_id: int, dry_run: bool, source: str = 'ELEXON') -> dict:
     """Run aggregation for a specific windfarm."""
     start_dt = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=ZoneInfo('UTC'))
     end_dt = datetime.strptime(end_date, '%Y-%m-%d').replace(tzinfo=ZoneInfo('UTC'))
@@ -120,15 +123,15 @@ async def run_aggregation(start_date: str, end_date: str, windfarm_id: int, dry_
             try:
                 result = await processor.process_day(
                     date=current_date,
-                    sources=['ELEXON'],
+                    sources=[source],
                     windfarm_id=windfarm_id,
                     skip_load_units=True,
                     skip_commit=True
                 )
 
                 stats['days_processed'] += 1
-                elexon_result = result.get('sources', {}).get('ELEXON', {})
-                stats['hourly_records_created'] += elexon_result.get('hourly_records', 0)
+                source_result = result.get('sources', {}).get(source, {})
+                stats['hourly_records_created'] += source_result.get('hourly_records', 0)
 
                 # Progress output every 30 days
                 if stats['days_processed'] % 30 == 0:
@@ -159,7 +162,7 @@ async def main():
         sys.exit(1)
 
     print("=" * 70)
-    print("ELEXON Data Re-Aggregation")
+    print(f"{args.source} Data Re-Aggregation")
     print("=" * 70)
 
     # Get windfarm ID
@@ -178,6 +181,7 @@ async def main():
     print(f"  Windfarm ID: {windfarm_id}")
     if windfarm_name:
         print(f"  Windfarm Name: {windfarm_name}")
+    print(f"  Source: {args.source}")
     print(f"  Date Range: {args.start} to {args.end}")
     print(f"  Dry Run: {args.dry_run}")
 
@@ -186,7 +190,7 @@ async def main():
     print("Running Aggregation")
     print("-" * 70)
 
-    stats = await run_aggregation(args.start, args.end, windfarm_id, args.dry_run)
+    stats = await run_aggregation(args.start, args.end, windfarm_id, args.dry_run, args.source)
 
     print("\n" + "=" * 70)
     print("SUMMARY")
