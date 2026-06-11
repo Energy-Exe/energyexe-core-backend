@@ -61,7 +61,7 @@ Curves are built per calendar year and as an all-years "clean" curve, with curta
         "content_md": """\
 - **Capacity factor (CF)** = `sum(metered_mwh) / (nameplate_mw × distinct hours in period)`. Always nameplate-based — never an average of hourly CFs, which would drop hours with missing readings and inflate the result. For multi-unit windfarms, generation is summed across units before dividing by the windfarm's total nameplate. Typical ranges: 25–35% onshore, 35–50% offshore.
 - **Availability** = fraction of expected-operational hours where the unit produced above a low threshold (idle filter).
-- **P50 target** — operator-published annual P50 generation, divided by 12 to get the monthly target. The P50 tab shows cumulative actual vs cumulative P50 and a "gap in months" KPI (how many months of average production it would take to close the deficit). Where the operator figure is unavailable, an auto-computed long-run target may be used and is labelled as such.
+- **P50 target** — operator-published annual P50 generation, divided by 12 to get the monthly target. The Generation tab shows cumulative actual vs cumulative P50 and a "gap in months" KPI. Gap = actual − P50, so positive means generation is ahead of target and negative means it is behind. Where the operator figure is unavailable, an auto-computed long-run target may be used and is labelled as such.
 - **Metered vs reported** — hourly metered totals can differ from annually reported financial-statement generation by 2–5%; the platform treats metered hourly data as the operational source of truth.""",
     },
     {

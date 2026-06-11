@@ -146,7 +146,7 @@ class P50TargetService:
         - Monthly P50 = Annual P50 / 12
         - Aggregated P50 = cumulative sum of monthly P50 from start
         - Aggregated actual = cumulative sum of actual monthly generation
-        - Gap = aggregated P50 - aggregated actual
+        - Gap = aggregated actual - aggregated P50 (positive = above target)
         - Average annual generation excludes first year after COD
         """
         # Load windfarm
@@ -181,7 +181,7 @@ class P50TargetService:
         for i, (month_str, actual_gwh) in enumerate(monthly_gen):
             aggregated_p50 += monthly_p50
             aggregated_actual += actual_gwh
-            gap = aggregated_p50 - aggregated_actual
+            gap = aggregated_actual - aggregated_p50
             monthly_data.append(
                 P50MonthlyDataPoint(
                     month=month_str,
@@ -209,7 +209,7 @@ class P50TargetService:
         yearly_gap_values = [g.gap_gwh for g in yearly_gaps]
         avg_annual_gap = sum(yearly_gap_values) / len(yearly_gap_values) if yearly_gap_values else 0.0
 
-        total_gap = aggregated_p50 - aggregated_actual if monthly_data else 0.0
+        total_gap = aggregated_actual - aggregated_p50 if monthly_data else 0.0
         gap_pct = (total_gap / avg_annual_gen * 100) if avg_annual_gen > 0 else None
         gap_months = total_gap / monthly_p50 if monthly_p50 > 0 else 0.0
 
@@ -286,7 +286,7 @@ class P50TargetService:
             data = yearly[year]
             # Prorate P50 target by number of months with data in that year
             p50_for_year = monthly_p50 * data["months"]
-            gap = p50_for_year - data["actual"]
+            gap = data["actual"] - p50_for_year
             gap_months = gap / monthly_p50 if monthly_p50 > 0 else 0.0
             gaps.append(
                 P50YearlyGap(
