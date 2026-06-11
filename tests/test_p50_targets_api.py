@@ -642,7 +642,7 @@ class TestP50Analysis:
     def test_analysis_gap_consistency(
         self, api_client, windfarm_with_generation, cleanup_targets
     ):
-        """Gap = aggregated_p50 - aggregated_actual at each data point."""
+        """Gap = aggregated_actual - aggregated_p50 at each data point."""
         wf = windfarm_with_generation
 
         target_resp = api_client.post(
@@ -661,18 +661,18 @@ class TestP50Analysis:
 
         for point in response.json()["monthly_data"]:
             expected_gap = round(
-                point["aggregated_p50_gwh"] - point["aggregated_actual_gwh"], 3
+                point["aggregated_actual_gwh"] - point["aggregated_p50_gwh"], 3
             )
             actual_gap = point["aggregated_gap_gwh"]
             assert abs(actual_gap - expected_gap) < 0.01, (
                 f"Month {point['month']}: gap {actual_gap} != "
-                f"p50 {point['aggregated_p50_gwh']} - actual {point['aggregated_actual_gwh']} = {expected_gap}"
+                f"actual {point['aggregated_actual_gwh']} - p50 {point['aggregated_p50_gwh']} = {expected_gap}"
             )
 
     def test_analysis_yearly_gaps_structure(
         self, api_client, windfarm_with_generation, cleanup_targets
     ):
-        """Yearly gaps have correct structure and gap = p50_target - actual."""
+        """Yearly gaps have correct structure and gap = actual - p50_target."""
         wf = windfarm_with_generation
 
         target_resp = api_client.post(
@@ -697,8 +697,8 @@ class TestP50Analysis:
             assert "gap_gwh" in gap
             assert "gap_months" in gap
 
-            # gap = p50_target - actual
-            expected = round(gap["p50_target_gwh"] - gap["actual_generation_gwh"], 3)
+            # gap = actual - p50_target
+            expected = round(gap["actual_generation_gwh"] - gap["p50_target_gwh"], 3)
             assert abs(gap["gap_gwh"] - expected) < 0.01, (
                 f"Year {gap['year']}: gap_gwh {gap['gap_gwh']} != expected {expected}"
             )

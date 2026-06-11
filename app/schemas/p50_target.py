@@ -56,7 +56,7 @@ class P50MonthlyDataPoint(BaseModel):
     actual_generation_gwh: float  # Actual generation for this month
     aggregated_p50_gwh: float  # Cumulative P50 from start
     aggregated_actual_gwh: float  # Cumulative actual from start
-    aggregated_gap_gwh: float  # aggregated_p50 - aggregated_actual
+    aggregated_gap_gwh: float  # aggregated_actual - aggregated_p50 (positive = above target)
 
 
 class P50YearlyGap(BaseModel):
@@ -65,7 +65,7 @@ class P50YearlyGap(BaseModel):
     year: int
     actual_generation_gwh: float
     p50_target_gwh: float  # Prorated if partial year
-    gap_gwh: float  # p50 - actual (positive = underperforming)
+    gap_gwh: float  # actual - p50 (positive = overperforming)
     gap_months: float  # gap / monthly_p50
 
 
@@ -78,9 +78,9 @@ class P50AnalysisResult(BaseModel):
     p50_target: P50TargetResponse
     p50_capacity_factor_pct: Optional[float]  # P50 / (capacity_mw * 8760) * 100
     avg_annual_generation_gwh: float  # Average actual annual gen (excl first year after COD)
-    avg_annual_gap_gwh: float  # Average (P50 - actual) per year
-    gap_from_p50_gwh: float  # Total cumulative gap
+    avg_annual_gap_gwh: float  # Average (actual - P50) per year
+    gap_from_p50_gwh: float  # Total cumulative gap (actual - P50; positive = above target)
     gap_pct_of_annual_avg: Optional[float]  # gap / avg_annual_generation * 100
-    gap_in_months: float  # total gap / monthly P50
+    gap_in_months: float  # total gap / monthly P50 (positive = months ahead of target)
     monthly_data: List[P50MonthlyDataPoint]
     yearly_gaps: List[P50YearlyGap]
