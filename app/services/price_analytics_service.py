@@ -728,6 +728,7 @@ class PriceAnalyticsService:
         return {
             "bidzone_id": bidzone_id,
             "bidzone_code": bidzone_code,
+            "bidzone_name": bidzone.name if bidzone else None,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "windfarms": windfarms,
@@ -871,6 +872,7 @@ class PriceAnalyticsService:
         return {
             "bidzone_id": bidzone_id,
             "bidzone_code": bidzone_code,
+            "bidzone_name": bidzone.name if bidzone else None,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "axes": axes,
