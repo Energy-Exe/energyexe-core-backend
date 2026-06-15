@@ -9,10 +9,15 @@ from app.core.deps import exclude_deleted, get_current_user_optional
 from app.models.user import User
 from app.schemas.windfarm import (
     Windfarm,
+    WindfarmAggregateStats,
     WindfarmCreate,
     WindfarmCreateWithOwners,
     WindfarmListItem,
     WindfarmUpdate,
+)
+from app.services.windfarm_scope_service import (
+    PeerScopeParams,
+    build_windfarm_scope_conditions,
 )
 from app.schemas.windfarm_owner import (
     WindfarmOwner,
@@ -128,6 +133,41 @@ async def get_windfarm_names(
         stmt = stmt.where(WindfarmModel.is_deleted == False)  # noqa: E712
     result = await db.execute(stmt)
     return [{"id": row.id, "name": row.name, "code": row.code} for row in result.all()]
+
+
+@router.get("/aggregate-stats", response_model=WindfarmAggregateStats)
+async def get_windfarm_aggregate_stats(
+    scope: PeerScopeParams = Depends(),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    """Aggregate windfarm KPIs, optionally scoped by peer-group filters.
+
+    Without filters: whole-dataset figures for the Performance landing page
+    (total farms, installed capacity, operational farms, markets covered).
+    With filters: the same figures for the matching peer group.
+    """
+    from sqlalchemy import case, func, select as sa_select
+    from app.models.windfarm import Windfarm as WindfarmModel
+
+    stmt = sa_select(
+        func.count(WindfarmModel.id).label("farm_count"),
+        func.coalesce(func.sum(WindfarmModel.nameplate_capacity_mw), 0).label(
+            "total_capacity_mw"
+        ),
+        func.sum(case((WindfarmModel.status == "operational", 1), else_=0)).label(
+            "operational_count"
+        ),
+        func.count(func.distinct(WindfarmModel.country_id)).label("countries_count"),
+    ).where(*build_windfarm_scope_conditions(scope))
+
+    row = (await db.execute(stmt)).first()
+    return WindfarmAggregateStats(
+        farm_count=row.farm_count or 0,
+        total_capacity_mw=round(float(row.total_capacity_mw or 0), 2),
+        operational_count=int(row.operational_count or 0),
+        countries_count=row.countries_count or 0,
+    )
 
 
 @router.get("/{windfarm_id}", response_model=Windfarm)

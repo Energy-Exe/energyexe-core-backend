@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and adjust. Everything has a sensible default;
+# the one you almost certainly want to set is cors_origins.
+
+# CORS override — usually UNNEEDED (the app's default list already includes
+# the prod domains). If set, it must be a JSON array string:
+# cors_origins = "[\"https://dashboard.energyexe.com\",\"https://app.energyexe.com\"]"
+
+# Once you've created an ACM cert (DNS-validated) in eu-north-1:
+# certificate_arn = "arn:aws:acm:eu-north-1:ACCOUNT_ID:certificate/..."
+
+# Bump if import jobs need more headroom (pandas-heavy):
+# task_cpu    = 2048
+# task_memory = 8192
