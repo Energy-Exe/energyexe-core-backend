@@ -505,6 +505,293 @@ class FinancialDataService:
 
         return responses
 
+    # --- Peer-group financial summary ---
+
+    async def get_peer_financial_summary(
+        self, windfarm_ids: List[int], display_currency: str = "EUR"
+    ) -> Dict[str, Any]:
+        """Most-recent usable financial ratios per farm across a peer group.
+
+        Follows the same rules as calculate_financial_ratios (ramp-up exclusion
+        at COD + 365 days, generation summed over ALL farms linked to the
+        entity for holdco filings, ECB period conversion to display_currency),
+        but entity-first and returning only the latest usable period per farm.
+
+        Farms whose filing currency cannot be converted keep their original
+        currency on the row and are excluded from the peer averages — mixing
+        currencies in a mean would be meaningless.
+        """
+        from app.services.exchange_rate_service import ExchangeRateService
+
+        empty = {
+            "display_currency": display_currency,
+            "coverage": {"farm_count": len(windfarm_ids), "farms_with_financials": 0},
+            "averages": {
+                "revenue_per_mwh": None,
+                "opex_per_mwh": None,
+                "ebitda_margin_pct": None,
+            },
+            "farms": [],
+        }
+        if not windfarm_ids:
+            empty["coverage"]["farm_count"] = 0
+            return empty
+
+        # Farm -> entity links inside the scope
+        link_rows = (
+            await self.db.execute(
+                select(
+                    WindfarmFinancialEntity.windfarm_id,
+                    WindfarmFinancialEntity.financial_entity_id,
+                ).where(WindfarmFinancialEntity.windfarm_id.in_(windfarm_ids))
+            )
+        ).all()
+        if not link_rows:
+            return empty
+
+        farm_entities: Dict[int, List[int]] = {}
+        entity_ids = set()
+        for wf_id, ent_id in link_rows:
+            farm_entities.setdefault(wf_id, []).append(ent_id)
+            entity_ids.add(ent_id)
+
+        # Entity -> ALL linked farms (holdco generation attribution spans farms
+        # outside the scope too)
+        all_links = (
+            await self.db.execute(
+                select(
+                    WindfarmFinancialEntity.financial_entity_id,
+                    WindfarmFinancialEntity.windfarm_id,
+                ).where(WindfarmFinancialEntity.financial_entity_id.in_(entity_ids))
+            )
+        ).all()
+        entity_farms: Dict[int, List[int]] = {}
+        for ent_id, wf_id in all_links:
+            entity_farms.setdefault(ent_id, []).append(wf_id)
+
+        entity_names: Dict[int, str] = {
+            row.id: row.name
+            for row in (
+                await self.db.execute(
+                    select(FinancialEntity.id, FinancialEntity.name).where(
+                        FinancialEntity.id.in_(entity_ids)
+                    )
+                )
+            ).all()
+        }
+
+        all_linked_farm_ids = {wf for farms in entity_farms.values() for wf in farms}
+        cod_by_farm: Dict[int, Any] = {
+            row.id: row.commercial_operational_date
+            for row in (
+                await self.db.execute(
+                    select(Windfarm.id, Windfarm.commercial_operational_date).where(
+                        Windfarm.id.in_(all_linked_farm_ids | set(windfarm_ids))
+                    )
+                )
+            ).all()
+        }
+
+        # Newest-first filings per entity; walk at most the 3 latest periods
+        # looking for a usable one (ratios need overlapping generation data).
+        fd_rows = (
+            await self.db.execute(
+                select(FinancialData)
+                .where(FinancialData.financial_entity_id.in_(entity_ids))
+                .order_by(FinancialData.financial_entity_id, FinancialData.period_end.desc())
+            )
+        ).scalars().all()
+        entity_filings: Dict[int, List[FinancialData]] = {}
+        for fd in fd_rows:
+            filings = entity_filings.setdefault(fd.financial_entity_id, [])
+            if len(filings) < 3:
+                filings.append(fd)
+
+        # Drop ramp-up-excluded filings up front (pure date math), then batch
+        # the generation sums for every remaining candidate filing into ONE
+        # query — per-filing queries against remote RDS take ~45s for a
+        # 120-farm peer group, the batched join takes seconds.
+        candidate_filings: Dict[int, List[FinancialData]] = {}
+        ramp_cutoff_by_entity: Dict[int, Any] = {}
+        for ent_id, filings in entity_filings.items():
+            linked_wf_ids = entity_farms.get(ent_id, [])
+            cod_dates = [
+                cod_by_farm.get(wf) for wf in linked_wf_ids if cod_by_farm.get(wf) is not None
+            ]
+            effective_cod = max(cod_dates) if cod_dates else None
+            ramp_up_cutoff = (
+                effective_cod + timedelta(days=365) if effective_cod is not None else None
+            )
+            ramp_cutoff_by_entity[ent_id] = ramp_up_cutoff
+            usable = [
+                fd
+                for fd in filings
+                if ramp_up_cutoff is None or fd.period_start >= ramp_up_cutoff
+            ]
+            if usable:
+                candidate_filings[ent_id] = usable
+
+        all_candidate_ids = [fd.id for filings in candidate_filings.values() for fd in filings]
+        gen_by_filing: Dict[int, Any] = {}
+        if all_candidate_ids:
+            from sqlalchemy import text as sa_text
+
+            gen_rows = (
+                await self.db.execute(
+                    sa_text(
+                        """
+                        SELECT fd.id AS fd_id,
+                               SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) AS gen_mwh
+                        FROM financial_data fd
+                        JOIN windfarm_financial_entities l
+                          ON l.financial_entity_id = fd.financial_entity_id
+                        JOIN generation_data g
+                          ON g.windfarm_id = l.windfarm_id
+                         AND g.hour >= fd.period_start
+                         AND g.hour < fd.period_end + 1
+                        WHERE fd.id = ANY(:fd_ids)
+                        GROUP BY fd.id
+                        """
+                    ),
+                    {"fd_ids": all_candidate_ids},
+                )
+            ).all()
+            gen_by_filing = {row.fd_id: row.gen_mwh for row in gen_rows}
+
+        exchange_rate_svc = ExchangeRateService(self.db)
+        entity_result: Dict[int, Dict[str, Any]] = {}
+
+        # Filings cluster on the same fiscal periods (calendar years), so memoise
+        # FX lookups per (currency, period) — saves one DB round trip per entity.
+        fx_cache: Dict[Any, Optional[Decimal]] = {}
+
+        async def _cached_rate(from_ccy: str, start: Any, end: Any) -> Optional[Decimal]:
+            key = (from_ccy, display_currency, start, end)
+            if key not in fx_cache:
+                fx_cache[key] = await exchange_rate_svc.get_rate_for_period(
+                    from_ccy, display_currency, start, end
+                )
+            return fx_cache[key]
+
+        for ent_id, filings in candidate_filings.items():
+            for fd in filings:
+                total_gen_mwh = gen_by_filing.get(fd.id)
+                if total_gen_mwh is None or total_gen_mwh <= 0:
+                    continue
+
+                effective_revenue = fd.total_revenue
+                effective_opex = fd.total_operating_expenses
+                effective_ebitda = fd.ebitda
+                shown_currency = fd.currency
+                if display_currency and fd.currency != display_currency:
+                    rate = await _cached_rate(fd.currency, fd.period_start, fd.period_end)
+                    if rate is not None:
+                        shown_currency = display_currency
+                        if effective_revenue is not None:
+                            effective_revenue = round(effective_revenue * rate, 2)
+                        if effective_opex is not None:
+                            effective_opex = round(effective_opex * rate, 2)
+                        if effective_ebitda is not None:
+                            effective_ebitda = round(effective_ebitda * rate, 2)
+                elif display_currency:
+                    shown_currency = display_currency
+
+                ratios = self._compute_ratios(
+                    total_revenue=effective_revenue,
+                    total_opex=effective_opex,
+                    ebitda=effective_ebitda,
+                    generation_mwh=round(total_gen_mwh, 1),
+                )
+                if all(v is None for v in ratios.values()):
+                    continue
+
+                entity_result[ent_id] = {
+                    "entity_id": ent_id,
+                    "entity_name": entity_names.get(ent_id),
+                    "period_start": fd.period_start,
+                    "period_end": fd.period_end,
+                    "currency": shown_currency,
+                    **ratios,
+                }
+                break
+
+        # Farm rows: latest usable entity result per scoped farm
+        farm_meta = {
+            row.id: row
+            for row in (
+                await self.db.execute(
+                    select(
+                        Windfarm.id, Windfarm.name, Windfarm.nameplate_capacity_mw
+                    ).where(Windfarm.id.in_(windfarm_ids))
+                )
+            ).all()
+        }
+
+        farms = []
+        for wf_id in windfarm_ids:
+            candidates = [
+                entity_result[e] for e in farm_entities.get(wf_id, []) if e in entity_result
+            ]
+            if not candidates:
+                continue
+            best = max(candidates, key=lambda c: c["period_end"])
+            meta = farm_meta.get(wf_id)
+            farms.append(
+                {
+                    "windfarm_id": wf_id,
+                    "name": meta.name if meta else f"Farm {wf_id}",
+                    "capacity_mw": (
+                        round(float(meta.nameplate_capacity_mw), 2)
+                        if meta and meta.nameplate_capacity_mw is not None
+                        else None
+                    ),
+                    "revenue_per_mwh": (
+                        float(best["revenue_per_mwh"])
+                        if best["revenue_per_mwh"] is not None
+                        else None
+                    ),
+                    "opex_per_mwh": (
+                        float(best["opex_per_mwh"]) if best["opex_per_mwh"] is not None else None
+                    ),
+                    "ebitda_margin_pct": (
+                        float(best["ebitda_margin_pct"])
+                        if best["ebitda_margin_pct"] is not None
+                        else None
+                    ),
+                    "period_start": best["period_start"],
+                    "period_end": best["period_end"],
+                    "currency": best["currency"],
+                    "entity_name": best["entity_name"],
+                }
+            )
+
+        farms.sort(key=lambda f: (f["revenue_per_mwh"] is None, -(f["revenue_per_mwh"] or 0)))
+
+        def _avg(metric: str) -> Optional[float]:
+            vals = [
+                f[metric]
+                for f in farms
+                if f[metric] is not None and f["currency"] == display_currency
+            ]
+            # EBITDA margin is currency-independent; include every row for it
+            if metric == "ebitda_margin_pct":
+                vals = [f[metric] for f in farms if f[metric] is not None]
+            return round(sum(vals) / len(vals), 2) if vals else None
+
+        return {
+            "display_currency": display_currency,
+            "coverage": {
+                "farm_count": len(windfarm_ids),
+                "farms_with_financials": len(farms),
+            },
+            "averages": {
+                "revenue_per_mwh": _avg("revenue_per_mwh"),
+                "opex_per_mwh": _avg("opex_per_mwh"),
+                "ebitda_margin_pct": _avg("ebitda_margin_pct"),
+            },
+            "farms": farms,
+        }
+
     # --- Excel Import ---
 
     async def import_from_excel(

@@ -1,0 +1,57 @@
+# Move to .github/workflows/deploy-aws.yml when ready to switch CI deploys on.
+# Kept as .example here so it doesn't fire on push before AWS creds exist.
+#
+# Repo secrets needed: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+# (an IAM user scoped to ECR push + ecs:UpdateService; OIDC role assumption
+# is the nicer long-term setup if you want to avoid long-lived keys).
+
+name: Deploy to AWS Fargate
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-north-1
+  ECR_REPOSITORY: energyexe-core-backend
+  ECS_CLUSTER: energyexe
+  ECS_SERVICE: energyexe-core-backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/$ECR_REPOSITORY"
+          docker build --target production -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
+
+      - name: Deploy (task def points at :latest, so a force-redeploy picks it up)
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment \
+            --query 'service.deployments[0].id' --output text
+
+      - name: Wait for service to stabilize
+        run: aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"

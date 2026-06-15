@@ -10,6 +10,12 @@ from sqlalchemy import Integer
 from app.core.deps import get_current_active_user, get_db
 from app.models.user import User
 from app.services.unified_generation_service import UnifiedGenerationService
+from app.services.windfarm_scope_service import (
+    PeerScopeParams,
+    apply_analytics_work_mem,
+    resolve_windfarm_scope_ids,
+    windfarm_ids_sql_array,
+)
 
 router = APIRouter()
 
@@ -589,7 +595,7 @@ async def get_portfolio_generation_stats(
     start_date: datetime = Query(..., description="Start date for statistics"),
     end_date: datetime = Query(..., description="End date for statistics"),
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
-    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    scope: PeerScopeParams = Depends(),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ) -> Dict[str, Any]:
@@ -600,9 +606,7 @@ async def get_portfolio_generation_stats(
     """
     from app.models.generation_data import GenerationData
     from app.models.windfarm import Windfarm
-    from app.models.portfolio import PortfolioItem
     from sqlalchemy import select, func, and_, desc
-    from sqlalchemy.orm import selectinload
 
     # Build base query for generation aggregation
     conditions = [
@@ -610,34 +614,23 @@ async def get_portfolio_generation_stats(
         GenerationData.hour < end_date + timedelta(days=1),
     ]
 
-    # If portfolio_id is specified, filter by portfolio items
-    if portfolio_id:
-        windfarm_ids_query = select(PortfolioItem.windfarm_id).where(
-            PortfolioItem.portfolio_id == portfolio_id
-        )
-        windfarm_ids_result = await db.execute(windfarm_ids_query)
-        windfarm_ids = [row[0] for row in windfarm_ids_result.fetchall()]
-        if windfarm_ids:
-            conditions.append(GenerationData.windfarm_id.in_(windfarm_ids))
-        else:
-            # Empty portfolio - return zeros
+    windfarm_scope_ids = await resolve_windfarm_scope_ids(
+        db, portfolio_id=portfolio_id, scope=scope
+    )
+    if windfarm_scope_ids is not None:
+        if not windfarm_scope_ids:
+            # Filters matched no windfarms - return zeros
             return {
                 'total_mwh': 0,
                 'avg_capacity_factor': 0,
                 'farm_count': 0,
                 'record_count': 0,
                 'avg_quality_score': 0,
+                'total_capacity_mw': 0,
                 'top_performers': [],
                 'bottom_performers': [],
             }
-
-    # If country_id is specified, filter windfarms by country
-    if country_id:
-        windfarm_ids_query = select(Windfarm.id).where(Windfarm.country_id == country_id)
-        windfarm_ids_result = await db.execute(windfarm_ids_query)
-        country_windfarm_ids = [row[0] for row in windfarm_ids_result.fetchall()]
-        if country_windfarm_ids:
-            conditions.append(GenerationData.windfarm_id.in_(country_windfarm_ids))
+        conditions.append(GenerationData.windfarm_id.in_(windfarm_scope_ids))
 
     # Get total generation stats (net = generation - consumption)
     net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
@@ -647,6 +640,10 @@ async def get_portfolio_generation_stats(
         func.count(func.distinct(GenerationData.windfarm_id)).label('farm_count'),
         func.count(GenerationData.id).label('record_count'),
     ).where(and_(*conditions))
+
+    # These two aggregations each scan ~1M generation rows for a year-wide peer
+    # scope; raise work_mem so the bitmap stays exact instead of degrading.
+    await apply_analytics_work_mem(db)
 
     stats_result = await db.execute(stats_query)
     stats = stats_result.first()
@@ -735,7 +732,7 @@ async def get_portfolio_generation_timeseries(
     end_date: datetime = Query(..., description="End date"),
     aggregation: str = Query("daily", regex="^(hourly|daily|weekly|monthly)$"),
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
-    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    scope: PeerScopeParams = Depends(),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ) -> Dict[str, Any]:
@@ -746,8 +743,7 @@ async def get_portfolio_generation_timeseries(
     """
     from app.models.generation_data import GenerationData
     from app.models.windfarm import Windfarm
-    from app.models.portfolio import PortfolioItem
-    from sqlalchemy import select, func, and_, literal, text
+    from sqlalchemy import select, func, and_, literal
 
     # Build base conditions
     conditions = [
@@ -755,23 +751,19 @@ async def get_portfolio_generation_timeseries(
         GenerationData.hour < end_date + timedelta(days=1),
     ]
 
-    # Filter by portfolio or country
-    windfarm_filter_ids = None
-    if portfolio_id:
-        windfarm_ids_query = select(PortfolioItem.windfarm_id).where(
-            PortfolioItem.portfolio_id == portfolio_id
-        )
-        windfarm_ids_result = await db.execute(windfarm_ids_query)
-        windfarm_filter_ids = [row[0] for row in windfarm_ids_result.fetchall()]
-        if windfarm_filter_ids:
-            conditions.append(GenerationData.windfarm_id.in_(windfarm_filter_ids))
-
-    if country_id:
-        windfarm_ids_query = select(Windfarm.id).where(Windfarm.country_id == country_id)
-        windfarm_ids_result = await db.execute(windfarm_ids_query)
-        country_windfarm_ids = [row[0] for row in windfarm_ids_result.fetchall()]
-        if country_windfarm_ids:
-            conditions.append(GenerationData.windfarm_id.in_(country_windfarm_ids))
+    windfarm_scope_ids = await resolve_windfarm_scope_ids(
+        db, portfolio_id=portfolio_id, scope=scope
+    )
+    if windfarm_scope_ids is not None:
+        if not windfarm_scope_ids:
+            return {
+                'aggregation': aggregation,
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
+                'timeseries': [],
+                'by_farm': {},
+            }
+        conditions.append(GenerationData.windfarm_id.in_(windfarm_scope_ids))
 
     # Map aggregation to PostgreSQL date_trunc
     agg_map = {
@@ -866,7 +858,7 @@ async def get_portfolio_generation_timeseries(
 @router.get("/portfolio/availability")
 async def get_portfolio_generation_availability(
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
-    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    scope: PeerScopeParams = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
@@ -875,29 +867,11 @@ async def get_portfolio_generation_availability(
     windfarms. Used by the client to anchor analytics windows at a range that
     actually contains data.
     """
-    from app.models.portfolio import PortfolioItem
-    from app.models.windfarm import Windfarm
-    from sqlalchemy import select, text
+    from sqlalchemy import text
 
-    windfarm_ids: Optional[List[int]] = None
-    if portfolio_id:
-        result = await db.execute(
-            select(PortfolioItem.windfarm_id).where(PortfolioItem.portfolio_id == portfolio_id)
-        )
-        windfarm_ids = [row[0] for row in result.fetchall()]
-        if not windfarm_ids:
-            return {"min_hour": None, "max_hour": None, "farm_count": 0}
-
-    if country_id:
-        result = await db.execute(select(Windfarm.id).where(Windfarm.country_id == country_id))
-        country_ids = [row[0] for row in result.fetchall()]
-        windfarm_ids = (
-            [wf_id for wf_id in windfarm_ids if wf_id in country_ids]
-            if windfarm_ids is not None
-            else country_ids
-        )
-        if not windfarm_ids:
-            return {"min_hour": None, "max_hour": None, "farm_count": 0}
+    windfarm_ids = await resolve_windfarm_scope_ids(db, portfolio_id=portfolio_id, scope=scope)
+    if windfarm_ids is not None and not windfarm_ids:
+        return {"min_hour": None, "max_hour": None, "farm_count": 0}
 
     params: Dict[str, Any] = {}
     where_clause = ""
@@ -924,7 +898,7 @@ async def get_portfolio_performance(
     start_date: datetime = Query(..., description="Start date"),
     end_date: datetime = Query(..., description="End date"),
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
-    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    scope: PeerScopeParams = Depends(),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ) -> Dict[str, Any]:
@@ -937,43 +911,43 @@ async def get_portfolio_performance(
     - Performance trends over time
     - Technology comparison (by turbine model)
     """
-    from app.models.generation_data import GenerationData
-    from app.models.windfarm import Windfarm
-    from app.models.turbine_unit import TurbineUnit
-    from app.models.turbine_model import TurbineModel
-    from app.models.portfolio import PortfolioItem
     from app.models.country import Country  # noqa: F401  # referenced via SQL JOIN
-    from sqlalchemy import select, func, and_, text
+    from sqlalchemy import text
 
     # Calculate hours in period
     hours_in_period = (end_date - start_date).total_seconds() / 3600
 
-    # Build windfarm filter based on portfolio or country
-    windfarm_filter_ids = None
-    if portfolio_id:
-        windfarm_ids_query = select(PortfolioItem.windfarm_id).where(
-            PortfolioItem.portfolio_id == portfolio_id
-        )
-        windfarm_ids_result = await db.execute(windfarm_ids_query)
-        windfarm_filter_ids = [row[0] for row in windfarm_ids_result.fetchall()]
-        if not windfarm_filter_ids:
-            return {
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
-                "hours_in_period": hours_in_period,
-                "farm_count": 0,
-                "cf_distribution": [],
-                "performance_ranking": [],
-                "performance_trend": [],
-                "by_technology": [],
-                "statistics": {
-                    "avg_capacity_factor": 0,
-                    "max_capacity_factor": 0,
-                    "min_capacity_factor": 0,
-                    "total_capacity_mw": 0,
-                    "total_generation_mwh": 0,
-                },
-            }
+    windfarm_filter_ids = await resolve_windfarm_scope_ids(
+        db, portfolio_id=portfolio_id, scope=scope
+    )
+    if windfarm_filter_ids is not None and not windfarm_filter_ids:
+        return {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "hours_in_period": hours_in_period,
+            "farm_count": 0,
+            "cf_distribution": [],
+            "performance_ranking": [],
+            "performance_trend": [],
+            "by_technology": [],
+            "statistics": {
+                "avg_capacity_factor": 0,
+                "max_capacity_factor": 0,
+                "min_capacity_factor": 0,
+                "total_capacity_mw": 0,
+                "total_generation_mwh": 0,
+            },
+        }
+
+    # Inline the scope ids as a literal int[] (not a bound param) so the planner
+    # sees their cardinality and uses the windfarm index on generation_data
+    # instead of a full seq scan over ~25M rows. Reused by all three queries
+    # below.
+    scope_and = (
+        f" AND g.windfarm_id = ANY({windfarm_ids_sql_array(windfarm_filter_ids)})"
+        if windfarm_filter_ids
+        else ""
+    )
 
     # Calculate capacity factor for each farm
     farm_cf_query = text("""
@@ -997,8 +971,7 @@ async def get_portfolio_performance(
         WHERE g.hour >= :start_date
           AND g.hour < :end_date
           AND g.generation_mwh IS NOT NULL
-    """ + (" AND g.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
-    (" AND wf.country_id = :country_id" if country_id else "") + """
+    """ + scope_and + """
         GROUP BY wf.id, wf.name, wf.code, wf.nameplate_capacity_mw, c.name
         HAVING SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
         ORDER BY capacity_factor DESC
@@ -1009,10 +982,10 @@ async def get_portfolio_performance(
         'end_date': end_date + timedelta(days=1),
         'hours': hours_in_period,
     }
-    if windfarm_filter_ids:
-        params['windfarm_ids'] = windfarm_filter_ids
-    if country_id:
-        params['country_id'] = country_id
+
+    # Keep the per-farm bitmap aggregations exact/in-memory (see
+    # apply_analytics_work_mem) — drops this endpoint from ~13s to a few seconds.
+    await apply_analytics_work_mem(db)
 
     try:
         farm_cf_result = await asyncio.wait_for(
@@ -1079,8 +1052,7 @@ async def get_portfolio_performance(
         WHERE g.hour >= :start_date
           AND g.hour < :end_date
           AND g.generation_mwh IS NOT NULL
-    """ + (" AND g.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
-    (" AND wf.country_id = :country_id" if country_id else "") + """
+    """ + scope_and + """
         GROUP BY date_trunc('month', g.hour)
         ORDER BY period
     """)
@@ -1136,8 +1108,7 @@ async def get_portfolio_performance(
             WHERE g.hour >= :start_date
               AND g.hour < :end_date
               AND g.generation_mwh IS NOT NULL
-    """ + (" AND g.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
-    (" AND wf.country_id = :country_id" if country_id else "") + """
+    """ + scope_and + """
             GROUP BY g.windfarm_id
         ),
         model_per_farm AS (
@@ -1231,4 +1202,212 @@ async def get_portfolio_performance(
             "total_capacity_mw": round(total_capacity_mw, 2),
             "total_generation_mwh": round(total_generation_mwh, 2),
         },
+    }
+
+
+@router.get("/portfolio/normalised-timeseries")
+async def get_portfolio_normalised_timeseries(
+    start_date: datetime = Query(..., description="Start date"),
+    end_date: datetime = Query(..., description="End date"),
+    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    scope: PeerScopeParams = Depends(),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Monthly actual vs ERA5-wind-normalised generation for a peer group.
+
+    Normalised output = what the farms would have produced at their fitted
+    power-curve expectation given the actual wind resource:
+    normalised_mwh = actual_mwh / norm_ratio_p50 (performance_summaries,
+    Module 4; norm_ratio = actual/expected per hour, p50 = monthly mean).
+
+    Normalisation data only exists for a subset of farms — totals.delta_pct
+    compares actual vs normalised over the covered subset only (apples to
+    apples); totals.actual_mwh covers the whole scope.
+    """
+    from sqlalchemy import text
+
+    windfarm_filter_ids = await resolve_windfarm_scope_ids(
+        db, portfolio_id=portfolio_id, scope=scope
+    )
+    empty_payload = {
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "coverage": {"farm_count": 0, "farms_with_norm": 0},
+        "totals": {
+            "actual_mwh": 0,
+            "actual_covered_mwh": 0,
+            "normalised_mwh": 0,
+            "delta_pct": None,
+            "avg_actual_mwh_per_farm": 0,
+        },
+        "timeseries": [],
+        "by_farm": [],
+    }
+    if windfarm_filter_ids is not None and not windfarm_filter_ids:
+        return empty_payload
+
+    # Inline the scope ids as a literal int[] so the planner uses the windfarm
+    # index on generation_data rather than a full seq scan.
+    scope_clause = (
+        f"AND g.windfarm_id = ANY({windfarm_ids_sql_array(windfarm_filter_ids)})"
+        if windfarm_filter_ids is not None
+        else ""
+    )
+    query = text(f"""
+        WITH monthly_gen AS (
+            SELECT
+                g.windfarm_id,
+                date_trunc('month', g.hour) AS month,
+                SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) AS actual_mwh
+            FROM generation_data g
+            WHERE g.hour >= :start_date
+              AND g.hour < :end_date
+              AND g.generation_mwh IS NOT NULL
+              {scope_clause}
+            GROUP BY g.windfarm_id, date_trunc('month', g.hour)
+        )
+        SELECT
+            mg.windfarm_id,
+            w.name AS windfarm_name,
+            w.nameplate_capacity_mw,
+            mg.month,
+            mg.actual_mwh,
+            ps.norm_ratio_p50
+        FROM monthly_gen mg
+        JOIN windfarms w ON w.id = mg.windfarm_id
+        LEFT JOIN performance_summaries ps
+          ON ps.windfarm_id = mg.windfarm_id
+         AND ps.period_type = 'month'
+         AND ps.year = EXTRACT(YEAR FROM mg.month)::int
+         AND ps.month = EXTRACT(MONTH FROM mg.month)::int
+        ORDER BY mg.month
+    """)
+
+    params: Dict[str, Any] = {
+        "start_date": start_date,
+        "end_date": end_date + timedelta(days=1),
+    }
+
+    await apply_analytics_work_mem(db)
+
+    try:
+        rows = (await asyncio.wait_for(db.execute(query, params), timeout=60)).fetchall()
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Normalised generation query exceeded 60s — narrow the date "
+                "range or peer group."
+            ),
+        )
+
+    if not rows:
+        return empty_payload
+
+    # Clamp to whole months inside the requested window — the timestamptz
+    # date_trunc can spill a sliver of the preceding/following month across
+    # the session-timezone boundary.
+    start_month = start_date.strftime("%Y-%m")
+    end_month = end_date.strftime("%Y-%m")
+    rows = [r for r in rows if start_month <= r.month.strftime("%Y-%m") <= end_month]
+    if not rows:
+        return empty_payload
+
+    month_acc: Dict[Any, Dict[str, float]] = {}
+    farm_acc: Dict[int, Dict[str, Any]] = {}
+    farms_with_norm = set()
+
+    for r in rows:
+        actual = float(r.actual_mwh or 0)
+        ratio = float(r.norm_ratio_p50) if r.norm_ratio_p50 is not None else None
+        usable = ratio is not None and ratio > 0
+        normalised = (actual / ratio) if usable else None
+
+        m = month_acc.setdefault(
+            r.month, {"actual": 0.0, "actual_covered": 0.0, "normalised": 0.0, "covered": 0}
+        )
+        m["actual"] += actual
+        if usable:
+            m["actual_covered"] += actual
+            m["normalised"] += normalised
+            m["covered"] += 1
+            farms_with_norm.add(r.windfarm_id)
+
+        f = farm_acc.setdefault(
+            r.windfarm_id,
+            {
+                "windfarm_id": r.windfarm_id,
+                "name": r.windfarm_name,
+                "capacity_mw": float(r.nameplate_capacity_mw or 0),
+                "actual": 0.0,
+                "actual_covered": 0.0,
+                "normalised": 0.0,
+                "months_total": 0,
+                "months_covered": 0,
+            },
+        )
+        f["actual"] += actual
+        f["months_total"] += 1
+        if usable:
+            f["actual_covered"] += actual
+            f["normalised"] += normalised
+            f["months_covered"] += 1
+
+    total_actual = sum(f["actual"] for f in farm_acc.values())
+    total_actual_covered = sum(f["actual_covered"] for f in farm_acc.values())
+    total_normalised = sum(f["normalised"] for f in farm_acc.values())
+    delta_pct = (
+        round((total_actual_covered - total_normalised) / total_normalised * 100, 2)
+        if total_normalised > 0
+        else None
+    )
+
+    timeseries = []
+    for month in sorted(month_acc):
+        m = month_acc[month]
+        timeseries.append({
+            "month": month.strftime("%Y-%m"),
+            "actual_mwh": round(m["actual"], 2),
+            "actual_covered_mwh": round(m["actual_covered"], 2),
+            "normalised_mwh": round(m["normalised"], 2) if m["covered"] else None,
+        })
+
+    by_farm = []
+    for f in sorted(farm_acc.values(), key=lambda x: x["actual"], reverse=True)[:10]:
+        covered = f["months_covered"] > 0 and f["normalised"] > 0
+        by_farm.append({
+            "windfarm_id": f["windfarm_id"],
+            "name": f["name"],
+            "capacity_mw": round(f["capacity_mw"], 2),
+            "actual_mwh": round(f["actual"], 2),
+            "normalised_mwh": round(f["normalised"], 2) if covered else None,
+            "delta_pct": (
+                round((f["actual_covered"] - f["normalised"]) / f["normalised"] * 100, 2)
+                if covered
+                else None
+            ),
+            "months_covered": f["months_covered"],
+            "months_total": f["months_total"],
+        })
+
+    return {
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "coverage": {
+            "farm_count": len(farm_acc),
+            "farms_with_norm": len(farms_with_norm),
+        },
+        "totals": {
+            "actual_mwh": round(total_actual, 2),
+            "actual_covered_mwh": round(total_actual_covered, 2),
+            "normalised_mwh": round(total_normalised, 2),
+            "delta_pct": delta_pct,
+            "avg_actual_mwh_per_farm": (
+                round(total_actual / len(farm_acc), 2) if farm_acc else 0
+            ),
+        },
+        "timeseries": timeseries,
+        "by_farm": by_farm,
     }

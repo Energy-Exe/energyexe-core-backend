@@ -38,6 +38,11 @@ class GenerationUnitBase(BaseModel):
     first_power_date: Optional[date] = Field(None, description="Date when the unit first generated power")
     commercial_operational_date: Optional[date] = Field(None, description="Commercial operational date (per-unit override)")
     ramp_up_end_date: Optional[date] = Field(None, description="Date when ramp-up period is fully complete (per-unit override)")
+    status: Optional[str] = Field(
+        None,
+        pattern="^(operational|decommissioned|under_installation|expanded)$",
+        description="Operational status of the generation unit",
+    )
     notes: Optional[str] = Field(None, description="Additional notes")
 
 
@@ -68,6 +73,11 @@ class GenerationUnitUpdate(BaseModel):
     first_power_date: Optional[date] = Field(None, description="Date when the unit first generated power")
     commercial_operational_date: Optional[date] = Field(None, description="Commercial operational date (per-unit override)")
     ramp_up_end_date: Optional[date] = Field(None, description="Date when ramp-up period is fully complete (per-unit override)")
+    status: Optional[str] = Field(
+        None,
+        pattern="^(operational|decommissioned|under_installation|expanded)$",
+        description="Operational status of the generation unit",
+    )
     notes: Optional[str] = Field(None, description="Additional notes")
 
 

@@ -194,3 +194,6 @@ file::*
 *.xlsx
 # Local data-processing run artifacts (checkpoints/process logs) — not source
 generation_processing_logs/
+
+# Test runner artifacts
+test-results/

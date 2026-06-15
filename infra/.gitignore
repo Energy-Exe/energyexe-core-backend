@@ -1,0 +1,17 @@
+# Terraform state — contains resolved secrets in plaintext, never commit
+*.tfstate
+*.tfstate.*
+
+# Provider plugins & module caches (hundreds of MB, exceeds GitHub limits)
+.terraform/
+
+# Saved plan output — may embed sensitive values
+tfplan
+*.tfplan
+
+# Variable files may contain secrets (the *.tfvars.example template is kept)
+*.tfvars
+
+# Crash logs
+crash.log
+crash.*.log

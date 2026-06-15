@@ -133,6 +133,19 @@ class WindfarmListItem(Windfarm):
     model_config = ConfigDict(from_attributes=True)
 
 
+class WindfarmAggregateStats(BaseModel):
+    """Dataset-level aggregates for a (possibly filtered) set of windfarms.
+
+    No filters -> whole-dataset KPIs for the Performance landing page;
+    with peer-scope filters -> the "N farms in peer group" figures.
+    """
+
+    farm_count: int
+    total_capacity_mw: float
+    operational_count: int
+    countries_count: int
+
+
 class WindfarmWithOwners(Windfarm):
     windfarm_owners: List[dict] = []
 

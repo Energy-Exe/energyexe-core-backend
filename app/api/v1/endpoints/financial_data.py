@@ -22,6 +22,7 @@ from app.schemas.financial_data import (
     FinancialRatiosResponse,
 )
 from app.services.financial_data_service import FinancialDataService
+from app.services.windfarm_scope_service import PeerScopeParams, resolve_windfarm_scope_ids
 
 router = APIRouter()
 
@@ -110,6 +111,37 @@ async def get_financial_ratios(
     """
     service = FinancialDataService(db)
     return await service.calculate_financial_ratios(windfarm_id, display_currency=display_currency)
+
+
+@router.get("/peer-summary")
+async def get_peer_financial_summary(
+    scope: PeerScopeParams = Depends(),
+    display_currency: str = Query("EUR", pattern="^[A-Z]{3}$"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Most-recent financial ratios per farm across a peer group, plus averages.
+
+    Sourced from filed accounts — not available for all farms; the coverage
+    block reports how many of the scoped farms have usable data. Rows whose
+    filing currency cannot be converted to display_currency keep the original
+    currency and are excluded from the per-MWh averages.
+    """
+    from sqlalchemy import select as sa_select
+    from app.models.windfarm import Windfarm as WindfarmModel
+    from app.services.windfarm_scope_service import build_windfarm_scope_conditions
+
+    windfarm_ids = await resolve_windfarm_scope_ids(db, scope=scope)
+    if windfarm_ids is None:
+        # No filters: the peer group is the whole (non-deleted) dataset.
+        rows = await db.execute(
+            sa_select(WindfarmModel.id).where(*build_windfarm_scope_conditions(scope))
+        )
+        windfarm_ids = [row[0] for row in rows.fetchall()]
+
+    service = FinancialDataService(db)
+    return await service.get_peer_financial_summary(
+        windfarm_ids, display_currency=display_currency
+    )
 
 
 @router.get("/{data_id}", response_model=FinancialDataWithEntity)

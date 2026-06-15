@@ -689,11 +689,18 @@ async def get_generation_price_correlation(
 from datetime import timedelta
 from typing import Dict, Any
 
+from app.services.windfarm_scope_service import (
+    PeerScopeParams,
+    apply_analytics_work_mem,
+    resolve_windfarm_scope_ids,
+    windfarm_ids_sql_array,
+)
+
 
 @router.get("/analytics/portfolio/availability")
 async def get_portfolio_price_availability(
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
-    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    scope: PeerScopeParams = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -702,29 +709,11 @@ async def get_portfolio_price_availability(
     accessible windfarms. Used by the client to default analytics windows to
     a range that actually contains data.
     """
-    from app.models.portfolio import PortfolioItem
-    from app.models.windfarm import Windfarm
-    from sqlalchemy import select, text
+    from sqlalchemy import text
 
-    windfarm_ids: Optional[List[int]] = None
-    if portfolio_id:
-        result = await db.execute(
-            select(PortfolioItem.windfarm_id).where(PortfolioItem.portfolio_id == portfolio_id)
-        )
-        windfarm_ids = [row[0] for row in result.fetchall()]
-        if not windfarm_ids:
-            return {"min_hour": None, "max_hour": None, "farm_count": 0}
-
-    if country_id:
-        result = await db.execute(select(Windfarm.id).where(Windfarm.country_id == country_id))
-        country_ids = [row[0] for row in result.fetchall()]
-        windfarm_ids = (
-            [wf_id for wf_id in windfarm_ids if wf_id in country_ids]
-            if windfarm_ids is not None
-            else country_ids
-        )
-        if not windfarm_ids:
-            return {"min_hour": None, "max_hour": None, "farm_count": 0}
+    windfarm_ids = await resolve_windfarm_scope_ids(db, portfolio_id=portfolio_id, scope=scope)
+    if windfarm_ids is not None and not windfarm_ids:
+        return {"min_hour": None, "max_hour": None, "farm_count": 0}
 
     # Use index-friendly ORDER BY ... LIMIT 1 instead of MIN/MAX +
     # COUNT(DISTINCT) — the latter forces a full scan even with an index on
@@ -755,7 +744,7 @@ async def get_portfolio_revenue(
     start_date: datetime = Query(..., description="Start date for analysis"),
     end_date: datetime = Query(..., description="End date for analysis"),
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
-    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    scope: PeerScopeParams = Depends(),
     aggregation: Literal["day", "week", "month"] = Query("month", description="Time aggregation"),
     exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
@@ -766,46 +755,22 @@ async def get_portfolio_revenue(
 
     Returns total revenue, average achieved price, by-farm breakdown, and monthly trends.
     """
-    from app.models.generation_data import GenerationData
-    from app.models.price_data import PriceData
-    from app.models.windfarm import Windfarm
-    from app.models.portfolio import PortfolioItem
-    from sqlalchemy import select, func, and_, desc, text
+    from sqlalchemy import text
 
-    # Build base conditions
-    conditions = [
-        GenerationData.hour >= start_date,
-        GenerationData.hour < end_date + timedelta(days=1),
-    ]
-
-    # Filter by portfolio or country
-    windfarm_filter_ids = None
-    if portfolio_id:
-        windfarm_ids_query = select(PortfolioItem.windfarm_id).where(
-            PortfolioItem.portfolio_id == portfolio_id
-        )
-        windfarm_ids_result = await db.execute(windfarm_ids_query)
-        windfarm_filter_ids = [row[0] for row in windfarm_ids_result.fetchall()]
-        if windfarm_filter_ids:
-            conditions.append(GenerationData.windfarm_id.in_(windfarm_filter_ids))
-        else:
-            return {
-                'total_revenue_eur': 0,
-                'total_generation_mwh': 0,
-                'avg_achieved_price': 0,
-                'avg_market_price': 0,
-                'avg_capture_rate': 0,
-                'farm_count': 0,
-                'by_farm': [],
-                'by_period': [],
-            }
-
-    if country_id:
-        windfarm_ids_query = select(Windfarm.id).where(Windfarm.country_id == country_id)
-        windfarm_ids_result = await db.execute(windfarm_ids_query)
-        country_windfarm_ids = [row[0] for row in windfarm_ids_result.fetchall()]
-        if country_windfarm_ids:
-            conditions.append(GenerationData.windfarm_id.in_(country_windfarm_ids))
+    windfarm_filter_ids = await resolve_windfarm_scope_ids(
+        db, portfolio_id=portfolio_id, scope=scope
+    )
+    if windfarm_filter_ids is not None and not windfarm_filter_ids:
+        return {
+            'total_revenue_eur': 0,
+            'total_generation_mwh': 0,
+            'avg_achieved_price': 0,
+            'avg_market_price': 0,
+            'avg_capture_rate': 0,
+            'farm_count': 0,
+            'by_farm': [],
+            'by_period': [],
+        }
 
     # Map aggregation to date_trunc literal (interpolated, not bound — Postgres
     # date_trunc with a bind param defeats index pruning and breaks GROUP BY
@@ -814,53 +779,62 @@ async def get_portfolio_revenue(
     trunc_period = agg_map.get(aggregation, 'month')
     ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
-    # Build the optional portfolio/country filter as an extra WHERE clause that
-    # constrains both g.windfarm_id AND p.windfarm_id — the latter helps the
-    # planner prune price_data partitions early.
-    windfarm_filter_sql = ""
+    # Scope the driving CTE to the resolved windfarm ids, inlined as a literal
+    # int[] (not a bound param) so the planner sees their cardinality. The join is
+    # then driven FROM this scoped set into a generation_data bitmap scan and
+    # probes price_data via its (windfarm_id, hour) index — keeping a ~120-farm,
+    # year-wide query at a few seconds. Letting price_data drive and probe
+    # generation_data ~1M times (the natural plan otherwise) blows the 60s guard.
+    scope_where = (
+        f"WHERE w.id = ANY({windfarm_ids_sql_array(windfarm_filter_ids)})"
+        if windfarm_filter_ids is not None
+        else ""
+    )
     sql_params: Dict[str, Any] = {
         'start_date': start_date,
         'end_date': end_date + timedelta(days=1),
     }
-    if windfarm_filter_ids is not None:
-        windfarm_filter_sql = "AND g.windfarm_id = ANY(:windfarm_ids) AND p.windfarm_id = ANY(:windfarm_ids)"
-        sql_params['windfarm_ids'] = windfarm_filter_ids
 
     # ONE pass over the joined dataset. Bucket per (windfarm, period); roll up
     # totals / by_farm / by_period in Python. For a 1y window at month
     # aggregation that's ~hundreds of rows back — trivial to post-process.
     bucket_query = text(f"""
-        WITH preferred_source AS (
-            SELECT w.id AS windfarm_id,
+        WITH scope AS (
+            SELECT w.id AS windfarm_id, w.name AS windfarm_name,
                 CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END AS pref_source
             FROM windfarms w
             LEFT JOIN bidzones b ON w.bidzone_id = b.id
+            {scope_where}
         )
         SELECT
             g.windfarm_id,
-            w.name AS windfarm_name,
+            s.windfarm_name,
             DATE_TRUNC('{trunc_period}', g.hour) AS period,
             SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) AS gen_sum,
             SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) AS rev_sum,
             SUM(p.day_ahead_price) AS price_sum,
             COUNT(*) AS hour_count
-        FROM generation_data g
-        JOIN preferred_source ps ON g.windfarm_id = ps.windfarm_id
+        FROM scope s
+        JOIN generation_data g
+          ON g.windfarm_id = s.windfarm_id
+         AND g.hour >= :start_date
+         AND g.hour < :end_date
+         AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+         {ramp_up_clause}
         JOIN price_data p
-          ON g.windfarm_id = p.windfarm_id
-         AND g.hour = p.hour
-         AND p.source = ps.pref_source
+          ON p.windfarm_id = s.windfarm_id
+         AND p.hour = g.hour
+         AND p.source = s.pref_source
          AND p.hour >= :start_date
          AND p.hour < :end_date
-        JOIN windfarms w ON g.windfarm_id = w.id
-        WHERE g.hour >= :start_date
-          AND g.hour < :end_date
-          AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
-          AND p.day_ahead_price IS NOT NULL
-          {ramp_up_clause}
-          {windfarm_filter_sql}
-        GROUP BY g.windfarm_id, w.name, DATE_TRUNC('{trunc_period}', g.hour)
+         AND p.day_ahead_price IS NOT NULL
+        GROUP BY g.windfarm_id, s.windfarm_name, DATE_TRUNC('{trunc_period}', g.hour)
     """)
+
+    # Keep the generation×price bitmap join off the lossy/seq-scan path (see
+    # apply_analytics_work_mem) — this is what gets a ~120-farm year-wide scope
+    # back in single-digit seconds instead of hitting the 60s guard below.
+    await apply_analytics_work_mem(db)
 
     # Cap the join scan at 60s. The bottleneck is the generation_data x
     # price_data join — large unfiltered windows can blow past this. Returning
@@ -970,7 +944,7 @@ async def get_portfolio_capture_rates(
     start_date: datetime = Query(..., description="Start date for analysis"),
     end_date: datetime = Query(..., description="End date for analysis"),
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
-    country_id: Optional[int] = Query(None, description="Filter by country ID"),
+    scope: PeerScopeParams = Depends(),
     sort_by: Literal["capture_rate", "revenue", "generation"] = Query("capture_rate"),
     exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
     db: AsyncSession = Depends(get_db),
@@ -981,12 +955,51 @@ async def get_portfolio_capture_rates(
 
     Capture Rate = Achieved Price / Market Average Price
     """
-    from app.models.windfarm import Windfarm
-    from app.models.portfolio import PortfolioItem
-    from sqlalchemy import select, text
+    from sqlalchemy import text
 
-    # Get market average price first (use preferred source per bidzone)
-    market_avg_query = text("""
+    windfarm_filter_ids = await resolve_windfarm_scope_ids(
+        db, portfolio_id=portfolio_id, scope=scope
+    )
+    if windfarm_filter_ids is not None and not windfarm_filter_ids:
+        return {
+            'start_date': start_date.isoformat(),
+            'end_date': end_date.isoformat(),
+            'market_average_price': 0,
+            'farm_count': 0,
+            'statistics': {
+                'avg_capture_rate': 0,
+                'max_capture_rate': 0,
+                'min_capture_rate': 0,
+            },
+            'farms': [],
+        }
+
+    base_params: Dict[str, Any] = {
+        'start_date': start_date,
+        'end_date': end_date + timedelta(days=1),
+    }
+    # Inline the scope ids as a literal int[] (not a bound param) so the planner
+    # sees their cardinality and avoids the nested-loop plan; see
+    # windfarm_ids_sql_array.
+    ids_arr = (
+        windfarm_ids_sql_array(windfarm_filter_ids)
+        if windfarm_filter_ids is not None
+        else None
+    )
+
+    # Get market average price first (use preferred source per bidzone). When a
+    # windfarm scope is active, restrict the market benchmark to the bidzones
+    # those farms trade in — comparing a scoped peer group against the global
+    # all-markets average would distort capture rates.
+    market_scope_clause = (
+        f"""AND bidzone_id IN (
+              SELECT DISTINCT bidzone_id FROM windfarms
+              WHERE id = ANY({ids_arr}) AND bidzone_id IS NOT NULL
+          )"""
+        if windfarm_filter_ids is not None
+        else ""
+    )
+    market_avg_query = text(f"""
         SELECT AVG(day_ahead_price) as market_avg
         FROM price_data
         WHERE hour >= :start_date
@@ -996,29 +1009,39 @@ async def get_portfolio_capture_rates(
               WHEN bidzone_id = (SELECT id FROM bidzones WHERE code = '10YGB----------A') THEN 'ELEXON'
               ELSE 'ENTSOE'
           END
+          {market_scope_clause}
     """)
 
-    market_result = await db.execute(market_avg_query, {
-        'start_date': start_date,
-        'end_date': end_date + timedelta(days=1),
-    })
+    # Same generation×price join as /revenue — raise work_mem so the bitmap join
+    # stays exact and in-memory instead of degrading to a full table seq scan.
+    await apply_analytics_work_mem(db)
+
+    market_result = await db.execute(market_avg_query, base_params)
     market_row = market_result.fetchone()
     market_avg = float(market_row.market_avg or 0) if market_row else 0
 
-    # Get per-farm capture rates
+    # Get per-farm capture rates. Same shape as /revenue: drive the join from the
+    # scoped windfarm set (inlined literal int[]) into a generation_data bitmap
+    # scan, then probe price_data on (windfarm_id, hour) — not the other way round,
+    # which would probe generation_data ~1M times and hang.
     ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
+    scope_where = (
+        f"WHERE w.id = ANY({ids_arr})" if windfarm_filter_ids is not None else ""
+    )
     farm_query = text(f"""
-        WITH preferred_source AS (
-            SELECT w.id as windfarm_id,
-                CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END as pref_source
+        WITH scope AS (
+            SELECT w.id AS windfarm_id, w.name AS windfarm_name, w.bidzone_id,
+                b.code AS bidzone_code,
+                CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END AS pref_source
             FROM windfarms w
             LEFT JOIN bidzones b ON w.bidzone_id = b.id
+            {scope_where}
         )
         SELECT
             g.windfarm_id,
-            w.name as windfarm_name,
-            w.bidzone_id,
-            b.code as bidzone_code,
+            s.windfarm_name,
+            s.bidzone_id,
+            s.bidzone_code,
             SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation,
             SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) as total_revenue,
             CASE
@@ -1026,24 +1049,25 @@ async def get_portfolio_capture_rates(
                 THEN SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) / SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0))
                 ELSE 0
             END as achieved_price
-        FROM generation_data g
-        JOIN preferred_source ps ON g.windfarm_id = ps.windfarm_id
-        JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = ps.pref_source
-        JOIN windfarms w ON g.windfarm_id = w.id
-        LEFT JOIN bidzones b ON w.bidzone_id = b.id
-        WHERE g.hour >= :start_date
-          AND g.hour < :end_date
-          AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
-          AND p.day_ahead_price IS NOT NULL
-          {ramp_up_clause}
-        GROUP BY g.windfarm_id, w.name, w.bidzone_id, b.code
+        FROM scope s
+        JOIN generation_data g
+          ON g.windfarm_id = s.windfarm_id
+         AND g.hour >= :start_date
+         AND g.hour < :end_date
+         AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+         {ramp_up_clause}
+        JOIN price_data p
+          ON p.windfarm_id = s.windfarm_id
+         AND p.hour = g.hour
+         AND p.source = s.pref_source
+         AND p.hour >= :start_date
+         AND p.hour < :end_date
+         AND p.day_ahead_price IS NOT NULL
+        GROUP BY g.windfarm_id, s.windfarm_name, s.bidzone_id, s.bidzone_code
         HAVING SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
     """)
 
-    farm_result = await db.execute(farm_query, {
-        'start_date': start_date,
-        'end_date': end_date + timedelta(days=1),
-    })
+    farm_result = await db.execute(farm_query, base_params)
     farm_data = farm_result.fetchall()
 
     farms = []
