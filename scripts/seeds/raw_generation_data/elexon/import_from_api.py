@@ -45,9 +45,13 @@ from sqlalchemy.dialects.postgresql import insert
 logger = structlog.get_logger()
 
 
-async def get_elexon_bm_units() -> List[Dict]:
+async def get_elexon_bm_units(codes: List[str] = None) -> List[Dict]:
     """
-    Get all ELEXON BM units from database.
+    Get ELEXON BM units from database.
+
+    Args:
+        codes: Optional list of BM unit codes to restrict to (e.g. for backfilling
+            a single newly-added unit). When None, returns the whole ELEXON fleet.
 
     Returns:
         List of dicts with unit info
@@ -56,6 +60,8 @@ async def get_elexon_bm_units() -> List[Dict]:
 
     async with AsyncSessionLocal() as db:
         stmt = select(GenerationUnit).where(GenerationUnit.source == "ELEXON")
+        if codes:
+            stmt = stmt.where(GenerationUnit.code.in_(codes))
         result = await db.execute(stmt)
         units = result.scalars().all()
 
@@ -247,7 +253,8 @@ async def fetch_and_store_elexon_data(
     return result
 
 
-async def main(start_date: str, end_date: str, dry_run: bool = False, chunk_days: int = 7):
+async def main(start_date: str, end_date: str, dry_run: bool = False, chunk_days: int = 7,
+               bmu_codes: List[str] = None):
     """
     Main import function with automatic chunking for large date ranges.
 
@@ -256,6 +263,8 @@ async def main(start_date: str, end_date: str, dry_run: bool = False, chunk_days
         end_date: End date (YYYY-MM-DD)
         dry_run: If True, don't actually store data
         chunk_days: Number of days per chunk (default: 7)
+        bmu_codes: Optional list of BM unit codes to restrict the import to (e.g. to
+            backfill a single newly-added unit). When None, imports the whole ELEXON fleet.
     """
     print("="*80)
     print(" " * 25 + "ELEXON API DATA IMPORT")
@@ -274,8 +283,13 @@ async def main(start_date: str, end_date: str, dry_run: bool = False, chunk_days
 
     # Get BM units once
     print("Fetching ELEXON BM units from database...")
-    bm_units = await get_elexon_bm_units()
+    bm_units = await get_elexon_bm_units(codes=bmu_codes)
+    if bmu_codes:
+        print(f"Restricting to {len(bmu_codes)} requested BMU code(s): {', '.join(bmu_codes)}")
     print(f"Found {len(bm_units)} BM units")
+    if not bm_units:
+        print("\n❌ ERROR: no matching ELEXON BM units found in the database", file=sys.stderr)
+        sys.exit(1)
 
     # Determine if chunking is needed
     if total_days > chunk_days:
@@ -399,14 +413,21 @@ if __name__ == "__main__":
     parser.add_argument('--start', required=True, help='Start date (YYYY-MM-DD)')
     parser.add_argument('--end', required=True, help='End date (YYYY-MM-DD)')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be fetched without storing')
+    parser.add_argument('--bmu', type=str, default=None,
+                        help='Optional comma-separated BM unit code(s) to restrict the import to '
+                             '(e.g. 2__BLOND003). Useful for backfilling a single newly-added unit. '
+                             'When omitted, the whole ELEXON fleet is imported.')
 
     args = parser.parse_args()
+
+    bmu_codes = [c.strip() for c in args.bmu.split(',') if c.strip()] if args.bmu else None
 
     try:
         asyncio.run(main(
             start_date=args.start,
             end_date=args.end,
-            dry_run=args.dry_run
+            dry_run=args.dry_run,
+            bmu_codes=bmu_codes
         ))
     except KeyboardInterrupt:
         print("\n\n⚠️ Import cancelled by user")
