@@ -90,8 +90,11 @@ aws logs tail /ecs/energyexe-core-backend --follow --profile energyexe
 
 ## Day-2 operations
 
-- **Deploy**: push to main once `github-deploy.yml.example` is moved into
-  `.github/workflows/`, or run the build/push/force-redeploy by hand.
+- **Deploy**: automatic on push to `master` via `.github/workflows/deploy-aws.yml`
+  (builds, pushes to ECR, forces an ECS redeploy). It authenticates with GitHub
+  OIDC assuming the `energyexe-core-backend-github-deploy` role (infra/cicd.tf) —
+  no stored AWS keys. Skips docs-only / `infra/**` changes. You can also trigger
+  it manually (Actions → Run workflow) or run the build/push/redeploy by hand.
 - **Logs**: `aws logs tail /ecs/energyexe-core-backend --follow --profile energyexe`
 - **Shell into the task** (debugging): enable ECS Exec later if needed, or run a
   one-off task with the same task def.

@@ -1,25 +1,33 @@
-# Move to .github/workflows/deploy-aws.yml when ready to switch CI deploys on.
-# Kept as .example here so it doesn't fire on push before AWS creds exist.
-#
-# Repo secrets needed: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-# (an IAM user scoped to ECR push + ecs:UpdateService; OIDC role assumption
-# is the nicer long-term setup if you want to avoid long-lived keys).
-
 name: Deploy to AWS Fargate
+
+# Builds the production image, pushes to ECR, and forces a new ECS deployment.
+# Authenticates to AWS via GitHub OIDC (no stored keys) — the role is defined
+# in infra/cicd.tf and trusts only this repo's master branch.
 
 on:
   push:
-    branches: [main]
+    branches: [master]
+    # Skip deploys for docs-only / infra-only changes that don't affect the image.
+    paths-ignore:
+      - '**.md'
+      - 'infra/**'
+      - 'docs/**'
+  workflow_dispatch: {}
 
 concurrency:
   group: deploy-aws
   cancel-in-progress: false
+
+permissions:
+  id-token: write   # required to request the OIDC token
+  contents: read
 
 env:
   AWS_REGION: eu-north-1
   ECR_REPOSITORY: energyexe-core-backend
   ECS_CLUSTER: energyexe
   ECS_SERVICE: energyexe-core-backend
+  DEPLOY_ROLE_ARN: arn:aws:iam::580639800175:role/energyexe-core-backend-github-deploy
 
 jobs:
   deploy:
@@ -29,8 +37,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - id: ecr
@@ -45,7 +52,9 @@ jobs:
           docker push "$IMAGE:${{ github.sha }}"
           docker push "$IMAGE:latest"
 
-      - name: Deploy (task def points at :latest, so a force-redeploy picks it up)
+      - name: Force new deployment
+        # Task definition points at :latest, so a forced redeploy pulls the
+        # image we just pushed. Single-task service => ~1-2 min downtime.
         run: |
           aws ecs update-service \
             --cluster "$ECS_CLUSTER" \
