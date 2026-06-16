@@ -32,7 +32,8 @@ on:
           - ecb-rates-daily
 
 env:
-  API_URL: https://energyexe-core-backend-production.up.railway.app
+  # Cutover 2026-06-17: imports now hit AWS Fargate (was the Railway URL).
+  API_URL: https://api.energyexe.com
 
 jobs:
   # ENTSOE Daily Import (runs at 6 AM)

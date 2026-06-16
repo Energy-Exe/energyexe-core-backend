@@ -7,11 +7,14 @@ name: Deploy to AWS Fargate
 on:
   push:
     branches: [master]
-    # Skip deploys for docs-only / infra-only changes that don't affect the image.
+    # Skip deploys for changes that don't affect the app image: docs, Terraform,
+    # and CI/cron workflow config (a workflow-only commit shouldn't redeploy the
+    # app; a mixed commit with app code still deploys).
     paths-ignore:
       - '**.md'
       - 'infra/**'
       - 'docs/**'
+      - '.github/**'
   workflow_dispatch: {}
 
 concurrency:

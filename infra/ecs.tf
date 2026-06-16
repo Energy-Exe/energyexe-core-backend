@@ -71,6 +71,10 @@ resource "aws_ecs_task_definition" "api" {
         { name = "DEBUG", value = "false" },
         { name = "LOG_LEVEL", value = "INFO" },
         { name = "PIPELINE_DAILY_ENABLED", value = tostring(var.pipeline_daily_enabled) },
+        # Hour (UTC) the in-process nightly pipeline runs. Offset from Railway's
+        # 03:00 during burn-in so the two never run concurrently against the
+        # shared RDS; reset to 3 once Railway is gone.
+        { name = "PIPELINE_DAILY_HOUR", value = tostring(var.pipeline_daily_hour) },
         { name = "CDSAPI_URL", value = "https://cds.climate.copernicus.eu/api" },
         # Region for boto3; credentials come from the task role, not env keys.
         { name = "AWS_DEFAULT_REGION", value = var.region },

@@ -53,9 +53,15 @@ variable "s3_bucket_name" {
 }
 
 variable "pipeline_daily_enabled" {
-  description = "Enables the in-process APScheduler nightly pipeline (03:00 UTC). Keep false during Railway burn-in — true on both platforms means the pipeline runs twice a night. Flip to true at cutover."
+  description = "Enables the in-process APScheduler nightly pipeline. Keep false during Railway burn-in — true on both platforms means the pipeline runs twice a night. Flip to true at cutover."
   type        = bool
   default     = false
+}
+
+variable "pipeline_daily_hour" {
+  description = "UTC hour the nightly pipeline runs. Default 3 matches Railway; offset (e.g. 5) during burn-in so AWS and Railway don't run concurrently against the shared RDS."
+  type        = string
+  default     = "3"
 }
 
 variable "cors_origins" {
