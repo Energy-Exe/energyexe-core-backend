@@ -4,6 +4,7 @@ import time
 import uuid
 from typing import Callable
 
+import sentry_sdk
 import structlog
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -21,6 +22,10 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
         # Add request ID to request state
         request.state.request_id = request_id
+
+        # Tag the per-request Sentry scope so GlitchTip issues carry the same
+        # request_id we log — lets you pivot from an error to its log line.
+        sentry_sdk.set_tag("request_id", request_id)
 
         # Log request
         logger.info(
@@ -58,6 +63,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 request_id=request_id,
                 error=str(e),
                 process_time=round(process_time, 4),
+                exc_info=True,
             )
             raise
 

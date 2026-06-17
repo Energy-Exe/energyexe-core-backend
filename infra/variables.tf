@@ -69,3 +69,47 @@ variable "cors_origins" {
   type        = string
   default     = ""
 }
+
+# --- GlitchTip (self-hosted error tracker) — see glitchtip.tf ---
+
+variable "glitchtip_domain" {
+  description = "Custom domain for GlitchTip, e.g. errors.energyexe.com. Empty = GlitchTip disabled. Setting this (phase 1) creates the ACM cert + secret containers + SG + IAM."
+  type        = string
+  default     = ""
+}
+
+variable "glitchtip_certificate_arn" {
+  description = "ACM cert ARN for glitchtip_domain. Empty until the cert is ISSUED. Setting this (phase 2) creates the target group, listener wiring, task definition, and service. Requires var.certificate_arn (the API HTTPS listener) to exist."
+  type        = string
+  default     = ""
+}
+
+variable "glitchtip_image_tag" {
+  description = "Tag of the GlitchTip image mirrored into the private ECR repo (see glitchtip.tf). PIN a real release tag before production (https://gitlab.com/glitchtip/glitchtip/-/releases); 'latest' is only for first bring-up."
+  type        = string
+  default     = "latest"
+}
+
+variable "glitchtip_task_cpu" {
+  description = "Fargate CPU units for the GlitchTip task (web+worker+redis). 512 = 0.5 vCPU."
+  type        = number
+  default     = 512
+}
+
+variable "glitchtip_task_memory" {
+  description = "Fargate memory (MiB) for the GlitchTip task."
+  type        = number
+  default     = 2048
+}
+
+variable "backend_sentry_dsn_enabled" {
+  description = "When true, the backend task reads SENTRY_DSN from Secrets Manager and reports errors to GlitchTip. Keep false until GlitchTip is up, a project exists, and the energyexe/core-backend/sentry-dsn secret is populated — otherwise the running backend can't start (empty secret)."
+  type        = bool
+  default     = false
+}
+
+variable "alert_email" {
+  description = "Email address for CloudWatch alarm notifications (SNS). Empty = create the SNS topic but no subscription. The subscription needs a one-time confirmation click. See monitoring.tf."
+  type        = string
+  default     = ""
+}

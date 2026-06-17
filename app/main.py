@@ -13,6 +13,11 @@ from app.core.config import get_settings
 from app.core.database import init_db
 from app.core.exceptions import add_exception_handlers
 from app.core.middleware import add_middleware
+from app.core.observability import init_sentry
+
+# Initialize error tracking (GlitchTip) as early as possible so import-time and
+# startup failures are captured. No-op when SENTRY_DSN is unset.
+init_sentry(get_settings())
 
 logger = structlog.get_logger()
 
@@ -30,6 +35,7 @@ async def lifespan(app: FastAPI):
     # Clone frontend repos for Brain Agent code access (non-blocking)
     try:
         from app.services.brain_agent_repo_manager import ensure_repos
+
         ensure_repos()
     except Exception as e:
         logger.warning("brain_agent_repo_setup_failed", error=str(e))
@@ -38,6 +44,7 @@ async def lifespan(app: FastAPI):
     # Opt-in via PIPELINE_DAILY_ENABLED=true so dev machines don't run it.
     try:
         from app.cron.pipeline_daily import start_pipeline_scheduler
+
         start_pipeline_scheduler()
     except Exception as e:
         logger.warning("pipeline_scheduler_start_failed", error=str(e))
@@ -47,6 +54,7 @@ async def lifespan(app: FastAPI):
     # Shut down scheduler so APScheduler doesn't hold the event loop open.
     try:
         from app.cron.pipeline_daily import stop_pipeline_scheduler
+
         stop_pipeline_scheduler()
     except Exception as e:
         logger.warning("pipeline_scheduler_stop_failed", error=str(e))

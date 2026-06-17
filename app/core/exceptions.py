@@ -1,5 +1,6 @@
 """Exception handling and custom exceptions."""
 
+import sentry_sdk
 import structlog
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -137,10 +138,14 @@ async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError) -
     """Handle SQLAlchemy exceptions."""
     request_id = getattr(request.state, "request_id", "unknown")
 
+    # This handler swallows the exception (returns a 500), so Sentry's auto
+    # capture won't fire — report it explicitly. No-op if Sentry is disabled.
+    sentry_sdk.capture_exception(exc)
     logger.error(
         "Database exception occurred",
         request_id=request_id,
         error=str(exc),
+        exc_info=True,
     )
 
     response = JSONResponse(
@@ -161,11 +166,16 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
     """Handle general exceptions."""
     request_id = getattr(request.state, "request_id", "unknown")
 
+    # Catch-all handler: it returns a 500 instead of re-raising, so Sentry's
+    # FastAPI integration never sees the exception — capture it explicitly.
+    # No-op if Sentry is disabled. exc_info=True puts the traceback in the logs.
+    sentry_sdk.capture_exception(exc)
     logger.error(
         "Unhandled exception occurred",
         request_id=request_id,
         exception_type=type(exc).__name__,
         error=str(exc),
+        exc_info=True,
     )
 
     response = JSONResponse(

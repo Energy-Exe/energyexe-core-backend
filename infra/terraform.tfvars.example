@@ -11,3 +11,19 @@
 # Bump if import jobs need more headroom (pandas-heavy):
 # task_cpu    = 2048
 # task_memory = 8192
+
+# --- Monitoring (see infra/README.md → "Monitoring & error tracking") ---
+
+# CloudWatch alarm emails (SNS). Confirm the subscription via the emailed link.
+# alert_email = "you@energyexe.com"
+
+# GlitchTip error tracker — two-phase apply:
+#   Phase 1: set the domain only, validate the cert, populate secrets.
+# glitchtip_domain = "errors.energyexe.com"
+#   Phase 2: set the issued cert ARN + the mirrored image tag (see README —
+#   mirror glitchtip/glitchtip into the private ECR repo first).
+# glitchtip_certificate_arn = "arn:aws:acm:eu-north-1:ACCOUNT_ID:certificate/..."
+# glitchtip_image_tag       = "6.1.8"
+
+# Flip on AFTER GlitchTip is up and energyexe/core-backend/sentry-dsn is populated:
+# backend_sentry_dsn_enabled = true

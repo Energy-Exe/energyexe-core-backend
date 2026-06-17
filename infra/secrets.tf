@@ -22,6 +22,18 @@ resource "aws_secretsmanager_secret" "secret_key" {
   description = "JWT signing key for energyexe-core-backend"
 }
 
+# GlitchTip DSN the backend reports errors to. Container always exists so it can
+# be populated once GlitchTip is up and a project is created; the backend only
+# *reads* it when var.backend_sentry_dsn_enabled=true (ecs.tf).
+#
+#   aws secretsmanager put-secret-value --profile energyexe \
+#     --secret-id energyexe/core-backend/sentry-dsn \
+#     --secret-string 'https://<public_key>@errors.energyexe.com/<project_id>'
+resource "aws_secretsmanager_secret" "backend_sentry_dsn" {
+  name        = "energyexe/core-backend/sentry-dsn"
+  description = "GlitchTip DSN for the backend's Sentry SDK"
+}
+
 # Remaining app secrets, keyed by the env var name the app reads.
 # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are deliberately absent: the task
 # role grants S3 access directly (iam.tf), so no static keys in the container.

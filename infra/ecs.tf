@@ -70,6 +70,8 @@ resource "aws_ecs_task_definition" "api" {
       [
         { name = "DEBUG", value = "false" },
         { name = "LOG_LEVEL", value = "INFO" },
+        # Tags errors in GlitchTip. Harmless when SENTRY_DSN is unset (init no-ops).
+        { name = "SENTRY_ENVIRONMENT", value = "production" },
         { name = "PIPELINE_DAILY_ENABLED", value = tostring(var.pipeline_daily_enabled) },
         # Hour (UTC) the in-process nightly pipeline runs. Offset from Railway's
         # 03:00 during burn-in so the two never run concurrently against the
@@ -106,7 +108,12 @@ resource "aws_ecs_task_definition" "api" {
       ],
       [for env_name in sort(keys(local.extra_secrets)) :
         { name = env_name, valueFrom = aws_secretsmanager_secret.extra[env_name].arn }
-      ]
+      ],
+      # Only wired once GlitchTip exists and the secret is populated — flipping
+      # this on an empty secret would stop the backend from starting.
+      var.backend_sentry_dsn_enabled ? [
+        { name = "SENTRY_DSN", valueFrom = aws_secretsmanager_secret.backend_sentry_dsn.arn }
+      ] : []
     )
 
     logConfiguration = {

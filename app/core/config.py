@@ -112,6 +112,12 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
+    # Error tracking (GlitchTip — Sentry-API-compatible). Empty DSN disables it,
+    # so local dev and tests run without a tracker. See app/core/observability.py.
+    SENTRY_DSN: Optional[str] = None
+    SENTRY_ENVIRONMENT: str = "production"
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+
     # ENTSOE Integration
     ENTSOE_API_KEY: str = ""  # Set via environment variable
     ENTSOE_DEFAULT_AREAS: str = "DE_LU,FR,ES,GB,NL,BE"
