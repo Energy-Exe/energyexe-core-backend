@@ -20,6 +20,8 @@ import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from app.core.observability import capture_exception, cron_checkin
+
 logger = structlog.get_logger(__name__)
 
 # Module-level scheduler — only one instance per process.
@@ -36,6 +38,23 @@ def _get_cron_kwargs() -> dict:
         "hour": int(os.getenv("PIPELINE_DAILY_HOUR", "3")),
         "minute": int(os.getenv("PIPELINE_DAILY_MINUTE", "0")),
         "timezone": "UTC",
+    }
+
+
+# GlitchTip cron monitor slug — tracks whether the nightly job ran and passed.
+_CRON_MONITOR_SLUG = "pipeline-daily"
+
+
+def _cron_monitor_config() -> dict:
+    """Schedule GlitchTip expects this job on, so it can alert on missed runs."""
+    cron = _get_cron_kwargs()
+    return {
+        "schedule": {"type": "crontab", "value": f"{cron['minute']} {cron['hour']} * * *"},
+        "timezone": "UTC",
+        # Alert if no check-in lands within 30 min of the expected time, or a
+        # run overruns 3h (the full-fleet pipeline + detection can be long).
+        "checkin_margin": 30,
+        "max_runtime": 180,
     }
 
 
@@ -62,6 +81,14 @@ async def run_pipeline_job() -> None:
     job_started = datetime.now(timezone.utc)
     logger.info("pipeline_daily_job_started", at=job_started.isoformat())
 
+    # Open a GlitchTip cron check-in. monitor_config auto-creates the monitor
+    # and teaches GlitchTip the schedule, so it alerts if a nightly run never
+    # arrives (the silent-failure class) as well as on the explicit failures
+    # reported below. No-op when SENTRY_DSN is unset.
+    check_in_id = cron_checkin(
+        _CRON_MONITOR_SLUG, status="in_progress", monitor_config=_cron_monitor_config()
+    )
+
     from app.core.database import get_session_factory
     from app.services.opportunity_detection_service import OpportunityDetectionService
     from app.services.performance_pipeline_service import PerformancePipelineService
@@ -84,6 +111,10 @@ async def run_pipeline_job() -> None:
             duration_s=duration_s,
             error=str(exc),
         )
+        # Report to GlitchTip and close the cron monitor as failed — the batch
+        # is the job's deliverable, so without it we stop here.
+        capture_exception(exc)
+        cron_checkin(_CRON_MONITOR_SLUG, status="error", check_in_id=check_in_id)
         # Best-effort alert. If alerting itself fails, the structured log line
         # above is the durable signal.
         try:
@@ -108,6 +139,7 @@ async def run_pipeline_job() -> None:
     # but does NOT mask the batch's success reporting. The CLI backstop
     # (scripts/jobs/run_detection_jobs.py opportunity-detection) covers re-runs.
     detection_started = datetime.now(timezone.utc)
+    job_status = "ok"
     try:
         async with session_factory() as db:
             detection_svc = OpportunityDetectionService(db)
@@ -123,6 +155,8 @@ async def run_pipeline_job() -> None:
             duration_s=(datetime.now(timezone.utc) - detection_started).total_seconds(),
             error=str(exc),
         )
+        capture_exception(exc)
+        job_status = "error"
         try:
             async with session_factory() as db:
                 from app.services.alert_service import AlertService
@@ -137,6 +171,8 @@ async def run_pipeline_job() -> None:
         except Exception as alert_exc:
             logger.warning("detection_alert_send_failed", error=str(alert_exc))
 
+    # Close out the cron monitor: "ok" only if both batch and detection passed.
+    cron_checkin(_CRON_MONITOR_SLUG, status=job_status, check_in_id=check_in_id)
     logger.info(
         "pipeline_daily_job_complete",
         duration_s=(datetime.now(timezone.utc) - job_started).total_seconds(),

@@ -50,6 +50,14 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload
 # Production stage
 FROM base AS production
 
+# Git SHA baked in at build time → GlitchTip/Sentry release tag. It travels
+# inside the image, so CI's `--force-new-deployment` (the task def stays pinned
+# to :latest) carries the right release with no task-definition change. CI
+# passes --build-arg GIT_SHA=<sha>; defaults to "unknown" for local builds,
+# which init_sentry treats as "no release".
+ARG GIT_SHA=unknown
+ENV SENTRY_RELEASE=$GIT_SHA
+
 # Install dependencies
 RUN pip install --retries 5 --timeout 30 -r requirements.txt
 

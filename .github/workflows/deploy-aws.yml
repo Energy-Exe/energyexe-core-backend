@@ -51,7 +51,9 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           IMAGE="$REGISTRY/$ECR_REPOSITORY"
-          docker build --target production -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
+          docker build --target production \
+            --build-arg GIT_SHA="${{ github.sha }}" \
+            -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
           docker push "$IMAGE:${{ github.sha }}"
           docker push "$IMAGE:latest"
 

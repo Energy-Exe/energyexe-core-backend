@@ -117,6 +117,10 @@ class Settings(BaseSettings):
     SENTRY_DSN: Optional[str] = None
     SENTRY_ENVIRONMENT: str = "production"
     SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+    # Git SHA of the running build, baked into the Docker image at build time
+    # (see Dockerfile `ARG GIT_SHA`). Tags every GlitchTip error with its
+    # release so regressions are traceable to a commit.
+    SENTRY_RELEASE: Optional[str] = None
 
     # ENTSOE Integration
     ENTSOE_API_KEY: str = ""  # Set via environment variable
