@@ -85,6 +85,34 @@ async def cache_report(cache_key: str, data: dict, ttl_seconds: int = 3600):
         return False
 
 
+async def check_rate_limit(
+    key: str, limit: int, window_seconds: int
+) -> tuple[bool, int]:
+    """Fixed-window rate limiter backed by Valkey/Redis.
+
+    Returns ``(allowed, retry_after_seconds)``. Fails **open** (allowed) when
+    Redis is unavailable — local dev without Valkey must keep working, and a
+    cache outage should never take the feature down.
+    """
+    client = await get_redis()
+    if not client:
+        return True, 0
+
+    try:
+        full_key = f"ratelimit:{key}"
+        count = await client.incr(full_key)
+        if count == 1:
+            # First hit in this window — start the expiry clock.
+            await client.expire(full_key, window_seconds)
+        if count > limit:
+            ttl = await client.ttl(full_key)
+            return False, max(ttl, 1)
+        return True, 0
+    except Exception as e:
+        print(f"Redis rate-limit error: {e}")
+        return True, 0
+
+
 async def invalidate_report_cache(cache_key: str) -> bool:
     """Invalidate cached report data."""
     client = await get_redis()

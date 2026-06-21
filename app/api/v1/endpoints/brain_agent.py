@@ -34,6 +34,12 @@ router = APIRouter()
 # Shorter interval (5s) ensures Railway/proxy doesn't buffer or drop the connection.
 HEARTBEAT_INTERVAL = 5
 
+# Per-user turn rate limits (turns per 60s window), by effective source. Agent
+# turns are expensive and long-running, so these are deliberately low. Enforced
+# via Valkey; fails open when Valkey is unavailable (see check_rate_limit).
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_PER_MINUTE = {"admin": 20, "client": 10}
+
 
 @router.post("/chat")
 async def agent_chat(
@@ -58,6 +64,30 @@ async def agent_chat(
         effective_source = "client"
     else:
         effective_source = requested_source if requested_source in ("admin", "client") else "admin"
+
+    # Per-user rate limit. Checked before opening the SSE stream so we can
+    # return a real 429 with Retry-After (an error event mid-stream can't carry
+    # the status code). Fails open if Valkey is down.
+    from app.core.redis import check_rate_limit
+
+    limit = RATE_LIMIT_PER_MINUTE.get(effective_source, RATE_LIMIT_PER_MINUTE["client"])
+    allowed, retry_after = await check_rate_limit(
+        key=f"brain-agent:{current_user.id}",
+        limit=limit,
+        window_seconds=RATE_LIMIT_WINDOW_SECONDS,
+    )
+    if not allowed:
+        logger.info(
+            "brain_agent_rate_limited",
+            user_id=current_user.id,
+            source=effective_source,
+            retry_after=retry_after,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="You're sending messages too quickly. Please wait a moment and try again.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
     user_name = None
     if current_user.first_name:
