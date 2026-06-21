@@ -6,9 +6,12 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-ALLOWED_BRAIN_MODELS = ("claude-sonnet-4-6", "claude-opus-4-6")
+# "Most capable" option is Opus 4.8 (claude-opus-4-8). claude-opus-4-6 is kept
+# accepted-but-legacy so a stale frontend bundle or a thread saved under the old
+# model string doesn't 422 during a deploy rollout.
+ALLOWED_BRAIN_MODELS = ("claude-sonnet-4-6", "claude-opus-4-8", "claude-opus-4-6")
 
-BrainModelType = Literal["claude-sonnet-4-6", "claude-opus-4-6"]
+BrainModelType = Literal["claude-sonnet-4-6", "claude-opus-4-8", "claude-opus-4-6"]
 
 DEFAULT_BRAIN_MODEL = "claude-sonnet-4-6"
 

@@ -55,7 +55,11 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "model_default": None,  # falls back to settings.BRAIN_MODEL
         "model_locked": False,
         "max_turns": 25,
-        "max_budget_usd": None,
+        # Per-turn ceiling enforced by the SDK (stops a single runaway turn).
+        "max_budget_usd": 5.0,
+        # Cumulative per-thread ceiling enforced app-side in chat() — refuses a
+        # new turn once a long conversation has spent this much.
+        "max_thread_budget_usd": 50.0,
         "wrap_user_input": False,
     },
     "client": {
@@ -63,7 +67,8 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "model_default": None,
         "model_locked": False,
         "max_turns": 25,
-        "max_budget_usd": None,
+        "max_budget_usd": 2.0,
+        "max_thread_budget_usd": 20.0,
         "wrap_user_input": False,
     },
 }
@@ -149,6 +154,48 @@ class BrainAgentService:
             )
 
         try:
+            # Cumulative per-thread budget guard (complements the SDK's per-turn
+            # max_budget_usd). Refuse a new turn once the thread's accumulated
+            # cost crosses the ceiling, so a long conversation can't rack up
+            # unbounded spend. Best-effort — never block a turn on a read error.
+            thread_budget = profile.get("max_thread_budget_usd")
+            if thread_budget is not None and session_id:
+                try:
+                    from app.models.agent_thread import AgentThread
+
+                    existing_cost = (
+                        await self.db.execute(
+                            select(AgentThread.total_cost_usd).where(
+                                AgentThread.id == session_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if existing_cost is not None and float(existing_cost) >= thread_budget:
+                        logger.info(
+                            "brain_agent_thread_budget_exceeded",
+                            session_id=session_id,
+                            user_id=user_id,
+                            spent=float(existing_cost),
+                            limit=thread_budget,
+                        )
+                        yield SSEEvent(
+                            event_type="error",
+                            data={
+                                "message": (
+                                    f"This conversation has reached its spend limit "
+                                    f"(${thread_budget:.2f}). Start a new chat to continue."
+                                ),
+                                "code": "thread_budget_exceeded",
+                            },
+                        )
+                        return
+                except Exception as budget_exc:
+                    logger.warning(
+                        "brain_agent_thread_budget_check_failed",
+                        session_id=session_id,
+                        error=str(budget_exc),
+                    )
+
             session, is_new_session = await self._get_or_create_session(
                 user_id,
                 session_id,
