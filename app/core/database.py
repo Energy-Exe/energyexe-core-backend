@@ -3,7 +3,7 @@
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app.core.config import get_settings
 
@@ -12,6 +12,28 @@ logger = structlog.get_logger()
 # Lazy initialization
 _engine = None
 _async_session_factory = None
+
+
+def _pg_connect_args(settings, application_name: str) -> dict:
+    """asyncpg connect_args shared by the main pool and any isolated engine.
+
+    TCP keepalive: asyncpg is NOT libpq, so PostgreSQL's per-session keepalive
+    GUCs are set via server_settings (not libpq keepalives* kwargs). This keeps
+    long-running connections alive across idle gaps and lets the server detect
+    dead peers — the 2026-05-30 6-way parallel run hung on silently-dropped RDS
+    connections without it. command_timeout bounds any single in-query hang;
+    ssl is required by AWS RDS.
+    """
+    return {
+        "server_settings": {
+            "application_name": application_name,
+            "tcp_keepalives_idle": "30",
+            "tcp_keepalives_interval": "10",
+            "tcp_keepalives_count": "5",
+        },
+        "command_timeout": settings.DB_COMMAND_TIMEOUT,
+        "ssl": "require",
+    }
 
 
 def get_engine():
@@ -43,25 +65,43 @@ def get_engine():
 
             # Connection timeout settings
             engine_kwargs["pool_timeout"] = settings.DB_POOL_TIMEOUT
-            # TCP keepalive (detect-shard branch): asyncpg is NOT libpq, so we set
-            # PostgreSQL's per-session keepalive GUCs via server_settings rather than
-            # libpq keepalives* kwargs. This keeps long-running shard connections alive
-            # across idle gaps and lets the server detect dead peers — the 2026-05-30
-            # 6-way parallel run hung on silently-dropped RDS connections without it.
-            # command_timeout still bounds any single in-query hang.
-            engine_kwargs["connect_args"] = {
-                "server_settings": {
-                    "application_name": "energyexe-backend",
-                    "tcp_keepalives_idle": "30",
-                    "tcp_keepalives_interval": "10",
-                    "tcp_keepalives_count": "5",
-                },
-                "command_timeout": settings.DB_COMMAND_TIMEOUT,
-                "ssl": "require",  # Enable SSL for AWS RDS
-            }
+            # connect_args (TCP keepalives + command_timeout + ssl) are shared
+            # with create_isolated_engine via _pg_connect_args — see its docstring.
+            engine_kwargs["connect_args"] = _pg_connect_args(settings, "energyexe-backend")
 
         _engine = create_async_engine(settings.database_url_async, **engine_kwargs)
     return _engine
+
+
+def create_isolated_engine():
+    """Create a standalone NullPool async engine that does NOT share the global
+    request-serving pool. The caller MUST ``await engine.dispose()`` when done,
+    ideally in a ``finally``.
+
+    Use for DB work that may be cancelled mid-query — e.g. wrapped in
+    ``asyncio.wait_for`` — where the cancellation can interrupt AsyncSession
+    cleanup before the connection is checked back in. Running such work on its
+    own throwaway engine means a half-cancelled checkout can never orphan a
+    connection in the shared pool that serves the API (root cause of the
+    2026-06-18 pool-exhaustion incident). NullPool keeps nothing pooled (one
+    fresh connection per use), so dispose() is a clean teardown.
+    """
+    settings = get_settings()
+    if "sqlite" in settings.database_url_async:
+        return create_async_engine(
+            settings.database_url_async,
+            echo=settings.DB_ECHO,
+            future=True,
+            poolclass=NullPool,
+            connect_args={"check_same_thread": False},
+        )
+    return create_async_engine(
+        settings.database_url_async,
+        echo=settings.DB_ECHO,
+        future=True,
+        poolclass=NullPool,
+        connect_args=_pg_connect_args(settings, "energyexe-backend-peeragg"),
+    )
 
 
 def get_session_factory():

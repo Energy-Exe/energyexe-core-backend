@@ -33,6 +33,7 @@ from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
 from app.services.brain_agent_skill_files import (
     CHART_STYLE_PY,
+    REPORT_PDF_PY,
     SKILL_DOMAIN,
     SKILL_QUERIES,
     SKILL_SCHEMA,
@@ -90,7 +91,7 @@ class SSEEvent:
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
 
 # Files placed in the sandbox at session creation — skip when scanning for agent output
-SANDBOX_SEED_FILES = {"db.py", "eexe_style.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md", "skill_methodology.md"}
+SANDBOX_SEED_FILES = {"db.py", "eexe_style.py", "report_pdf.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md", "skill_methodology.md"}
 
 # Working file extensions — scripts the agent writes to execute, not user-facing output
 WORKING_FILE_EXTENSIONS = {".py", ".sh", ".bash", ".sql"}
@@ -591,9 +592,11 @@ class BrainAgentService:
         settings = get_settings()
         profile = _get_profile(source)
 
-        # Resolve source code repo paths (for read-only code access)
+        # Resolve source code repo paths (for read-only code access).
+        # EPR-59: the client surface gets NO codebase access — clients must not
+        # be able to read source and thereby reconstruct DB schema / internals.
         from app.services.brain_agent_repo_manager import get_repo_dirs
-        repo_dirs_str = get_repo_dirs()
+        repo_dirs_str = [] if source == "client" else get_repo_dirs()
 
         system_prompt = self._build_system_prompt(
             user_name,
@@ -609,6 +612,8 @@ class BrainAgentService:
         # #161 — platform chart theme module; `import eexe_style` in any chart
         # script applies the EnergyExe palette/design automatically.
         (work_dir / "eexe_style.py").write_text(CHART_STYLE_PY)
+        # report_pdf.py — branded PDF report builder (EPR-68)
+        (work_dir / "report_pdf.py").write_text(REPORT_PDF_PY)
         (work_dir / "skill_schema.md").write_text(SKILL_SCHEMA)
         (work_dir / "skill_queries.md").write_text(SKILL_QUERIES)
         (work_dir / "skill_domain.md").write_text(SKILL_DOMAIN)
@@ -651,12 +656,29 @@ class BrainAgentService:
         #   2. Fall back to the main URL + PGOPTIONS session-level
         #      `default_transaction_read_only=on` if the role's password
         #      isn't configured yet.
-        agent_db_url = settings.database_url_agent_ro or settings.database_url_sync
-        if not settings.database_url_agent_ro:
-            logger.warning(
-                "brain_agent_ro_role_not_configured",
-                msg="BRAIN_AGENT_RO_PASSWORD is unset — falling back to PGOPTIONS read-only enforcement.",
+        # EPR-59: client sessions connect with the locked-down client RO role
+        # (SELECT on allowlisted tables only), so even a self-written psycopg2
+        # connection can't read internal-table data or enumerate them via
+        # information_schema. Fall back to the shared RO role, then PGOPTIONS.
+        if source == "client":
+            agent_db_url = (
+                settings.database_url_agent_client_ro
+                or settings.database_url_agent_ro
+                or settings.database_url_sync
             )
+            if not settings.database_url_agent_client_ro:
+                logger.warning(
+                    "brain_agent_client_ro_role_not_configured",
+                    msg="BRAIN_AGENT_CLIENT_RO_PASSWORD is unset — client session "
+                    "falling back to the shared RO role / PGOPTIONS guard.",
+                )
+        else:
+            agent_db_url = settings.database_url_agent_ro or settings.database_url_sync
+            if not settings.database_url_agent_ro:
+                logger.warning(
+                    "brain_agent_ro_role_not_configured",
+                    msg="BRAIN_AGENT_RO_PASSWORD is unset — falling back to PGOPTIONS read-only enforcement.",
+                )
 
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
@@ -697,6 +719,9 @@ class BrainAgentService:
                 # read-only at the session level even if the role somehow
                 # gained write grants.
                 "PGOPTIONS": "-c default_transaction_read_only=on",
+                # EPR-59: client db.py rejects information_schema / pg_catalog
+                # introspection so the client agent can't describe DB structure.
+                "BRAIN_AGENT_BLOCK_INTROSPECTION": "1" if source == "client" else "0",
                 "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "1200000",  # 20 min (was 10)
                 "CLAUDECODE": "",  # Unset to prevent nested session detection
             },

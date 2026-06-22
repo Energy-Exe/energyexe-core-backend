@@ -10,10 +10,9 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
-
 from app.models.import_job_execution import ImportJobExecution, ImportJobStatus
 from app.models.performance_summary import PerformanceSummary
 from app.models.power_curve_bin import PowerCurveBin
@@ -463,20 +462,32 @@ class PerformancePipelineService:
         # cancels the await at the event-loop layer regardless of what asyncpg is
         # blocked on, so the pipeline always proceeds. The whole session block
         # (incl. close) is inside the bound so a hung cleanup is cancellable too.
-        async def _refresh_peer_aggregates() -> None:
-            from app.core.database import get_session_factory
-            from app.services.peer_aggregate_service import PeerAggregateService
+        # Run on an ISOLATED engine, not the shared request-serving pool. The
+        # asyncio.wait_for below cancels the await mid-flight on timeout, and a
+        # cancellation can interrupt AsyncSession cleanup before the connection
+        # is checked back in. On the shared pool that orphaned connection
+        # accumulated once per windfarm over the long nightly run until the pool
+        # was exhausted and the live API started 500ing (2026-06-18 incident).
+        # On a throwaway NullPool engine that we always dispose() in finally, a
+        # half-cancelled checkout can never starve the API pool.
+        from app.core.database import create_isolated_engine
+        from app.services.peer_aggregate_service import PeerAggregateService
 
-            async with get_session_factory()() as agg_db:
+        async def _refresh_peer_aggregates(engine) -> None:
+            factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+            async with factory() as agg_db:
                 await PeerAggregateService(agg_db).refresh_for_windfarm(windfarm_id, years)
                 await agg_db.commit()
 
         peer_agg_timeout = get_settings().PIPELINE_PEER_AGG_TIMEOUT_S
+        agg_engine = create_isolated_engine()
         try:
             if peer_agg_timeout and peer_agg_timeout > 0:
-                await asyncio.wait_for(_refresh_peer_aggregates(), timeout=peer_agg_timeout)
+                await asyncio.wait_for(
+                    _refresh_peer_aggregates(agg_engine), timeout=peer_agg_timeout
+                )
             else:
-                await _refresh_peer_aggregates()
+                await _refresh_peer_aggregates(agg_engine)
         except asyncio.TimeoutError:
             logger.warning(
                 "pipeline_peer_aggregate_refresh_timeout",
@@ -489,6 +500,14 @@ class PerformancePipelineService:
                 windfarm_id=windfarm_id,
                 error=str(e),
             )
+        finally:
+            # Tear down the throwaway engine. shield() so the outer cancellation
+            # (if run_pipeline itself is being cancelled) can't interrupt the
+            # teardown; never let a dispose error mask the pipeline result.
+            try:
+                await asyncio.shield(agg_engine.dispose())
+            except Exception:
+                pass
 
         return result
 
