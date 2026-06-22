@@ -28,8 +28,9 @@ SKILL_SCHEMA = """# Database Schema Reference
 **weather_data**: hour (timestamptz), windfarm_id, wind_speed_100m, wind_direction_deg, temperature_2m_k, temperature_2m_c, source (ERA5)
 - Unique: (hour, windfarm_id, source)
 
-**financial_data**: financial_entity_id, period_start, period_end, currency, revenue, total_revenue, ebitda, depreciation, ebit, net_income, reported_generation_gwh
+**financial_data**: financial_entity_id, period_start, period_end, period_length_months (Numeric — NOT always 12), is_synthetic (bool), currency, revenue, total_revenue, total_operating_expenses, ebitda, depreciation, ebit, net_income, reported_generation_gwh, comment
 - Linked via: windfarm_financial_entities(windfarm_id, financial_entity_id)
+- Periods are NOT always 12-month calendar years: many entities report Oct–Sep fiscal years and some rows are 3/6/9/15/18-month transition periods. Always read period_start/period_end/period_length_months, label by real dates, and annualise (or flag the mismatch) before period-over-period comparison. Never call a non-12-month row "incomplete".
 
 ## Supporting Tables
 
@@ -44,6 +45,11 @@ SKILL_SCHEMA = """# Database Schema Reference
 **performance_anomalies**: windfarm_id, hour, anomaly_type (underperformance/overperformance), actual_p_pu, expected_p_pu, wind_speed, wind_bin, lost_mwh, lost_eur, market_price, run_id. Unique: (windfarm_id, hour)
 **performance_summaries**: windfarm_id, period_type (month/year), year, month. ODI: odi_pct_underperf, lost_mwh, expected_mwh, odi_pct_loss_mwh, lost_eur, odi_pct_loss_eur, long_run_count, max_run_hours. Norm: norm_ratio_p50, norm_index_p50, norm_ratio_p10, norm_index_p10. Commercial: constraint_proxy_mwh, lost_value_eur
 **degradation_results**: windfarm_id, reference_curve (q50=P50/q90=P10), slope_pu_per_year, slope_pct_per_year, intercept, r_squared, p_value, ci_lower_95, ci_upper_95, baseline_cap_pu, data_points
+**p50_targets**: windfarm_id, p50_target_start_date, p50_target_end_date, p50_target_volume_gwh (the SOURCED P50 annual generation target, in GWh), source (provenance URL), comment
+  - This is the table for **P50 attainment / P50 target / P50 gap**: `actual GWh ÷ p50_target_volume_gwh`, window = (COD year + 1) → end of previous calendar year.
+  - NOT the same as `norm_index_p50` (a wind-normalised performance index in performance_summaries). Never use norm_index_p50 to answer P50-target questions.
+**structural_constraint_flags**: windfarm_id, period_start, period_end, duration_hours, flag_trigger, mean_q50_ratio, mean_q90_ratio, review_status (confirmed/pending/dismissed), analyst_notes (free-text CONFIRMED cause of the outage/export-constraint, e.g. "Export cable failure"), reviewed_by, reviewed_at
+  - When asked WHY a windfarm lost output / had an outage / was constrained, read analyst_notes for a row covering the period (prefer review_status='confirmed') and use it as the authoritative cause. Only infer if no note exists — do not speculate over a confirmed note.
 **generation_concentration_summaries**: windfarm_id, period_type (year/month), year, month, total_mwh, total_hours, weighted_avg_capture_price_eur, time_weighted_avg_price_eur, capture_ratio, top_decile_share_pct, top_quartile_share_pct, bottom_decile_share_pct, bottom_quartile_share_pct, decile_shares (JSONB: {"d1":..,"d2":..,...,"d10":..} — % of generation in each price decile, D1=lowest-price hours, D10=highest), vs_zone_capture_ratio_diff, vs_zone_top_decile_diff, pipeline_run_id, computed_at
   - Unique: (windfarm_id, period_type, year, month)
 **peer_group_aggregates**: group_type ('bidzone'/'country'/'owner'/'turbine_model'), group_id, metric_key (see list below), period_type (year/month), year, month, windfarm_count, avg_value, p10_value, p50_value, p90_value, computed_at
@@ -482,3 +488,126 @@ Our database is a curated subset, not the complete global inventory.
 Always say "in our database" when reporting counts.
 DB data is authoritative. WebSearch data must be labeled "According to [source]".
 """
+
+
+# Branded PDF report builder seeded into the sandbox as report_pdf.py.
+# Lets the agent produce downloadable, document-style PDFs (EPR-68) instead of
+# markdown — title, headings, paragraphs, tables, bullets, and embedded charts.
+REPORT_PDF_PY = '''"""EnergyExe branded PDF report builder.
+
+Build downloadable, document-style PDF reports / commercial summaries with
+selectable text and real tables.
+
+    from report_pdf import Report
+    r = Report("Seagreen - Commercial Summary", subtitle="2024 performance")
+    r.heading("Generation Performance", level=2)
+    r.paragraph("Seagreen generated 4.47 TWh in 2024, a 47.3% capacity factor.")
+    r.table([["Year", "Generation (GWh)", "Capacity factor"],
+             ["2024", "4,465", "47.3%"], ["2025", "4,428", "46.8%"]])  # row 0 = header
+    r.image("seagreen_chart.png", width_in=6.2)   # embed a matplotlib PNG chart
+    r.bullets(["PPA with SSE expires 2030", "P50 attainment 89%"])
+    r.save("Seagreen_Commercial_Summary.pdf")     # appears as a download button
+
+The API is intentionally forgiving:
+  Report(title="", subtitle=None)
+  heading(text, level=1|2|3)        # 1=title, 2=section (default), 3=sub-heading
+  paragraph(text, style=None)       # style="subtitle" for a muted lead line
+  table(rows)                       # row 0 is treated as the header row
+  table(headers, rows)              # OR pass header list + body rows separately
+  bullets(items); image(path, width_in=6.0); save(filename)
+Embed charts by saving them as PNG with matplotlib first, then r.image(path).
+"""
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import (
+    Image, ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+)
+
+BRAND = colors.HexColor("#2563EB")     # electric blue
+INK = colors.HexColor("#0F1B2D")       # near-black navy
+SLATE = colors.HexColor("#475569")     # body text
+LINE = colors.HexColor("#E2E8F0")      # light rule
+ZEBRA = colors.HexColor("#F1F5F9")     # alternating row
+
+
+class Report:
+    def __init__(self, title="", subtitle=None):
+        self._flow = []
+        ss = getSampleStyleSheet()
+        self.s_title = ParagraphStyle("t", parent=ss["Title"], textColor=INK, fontSize=22, spaceAfter=4, alignment=TA_LEFT)
+        self.s_sub = ParagraphStyle("st", parent=ss["Normal"], textColor=BRAND, fontSize=11, spaceAfter=14)
+        self.s_h2 = ParagraphStyle("h2", parent=ss["Heading2"], textColor=BRAND, fontSize=14, spaceBefore=14, spaceAfter=6)
+        self.s_h3 = ParagraphStyle("h3", parent=ss["Heading3"], textColor=INK, fontSize=11, spaceBefore=10, spaceAfter=4)
+        self.s_body = ParagraphStyle("b", parent=ss["Normal"], textColor=SLATE, fontSize=10, leading=15, spaceAfter=8)
+        if title:
+            self._flow.append(Paragraph(str(title), self.s_title))
+        if subtitle:
+            self._flow.append(Paragraph(str(subtitle), self.s_sub))
+
+    def heading(self, text, level=2):
+        style = self.s_title if level <= 1 else self.s_h2 if level == 2 else self.s_h3
+        self._flow.append(Paragraph(str(text), style))
+        return self
+
+    def paragraph(self, text, style=None):
+        st = self.s_sub if str(style).lower() in ("subtitle", "sub", "lead") else self.s_body
+        self._flow.append(Paragraph(str(text), st))
+        return self
+
+    def bullets(self, items):
+        li = [ListItem(Paragraph(str(x), self.s_body), leftIndent=10) for x in items]
+        self._flow.append(ListFlowable(li, bulletType="bullet", bulletColor=BRAND, start="square"))
+        self._flow.append(Spacer(1, 6))
+        return self
+
+    def table(self, data, rows=None):
+        # Accept either table(rows) [row 0 = header] or table(headers, rows).
+        if rows is not None:
+            grid = [list(data)] + [list(r) for r in rows]
+        else:
+            grid = [list(r) for r in data]
+        data = [[str(c) for c in r] for r in grid]
+        t = Table(data, repeatRows=1, hAlign="LEFT")
+        style = [
+            ("BACKGROUND", (0, 0), (-1, 0), BRAND),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("TEXTCOLOR", (0, 1), (-1, -1), SLATE),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ]
+        for i in range(1, len(data)):
+            if i % 2 == 0:
+                style.append(("BACKGROUND", (0, i), (-1, i), ZEBRA))
+        t.setStyle(TableStyle(style))
+        self._flow.append(t)
+        self._flow.append(Spacer(1, 10))
+        return self
+
+    def image(self, path, width_in=6.0):
+        img = Image(path)
+        w = width_in * inch
+        img.drawHeight = img.drawHeight * (w / img.drawWidth)
+        img.drawWidth = w
+        img.hAlign = "LEFT"
+        self._flow.append(img)
+        self._flow.append(Spacer(1, 10))
+        return self
+
+    def save(self, filename):
+        doc = SimpleDocTemplate(
+            filename, pagesize=A4,
+            leftMargin=0.8 * inch, rightMargin=0.8 * inch,
+            topMargin=0.8 * inch, bottomMargin=0.8 * inch,
+            title=filename,
+        )
+        doc.build(self._flow)
+        return filename
+'''
+

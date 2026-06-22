@@ -63,8 +63,12 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: Optional[PostgresDsn] = None
-    DB_POOL_SIZE: int = 5
-    DB_MAX_OVERFLOW: int = 10
+    # Pool headroom: the single backend process serves live API traffic AND a
+    # multi-hour nightly pipeline batch from the same pool. 5+10=15 was too
+    # tight — a batch + an API burst exhausted it (2026-06-18 incident). 10+20=30
+    # max is well within RDS max_connections (838 on db.t4g.large).
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
     DB_ECHO: bool = False
 
     # Database connection health settings (for cloud PostgreSQL)
@@ -157,6 +161,14 @@ class Settings(BaseSettings):
     BRAIN_AGENT_RO_USER: str = "brain_agent_ro"
     BRAIN_AGENT_RO_PASSWORD: str = ""
 
+    # Brain Agent — locked-down CLIENT read-only role (EPR-59). Used only for
+    # source='client' sessions; granted SELECT on client-appropriate tables only
+    # (no users / audit_logs / agent_threads / import_* / raw tables), so the
+    # client agent cannot read internal data or enumerate internal tables via
+    # information_schema. See migration c1a2b3c4d5e6_add_brain_agent_client_ro_role.py.
+    BRAIN_AGENT_CLIENT_RO_USER: str = "brain_agent_client_ro"
+    BRAIN_AGENT_CLIENT_RO_PASSWORD: str = ""
+
     # Brain Agent — source code access for codebase exploration
     CODE_REPOS_DIR: str = "/tmp/energyexe-repos"
     GITHUB_TOKEN: str = ""  # PAT for cloning private repos at startup
@@ -195,6 +207,23 @@ class Settings(BaseSettings):
             return url.replace("postgresql+asyncpg://", "postgresql://")
         return url
 
+    def _agent_role_url(self, user: str, password: str) -> Optional[str]:
+        """Build a sync Postgres URL for a given brain-agent role.
+
+        Returns ``None`` when the password or DATABASE_URL is unset — callers
+        fall back to the next-best connection.
+        """
+        if not password or not self.DATABASE_URL:
+            return None
+
+        from urllib.parse import quote, urlparse, urlunparse
+
+        parsed = urlparse(self.database_url_sync)  # already in sync form
+        host = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port else ""
+        netloc = f"{quote(user, safe='')}:{quote(password, safe='')}@{host}{port}"
+        return urlunparse(parsed._replace(netloc=netloc))
+
     @property
     def database_url_agent_ro(self) -> Optional[str]:
         """Sync Postgres URL using the brain-agent read-only role.
@@ -204,21 +233,21 @@ class Settings(BaseSettings):
         guard. Once the password is set, the agent always connects with
         ``BRAIN_AGENT_RO_USER`` so the database itself enforces SELECT-only.
         """
-        if not self.BRAIN_AGENT_RO_PASSWORD:
-            return None
-        if not self.DATABASE_URL:
-            return None
+        return self._agent_role_url(self.BRAIN_AGENT_RO_USER, self.BRAIN_AGENT_RO_PASSWORD)
 
-        from urllib.parse import quote, urlparse, urlunparse
+    @property
+    def database_url_agent_client_ro(self) -> Optional[str]:
+        """Sync Postgres URL using the locked-down CLIENT read-only role (EPR-59).
 
-        base = self.database_url_sync  # already in sync form
-        parsed = urlparse(base)
-        host = parsed.hostname or ""
-        port = f":{parsed.port}" if parsed.port else ""
-        user = quote(self.BRAIN_AGENT_RO_USER, safe="")
-        pw = quote(self.BRAIN_AGENT_RO_PASSWORD, safe="")
-        netloc = f"{user}:{pw}@{host}{port}"
-        return urlunparse(parsed._replace(netloc=netloc))
+        Returns ``None`` when ``BRAIN_AGENT_CLIENT_RO_PASSWORD`` is not
+        configured — the caller falls back to ``database_url_agent_ro``. This
+        role is granted SELECT on client-appropriate tables only, so the client
+        agent cannot read internal-table data or enumerate them via
+        information_schema even if it bypasses db.py with its own psycopg2.
+        """
+        return self._agent_role_url(
+            self.BRAIN_AGENT_CLIENT_RO_USER, self.BRAIN_AGENT_CLIENT_RO_PASSWORD
+        )
 
     @property
     def database_url_async(self) -> str:

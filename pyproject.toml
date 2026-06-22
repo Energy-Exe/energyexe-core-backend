@@ -54,6 +54,12 @@ resend = "^2.0.0"
 claude-agent-sdk = "^0.1.48"
 boto3 = "^1.35.0"
 sentry-sdk = {extras = ["fastapi"], version = "^2.20.0"}
+# Brain-agent sandbox: chart generation (matplotlib + pillow) and PDF reports
+# (reportlab). MUST also be in requirements.txt — the Docker image installs from
+# requirements.txt, not Poetry.
+matplotlib = "^3.10"
+pillow = "^11.3"
+reportlab = "^4.4"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"

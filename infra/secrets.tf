@@ -39,8 +39,9 @@ resource "aws_secretsmanager_secret" "backend_sentry_dsn" {
 # role grants S3 access directly (iam.tf), so no static keys in the container.
 locals {
   extra_secrets = {
-    ANTHROPIC_API_KEY       = "anthropic-api-key"
-    BRAIN_AGENT_RO_PASSWORD = "brain-agent-ro-password"
+    ANTHROPIC_API_KEY              = "anthropic-api-key"
+    BRAIN_AGENT_RO_PASSWORD        = "brain-agent-ro-password"
+    BRAIN_AGENT_CLIENT_RO_PASSWORD = "brain-agent-client-ro-password"
     CDSAPI_KEY              = "cdsapi-key"
     EIA_API_KEY             = "eia-api-key"
     ENTSOE_API_KEY          = "entsoe-api-key"

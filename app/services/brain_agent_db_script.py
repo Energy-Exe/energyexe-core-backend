@@ -39,6 +39,14 @@ def validate_sql(sql: str) -> str:
         if re.search(rf"\\b{kw}\\b", upper):
             return json.dumps({"error": f"Mutation keyword \\'{kw}\\' not allowed."})
 
+    # Client surface (EPR-59): block schema introspection so the client agent
+    # cannot enumerate or describe the database structure / relationships.
+    if os.environ.get("BRAIN_AGENT_BLOCK_INTROSPECTION") == "1" and re.search(
+        r"\\b(INFORMATION_SCHEMA|PG_CATALOG|PG_CLASS|PG_ATTRIBUTE|PG_CONSTRAINT|PG_NAMESPACE|PG_TABLES|PG_VIEWS|PG_INDEXES|PG_ROLES|PG_STAT|PG_DESCRIPTION)\\b",
+        upper,
+    ):
+        return json.dumps({"error": "Schema introspection is not available."})
+
     # Strip OFFSET — pagination is not supported, all data comes in one query
     sql = re.sub(r"\\bOFFSET\\s+\\d+", "", sql, flags=re.IGNORECASE)
 
@@ -63,6 +71,7 @@ def run_query(sql: str) -> str:
         return result  # Error JSON
     sql = result
 
+    conn = None
     try:
         conn = psycopg2.connect(db_url)
         conn.set_session(readonly=True, autocommit=True)
@@ -75,8 +84,6 @@ def run_query(sql: str) -> str:
         total_rows = len(rows)
 
         if total_rows == 0:
-            cur.close()
-            conn.close()
             return "No rows returned."
 
         # Build text table (top MAX_DISPLAY_ROWS only)
@@ -116,12 +123,15 @@ def run_query(sql: str) -> str:
             result_text += "\\n".join(summary_parts)
             result_text += "\\n\\nNote: This is all the data. Do NOT make additional queries for remaining rows."
 
-        cur.close()
-        conn.close()
         return result_text
 
     except Exception as e:
         return json.dumps({"error": str(e)})
+    finally:
+        # Always return the connection — the bare `except` above used to leak it
+        # on any query error (closing the connection also closes its cursor).
+        if conn is not None:
+            conn.close()
 
 
 if __name__ == "__main__":
