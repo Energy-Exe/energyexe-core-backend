@@ -1039,22 +1039,38 @@ async def get_portfolio_performance(
             "count": count,
         })
 
-    # Performance trend over time (monthly)
+    # Performance trend over time (monthly).
+    #
+    # Pre-aggregate generation per (month, windfarm) in a CTE BEFORE joining
+    # nameplate capacity. A naive `SUM(wf.nameplate_capacity_mw)` over the
+    # generation_data ⋈ windfarms hourly join counts each farm's nameplate once
+    # per hourly row (~730×/month), inflating total_capacity ~730× and deflating
+    # the period capacity factor by the same factor (a real 35% rendered as
+    # ~0.05% — the "divided by 1000" the client reported). Summing nameplate over
+    # one row per (period, windfarm) counts it once per farm. (EPR-64)
     trend_query = text("""
-        SELECT
-            date_trunc('month', g.hour) as period,
-            SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_mwh,
-            SUM(wf.nameplate_capacity_mw) as total_capacity,
-            COUNT(DISTINCT g.windfarm_id) as farm_count,
-            EXTRACT(EPOCH FROM (date_trunc('month', g.hour) + interval '1 month' - date_trunc('month', g.hour))) / 3600 as period_hours
-        FROM generation_data g
-        JOIN windfarms wf ON g.windfarm_id = wf.id
-        WHERE g.hour >= :start_date
-          AND g.hour < :end_date
-          AND g.generation_mwh IS NOT NULL
+        WITH monthly_farm AS (
+            SELECT
+                date_trunc('month', g.hour) as period,
+                g.windfarm_id,
+                SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as wf_mwh
+            FROM generation_data g
+            WHERE g.hour >= :start_date
+              AND g.hour < :end_date
+              AND g.generation_mwh IS NOT NULL
     """ + scope_and + """
-        GROUP BY date_trunc('month', g.hour)
-        ORDER BY period
+            GROUP BY date_trunc('month', g.hour), g.windfarm_id
+        )
+        SELECT
+            mf.period as period,
+            SUM(mf.wf_mwh) as total_mwh,
+            SUM(wf.nameplate_capacity_mw) as total_capacity,
+            COUNT(DISTINCT mf.windfarm_id) as farm_count,
+            EXTRACT(EPOCH FROM (mf.period + interval '1 month' - mf.period)) / 3600 as period_hours
+        FROM monthly_farm mf
+        JOIN windfarms wf ON mf.windfarm_id = wf.id
+        GROUP BY mf.period
+        ORDER BY mf.period
     """)
 
     try:
@@ -1070,13 +1086,13 @@ async def get_portfolio_performance(
     performance_trend = []
     for row in trend_rows:
         period_hours = float(row.period_hours or 730)  # ~730 hours per month
-        # Calculate capacity factor for the period
+        # Capacity factor for the period: total generation over the portfolio's
+        # max possible output (Σ nameplate × hours). total_capacity is now the
+        # sum of distinct-farm nameplates for the month (see CTE above).
         period_cf = 0
-        if row.total_capacity and row.total_mwh and period_hours > 0:
-            # Divide by farm_count to get average capacity per farm
-            avg_capacity = float(row.total_capacity) / row.farm_count if row.farm_count else 0
-            if avg_capacity > 0:
-                period_cf = (float(row.total_mwh) / (avg_capacity * row.farm_count * period_hours)) * 100
+        total_capacity = float(row.total_capacity or 0)
+        if total_capacity > 0 and row.total_mwh and period_hours > 0:
+            period_cf = (float(row.total_mwh) / (total_capacity * period_hours)) * 100
 
         performance_trend.append({
             "period": row.period.isoformat() if row.period else None,
