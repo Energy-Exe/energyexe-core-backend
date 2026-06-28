@@ -7,10 +7,12 @@ name: Deploy to Staging
 # prod. Prod still deploys from `master` via deploy-aws.yml, untouched.
 
 on:
-  # Staging deploys on every push to the staging branch (no paths-ignore) so
-  # staging always reflects the branch — redeploys are cheap on a single task.
+  # Staging deploys on every push to the staging branch (redeploys are cheap on
+  # a single task), except docs-only commits.
   push:
     branches: [staging]
+    paths-ignore:
+      - '**.md'
   workflow_dispatch: {}
 
 concurrency:
