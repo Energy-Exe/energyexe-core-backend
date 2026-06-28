@@ -80,11 +80,18 @@ def create_application() -> FastAPI:
         redirect_slashes=False,
     )
 
-    # Add CORS middleware first (must be before other middleware)
+    # Add CORS middleware first (must be before other middleware).
+    # Use the configured allowlist, NOT ["*"]: with allow_credentials=True a
+    # wildcard origin makes Starlette emit `Access-Control-Allow-Origin: *` on
+    # actual (non-preflight) responses for token-auth requests (no cookie), which
+    # browsers reject for credentialed requests. An explicit list makes it echo
+    # the specific allowed origin on every response. The list comes from
+    # BACKEND_CORS_ORIGINS (env override per environment; defaults cover prod +
+    # localhost in app/core/config.py).
     if settings.BACKEND_CORS_ORIGINS:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=settings.BACKEND_CORS_ORIGINS,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
