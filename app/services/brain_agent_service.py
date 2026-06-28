@@ -649,6 +649,25 @@ class BrainAgentService:
                 or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL)
             )
 
+        # Extended-thinking compatibility: the bundled Claude Code CLI
+        # (2.1.71 in claude-agent-sdk 0.1.48) defaults to thinking.type=enabled,
+        # which newer models reject with a 400 ("\"thinking.type.enabled\" is not
+        # supported for this model. Use \"thinking.type.adaptive\"..."). This CLI
+        # has no path to emit thinking.type=adaptive for those models, so disable
+        # extended thinking for them. Verified against the bundled CLI on Opus 4.8:
+        # --max-thinking-tokens 0 (this disabled config) succeeds, while the
+        # default, --effort high, and a positive budget all still 400. Sonnet 4.6
+        # / Opus 4.6 still accept enabled-thinking, so leave them on the default.
+        # Proper fix = upgrade claude-agent-sdk so the bundled CLI uses adaptive.
+        ADAPTIVE_ONLY_MODELS = {
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-fable-5",
+        }
+        thinking_config = (
+            {"type": "disabled"} if resolved_model in ADAPTIVE_ONLY_MODELS else None
+        )
+
         # Strict read-only DB access for the agent process:
         #   1. Prefer the dedicated `brain_agent_ro` Postgres role — it has
         #      only SELECT grants, so the server rejects any write attempt
@@ -708,6 +727,7 @@ class BrainAgentService:
             max_budget_usd=profile["max_budget_usd"],
             permission_mode="bypassPermissions",
             model=resolved_model,
+            thinking=thinking_config,
             stderr=_on_stderr,
             max_buffer_size=10 * 1024 * 1024,
             setting_sources=[],  # Don't inherit global MCP servers (Gmail, Slack, etc.)
