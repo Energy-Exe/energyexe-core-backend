@@ -608,6 +608,7 @@ async def get_portfolio_weather_summary(
             c.code AS country_code,
             EXTRACT(MONTH FROM w.hour)::int AS month,
             w.windfarm_id,
+            wf.name AS windfarm_name,
             SUM(w.wind_speed_100m) AS wind_sum,
             MIN(w.wind_speed_100m) AS wind_min,
             MAX(w.wind_speed_100m) AS wind_max,
@@ -622,7 +623,7 @@ async def get_portfolio_weather_summary(
         """
         + bucket_filter
         + """
-        GROUP BY c.id, c.name, c.code, EXTRACT(MONTH FROM w.hour), w.windfarm_id
+        GROUP BY c.id, c.name, c.code, EXTRACT(MONTH FROM w.hour), w.windfarm_id, wf.name
         """
     )
 
@@ -659,6 +660,10 @@ async def get_portfolio_weather_summary(
 
     country_acc: Dict[int, Dict[str, Any]] = {}
     month_acc: Dict[int, Dict[str, Any]] = {}
+    # Per-(farm, month) wind & temperature, preserved for the per-windfarm
+    # seasonal charts on the Weather tab (EPR-66). The bucket query already
+    # groups per (windfarm, month) so this is a straight pass-through.
+    farm_month_acc: Dict[Any, Dict[str, Any]] = {}
 
     for r in bucket_rows:
         wsum = float(r.wind_sum or 0)
@@ -702,6 +707,21 @@ async def get_portfolio_weather_summary(
         mb["hours"] += hours
         mb["farms"].add(r.windfarm_id)
 
+        fm = farm_month_acc.setdefault(
+            (r.windfarm_id, int(r.month)),
+            {
+                "windfarm_id": r.windfarm_id,
+                "windfarm_name": r.windfarm_name,
+                "month": int(r.month),
+                "wind_sum": 0.0,
+                "temp_sum": 0.0,
+                "hours": 0,
+            },
+        )
+        fm["wind_sum"] += wsum
+        fm["temp_sum"] += tsum
+        fm["hours"] += hours
+
     # Build stats_row equivalent
     class _Stats:
         pass
@@ -743,7 +763,12 @@ async def get_portfolio_weather_summary(
                 wf.name as windfarm_name,
                 wf.code as windfarm_code,
                 c.name as country_name,
+                bz.name as bidzone_name,
                 AVG(w.wind_speed_100m) as avg_wind_speed,
+                STDDEV(w.wind_speed_100m) as wind_std,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY w.wind_speed_100m) as wind_p50,
+                (mode() WITHIN GROUP (ORDER BY (round(w.wind_direction_deg / 22.5)::int % 16))) * 22.5 as prevailing_direction_deg,
+                AVG(w.temperature_2m_c) as avg_temperature,
                 AVG(g.generation_mwh) as avg_generation,
                 wf.nameplate_capacity_mw,
                 CASE
@@ -757,6 +782,7 @@ async def get_portfolio_weather_summary(
             JOIN generation_data g ON w.windfarm_id = g.windfarm_id AND w.hour = g.hour
             JOIN windfarms wf ON w.windfarm_id = wf.id
             JOIN countries c ON wf.country_id = c.id
+            LEFT JOIN bidzones bz ON wf.bidzone_id = bz.id
             WHERE w.hour >= :start_date
               AND w.hour < :end_date
               AND w.wind_speed_100m IS NOT NULL
@@ -764,7 +790,7 @@ async def get_portfolio_weather_summary(
               {ramp_up_clause}
     """ + (" AND w.windfarm_id = ANY(:windfarm_ids)" if windfarm_filter_ids else "") +
     (" AND wf.country_id = :country_id" if country_id else "") + """
-            GROUP BY wf.id, wf.name, wf.code, c.name, wf.nameplate_capacity_mw
+            GROUP BY wf.id, wf.name, wf.code, c.name, bz.name, wf.nameplate_capacity_mw
             HAVING COUNT(*) > 24
         )
         SELECT * FROM farm_correlations
@@ -789,7 +815,12 @@ async def get_portfolio_weather_summary(
             "windfarm_name": row.windfarm_name,
             "windfarm_code": row.windfarm_code,
             "country_name": row.country_name,
+            "bidzone_name": row.bidzone_name,
             "avg_wind_speed": round(float(row.avg_wind_speed or 0), 2),
+            "wind_std": round(float(row.wind_std), 2) if row.wind_std is not None else None,
+            "wind_p50": round(float(row.wind_p50), 2) if row.wind_p50 is not None else None,
+            "prevailing_direction_deg": round(float(row.prevailing_direction_deg)) if row.prevailing_direction_deg is not None else None,
+            "avg_temperature": round(float(row.avg_temperature or 0), 1),
             "avg_generation_mwh": round(float(row.avg_generation or 0), 2),
             "capacity_factor": round(float(row.capacity_factor or 0), 1),
             "wind_gen_correlation": round(float(row.wind_gen_correlation or 0), 3) if row.wind_gen_correlation else None,
@@ -819,6 +850,23 @@ async def get_portfolio_weather_summary(
         for mb in sorted(month_acc.values(), key=lambda x: x["month"])
     ]
 
+    # Per-(farm, month) wind & temperature for the per-windfarm seasonal charts
+    # (EPR-66). Sorted by farm name then month so the client can group by farm.
+    by_farm_month = [
+        {
+            "windfarm_id": fm["windfarm_id"],
+            "windfarm_name": fm["windfarm_name"],
+            "month": fm["month"],
+            "month_name": month_names[fm["month"] - 1],
+            "avg_wind_speed": round((fm["wind_sum"] / fm["hours"]) if fm["hours"] > 0 else 0, 2),
+            "avg_temperature": round((fm["temp_sum"] / fm["hours"]) if fm["hours"] > 0 else 0, 1),
+            "data_points": fm["hours"],
+        }
+        for fm in sorted(
+            farm_month_acc.values(), key=lambda x: (x["windfarm_name"] or "", x["month"])
+        )
+    ]
+
     return {
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
@@ -831,4 +879,5 @@ async def get_portfolio_weather_summary(
         "by_country": by_country,
         "correlation_summary": correlation_summary,
         "seasonal_patterns": seasonal_patterns,
+        "by_farm_month": by_farm_month,
     }
