@@ -1,0 +1,67 @@
+name: Deploy to Staging
+
+# Builds the image, pushes to the STAGING ECR repo, and redeploys the staging
+# ECS service. Triggered by the long-lived `staging` branch (staging-first
+# workflow). Auth via GitHub OIDC assuming the staging-only deploy role
+# (infra/staging/cicd.tf) — it can touch the staging repo + service, nothing in
+# prod. Prod still deploys from `master` via deploy-aws.yml, untouched.
+
+on:
+  # Staging deploys on every push to the staging branch (no paths-ignore) so
+  # staging always reflects the branch — redeploys are cheap on a single task.
+  push:
+    branches: [staging]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-north-1
+  ECR_REPOSITORY: energyexe-core-backend-staging
+  ECS_CLUSTER: energyexe
+  ECS_SERVICE: energyexe-core-backend-staging
+  DEPLOY_ROLE_ARN: arn:aws:iam::580639800175:role/energyexe-core-backend-staging-github-deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/$ECR_REPOSITORY"
+          docker build --target production \
+            --build-arg GIT_SHA="${{ github.sha }}" \
+            -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:staging" .
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:staging"
+
+      - name: Force new deployment
+        # Task definition points at :staging, so a forced redeploy pulls the
+        # image we just pushed.
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment \
+            --query 'service.deployments[0].id' --output text
+
+      - name: Wait for service to stabilize
+        run: aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"

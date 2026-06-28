@@ -1,0 +1,8 @@
+# Local state (this root keeps its own, separate from prod's)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfplan
+# Values may carry environment-specific ARNs; keep them out of git like prod.
+terraform.tfvars
