@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -39,21 +39,30 @@ class WindfarmService:
     ) -> Dict[int, datetime]:
         """Return {windfarm_id: max(generation_data.hour)} for the given IDs.
 
-        Single aggregate query — avoids N+1 round-trips when populating the
-        wind farms list (#18).
+        Avoids N+1 round-trips when populating the wind farms list (#18). Uses a
+        per-windfarm correlated subquery (ORDER BY hour DESC LIMIT 1) so Postgres
+        serves each lookup from idx_gen_windfarm_hour (windfarm_id, hour) via an
+        index-only scan. A plain `MAX(hour) ... GROUP BY windfarm_id` over a large
+        IN-list gets planned as a full seq scan of generation_data (~25M rows) and
+        ignores the index — that made the windfarms list endpoint take ~40-60s.
         """
         ids = [i for i in windfarm_ids if i is not None]
         if not ids:
             return {}
-        result = await db.execute(
-            select(
-                GenerationData.windfarm_id,
-                func.max(GenerationData.hour),
-            )
-            .where(GenerationData.windfarm_id.in_(ids))
-            .group_by(GenerationData.windfarm_id)
+        latest_hour = (
+            select(GenerationData.hour)
+            .where(GenerationData.windfarm_id == Windfarm.id)
+            .order_by(GenerationData.hour.desc())
+            .limit(1)
+            .correlate(Windfarm)
+            .scalar_subquery()
         )
-        return {row[0]: row[1] for row in result.all() if row[0] is not None}
+        result = await db.execute(
+            select(Windfarm.id, latest_hour).where(Windfarm.id.in_(ids))
+        )
+        # row[1] is NULL for windfarms with no generation_data — omit them, matching
+        # the previous GROUP BY behaviour (which only returned farms that had rows).
+        return {row[0]: row[1] for row in result.all() if row[1] is not None}
 
     @staticmethod
     async def get_windfarm(db: AsyncSession, windfarm_id: int) -> Optional[Windfarm]:
