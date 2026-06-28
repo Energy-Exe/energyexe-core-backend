@@ -43,15 +43,17 @@ promoted to prod. Staging must be:
                               RDS energyexedb (prod)     RDS energyexedb-staging (NEW)
                               db.t4g.large, public       db.t4g.micro, PRIVATE, snapshot-restored
 
-  staging frontends → Vercel (staging branch / preview), pointed at staging-api.energyexe.com
+  staging-dashboard.energyexe.com → CloudFront → S3 (admin-ui)  ┐  AWS-hosted staging frontends,
+  staging-app.energyexe.com       → CloudFront → S3 (client-ui) ┘  pointed at staging-api.energyexe.com
 ```
 
 **Shared with prod (to save cost):** the ALB, the ECS cluster, the default VPC/subnets, the
 GlitchTip error tracker, and the external-API-key secrets.
 
 **Separate (for isolation):** the RDS instance, the ECS service + task, the target group, the
-service & DB security groups, the staging-specific secrets, the ECR repo, the OIDC deploy role,
-and the CloudWatch log group.
+service & DB security groups, the staging-specific secrets, the ECR repo, the OIDC deploy roles
+(backend + one per frontend), the CloudWatch log group, and the two frontend stacks (private S3
+bucket + CloudFront distribution + us-east-1 ACM cert each).
 
 Everything runs in **AWS account `580639800175`, region `eu-north-1`**, default VPC
 `vpc-04f8e9553ad77d458`, using AWS CLI profile **`energyexe`**.
@@ -153,8 +155,9 @@ staging-api). This is purely additive; the prod default action and rules are unt
 ### TLS / certificates
 
 - `staging-api` cert: **ACM in `eu-north-1`**, DNS-validated, attached to the shared listener.
-- CloudFront certs (when the frontend pilot existed): **must be in `us-east-1`** — hence the second
-  provider alias.
+- Frontend CloudFront certs (`staging-dashboard` / `staging-app`): **must be in `us-east-1`** (a hard
+  CloudFront requirement) — hence the second `us_east_1` provider alias. DNS-validated, attached to
+  each distribution as an SNI alias in phase 2.
 
 ### Database — separate instance, restored from a prod snapshot
 
@@ -208,21 +211,39 @@ prod** (promotion). The promotion half is **Phase 2, not yet built**.
   workflows present on the default branch).
 - **Image bootstrap:** the very first staging task ran the **prod image** copied into the staging
   ECR, so staging was live before CI existed.
+- **Frontends:** each repo (`faisal-energyexe/energyexe-{admin,client}-ui`) has its own
+  `deploy-staging.yml` (on push to `staging`): `pnpm build` with
+  `VITE_API_URL=https://staging-api.energyexe.com/api/v1` → `aws s3 sync dist/ --delete` →
+  CloudFront invalidation. Each assumes its **own** OIDC role (`energyexe-staging-{admin,client}-ui-github-deploy`),
+  scoped to that bucket + distribution only, trust-pinned to its repo's `staging` branch. The
+  bucket/distribution/role IDs are non-secret and live as `env:` in the workflow.
 
-### Frontends — moved to Vercel (the AWS pilot was reverted)
+### Frontends — on AWS S3 + CloudFront (direct-child hostnames)
 
-We **piloted** hosting the staging frontends on **AWS S3 + CloudFront** (private buckets + OAC,
-SPA-fallback `403/404 → /index.html`, us-east-1 certs). It was **abandoned** because of a hard
-blocker (see §6, CAA), and the staging frontends **stay on Vercel** — Vercel deploys the `staging`
-branch (or previews), pointed at `https://staging-api.energyexe.com/api/v1`. All the AWS frontend
-resources were `terraform destroy`-ed and removed from the config; the backend's CORS is now driven
-by an optional `cors_origins` var (set to the Vercel staging origin when known).
+The staging frontends are hosted on **AWS S3 + CloudFront** (`frontend.tf`), one stack per UI:
+
+- **Private S3 bucket** (all public access blocked) reached only by CloudFront via **Origin Access
+  Control** (OAC) — a per-distribution bucket policy scopes `s3:GetObject` to that distribution's ARN.
+- **CloudFront** with **SPA-fallback** custom error responses (`403/404 → /index.html`, `200`) so
+  client-side deep links resolve (the AWS equivalent of Vercel's SPA rewrite); `PriceClass_100`
+  (NA+EU edges); the AWS-managed *CachingOptimized* policy.
+- **us-east-1 ACM cert** per host, DNS-validated, attached as the alias cert (phase 2).
+- Hostnames are **direct children** of `energyexe.com` — `staging-dashboard.energyexe.com` (admin-ui)
+  and `staging-app.energyexe.com` (client-ui). **This is the crux:** an earlier attempt used
+  `staging.dashboard.*` / `staging.app.*`, which sit *under* the Vercel-CNAME'd `dashboard` / `app`
+  labels and inherited Vercel's Amazon-excluding CAA → ACM refused (see §6). Direct children have no
+  Vercel label in their path, so ACM issues cleanly (proven first by `staging-api`).
+
+The backend's CORS (`cors_origins`) + `admin_portal_url` / `client_portal_url` are set to these two
+hostnames. **Prod frontends stay on Vercel** (`dashboard.*` / `app.*`) — only staging moved to AWS,
+as the pilot for eventually moving prod too.
 
 ### Cost
 
-≈ **$50–60/mo**, dominated by the snapshot-restored RDS (the ~200 GB storage floor). On-demand
-Fargate ≈ $18/mo. **Shared ALB + cluster + skipped Valkey = ~$0 added.** Levers if needed: stop the
-RDS when idle (storage-only), or switch to an empty seeded DB (~$15/mo total).
+≈ **$55–65/mo**, dominated by the snapshot-restored RDS (the ~200 GB storage floor). On-demand
+Fargate ≈ $18/mo. The two frontend stacks (S3 + CloudFront, low traffic) add ≈ **$2–5/mo**.
+**Shared ALB + cluster + skipped Valkey = ~$0 added.** Levers if needed: stop the RDS when idle
+(storage-only), or switch to an empty seeded DB (~$15/mo total).
 
 ---
 
@@ -238,13 +259,16 @@ RDS when idle (storage-only), or switch to an empty seeded DB (~$15/mo total).
 - **CloudFront ACM certs must be in `us-east-1`** (needs a provider alias).
 - **ELB/target-group names cap at 32 chars** — the staging TG is `energyexe-staging-tg`, not
   `${local.name}-tg`.
-- **ACM `CAA_ERROR` from following a CNAME:** `dashboard.energyexe.com` / `app.energyexe.com` are
-  **CNAMEs to Vercel**, and Vercel's CAA authorizes only Let's Encrypt / Sectigo / Google /
-  GlobalSign — **not Amazon**. ACM's CAA tree-walk for `staging.dashboard` / `staging.app` follows
-  that CNAME and is refused. `staging-api` (a *direct* child of `energyexe.com`, no intermediate
-  CNAME) issued fine. **This is why the frontends went to Vercel.** If AWS frontend hosting is ever
-  revisited, use direct-child hostnames (`staging-dashboard` / `staging-app`) or add a leaf CAA
-  record `0 issue "amazon.com"`.
+- **ACM `CAA_ERROR` from following a CNAME (and the fix):** `dashboard.energyexe.com` /
+  `app.energyexe.com` are **CNAMEs to Vercel**, and Vercel's CAA authorizes only Let's Encrypt /
+  Sectigo / Google / GlobalSign — **not Amazon**. ACM's CAA tree-walk for `staging.dashboard` /
+  `staging.app` follows that CNAME and is refused. `staging-api` (a *direct* child of `energyexe.com`,
+  no intermediate CNAME) issued fine. **Resolution:** the frontends use **direct-child hostnames**
+  `staging-dashboard.energyexe.com` / `staging-app.energyexe.com` — no Vercel label in the path, so
+  ACM issues normally. (An alternative would be a leaf CAA record `0 issue "amazon.com"`, but
+  direct-child is cleaner and needs no extra DNS.) Lesson: when issuing an ACM cert for a name under
+  a label that CNAMEs elsewhere, the *other* domain's CAA governs — pick a hostname whose path you
+  control.
 - **A killed `terraform apply` can drop resources from local state** — an interrupted run dropped
   `aws_db_instance.staging`. Fixed with `terraform import` + making the config match reality
   (`storage_encrypted = true`, `lifecycle { ignore_changes = [snapshot_identifier] }`) so it didn't
@@ -280,7 +304,15 @@ restore a new instance (don't rely on in-place replace — `snapshot_identifier`
 
 **Tear down staging:** `terraform destroy` in `infra/staging/` (separate state ⇒ prod is untouched).
 
-**Set the Vercel CORS origin:** set `cors_origins` (JSON-array string) + optional `*_portal_url` in
+**Deploy a staging frontend:** push to the `staging` branch of `faisal-energyexe/energyexe-admin-ui`
+or `…-client-ui` → its `deploy-staging.yml` builds + syncs to S3 + invalidates CloudFront. Watch:
+`gh run list --repo faisal-energyexe/energyexe-admin-ui --branch staging`.
+
+**Add a new frontend host on AWS:** add the cert ARN var, apply phase 1 (S3 + CloudFront + cert),
+add the validation CNAME at hyp.net, set the cert ARN var + re-apply (phase 2 attaches the alias),
+then add the host CNAME → CloudFront domain. Use a **direct-child** hostname (see §6 CAA).
+
+**Set the backend CORS origin:** set `cors_origins` (JSON-array string) + optional `*_portal_url` in
 `terraform.tfvars`, then `terraform apply` (replaces the task def → brief staging redeploy).
 
 ---
@@ -289,16 +321,20 @@ restore a new instance (don't rely on in-place replace — `snapshot_identifier`
 
 **Live & verified (2026-06-28):**
 - Staging backend healthy at `staging-api.energyexe.com` (valid TLS; runs the latest `staging` branch
-  image). Prod unaffected throughout.
-- Staging-first CI committed and proven (EPR-48 merged to staging → auto-deployed healthy).
+  image). Prod unaffected throughout (health OK, ALB rules unchanged, task-def rev 8).
+- **Staging frontends LIVE on AWS:** `https://staging-dashboard.energyexe.com` (admin-ui) +
+  `https://staging-app.energyexe.com` (client-ui) — both serve over valid TLS, SPA deep-links fall
+  back correctly, and the bundles call `staging-api.energyexe.com` (CORS verified). Deployed by each
+  repo's `deploy-staging.yml` on push to `staging`.
+- Staging-first CI committed and proven for all three repos (backend + both frontends).
 - EPR-48 consolidated on the `staging` branches: client-ui **#192** (off `main`), backend **#132**
   (off `master`).
 
 **Remaining:**
-- Configure the Vercel staging frontends (`VITE_API_URL`) and set the backend `cors_origins`.
-- `staging-api` DNS finishing propagation.
 - **Phase 2:** the `master → prod` image-promotion workflow (promote the staging-validated image
   digest to prod) — deliberately deferred.
-- `infra/staging/**` + `deploy-staging.yml` currently live only on the `staging` branch; they reach
-  `master` when `staging → master` is first promoted.
+- `infra/staging/**` + the backend `deploy-staging.yml` currently live only on the `staging` branch;
+  they reach `master` when `staging → master` is first promoted.
+- Optional: a post-restore PII scrub for the staging DB; extending the AWS-hosting pilot to the
+  **prod** frontends (move them off Vercel).
 - Future cleanup: extract a shared backend-service module so prod and staging stop duplicating.

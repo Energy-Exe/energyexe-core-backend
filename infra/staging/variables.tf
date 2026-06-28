@@ -89,22 +89,64 @@ variable "staging_api_certificate_arn" {
   default     = ""
 }
 
-# Staging frontends run on Vercel (the AWS S3+CloudFront pilot was dropped —
-# Vercel's CAA on dashboard/app blocks ACM from issuing for *.dashboard/*.app).
+# --- Staging frontends on AWS (S3 + CloudFront) ---
+# Direct-child hostnames of energyexe.com so ACM's CAA tree-walk never touches
+# the Vercel-CNAME'd dashboard.* / app.* labels (whose CAA excludes Amazon). See
+# frontend.tf for the full rationale. Two-phase like the API: phase 1 issues the
+# us-east-1 cert (empty arn), phase 2 sets the arn to attach the CloudFront alias.
+
+variable "admin_staging_domain" {
+  description = "Hostname for the staging admin-ui (CloudFront). Direct child of energyexe.com."
+  type        = string
+  default     = "staging-dashboard.energyexe.com"
+}
+
+variable "client_staging_domain" {
+  description = "Hostname for the staging client-ui (CloudFront). Direct child of energyexe.com."
+  type        = string
+  default     = "staging-app.energyexe.com"
+}
+
+variable "admin_certificate_arn" {
+  description = "ACM cert ARN (us-east-1) for admin_staging_domain. Empty until DNS-validated; setting it (phase 2) attaches the alias + cert to the admin CloudFront dist."
+  type        = string
+  default     = ""
+}
+
+variable "client_certificate_arn" {
+  description = "ACM cert ARN (us-east-1) for client_staging_domain. Empty until DNS-validated; setting it (phase 2) attaches the alias + cert to the client CloudFront dist."
+  type        = string
+  default     = ""
+}
+
+variable "github_admin_ui_repo" {
+  description = "owner/repo of the admin-ui; its `staging` branch may deploy to the staging admin bucket + invalidate its CloudFront dist."
+  type        = string
+  default     = "faisal-energyexe/energyexe-admin-ui"
+}
+
+variable "github_client_ui_repo" {
+  description = "owner/repo of the client-ui; its `staging` branch may deploy to the staging client bucket + invalidate its CloudFront dist."
+  type        = string
+  default     = "faisal-energyexe/energyexe-client-ui"
+}
+
+# CORS + portal URLs now point at the AWS CloudFront staging hostnames (above),
+# wired via tfvars once the certs ISSUE and the host CNAMEs resolve.
 variable "cors_origins" {
-  description = "BACKEND_CORS_ORIGINS as a JSON-array string for the staging API, e.g. '[\"https://<vercel-staging>.vercel.app\"]'. Empty = use the app's built-in default list."
+  description = "BACKEND_CORS_ORIGINS as a JSON-array string for the staging API, e.g. '[\"https://staging-dashboard.energyexe.com\",\"https://staging-app.energyexe.com\"]'. Empty = use the app's built-in default list."
   type        = string
   default     = ""
 }
 
 variable "admin_portal_url" {
-  description = "Staging admin UI URL (on Vercel) for link generation. Empty = unset."
+  description = "Staging admin UI URL (https://staging-dashboard.energyexe.com) for link generation. Empty = unset."
   type        = string
   default     = ""
 }
 
 variable "client_portal_url" {
-  description = "Staging client UI URL (on Vercel) for link generation. Empty = unset."
+  description = "Staging client UI URL (https://staging-app.energyexe.com) for link generation. Empty = unset."
   type        = string
   default     = ""
 }
