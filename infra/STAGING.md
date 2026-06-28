@@ -199,7 +199,17 @@ FARGATE`), ~$12/mo more. Consistent with "prioritize prod-safety over cost."
 ### CI/CD — staging-first deploy flow
 
 **Decision:** push to a long-lived **`staging` branch → deploys staging**; merge to **`master` →
-prod** (promotion). The promotion half is **Phase 2, not yet built**.
+prod** (promotion).
+
+**Phase 2 — `master → prod` promotion (built; PR #134, pending merge).** Prod's `deploy-aws.yml` no
+longer rebuilds on `master`: it **promotes the exact staging-validated image** — pulls the staging
+`:staging` image, retags it into the prod ECR repo as `:latest` + `:<sha>`, and `force-new-deployment`s
+prod. So prod runs the identical bytes staging tested. Prod IAM is **unchanged**: the prod deploy
+role's pull access to the staging repo is granted from the staging side (an ECR repository policy in
+`infra/staging/promotion.tf`). `workflow_dispatch` is kept for deliberate/first promotions, and the
+prod service's circuit breaker auto-rolls back a bad image. **Operating rule:** reach `master` by
+*merging* `staging`, so `:staging` matches master's code (a direct push to master would promote the
+older staging image).
 
 - **OIDC, no stored keys:** a separate `…-staging-github-deploy` role, trust pinned to
   `repo:Energy-Exe/energyexe-core-backend:ref:refs/heads/staging`, scoped to the staging ECR repo +
@@ -331,8 +341,10 @@ then add the host CNAME → CloudFront domain. Use a **direct-child** hostname (
   (off `master`).
 
 **Remaining:**
-- **Phase 2:** the `master → prod` image-promotion workflow (promote the staging-validated image
-  digest to prod) — deliberately deferred.
+- **Phase 2 — built, pending activation:** the `master → prod` promotion workflow is implemented
+  (PR #134) and the staging-side ECR pull grant is applied. Activate by merging PR #134, then run the
+  first promotion via `workflow_dispatch` (deliberate + monitored) — it ships the current staging
+  contents to prod.
 - `infra/staging/**` + the backend `deploy-staging.yml` currently live only on the `staging` branch;
   they reach `master` when `staging → master` is first promoted.
 - Optional: a post-restore PII scrub for the staging DB; extending the AWS-hosting pilot to the
