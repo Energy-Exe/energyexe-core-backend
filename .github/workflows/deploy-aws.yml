@@ -1,21 +1,31 @@
 name: Deploy to AWS Fargate
 
-# Builds the production image, pushes to ECR, and forces a new ECS deployment.
-# Authenticates to AWS via GitHub OIDC (no stored keys) — the role is defined
-# in infra/cicd.tf and trusts only this repo's master branch.
+# On push to master, PROMOTE the exact image already built + validated in staging
+# to production — no rebuild. The staging-validated image is copied from the
+# staging ECR repo into the prod repo and the prod ECS service is redeployed onto
+# it, so prod runs the identical artifact staging tested (decision: staging-first,
+# then promote on merge to master).
+#
+# Auth via GitHub OIDC (infra/cicd.tf). Pull access to the staging repo is granted
+# by a repository policy on the STAGING side (infra/staging/promotion.tf), so
+# prod's IAM is unchanged.
+#
+# PREREQUISITE: master must be reached by MERGING the `staging` branch, so the
+# staging `:staging` image corresponds to master's code. (A promoted image that
+# fails health checks still auto-rolls back — the prod service has a deployment
+# circuit breaker with rollback enabled.)
 
 on:
   push:
     branches: [master]
-    # Skip deploys for changes that don't affect the app image: docs, Terraform,
-    # and CI/cron workflow config (a workflow-only commit shouldn't redeploy the
-    # app; a mixed commit with app code still deploys).
+    # A promotion ships whatever staging validated, so doc/infra/CI-only commits
+    # never need to redeploy prod.
     paths-ignore:
       - '**.md'
       - 'infra/**'
       - 'docs/**'
       - '.github/**'
-  workflow_dispatch: {}
+  workflow_dispatch: {}  # manual, deliberate promotions (e.g. the first one)
 
 concurrency:
   group: deploy-aws
@@ -28,6 +38,8 @@ permissions:
 env:
   AWS_REGION: eu-north-1
   ECR_REPOSITORY: energyexe-core-backend
+  STAGING_ECR_REPOSITORY: energyexe-core-backend-staging
+  STAGING_IMAGE_TAG: staging
   ECS_CLUSTER: energyexe
   ECS_SERVICE: energyexe-core-backend
   DEPLOY_ROLE_ARN: arn:aws:iam::580639800175:role/energyexe-core-backend-github-deploy
@@ -36,8 +48,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
@@ -46,20 +56,29 @@ jobs:
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push image
+      - name: Promote staging-validated image to prod
+        # Copy the staging `:staging` image into the prod repo as :latest and
+        # :<sha>. No `docker build` — prod runs the exact bytes staging validated.
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
-          IMAGE="$REGISTRY/$ECR_REPOSITORY"
-          docker build --target production \
-            --build-arg GIT_SHA="${{ github.sha }}" \
-            -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
-          docker push "$IMAGE:${{ github.sha }}"
-          docker push "$IMAGE:latest"
+          STAGING_IMAGE="$REGISTRY/$STAGING_ECR_REPOSITORY:$STAGING_IMAGE_TAG"
+          PROD_IMAGE="$REGISTRY/$ECR_REPOSITORY"
+
+          echo "Pulling staging-validated image: $STAGING_IMAGE"
+          docker pull "$STAGING_IMAGE"
+
+          SRC_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$STAGING_IMAGE")
+          echo "Promoting $SRC_DIGEST  ->  $PROD_IMAGE:latest + :${{ github.sha }}"
+
+          docker tag "$STAGING_IMAGE" "$PROD_IMAGE:latest"
+          docker tag "$STAGING_IMAGE" "$PROD_IMAGE:${{ github.sha }}"
+          docker push "$PROD_IMAGE:latest"
+          docker push "$PROD_IMAGE:${{ github.sha }}"
 
       - name: Force new deployment
         # Task definition points at :latest, so a forced redeploy pulls the
-        # image we just pushed. Single-task service => ~1-2 min downtime.
+        # promoted image. Single-task service => ~1-2 min downtime.
         run: |
           aws ecs update-service \
             --cluster "$ECS_CLUSTER" \
