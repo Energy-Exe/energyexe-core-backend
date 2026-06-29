@@ -201,7 +201,7 @@ FARGATE`), ~$12/mo more. Consistent with "prioritize prod-safety over cost."
 **Decision:** push to a long-lived **`staging` branch → deploys staging**; merge to **`master` →
 prod** (promotion).
 
-**Phase 2 — `master → prod` promotion (built; PR #134, pending merge).** Prod's `deploy-aws.yml` no
+**Phase 2 — `master → prod` promotion (ACTIVATED 2026-06-29; PR #134 merged).** Prod's `deploy-aws.yml` no
 longer rebuilds on `master`: it **promotes the exact staging-validated image** — pulls the staging
 `:staging` image, retags it into the prod ECR repo as `:latest` + `:<sha>`, and `force-new-deployment`s
 prod. So prod runs the identical bytes staging tested. Prod IAM is **unchanged**: the prod deploy
@@ -209,7 +209,11 @@ role's pull access to the staging repo is granted from the staging side (an ECR 
 `infra/staging/promotion.tf`). `workflow_dispatch` is kept for deliberate/first promotions, and the
 prod service's circuit breaker auto-rolls back a bad image. **Operating rule:** reach `master` by
 *merging* `staging`, so `:staging` matches master's code (a direct push to master would promote the
-older staging image).
+older staging image). **First promotion (2026-06-29)** shipped CORS fix + windfarms perf + EPR-48
+Phase A to prod during the CORS incident below; capture the current prod `:latest` digest first
+(`aws ecr describe-images --repository-name energyexe-core-backend --image-ids imageTag=latest`) as a
+rollback ref — the mutable `:latest` tag means a circuit-breaker rollback re-pulls the *new* image,
+so keep the old digest handy.
 
 - **OIDC, no stored keys:** a separate `…-staging-github-deploy` role, trust pinned to
   `repo:Energy-Exe/energyexe-core-backend:ref:refs/heads/staging`, scoped to the staging ECR repo +
@@ -304,6 +308,25 @@ Fargate ≈ $18/mo. The two frontend stacks (S3 + CloudFront, low traffic) add �
   passed**. Fix: `allow_origins=settings.BACKEND_CORS_ORIGINS` (the explicit allowlist) so the specific
   origin is echoed on every response (`app/main.py`, backend PR #135). Diagnose by checking the ACAO
   header on the real GET (`curl -D - -H 'Origin: …'`), not just the OPTIONS preflight.
+- **A "CORS error" in the browser is often NOT a CORS bug — check what host the frontend actually
+  calls first.** During the 2026-06-29 incident the prod frontends showed CORS errors, but the real
+  cause was their **Vercel `VITE_API_URL` pointing at the wrong backend**: `dashboard.energyexe.com`
+  (admin-ui) was baked to the **deleted Railway URL** (`…railway.app/api/v1`) and `app.energyexe.com`
+  (client-ui) to **`staging-api.energyexe.com`** (whose CORS allowlist excludes `app.energyexe.com`).
+  Both fail with no CORS headers → the browser reports "CORS error" even though `api.energyexe.com` is
+  healthy + correctly allowlisted. The frontends were never repointed after the AWS cutover; deleting
+  Railway exposed it. **Fix:** set Vercel `VITE_API_URL=https://api.energyexe.com/api/v1` (Production)
+  on **both** projects + redeploy (API base is build-time env in `src/lib/api.ts`; it only falls back
+  to localhost). **Diagnostic:** `curl <site>/assets/index-*.js | grep -oE 'https://[^"]+/api/v1'`.
+- **Vercel Hobby plan blocks a deploy whose git *commit author* lacks project access.** The prod
+  frontends deploy on Vercel (Hobby, no collaborators on private repos). Merging client-ui #194
+  (`staging`→`main`) with the `Mohammad-Faisal` account made that the commit author → Vercel marked the
+  deploy *"Blocked"*. The frontend prod-branch commit must be **authored by the Vercel-linked account
+  `faisal-energyexe`** (verified email `mohammad.faisal@energyexe.com`). Note a PR *merge* re-blocks
+  (the merge commit is authored by whoever merges) — so push a small commit **directly to the prod
+  branch authored as `faisal-energyexe`** (you can push with any write-capable account; only the
+  *author* matters), or have the user click **Redeploy** in Vercel (owner-initiated redeploys bypass
+  the check). The backend's AWS promotion is unaffected (OIDC, no Vercel).
 - **`workflow_dispatch` requires the workflow on the default branch**; and `paths-ignore` would skip
   an infra-only bootstrap commit — both reasons the staging workflow drops `paths-ignore`.
 - **The shell is zsh** — unquoted `$VAR` does *not* word-split, so bundling CLI flags in a variable
@@ -366,13 +389,21 @@ task def → brief staging redeploy).
 - EPR-48 consolidated on the `staging` branches: client-ui **#192** (off `main`), backend **#132**
   (off `master`).
 
+**Also done (2026-06-29):**
+- **Phase 2 promotion ACTIVATED** — PR #134 merged; first promotion run (via `workflow_dispatch`)
+  shipped the CORS fix + windfarms perf + EPR-48 Phase A to prod (prod now runs the staging image,
+  digest `5854b01`). Prod CORS verified fixed for both `dashboard`/`app` origins. `master` deploys are
+  now image-promotions (no rebuild).
+- Railway fully **retired/deleted**; backend is AWS-only; nightly `pipeline_daily_hour` reset 5→3
+  (prod task-def rev 9).
+
 **Remaining:**
-- **Phase 2 — built, pending activation:** the `master → prod` promotion workflow is implemented
-  (PR #134) and the staging-side ECR pull grant is applied. Activate by merging PR #134, then run the
-  first promotion via `workflow_dispatch` (deliberate + monitored) — it ships the current staging
-  contents to prod.
+- **Prod frontends still point at the wrong API** (a Vercel env issue, NOT staging): set Vercel
+  `VITE_API_URL=https://api.energyexe.com/api/v1` (Production) on the **admin-ui + client-ui** projects
+  + redeploy — currently admin→deleted-Railway, client→staging-api (see §6). Done in the Vercel
+  dashboard (no Terraform).
 - `infra/staging/**` + the backend `deploy-staging.yml` currently live only on the `staging` branch;
-  they reach `master` when `staging → master` is first promoted.
+  they reach `master` on the next `staging → master` promotion.
 - Optional: a post-restore PII scrub for the staging DB; extending the AWS-hosting pilot to the
   **prod** frontends (move them off Vercel).
 - Future cleanup: extract a shared backend-service module so prod and staging stop duplicating.
