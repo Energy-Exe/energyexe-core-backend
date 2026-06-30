@@ -35,7 +35,11 @@ class TurbineUnitService:
 
     @staticmethod
     async def get_turbine_unit_by_code(db: AsyncSession, code: str) -> Optional[TurbineUnit]:
-        result = await db.execute(select(TurbineUnit).where(TurbineUnit.code == code))
+        result = await db.execute(
+            select(TurbineUnit)
+            .options(selectinload(TurbineUnit.windfarm), selectinload(TurbineUnit.turbine_model))
+            .where(TurbineUnit.code == code)
+        )
         return result.scalar_one_or_none()
 
     @staticmethod
@@ -58,8 +62,10 @@ class TurbineUnitService:
         db_turbine_unit = TurbineUnit(**turbine_unit.model_dump())
         db.add(db_turbine_unit)
         await db.commit()
-        await db.refresh(db_turbine_unit)
-        return db_turbine_unit
+        # Re-fetch with relations eager-loaded so the TurbineUnit response_model can
+        # serialize `windfarm`/`turbine_model` without triggering an async lazy load
+        # (which raises MissingGreenlet during serialization).
+        return await TurbineUnitService.get_turbine_unit(db, db_turbine_unit.id)
 
     @staticmethod
     async def update_turbine_unit(
@@ -76,12 +82,23 @@ class TurbineUnitService:
             setattr(db_turbine_unit, field, value)
 
         await db.commit()
-        await db.refresh(db_turbine_unit)
-        return db_turbine_unit
+        # Re-fetch with relations eager-loaded so the TurbineUnit response_model can
+        # serialize `windfarm`/`turbine_model` without triggering an async lazy load
+        # (MissingGreenlet). Re-fetching also refreshes the relation if windfarm_id
+        # or turbine_model_id changed in this update.
+        return await TurbineUnitService.get_turbine_unit(db, turbine_unit_id)
 
     @staticmethod
     async def delete_turbine_unit(db: AsyncSession, turbine_unit_id: int) -> Optional[TurbineUnit]:
-        result = await db.execute(select(TurbineUnit).where(TurbineUnit.id == turbine_unit_id))
+        # Eager-load relations before deleting: the DELETE endpoint serializes the
+        # removed row through the TurbineUnit response_model (needs windfarm/
+        # turbine_model). With expire_on_commit=False these stay populated after the
+        # commit, avoiding a post-delete async lazy load (MissingGreenlet).
+        result = await db.execute(
+            select(TurbineUnit)
+            .options(selectinload(TurbineUnit.windfarm), selectinload(TurbineUnit.turbine_model))
+            .where(TurbineUnit.id == turbine_unit_id)
+        )
         db_turbine_unit = result.scalar_one_or_none()
 
         if not db_turbine_unit:
