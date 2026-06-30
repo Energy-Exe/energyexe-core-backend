@@ -186,10 +186,23 @@ class PerformanceAnomalyService:
                     "mad_bin": row.get("mad_pu"),
                 }
 
-        # Apply bin stats
-        out["q50_bin"] = out["wind_bin_interval"].map(lambda iv: cap_map.get(iv, {}).get("q50_bin"))
-        out["q90_bin"] = out["wind_bin_interval"].map(lambda iv: cap_map.get(iv, {}).get("q90_bin"))
-        out["mad_bin"] = out["wind_bin_interval"].map(lambda iv: cap_map.get(iv, {}).get("mad_bin"))
+        # Apply bin stats. `wind_bin_interval` is a pandas Categorical (from
+        # pd.cut), and Series.map over a Categorical can return a Categorical-dtyped
+        # Series (pandas 2.x, when the mapped values are unique per category). That
+        # breaks the arithmetic below (`float * Categorical` → TypeError, the
+        # pipeline_anomaly_error). Coerce to numeric so q50/q90/mad are plain floats.
+        out["q50_bin"] = pd.to_numeric(
+            out["wind_bin_interval"].map(lambda iv: cap_map.get(iv, {}).get("q50_bin")),
+            errors="coerce",
+        )
+        out["q90_bin"] = pd.to_numeric(
+            out["wind_bin_interval"].map(lambda iv: cap_map.get(iv, {}).get("q90_bin")),
+            errors="coerce",
+        )
+        out["mad_bin"] = pd.to_numeric(
+            out["wind_bin_interval"].map(lambda iv: cap_map.get(iv, {}).get("mad_bin")),
+            errors="coerce",
+        )
 
         # Only classify where we have curve stats
         has_stats = out["q50_bin"].notna() & out["mad_bin"].notna()
