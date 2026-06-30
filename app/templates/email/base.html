@@ -92,13 +92,53 @@
             color: #666666;
             margin-top: 15px;
         }
+        .logo {
+            max-width: 180px;
+            height: auto;
+            display: inline-block;
+        }
+        .steps-heading {
+            font-weight: 600;
+            color: #333333;
+            margin: 0 0 12px;
+        }
+        .steps {
+            margin: 0 0 10px;
+            padding-left: 22px;
+            color: #555555;
+        }
+        .steps li {
+            margin-bottom: 10px;
+            padding-left: 4px;
+        }
+        .steps li strong {
+            color: #333333;
+        }
+        .notes-heading {
+            margin: 0 0 8px;
+            color: #555555;
+        }
+        .notes-list {
+            margin: 0 0 12px;
+            padding-left: 20px;
+            color: #888888;
+            font-size: 14px;
+        }
+        .notes-list li {
+            margin-bottom: 8px;
+        }
+        .notes-security {
+            margin: 0;
+            font-size: 13px;
+            color: #999999;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="email-wrapper">
             <div class="header">
-                <h1>{{ company_name }}</h1>
+                <img src="{{ client_portal_url }}/logo-energyexe-white.png" alt="{{ company_name }}" class="logo" width="180" />
             </div>
             <div class="content">
                 {% block content %}{% endblock %}
