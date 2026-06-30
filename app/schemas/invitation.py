@@ -3,19 +3,21 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
+
+from app.schemas.types import NormalizedEmailStr
 
 
 class InvitationCreate(BaseModel):
     """Schema for creating a single invitation."""
 
-    email: EmailStr
+    email: NormalizedEmailStr
 
 
 class BulkInvitationCreate(BaseModel):
     """Schema for creating bulk invitations."""
 
-    emails: List[EmailStr] = Field(..., min_length=1, max_length=100)
+    emails: List[NormalizedEmailStr] = Field(..., min_length=1, max_length=100)
 
 
 class InvitationAccept(BaseModel):

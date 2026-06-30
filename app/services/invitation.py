@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -46,12 +46,14 @@ class InvitationService:
         return result.scalar_one_or_none()
 
     async def get_by_email(self, email: str) -> Optional[Invitation]:
-        """Get pending invitation by email."""
+        """Get pending invitation by email (case-insensitive)."""
+        if not email:
+            return None
         result = await self.db.execute(
             select(Invitation)
             .options(joinedload(Invitation.invited_by))
             .where(
-                Invitation.email == email,
+                func.lower(Invitation.email) == email.strip().lower(),
                 Invitation.used_at.is_(None),
             )
         )
