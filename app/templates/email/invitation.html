@@ -3,20 +3,32 @@
 {% block title %}You're Invited to EnergyExe{% endblock %}
 
 {% block content %}
-<p class="greeting">Hello,</p>
+<p class="greeting">Welcome to EnergyExe</p>
 
 <div class="message">
-    <p><strong>{{ invited_by_name }}</strong> has invited you to join EnergyExe, a powerful energy data analytics platform.</p>
-    <p>Click the button below to create your account and get started.</p>
+    <p><strong>{{ invited_by_name }}</strong> has invited you to <strong>EnergyExe</strong> — the platform for monitoring the generation, performance, and portfolio health of your wind assets in one place.</p>
 </div>
+
+<p class="steps-heading">Getting started takes about a minute:</p>
+<ol class="steps">
+    <li><strong>Accept your invitation</strong> using the button below.</li>
+    <li><strong>Create your account</strong> — add your name, company, and a password.</li>
+    <li><strong>Sign in</strong> with your new credentials.</li>
+    <li>You'll land on your <strong>dashboard</strong>, ready to explore.</li>
+</ol>
 
 <div class="button-container">
     <a href="{{ invitation_url }}" class="button">Accept Invitation</a>
 </div>
 
 <div class="note">
-    <p><strong>Note:</strong> This invitation will expire in {{ expire_days }} days.</p>
-    <p>If you weren't expecting this invitation, you can safely ignore this email.</p>
+    <p class="notes-heading"><strong>A few practical notes</strong></p>
+    <ul class="notes-list">
+        <li>EnergyExe works best on the latest version of <strong>Chrome, Edge, Firefox, or Safari</strong>.</li>
+        <li>This invitation expires in <strong>{{ expire_days }} days</strong>.</li>
+        <li>Trouble signing in? Reply to this email or contact <a href="mailto:{{ support_email }}">{{ support_email }}</a> — we're happy to help.</li>
+    </ul>
+    <p class="notes-security">If you weren't expecting this invitation, you can safely ignore this email.</p>
 </div>
 
 <p class="url-fallback">

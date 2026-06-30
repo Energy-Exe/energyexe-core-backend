@@ -861,6 +861,11 @@ async def get_portfolio_revenue(
 
     farm_acc: Dict[int, Dict[str, Any]] = {}
     period_acc: Dict[Any, Dict[str, Any]] = {}
+    # Per-(farm, period) revenue preserved for the stacked monthly contribution
+    # chart on the Revenue tab (EPR-62). The bucket_query already returns one row
+    # per (windfarm, period), so this is a straight pass-through; we filter to the
+    # top farms after by_farm is ranked to keep the payload small.
+    farm_period_acc: Dict[Any, Dict[str, Any]] = {}
 
     for r in rows:
         gen = float(r.gen_sum or 0)
@@ -889,6 +894,13 @@ async def get_portfolio_revenue(
         p["price_sum"] += psum
         p["hours"] += hours
         p["farms"].add(r.windfarm_id)
+
+        fp = farm_period_acc.setdefault(
+            (r.windfarm_id, r.period),
+            {"windfarm_id": r.windfarm_id, "name": r.windfarm_name, "period": r.period, "gen": 0.0, "rev": 0.0},
+        )
+        fp["gen"] += gen
+        fp["rev"] += rev
 
     avg_market_price = (total_price_sum / total_hours) if total_hours > 0 else 0.0
     avg_achieved_price = (total_rev / total_gen) if total_gen > 0 else 0.0
@@ -924,6 +936,23 @@ async def get_portfolio_revenue(
             "farm_count": len(p["farms"]),
         })
 
+    # Per-(farm, period) revenue for the top farms (same ranking as by_farm), so
+    # the Revenue tab can render a stacked monthly contribution chart. Sorted by
+    # period then name; ISO period strings sort chronologically.
+    top_farm_ids = {f["windfarm_id"] for f in by_farm[:20]}
+    by_farm_period = [
+        {
+            "period": v["period"].isoformat() if v["period"] else None,
+            "windfarm_id": v["windfarm_id"],
+            "name": v["name"],
+            "total_generation_mwh": round(v["gen"], 2),
+            "total_revenue_eur": round(v["rev"], 2),
+        }
+        for v in farm_period_acc.values()
+        if v["windfarm_id"] in top_farm_ids
+    ]
+    by_farm_period.sort(key=lambda x: (x["period"] or "", x["name"] or ""))
+
     return {
         'start_date': start_date.isoformat(),
         'end_date': end_date.isoformat(),
@@ -936,6 +965,7 @@ async def get_portfolio_revenue(
         'farm_count': farm_count,
         'by_farm': by_farm[:20],
         'by_period': by_period,
+        'by_farm_period': by_farm_period,
     }
 
 
@@ -1032,6 +1062,7 @@ async def get_portfolio_capture_rates(
         WITH scope AS (
             SELECT w.id AS windfarm_id, w.name AS windfarm_name, w.bidzone_id,
                 b.code AS bidzone_code,
+                b.name AS bidzone_name,
                 CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END AS pref_source
             FROM windfarms w
             LEFT JOIN bidzones b ON w.bidzone_id = b.id
@@ -1042,6 +1073,7 @@ async def get_portfolio_capture_rates(
             s.windfarm_name,
             s.bidzone_id,
             s.bidzone_code,
+            s.bidzone_name,
             SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation,
             SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) as total_revenue,
             CASE
@@ -1063,7 +1095,7 @@ async def get_portfolio_capture_rates(
          AND p.hour >= :start_date
          AND p.hour < :end_date
          AND p.day_ahead_price IS NOT NULL
-        GROUP BY g.windfarm_id, s.windfarm_name, s.bidzone_id, s.bidzone_code
+        GROUP BY g.windfarm_id, s.windfarm_name, s.bidzone_id, s.bidzone_code, s.bidzone_name
         HAVING SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
     """)
 
@@ -1078,6 +1110,7 @@ async def get_portfolio_capture_rates(
             'windfarm_id': row.windfarm_id,
             'name': row.windfarm_name,
             'bidzone_code': row.bidzone_code,
+            'bidzone_name': row.bidzone_name,
             'total_generation_mwh': round(float(row.total_generation), 2),
             'total_revenue_eur': round(float(row.total_revenue), 2),
             'achieved_price': round(achieved, 2),
@@ -1092,9 +1125,16 @@ async def get_portfolio_capture_rates(
     elif sort_by == "generation":
         farms.sort(key=lambda x: x['total_generation_mwh'], reverse=True)
 
-    # Calculate statistics
+    # Portfolio capture-rate statistics. The average is GENERATION-WEIGHTED —
+    # (Σ revenue / Σ generation) / market price — so large farms count
+    # proportionally rather than a flat per-farm mean. This matches the /revenue
+    # endpoint's avg_capture_rate and the "Weighted avg. capture rate" label on
+    # the portfolio Overview card (EPR-70). Min/max stay per-farm extremes.
     capture_rates = [f['capture_rate'] for f in farms if f['capture_rate'] > 0]
-    avg_capture_rate = sum(capture_rates) / len(capture_rates) if capture_rates else 0
+    total_gen_all = sum(f['total_generation_mwh'] for f in farms)
+    total_rev_all = sum(f['total_revenue_eur'] for f in farms)
+    weighted_achieved = (total_rev_all / total_gen_all) if total_gen_all > 0 else 0
+    avg_capture_rate = (weighted_achieved / market_avg * 100) if market_avg > 0 else 0
     max_capture_rate = max(capture_rates) if capture_rates else 0
     min_capture_rate = min(capture_rates) if capture_rates else 0
 

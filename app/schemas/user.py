@@ -3,13 +3,15 @@
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
+
+from app.schemas.types import NormalizedEmailStr
 
 
 class UserBase(BaseModel):
     """Base user schema."""
 
-    email: EmailStr
+    email: NormalizedEmailStr
     username: str = Field(..., min_length=3, max_length=100)
     first_name: Optional[str] = Field(None, max_length=100)
     last_name: Optional[str] = Field(None, max_length=100)
@@ -25,7 +27,7 @@ class UserCreate(UserBase):
 class ClientRegister(BaseModel):
     """Schema for client self-registration."""
 
-    email: EmailStr
+    email: NormalizedEmailStr
     password: str = Field(..., min_length=8, max_length=100)
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
@@ -36,7 +38,7 @@ class ClientRegister(BaseModel):
 class UserUpdate(BaseModel):
     """Schema for updating a user."""
 
-    email: Optional[EmailStr] = None
+    email: Optional[NormalizedEmailStr] = None
     username: Optional[str] = Field(None, min_length=3, max_length=100)
     first_name: Optional[str] = Field(None, max_length=100)
     last_name: Optional[str] = Field(None, max_length=100)
@@ -102,14 +104,14 @@ class EmailVerification(BaseModel):
 class ResendVerification(BaseModel):
     """Schema for resending verification email."""
 
-    email: EmailStr
+    email: NormalizedEmailStr
 
 
 # Password reset schemas
 class ForgotPassword(BaseModel):
     """Schema for forgot password request."""
 
-    email: EmailStr
+    email: NormalizedEmailStr
     portal: Literal["client", "admin"] = "client"
 
 

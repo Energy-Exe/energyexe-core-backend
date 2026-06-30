@@ -953,6 +953,106 @@ class TestUserRejection:
 
 
 # ============================================================================
+# EMAIL CASE-INSENSITIVITY TESTS
+# ============================================================================
+
+
+class TestEmailCaseInsensitivity:
+    """Emails must be stored lowercased and looked up case-insensitively so a
+    casing mismatch (or a typo'd stored address) never silently drops a
+    password-reset / verification email."""
+
+    def test_get_by_email_is_case_insensitive(self, test_session):
+        """get_by_email finds a user regardless of the casing supplied."""
+        import asyncio
+        from app.services.user import UserService
+
+        async def run():
+            user = User(
+                email="lower.case@example.com",
+                username="lowercaseuser",
+                hashed_password=get_password_hash("TestPass123!"),
+                role="client",
+                is_active=True,
+            )
+            test_session.add(user)
+            await test_session.commit()
+
+            user_service = UserService(test_session)
+            # Different casing + surrounding whitespace must still match.
+            found = await user_service.get_by_email("  LOWER.CASE@EXAMPLE.COM  ")
+            assert found is not None
+            assert found.username == "lowercaseuser"
+            # Empty input is a clean miss, not an error.
+            assert await user_service.get_by_email("") is None
+
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_register_client_normalizes_email(self, client_registration_data, test_session):
+        """Registration stores the email lowercased + trimmed."""
+        import asyncio
+        from app.services.user import UserService
+        from app.schemas.user import ClientRegister
+
+        async def run():
+            data = client_registration_data.copy()
+            data["email"] = "  MixedCase@Example.COM  "
+            client_data = ClientRegister(**data)
+            # Schema normalizes before the service even sees it.
+            assert client_data.email == "mixedcase@example.com"
+
+            user, _ = await UserService(test_session).register_client(client_data)
+            assert user.email == "mixedcase@example.com"
+
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_register_client_duplicate_email_different_case(self, test_session):
+        """A second registration that differs only by casing is rejected."""
+        import asyncio
+        import pytest
+        from app.services.user import UserService
+        from app.schemas.user import ClientRegister
+        from app.core.exceptions import ValidationException
+
+        async def run():
+            user_service = UserService(test_session)
+            base = {
+                "password": "SecurePass123!",
+                "first_name": "Case",
+                "last_name": "Test",
+                "company_name": "Acme",
+            }
+            await user_service.register_client(
+                ClientRegister(email="dupe@example.com", **base)
+            )
+            with pytest.raises(ValidationException):
+                await user_service.register_client(
+                    ClientRegister(email="DUPE@EXAMPLE.COM", **base)
+                )
+
+        asyncio.get_event_loop().run_until_complete(run())
+
+    @patch(
+        "app.api.v1.endpoints.auth.email_service.send_password_reset_email",
+        new_callable=AsyncMock,
+    )
+    def test_forgot_password_case_insensitive_email(
+        self, mock_send_email, client: TestClient, user_with_reset_token
+    ):
+        """Forgot-password matches the account even when the email casing
+        differs from what is stored (the Kasper Grytnes regression)."""
+        user, _ = user_with_reset_token  # stored email: reset@example.com
+
+        response = client.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": "RESET@EXAMPLE.COM"},
+        )
+
+        assert response.status_code == 200
+        mock_send_email.assert_called_once()
+
+
+# ============================================================================
 # USER FEATURES TESTS
 # ============================================================================
 

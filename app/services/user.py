@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import structlog
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -31,8 +31,17 @@ class UserService:
         return result.scalar_one_or_none()
 
     async def get_by_email(self, email: str) -> Optional[User]:
-        """Get user by email."""
-        result = await self.db.execute(select(User).where(User.email == email))
+        """Get user by email (case-insensitive).
+
+        Emails are stored lowercased (see NormalizedEmailStr), but logins and
+        legacy data may arrive with different casing, so we always compare on
+        lower(email) to avoid silent lookup misses (e.g. password reset).
+        """
+        if not email:
+            return None
+        result = await self.db.execute(
+            select(User).where(func.lower(User.email) == email.strip().lower())
+        )
         return result.scalar_one_or_none()
 
     async def get_by_username(self, username: str) -> Optional[User]:
