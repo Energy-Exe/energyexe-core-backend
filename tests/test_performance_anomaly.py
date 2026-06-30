@@ -102,6 +102,37 @@ class TestClassifyHours:
         lost_eur = result.loc[0, "lost_eur"]
         assert abs(lost_eur - lost_mwh * 50.0) < 0.01
 
+    def test_full_bin_coverage_no_categorical_error(self):
+        """Regression: pipeline_anomaly_error 'float * Categorical'.
+
+        `wind_bin_interval` is a pandas Categorical (pd.cut). Series.map over it
+        returns a Categorical-dtyped Series when every category maps to a distinct
+        value (pandas 2.x). That made q50_bin/q90_bin/mad_bin categorical, so the
+        downstream arithmetic (`UNDERPERF_MAD_K * mad_bin`, `q50_bin * rated_mw`)
+        raised TypeError. This only surfaced for windfarms whose capability stats
+        covered the bins one-to-one (e.g. wf 7200, 2018/2020) — partial coverage
+        leaves duplicate Nones, which keeps the map non-categorical. Here every bin
+        maps to a unique value to reproduce the failing case.
+        """
+        # Capability stats for every bin pd.cut produces (2..25 m/s), each with
+        # strictly unique q50/q90/mad so the .map() stays Categorical.
+        records = []
+        for i, left in enumerate(range(2, 25)):
+            records.append({
+                "wind_bin": pd.Interval(float(left), float(left + 1), closed="left"),
+                "q50_pu": 0.30 + 0.01 * i,
+                "q90_pu": 0.60 + 0.011 * i,
+                "mad_pu": 0.020 + 0.001 * i,
+                "sample_count": 500,
+            })
+        cap = pd.DataFrame(records)
+        df = _make_hourly_df(n=60)
+
+        # Must not raise; loss columns must be numeric (not Categorical).
+        result = PerformanceAnomalyService.classify_hours(df, cap, rated_mw=100.0)
+        assert result["expected_mwh"].dtype.kind == "f"
+        assert (result["lost_mwh"] >= 0).all()
+
 
 class TestAssignRunIds:
     """Test consecutive underperformance run grouping."""
