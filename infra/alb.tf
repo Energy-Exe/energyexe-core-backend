@@ -3,6 +3,12 @@ resource "aws_lb" "this" {
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
   subnets            = data.aws_subnets.default.ids
+
+  # Default is 60s. Synchronous import-job triggers (POST /import-jobs/trigger/*)
+  # run the import in-request; ENTSOE daily takes ~66s, so a 60s idle timeout
+  # returned spurious 504s to the GitHub scheduled-imports curl even though the
+  # import completed. 300s gives long imports headroom while keeping a sane ceiling.
+  idle_timeout = 300
 }
 
 resource "aws_lb_target_group" "api" {
