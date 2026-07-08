@@ -39,6 +39,7 @@ from .p50_target import P50Target
 from .peer_group_aggregate import PeerGroupAggregate
 from .performance_anomaly import PerformanceAnomaly
 from .performance_summary import PerformanceSummary
+from .platform_update import PlatformUpdate
 from .portfolio import Portfolio, PortfolioItem, PortfolioType, UserFavorite
 from .power_curve_bin import PowerCurveBin
 from .ppa import PPA
@@ -80,6 +81,7 @@ __all__ = [
     "MarketBalanceArea",
     "MethodologySection",
     "Owner",
+    "PlatformUpdate",
     "PriceDataRaw",
     "PriceData",
     "Project",
