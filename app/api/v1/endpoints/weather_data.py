@@ -629,7 +629,7 @@ async def get_portfolio_weather_summary(
 
     params = {
         'start_date': start_date,
-        'end_date': end_date + timedelta(days=1),
+        'end_date': exclusive_end(end_date),
     }
     if windfarm_filter_ids:
         params['windfarm_ids'] = windfarm_filter_ids

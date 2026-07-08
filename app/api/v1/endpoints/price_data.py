@@ -792,7 +792,7 @@ async def get_portfolio_revenue(
     )
     sql_params: Dict[str, Any] = {
         'start_date': start_date,
-        'end_date': end_date + timedelta(days=1),
+        'end_date': exclusive_end(end_date),
     }
 
     # ONE pass over the joined dataset. Bucket per (windfarm, period); roll up
@@ -1006,7 +1006,7 @@ async def get_portfolio_capture_rates(
 
     base_params: Dict[str, Any] = {
         'start_date': start_date,
-        'end_date': end_date + timedelta(days=1),
+        'end_date': exclusive_end(end_date),
     }
     # Inline the scope ids as a literal int[] (not a bound param) so the planner
     # sees their cardinality and avoids the nested-loop plan; see
