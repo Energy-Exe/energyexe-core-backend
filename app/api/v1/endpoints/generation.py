@@ -10,6 +10,7 @@ from sqlalchemy import Integer
 from app.core.deps import get_current_active_user, get_db
 from app.models.user import User
 from app.services.unified_generation_service import UnifiedGenerationService
+from app.utils.date_bounds import exclusive_end
 from app.services.windfarm_scope_service import (
     PeerScopeParams,
     apply_analytics_work_mem,
@@ -611,7 +612,7 @@ async def get_portfolio_generation_stats(
     # Build base query for generation aggregation
     conditions = [
         GenerationData.hour >= start_date,
-        GenerationData.hour < end_date + timedelta(days=1),
+        GenerationData.hour < exclusive_end(end_date),
     ]
 
     windfarm_scope_ids = await resolve_windfarm_scope_ids(
@@ -748,7 +749,7 @@ async def get_portfolio_generation_timeseries(
     # Build base conditions
     conditions = [
         GenerationData.hour >= start_date,
-        GenerationData.hour < end_date + timedelta(days=1),
+        GenerationData.hour < exclusive_end(end_date),
     ]
 
     windfarm_scope_ids = await resolve_windfarm_scope_ids(
@@ -979,7 +980,7 @@ async def get_portfolio_performance(
 
     params = {
         'start_date': start_date,
-        'end_date': end_date + timedelta(days=1),
+        'end_date': exclusive_end(end_date),
         'hours': hours_in_period,
     }
 
@@ -1303,7 +1304,7 @@ async def get_portfolio_normalised_timeseries(
 
     params: Dict[str, Any] = {
         "start_date": start_date,
-        "end_date": end_date + timedelta(days=1),
+        "end_date": exclusive_end(end_date),
     }
 
     await apply_analytics_work_mem(db)
