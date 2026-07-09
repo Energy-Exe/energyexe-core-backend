@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
+from app.utils.date_bounds import exclusive_end
 from app.services.weather_data_service import WeatherDataService
 from app.services.weather_analytics_service import WeatherAnalyticsService
 from app.services.weather_correlation_service import WeatherCorrelationService
