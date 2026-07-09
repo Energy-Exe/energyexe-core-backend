@@ -33,6 +33,7 @@ from app.api.v1.endpoints import (
     owners,
     p50_targets,
     performance_pipeline,
+    platform_updates,
     portfolio,
     ppas,
     price_data,
@@ -173,6 +174,13 @@ api_router.include_router(
     methodology_sections.router,
     prefix="/methodology-sections",
     tags=["methodology-sections"],
+)
+
+# Platform updates (admin-authored announcements shown on the client dashboard)
+api_router.include_router(
+    platform_updates.router,
+    prefix="/platform-updates",
+    tags=["platform-updates"],
 )
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
