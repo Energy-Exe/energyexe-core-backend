@@ -32,12 +32,15 @@ if [ ! -f .env ]; then
     echo "Creating .env file for local development..."
     cat > .env << EOF
 # Local Development Configuration
-DATABASE_URL=postgresql+asyncpg://postgres:RwaN9FJDCgP2AhuALxZ4Wa7QfvbKXQ647AAickORJ0rq5N6lUG19UneFJJTJ9Jnv@146.235.201.245:5432/energyexe_db
+# Point at your local Postgres, or the STAGING RDS (prod is private since
+# 2026-07-15). Staging DSN: Secrets Manager energyexe/core-backend-staging/database-url
+DATABASE_URL=postgresql+asyncpg://postgres:CHANGE_ME@localhost:5432/energyexe_db
 
-# API Keys
-ENTSOE_API_KEY=3b00489d-a886-48a4-95ad-981da57f7b62
-ELEXON_API_KEY=ytitiohgylom033
-EIA_API_KEY=bLXfqlf12SKY6t6kIz03IKGgoTfTBxr9pOLKiZeZ
+# API Keys — real values live in AWS Secrets Manager (energyexe/core-backend/*);
+# never commit them here
+ENTSOE_API_KEY=
+ELEXON_API_KEY=
+EIA_API_KEY=
 
 # Local Valkey/Redis
 VALKEY_PUBLIC_HOST=localhost

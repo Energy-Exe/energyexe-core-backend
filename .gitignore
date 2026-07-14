@@ -197,3 +197,5 @@ generation_processing_logs/
 
 # Test runner artifacts
 test-results/
+.env.bak-pre-staging-2026-07-15
+infra/backups/
