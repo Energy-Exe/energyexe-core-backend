@@ -208,3 +208,35 @@ endpoint that raises and confirm the issue appears in GlitchTip with a
 - **Shell into the task** (debugging): enable ECS Exec later if needed, or run a
   one-off task with the same task def.
 - **Resize**: bump `task_cpu` / `task_memory` in terraform.tfvars, `terraform apply`.
+
+## RDS network access (changed 2026-07-15)
+
+**Prod `energyexedb` is PRIVATE; staging `energyexedb-staging` is PUBLIC**
+(user decision — laptop/dev work targets staging directly; prod DB access
+is a deliberate break-glass operation).
+
+The prod instance and its SG (`sg-08ce9488ba4aa1fde`, the VPC default SG)
+are **not Terraform-managed** — the flip was applied via CLI and is
+recorded here:
+
+```bash
+# revoked the three public 5432 ingress rules (backup: infra/backups/sg-08ce…json)
+aws ec2 revoke-security-group-ingress --group-id sg-08ce9488ba4aa1fde --protocol tcp --port 5432 --cidr 0.0.0.0/0
+aws ec2 revoke-security-group-ingress --group-id sg-08ce9488ba4aa1fde --protocol tcp --port 5432 --cidr 103.218.26.197/32
+aws ec2 revoke-security-group-ingress --group-id sg-08ce9488ba4aa1fde --protocol tcp --port 5432 --cidr 103.218.24.249/32
+aws rds modify-db-instance --db-instance-identifier energyexedb --no-publicly-accessible --apply-immediately
+```
+
+Remaining prod 5432 ingress is SG-to-SG only: backend service, GlitchTip,
+the scada-pipeline task, and the SSM bastion (`rds_from_bastion` in
+network.tf, gated by `bastion_security_group_id` in tfvars). Both master
+passwords were rotated the same day (secrets updated + services redeployed).
+
+Break-glass prod access: `energyexe-scada-pipeline/scripts/prod_tunnel.sh`
+(SSM port-forward via the stopped-by-default bastion; localhost:25432).
+Emergency rollback to public: `aws rds modify-db-instance
+--db-instance-identifier energyexedb --publicly-accessible
+--apply-immediately` + re-authorize rules from the backup JSON.
+
+Future hardening option (not done): `terraform import` the prod instance
+so `publicly_accessible` becomes declarative.

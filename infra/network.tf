@@ -88,3 +88,16 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_service" {
   to_port                      = 5432
   ip_protocol                  = "tcp"
 }
+
+# Break-glass: SSM bastion -> prod Postgres (prod is PRIVATE since
+# 2026-07-15). The bastion has no inbound rules and stays stopped; see
+# energyexe-scada-pipeline/scripts/prod_tunnel.sh for the runbook.
+resource "aws_vpc_security_group_ingress_rule" "rds_from_bastion" {
+  count                        = var.bastion_security_group_id == "" ? 0 : 1
+  security_group_id            = var.rds_security_group_id
+  description                  = "Postgres break-glass from SSM bastion"
+  referenced_security_group_id = var.bastion_security_group_id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+}

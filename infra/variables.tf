@@ -113,3 +113,9 @@ variable "alert_email" {
   type        = string
   default     = ""
 }
+
+variable "bastion_security_group_id" {
+  description = "SG of the SSM break-glass bastion allowed Postgres to the prod RDS (energyexe-scada-bastion; instance stays STOPPED between uses). Empty disables the rule. Prod RDS is PRIVATE since 2026-07-15 — this tunnel is the only operator path."
+  type        = string
+  default     = ""
+}
