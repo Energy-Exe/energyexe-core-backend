@@ -595,6 +595,11 @@ curtailment_delta_mwh, consumption_mwh, hours_scada/settlement/both
   measured wind; loss = potential − actual, attributed to
   downtime/curtailment/performance. Negative losses are real
   (over-performance) — keep them, don't clip.
+- **Curtailment attribution needs a power-setpoint signal, which only
+  Hill of Towie reports.** Kelmarsh/Penmanshiel (greenbyte) have no setpoint,
+  so their loss_curtailment_kwh is ~0 BY CONSTRUCTION — a signal gap, not
+  evidence of no curtailment; any curtailment they had lands in the
+  performance/downtime buckets. Never compare curtailment across farms.
 - **Config epochs**: Hill of Towie turbines had an AeroUp retrofit —
   compare power curves per `config` (baseline vs aeroup), never blend epochs.
 
