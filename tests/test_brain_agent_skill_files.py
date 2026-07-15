@@ -130,3 +130,66 @@ def test_brain_agent_system_prompts_list_all_19_schema_names():
         # INACTIVE schemas flagged so the agent excludes them from active findings.
         assert "INACTIVE" in text, f"INACTIVE semantics missing from {fname}"
         assert "SUPPRESSED" in text, f"SUPPRESSED semantics missing from {fname}"
+
+
+# ── SCADA gold-layer knowledgebase (schema `scada`) ──
+
+
+def test_scada_skill_covers_all_gold_tables():
+    """Canary: every scada gold table stays documented in SKILL_SCADA."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA
+
+    for table in (
+        "dim_farm",
+        "dim_turbine",
+        "dim_turbine_config",
+        "dim_event_category",
+        "dim_signal_capability",
+        "completeness_daily",
+        "energy_daily",
+        "availability_daily",
+        "losses_daily",
+        "farm_kpis_daily",
+        "power_curve_bins",
+        "power_curve_bins_yearly",
+        "losses_hourly",
+        "revenue_impact_daily",
+        "settlement_recon_daily",
+        "turbine_performance_yearly",
+    ):
+        assert f"scada.{table}" in SKILL_SCADA, f"scada.{table} missing from SKILL_SCADA"
+
+
+def test_scada_skill_pins_the_conventions():
+    """The load-bearing caveats: schema-qualify, units, ratio-of-sums, linkage."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA
+
+    assert "schema-qualify" in SKILL_SCADA
+    assert "hill_of_towie" in SKILL_SCADA
+    assert "kelmarsh" in SKILL_SCADA
+    assert "penmanshiel" in SKILL_SCADA
+    assert "7309" in SKILL_SCADA  # Hill of Towie windfarm_id
+    assert "ratio-of-sums" in SKILL_SCADA
+    assert "kWh" in SKILL_SCADA and "MWh" in SKILL_SCADA
+    assert "pre_cod" in SKILL_SCADA
+    assert "IEC 61400-26" in SKILL_SCADA
+
+
+def test_scada_queries_steer_to_rollups():
+    """Efficiency rules: pre-aggregated tables first, indexed keys, x-schema join."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA_QUERIES
+
+    assert "farm_kpis_daily" in SKILL_SCADA_QUERIES
+    assert "revenue_impact_daily" in SKILL_SCADA_QUERIES
+    assert "settlement_recon_daily" in SKILL_SCADA_QUERIES
+    assert "public.windfarms" in SKILL_SCADA_QUERIES  # cross-schema template
+    assert "never AVG" in SKILL_SCADA_QUERIES or "NEVER AVG" in SKILL_SCADA_QUERIES
+
+
+def test_scada_content_stays_out_of_unconditional_skills():
+    """SCADA text must live ONLY in the gated files — the static skill strings
+    are written to every sandbox including prod, where schema scada may not
+    exist yet."""
+    for blob in (SKILL_SCHEMA, SKILL_QUERIES, SKILL_DOMAIN, SKILL_SOURCES):
+        assert "scada." not in blob
+        assert "hill_of_towie" not in blob

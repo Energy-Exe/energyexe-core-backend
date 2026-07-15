@@ -92,3 +92,65 @@ def test_list_tool_result_content_is_flattened():
 
     out = BrainAgentService._convert_sdk_messages(sdk_messages)
     assert out[0]["toolCalls"][0]["result"] == "line1 line2"
+
+
+# ── SCADA gating (schema-presence check + prompt injection) ──
+
+
+class _FakeResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar(self):
+        return self._value
+
+
+class _FakeDB:
+    def __init__(self, value=None, raise_exc=False):
+        self._value = value
+        self._raise = raise_exc
+
+    async def execute(self, *_args, **_kwargs):
+        if self._raise:
+            raise RuntimeError("connection refused")
+        return _FakeResult(self._value)
+
+
+async def test_scada_schema_present_true_when_dim_farm_exists():
+    svc = BrainAgentService(db=_FakeDB(value=1))
+    assert await svc._scada_schema_present() is True
+
+
+async def test_scada_schema_present_false_when_schema_absent():
+    svc = BrainAgentService(db=_FakeDB(value=None))
+    assert await svc._scada_schema_present() is False
+
+
+async def test_scada_schema_present_false_on_db_error():
+    # Best-effort: a failing check must degrade to "no scada", never raise.
+    svc = BrainAgentService(db=_FakeDB(raise_exc=True))
+    assert await svc._scada_schema_present() is False
+
+
+def test_system_prompt_scada_lines_injected_when_enabled():
+    prompt = BrainAgentService._build_system_prompt(scada_enabled=True)
+    assert "skill_scada.md" in prompt
+    assert "skill_scada_queries.md" in prompt
+    assert "{{SCADA_SKILL_LINES}}" not in prompt
+
+
+def test_system_prompt_scada_lines_absent_when_disabled():
+    # Prod before the scada cut: no placeholder residue, no scada mention.
+    prompt = BrainAgentService._build_system_prompt(scada_enabled=False)
+    assert "skill_scada" not in prompt
+    assert "{{SCADA_SKILL_LINES}}" not in prompt
+
+
+def test_client_prompt_never_mentions_scada():
+    # The client surface has no scada grants; its prompt file carries no
+    # placeholder, so the flag must be a no-op there either way.
+    for enabled in (True, False):
+        prompt = BrainAgentService._build_system_prompt(
+            prompt_file="brain_agent_system_client.md", scada_enabled=enabled
+        )
+        assert "skill_scada" not in prompt

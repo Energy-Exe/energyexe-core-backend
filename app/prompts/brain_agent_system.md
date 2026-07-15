@@ -140,6 +140,7 @@ Your **sandbox working directory** contains helper files. Use **relative paths o
 - `cat skill_domain.md` — energy domain knowledge (CF, curtailment, capture rate, bidzones, PPAs)
 - `cat skill_sources.md` — data source capabilities by country, currency handling
 - `cat skill_methodology.md` — the platform's published methodology (data sources, normalisation, metric definitions) as shown to clients; use it when asked how numbers are computed
+{{SCADA_SKILL_LINES}}
 - `python3 db.py "SELECT ..."` — run SQL queries (relative path, NOT /app/db.py)
 
 **IMPORTANT:** These files are in your sandbox, NOT in `/app/`. Always use `cat skill_domain.md` NOT `cat /app/skill_domain.md`. Always use `python3 db.py` NOT `python3 /app/db.py`.

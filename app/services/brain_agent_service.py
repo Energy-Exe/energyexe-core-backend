@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from claude_agent_sdk import (
@@ -36,6 +36,8 @@ from app.services.brain_agent_skill_files import (
     REPORT_PDF_PY,
     SKILL_DOMAIN,
     SKILL_QUERIES,
+    SKILL_SCADA,
+    SKILL_SCADA_QUERIES,
     SKILL_SCHEMA,
     SKILL_SOURCES,
 )
@@ -91,7 +93,7 @@ class SSEEvent:
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
 
 # Files placed in the sandbox at session creation — skip when scanning for agent output
-SANDBOX_SEED_FILES = {"db.py", "eexe_style.py", "report_pdf.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md", "skill_methodology.md"}
+SANDBOX_SEED_FILES = {"db.py", "eexe_style.py", "report_pdf.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md", "skill_methodology.md", "skill_scada.md", "skill_scada_queries.md"}
 
 # Working file extensions — scripts the agent writes to execute, not user-facing output
 WORKING_FILE_EXTENSIONS = {".py", ".sh", ".bash", ".sql"}
@@ -556,6 +558,27 @@ class BrainAgentService:
             if s.user_id == user_id
         ]
 
+    async def _scada_schema_present(self) -> bool:
+        """True iff the SCADA gold schema exists in the connected database.
+
+        Gates the scada skill files + prompt lines: present on staging today,
+        on prod only after the scada prod cut, absent in local dev unless the
+        pipeline has published there. Best effort — session creation must
+        never fail on this check.
+        """
+        try:
+            result = await self.db.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'scada' AND table_name = 'dim_farm' "
+                    "LIMIT 1"
+                )
+            )
+            return result.scalar() is not None
+        except Exception as exc:
+            logger.warning("brain_agent_scada_check_failed", error=str(exc))
+            return False
+
     async def _get_or_create_session(
         self,
         user_id: int,
@@ -598,6 +621,12 @@ class BrainAgentService:
         from app.services.brain_agent_repo_manager import get_repo_dirs
         repo_dirs_str = [] if source == "client" else get_repo_dirs()
 
+        # SCADA gold layer (schema `scada`): admin surface only, and only when
+        # the schema actually exists in the connected DB (staging today; prod
+        # only after the scada prod cut) — the agent must never be taught
+        # tables it can't query.
+        scada_enabled = source != "client" and await self._scada_schema_present()
+
         system_prompt = self._build_system_prompt(
             user_name,
             repo_dirs=repo_dirs_str,
@@ -605,6 +634,7 @@ class BrainAgentService:
             user_first_name=user_first_name,
             user_company_name=user_company_name,
             user_id=user_id,
+            scada_enabled=scada_enabled,
         )
 
         # Write db.py helper script and skill files to sandbox
@@ -618,6 +648,9 @@ class BrainAgentService:
         (work_dir / "skill_queries.md").write_text(SKILL_QUERIES)
         (work_dir / "skill_domain.md").write_text(SKILL_DOMAIN)
         (work_dir / "skill_sources.md").write_text(SKILL_SOURCES)
+        if scada_enabled:
+            (work_dir / "skill_scada.md").write_text(SKILL_SCADA)
+            (work_dir / "skill_scada_queries.md").write_text(SKILL_SCADA_QUERIES)
 
         # DB-driven methodology (client-ui #177): compose the admin-editable
         # methodology sections into a skill file so the agent answers
@@ -1049,10 +1082,22 @@ class BrainAgentService:
         user_first_name: Optional[str] = None,
         user_company_name: Optional[str] = None,
         user_id: Optional[int] = None,
+        scada_enabled: bool = False,
     ) -> str:
         """Build the system prompt for the Brain Agent."""
         prompt = cls._load_prompt_template(prompt_file)
         prompt = prompt.replace("{{CURRENT_DATE}}", date.today().isoformat())
+        # Placeholder only exists in the admin prompt; skill files are written
+        # to the sandbox iff scada_enabled (schema present in this DB).
+        scada_lines = (
+            "- `cat skill_scada.md` — SCADA 10-minute turbine data (Postgres schema "
+            "`scada`): 3 research farms, availability/losses/power curves/revenue impact\n"
+            "- `cat skill_scada_queries.md` — efficient SCADA query patterns "
+            "(pre-aggregated roll-ups, cross-schema joins to public)"
+            if scada_enabled
+            else ""
+        )
+        prompt = prompt.replace("{{SCADA_SKILL_LINES}}", scada_lines)
         prompt = prompt.replace(
             "{{USER_NAME}}",
             f"Currently helping: {user_name}" if user_name else "",

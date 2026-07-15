@@ -490,6 +490,248 @@ DB data is authoritative. WebSearch data must be labeled "According to [source]"
 """
 
 
+# SCADA gold-layer knowledgebase (schema `scada`). Written to the sandbox ONLY
+# when the scada schema exists in the connected database (staging today; prod
+# after the scada prod cut) and only for admin sessions — see
+# brain_agent_service._get_or_create_session. Source of truth for this text:
+# energyexe-scada-pipeline scada_pipeline/gold/schema.py + PLAN.md rules G1-G11.
+SKILL_SCADA = """# SCADA Turbine Data (schema `scada`)
+
+10-minute turbine SCADA data for 3 research wind farms, processed by the
+EnergyExe SCADA pipeline into pre-aggregated "gold" tables. Lives in Postgres
+schema `scada` — it is NOT on the default search_path, so ALWAYS
+schema-qualify: `scada.dim_farm`, never `dim_farm`.
+
+## Farms & identity
+
+- `farm` (slug, the join key everywhere): `hill_of_towie` (21 turbines,
+  Scotland, data 2016 → 2026-04), `kelmarsh` (6, England, 2016 → 2024),
+  `penmanshiel` (14, Scotland, 2016 → 2024). Static research datasets — do
+  not expect current data.
+- `turbine` = short code (`T01`…); `(farm, turbine)` is the natural key.
+- Platform link: `dim_farm.windfarm_id` → `public.windfarms.id`. Only
+  Hill of Towie is linked (windfarm_id 7309). Kelmarsh and Penmanshiel are
+  NOT platform windfarms — for them, everything lives in schema scada only.
+
+## Dimensions
+
+**scada.dim_farm** (PK farm): name, tz (IANA, all Europe/London), country,
+source_format (siemens_wps|greenbyte), windfarm_id (nullable → public.windfarms.id),
+bidzone (EIC), n_turbines, rated_kw_total
+**scada.dim_turbine** (PK farm,turbine): title, oem, model, rated_kw,
+hub_height_m, rotor_diameter_m, lat, lon, cod (commercial operation date)
+**scada.dim_turbine_config** (PK farm,turbine,config): SCD2 config epochs
+(`baseline`/`aeroup` retrofit), valid_from/valid_to (NULL = open epoch)
+**scada.dim_event_category** (PK source_format,category): maps event categories →
+is_available (bool), loss_bucket (forced/scheduled/external/requested/
+environment/derating/none), precedence (lower wins overlaps)
+**scada.dim_signal_capability** (PK farm,signal): status (reported|all_null|absent),
+null_pct, first_year, last_year — CHECK THIS before trusting a signal exists
+for a farm.
+
+## Daily turbine facts — PK (farm, turbine, date_local), index (farm, date_local)
+
+**scada.completeness_daily**: expected_intervals, rows_present, rows_valid_core,
+rows_qc_clean, completeness_pct, pre_cod
+**scada.energy_daily**: energy_kwh, energy_method (meter|power_integral|mixed|none),
+energy_basis (net|export), meter_net_kwh, meter_export_kwh, meter_import_kwh,
+integral_kwh, intervals_meter/integral/gap, pre_cod. Gaps are counted, never
+scaled — energy_kwh is what was measured, not an estimate.
+**scada.availability_daily**: method (timer_based|event_based), expected_h,
+available_h, unavailable_h, unaccounted_h, generating_h, availability_pct,
+IEC unavailability split: unavail_forced_h / unavail_scheduled_h /
+unavail_external_h / unavail_requested_h / unavail_unclassified_h, pre_cod
+**scada.losses_daily**: method, potential_kwh (epoch power curve × measured wind),
+actual_kwh, loss_total_kwh (potential − actual, negatives kept = over-performance),
+loss_downtime_kwh, loss_curtailment_kwh, loss_performance_kwh,
+intervals_attributed/no_curve/gap, pre_cod
+
+## Farm roll-up — USE THIS for farm-level questions
+
+**scada.farm_kpis_daily** (PK farm,date_local; index date_local): n_turbines,
+n_reporting, completeness_pct, energy_kwh, method mixes (n_meter/n_integral/
+n_mixed/n_none, n_timer/n_event/n_signal), available_h, unavailable_h,
+generating_h, availability_pct, potential_kwh, loss_total/downtime/
+curtailment/performance_kwh, capacity_kw, capacity_factor.
+Pre-COD turbine-days are EXCLUDED (commercial fleet only) and pct columns are
+correct ratio-of-sums — never recompute farm pct by averaging turbine rows.
+
+## Power curves & yearly performance
+
+**scada.power_curve_bins** (PK farm,turbine,config,ws_bin): ws_bin = 0.5 m/s bin
+lower edge; n, power_mean_kw, power_p50_kw, power_std_kw, ws_mean_ms
+**scada.power_curve_bins_yearly**: same + year (degradation raw material)
+**scada.turbine_performance_yearly** (PK farm,turbine,config,year): aep_ref_mwh,
+aep_epoch_mwh, performance_index (1.0 = epoch average), bins_used,
+intervals_used, ws_coverage_pct (< ~90 ⇒ index unreliable — say so)
+
+## Value lane (money spine — Hill of Towie only)
+
+**scada.losses_hourly** (PK farm,hour_utc; index farm,date_local): farm-hour
+loss frame for price joins. hour_utc is tz-aware UTC; energy_kwh,
+potential_kwh, actual_kwh, loss buckets, n_turbines, intervals_*
+**scada.revenue_impact_daily** (PK farm,date_local): £ by loss cause ×
+day-ahead price. windfarm_id, currency (GBP), price_source, hours_priced/
+unpriced, price_mean_gbp_mwh, energy_mwh, revenue_gross_gbp,
+revenue_downtime_gbp, revenue_curtailment_gbp (negative on negative-price
+hours), revenue_performance_gbp (negative = over-performance),
+revenue_loss_total_gbp
+**scada.settlement_recon_daily** (PK farm,date_local): SCADA (turbine
+terminals) vs settlement boundary meter. scada_energy_mwh,
+settlement_metered_mwh, energy_delta_mwh (scada − settlement; small stable
+positive ≈ 2% = quantified site loss, this is expected not an error),
+energy_delta_pct, scada_curtailment_mwh, settlement_curtailed_mwh,
+curtailment_delta_mwh, consumption_mwh, hours_scada/settlement/both
+
+## Domain semantics
+
+- **Availability** is IEC 61400-26 time-based SYSTEM availability — every stop
+  counts against it regardless of cause. Two lanes: Hill of Towie
+  (siemens_wps) is timer_based — OEM timers, unavailability lands in
+  unavail_unclassified_h; Kelmarsh/Penmanshiel (greenbyte) are event_based —
+  IEC categories from dim_event_category give the forced/scheduled/external/
+  requested split.
+- **Losses**: potential = the turbine's own epoch power curve applied to
+  measured wind; loss = potential − actual, attributed to
+  downtime/curtailment/performance. Negative losses are real
+  (over-performance) — keep them, don't clip.
+- **Config epochs**: Hill of Towie turbines had an AeroUp retrofit —
+  compare power curves per `config` (baseline vs aeroup), never blend epochs.
+
+## Units & conventions
+
+- `date_local` = farm-local civil day (Europe/London). DST days have 138 or
+  150 ten-min intervals, not 144 — so pct over multiple days = ratio-of-sums
+  (SUM(numerator)/SUM(denominator)), NEVER AVG of daily pct.
+- Energy is **kWh** in turbine/daily/hourly tables, **MWh** in the money
+  tables (revenue_impact_daily, settlement_recon_daily). Divide kWh by 1000
+  before comparing.
+- Money is **GBP** (check `currency`); prices £/MWh. State currency.
+- `pre_cod` marks pre-commissioning days — excluded from farm KPIs; exclude
+  it in turbine-level analysis too unless explicitly asked.
+- Every row carries provenance: pipeline_version, computed_at.
+
+Query patterns: `cat skill_scada_queries.md`.
+"""
+
+SKILL_SCADA_QUERIES = """# SCADA Query Patterns (schema `scada`)
+
+## Efficiency rules
+
+1. Use the pre-aggregated tables: `farm_kpis_daily` for farm-level,
+   `losses_hourly` for hourly, `revenue_impact_daily` for money. Never
+   re-aggregate 142k turbine-day rows when a roll-up already exists.
+2. Farm-level percentages come from `farm_kpis_daily` (ratio-of-sums,
+   pre-COD handled). Multi-day pct = SUM/SUM, never AVG(pct).
+3. Always filter on the indexed keys: `farm` + `date_local` (or `hour_utc`).
+4. Always schema-qualify (`scada.`); cross-schema joins to `public.*` work
+   in the same query.
+
+## Monthly farm KPIs
+
+```sql
+SELECT date_trunc('month', date_local) AS month,
+       round(SUM(energy_kwh)::numeric / 1000, 1)            AS energy_mwh,
+       round((SUM(available_h) / NULLIF(SUM(available_h) + SUM(unavailable_h), 0))::numeric * 100, 2) AS availability_pct,
+       round((SUM(energy_kwh) / NULLIF(SUM(capacity_kw) * 24, 0))::numeric * 100, 2) AS capacity_factor_pct,
+       round(SUM(loss_total_kwh)::numeric / 1000, 1)        AS loss_mwh
+FROM scada.farm_kpis_daily
+WHERE farm = 'hill_of_towie' AND date_local >= '2024-01-01' AND date_local < '2025-01-01'
+GROUP BY 1 ORDER BY 1
+```
+
+## Loss Pareto by bucket (which loss type dominates)
+
+```sql
+SELECT round(SUM(loss_downtime_kwh)::numeric / 1000, 1)    AS downtime_mwh,
+       round(SUM(loss_curtailment_kwh)::numeric / 1000, 1) AS curtailment_mwh,
+       round(SUM(loss_performance_kwh)::numeric / 1000, 1) AS performance_mwh
+FROM scada.farm_kpis_daily
+WHERE farm = 'kelmarsh' AND date_local BETWEEN '2023-01-01' AND '2023-12-31'
+```
+
+## Worst loss days / worst turbines
+
+```sql
+SELECT date_local, round((loss_total_kwh/1000)::numeric,1) AS loss_mwh,
+       round((loss_downtime_kwh/1000)::numeric,1) AS downtime_mwh
+FROM scada.farm_kpis_daily WHERE farm = 'penmanshiel'
+ORDER BY loss_total_kwh DESC NULLS LAST LIMIT 10
+```
+```sql
+-- turbine ranking: turbine grain needed, so losses_daily is correct here
+SELECT turbine, round(SUM(loss_total_kwh)::numeric/1000, 1) AS loss_mwh
+FROM scada.losses_daily
+WHERE farm = 'hill_of_towie' AND date_local >= '2024-01-01' AND NOT pre_cod
+GROUP BY turbine ORDER BY 2 DESC LIMIT 10
+```
+
+## Revenue impact by cause (Hill of Towie only)
+
+```sql
+SELECT date_trunc('month', date_local) AS month,
+       round(SUM(revenue_gross_gbp)::numeric)      AS gross_gbp,
+       round(SUM(revenue_downtime_gbp)::numeric)   AS downtime_gbp,
+       round(SUM(revenue_curtailment_gbp)::numeric) AS curtailment_gbp,
+       round(SUM(revenue_performance_gbp)::numeric) AS performance_gbp
+FROM scada.revenue_impact_daily
+WHERE farm = 'hill_of_towie' AND date_local >= '2025-01-01'
+GROUP BY 1 ORDER BY 1
+```
+
+## Availability trend with IEC split (event-based farms)
+
+```sql
+SELECT date_trunc('month', date_local) AS month,
+       round((SUM(available_h)/NULLIF(SUM(expected_h),0))::numeric*100, 2) AS avail_pct,
+       round(SUM(unavail_forced_h)::numeric, 1)    AS forced_h,
+       round(SUM(unavail_scheduled_h)::numeric, 1) AS scheduled_h,
+       round(SUM(unavail_external_h)::numeric, 1)  AS external_h
+FROM scada.availability_daily
+WHERE farm = 'kelmarsh' AND NOT pre_cod AND date_local >= '2023-01-01'
+GROUP BY 1 ORDER BY 1
+```
+
+## Power curve: baseline vs AeroUp retrofit
+
+```sql
+SELECT ws_bin, config, power_mean_kw, n
+FROM scada.power_curve_bins
+WHERE farm = 'hill_of_towie' AND turbine = 'T01'
+ORDER BY ws_bin, config
+```
+
+## Cross-schema join to the platform (windfarm names, prices)
+
+```sql
+SELECT w.name, k.date_local, round((k.energy_kwh/1000)::numeric, 1) AS mwh,
+       round(p.day_ahead_price::numeric, 2) AS da_price
+FROM scada.farm_kpis_daily k
+JOIN scada.dim_farm f USING (farm)
+JOIN public.windfarms w ON w.id = f.windfarm_id
+JOIN public.price_data p
+  ON p.windfarm_id = f.windfarm_id
+ AND p.hour = k.date_local::timestamp AT TIME ZONE 'UTC' + interval '12 hours'
+WHERE k.farm = 'hill_of_towie'
+ORDER BY k.date_local DESC LIMIT 5
+```
+(Only hill_of_towie has windfarm_id; Kelmarsh/Penmanshiel rows drop out of
+this join by design.)
+
+## SCADA vs settlement reconciliation
+
+```sql
+SELECT date_trunc('month', date_local) AS month,
+       round(SUM(scada_energy_mwh)::numeric, 1)        AS scada_mwh,
+       round(SUM(settlement_metered_mwh)::numeric, 1)  AS settled_mwh,
+       round((SUM(energy_delta_mwh)/NULLIF(SUM(scada_energy_mwh),0))::numeric*100, 2) AS delta_pct
+FROM scada.settlement_recon_daily
+WHERE farm = 'hill_of_towie'
+GROUP BY 1 ORDER BY 1 DESC LIMIT 12
+```
+"""
+
+
 # Branded PDF report builder seeded into the sandbox as report_pdf.py.
 # Lets the agent produce downloadable, document-style PDFs (EPR-68) instead of
 # markdown — title, headings, paragraphs, tables, bullets, and embedded charts.
