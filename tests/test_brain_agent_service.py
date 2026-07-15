@@ -137,6 +137,11 @@ def test_system_prompt_scada_lines_injected_when_enabled():
     assert "skill_scada.md" in prompt
     assert "skill_scada_queries.md" in prompt
     assert "{{SCADA_SKILL_LINES}}" not in prompt
+    # Farm NAMES must be in the prompt index: a question naming Penmanshiel
+    # without the word "SCADA" otherwise routes to public.windfarms and the
+    # agent wrongly reports the farm missing (battery test q04).
+    for name in ("Hill of Towie", "Kelmarsh", "Penmanshiel"):
+        assert name in prompt
 
 
 def test_system_prompt_scada_lines_absent_when_disabled():

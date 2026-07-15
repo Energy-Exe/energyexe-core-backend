@@ -502,6 +502,12 @@ EnergyExe SCADA pipeline into pre-aggregated "gold" tables. Lives in Postgres
 schema `scada` — it is NOT on the default search_path, so ALWAYS
 schema-qualify: `scada.dim_farm`, never `dim_farm`.
 
+The tables documented below are the ONLY tables in schema scada. The raw
+10-minute interval data (individual wind/power/temperature readings) is NOT
+in Postgres — it lives in the pipeline's Parquet lake. Never invent tables
+like `scada.fact_10min`; if a question needs raw 10-minute rows, say that
+only the daily/hourly gold aggregates are queryable here.
+
 ## Farms & identity
 
 - `farm` (slug, the join key everywhere): `hill_of_towie` (21 turbines,

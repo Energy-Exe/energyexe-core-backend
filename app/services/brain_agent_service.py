@@ -1088,10 +1088,19 @@ class BrainAgentService:
         prompt = cls._load_prompt_template(prompt_file)
         prompt = prompt.replace("{{CURRENT_DATE}}", date.today().isoformat())
         # Placeholder only exists in the admin prompt; skill files are written
-        # to the sandbox iff scada_enabled (schema present in this DB).
+        # to the sandbox iff scada_enabled (schema present in this DB). Farm
+        # names MUST appear here: a question naming "Penmanshiel" without the
+        # word SCADA otherwise routes to public.windfarms, finds nothing, and
+        # the agent wrongly reports the farm doesn't exist (battery test q04).
         scada_lines = (
-            "- `cat skill_scada.md` — SCADA 10-minute turbine data (Postgres schema "
-            "`scada`): 3 research farms, availability/losses/power curves/revenue impact\n"
+            "- `cat skill_scada.md` — 10-minute SCADA turbine data (Postgres schema "
+            "`scada`) for **Hill of Towie, Kelmarsh and Penmanshiel**: availability, "
+            "losses, power curves, revenue impact. For ANY question about these "
+            "three farms, read this skill first and prefer schema `scada` (10-min "
+            "ground truth with per-cause loss/revenue attribution). Only Hill of "
+            "Towie also exists in public.windfarms (id 7309); Kelmarsh/Penmanshiel "
+            "are NOT platform windfarms — never report them as missing from the "
+            "database\n"
             "- `cat skill_scada_queries.md` — efficient SCADA query patterns "
             "(pre-aggregated roll-ups, cross-schema joins to public)"
             if scada_enabled
