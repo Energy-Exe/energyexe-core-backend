@@ -42,13 +42,13 @@ variable "rds_instance_class" {
 variable "task_cpu" {
   description = "Fargate CPU units for the staging API task (the nightly pipeline is OFF, so it only serves the API)."
   type        = number
-  default     = 512
+  default     = 1024
 }
 
 variable "task_memory" {
-  description = "Fargate memory (MiB) for the staging API task."
+  description = "Fargate memory (MiB) for the staging API task. A single brain-agent chat spawns a Claude CLI subprocess that OOM-killed the task at 1024 and 2048 MiB (exit 137, 2026-07-16) — 4096 is the working floor while the agent is exercised on staging."
   type        = number
-  default     = 1024
+  default     = 4096
 }
 
 variable "cpu_architecture" {

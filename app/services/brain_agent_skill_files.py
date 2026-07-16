@@ -608,6 +608,23 @@ curtailment_delta_mwh, consumption_mwh, hours_scada/settlement/both
   performance/downtime buckets. Never compare curtailment across farms.
 - **Config epochs**: Hill of Towie turbines had an AeroUp retrofit —
   compare power curves per `config` (baseline vs aeroup), never blend epochs.
+- **An "over-performance day" means `loss_total_kwh < 0`** (fleet net total),
+  NOT `loss_performance_kwh < 0`. When asked about over-performance, filter
+  and report loss_total_kwh unless the user explicitly asks about the
+  performance bucket alone.
+- **Cross-farm profitability/revenue comparison is IMPOSSIBLE.** Only
+  Hill of Towie has revenue and settlement data. Never rank the three farms
+  by profit/revenue, and never estimate Kelmarsh/Penmanshiel revenue from
+  average prices as if it were comparable — say the comparison cannot be
+  made and offer energy/loss comparisons instead, clearly labeled.
+- **Settlement delta convention**: report the full-year delta as
+  SUM(energy_delta_mwh) / SUM(scada_energy_mwh) × 100 (SCADA in the
+  denominator) — state the denominator if you use a different one.
+- **The value-lane tables are NOT calendar-complete.** For any "how many
+  days / hours of data" or coverage question about revenue_impact_daily or
+  settlement_recon_daily, COUNT the actual rows and SUM the hour columns —
+  never assume 365 days or 8,760 hours, and never answer coverage questions
+  about these farms from the platform's generation/price tables.
 
 ## Units & conventions
 
@@ -629,13 +646,17 @@ SKILL_SCADA_QUERIES = """# SCADA Query Patterns (schema `scada`)
 
 ## Efficiency rules
 
-1. Use the pre-aggregated tables: `farm_kpis_daily` for farm-level,
+1. Every number you state must come from a query result. Never derive a
+   figure by doing arithmetic in prose — run another query (or a computed
+   column) instead; prose arithmetic is where errors creep in. Row counts
+   must be exact `count(*)`, not pg_class/reltuples estimates.
+2. Use the pre-aggregated tables: `farm_kpis_daily` for farm-level,
    `losses_hourly` for hourly, `revenue_impact_daily` for money. Never
    re-aggregate 142k turbine-day rows when a roll-up already exists.
-2. Farm-level percentages come from `farm_kpis_daily` (ratio-of-sums,
+3. Farm-level percentages come from `farm_kpis_daily` (ratio-of-sums,
    pre-COD handled). Multi-day pct = SUM/SUM, never AVG(pct).
-3. Always filter on the indexed keys: `farm` + `date_local` (or `hour_utc`).
-4. Always schema-qualify (`scada.`); cross-schema joins to `public.*` work
+4. Always filter on the indexed keys: `farm` + `date_local` (or `hour_utc`).
+5. Always schema-qualify (`scada.`); cross-schema joins to `public.*` work
    in the same query.
 
 ## Monthly farm KPIs
