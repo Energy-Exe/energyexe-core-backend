@@ -1,386 +1,493 @@
-# Surfacing SCADA Data to the Brain Agent — Engineering Report
+# Teaching the Platform's AI Agent to Read Wind-Farm SCADA Data
 
-**Date:** 2026-07-16 / 17 · **Status:** Live on staging · **Scope:** energyexe-core-backend + energyexe-scada-pipeline
-**Related docs:** `energyexe-scada-pipeline/PLAN.md` (pipeline design & gotchas), `energyexe-scada-pipeline/docs/CLOUD_RUNBOOK.md` (cloud ops), `UPDATES.md` 2026-07-16 (session log)
+**The complete engineering story: design, alternatives, adversarial testing, and everything that broke along the way.**
 
-This report documents how we made the SCADA gold data queryable by the AI data agent on the admin dashboard: the design decisions and the alternatives we rejected, the implementation, the three testing campaigns (including an adversarial audit that assumed every answer was wrong), every defect we found and how we fixed it, the infrastructure failures the work exposed, and the limitations that remain. It is written to be learned from, not just referenced.
+*2026-07-16/17 · energyexe-core-backend + energyexe-scada-pipeline · Live on staging*
 
----
-
-## 1. Executive summary
-
-The SCADA pipeline (v0.6.0) produces 16 "gold" analytics tables for three research wind farms — Hill of Towie, Kelmarsh, Penmanshiel — into the `scada` schema of the staging database. Until this work, nothing consumed them. The first surfacing step, chosen deliberately ahead of REST endpoints or UI pages, was the **brain agent**: the AI data agent on the admin dashboard that answers questions by writing SQL.
-
-What was delivered:
-
-- **Database access**: the agent's read-only role can now read `scada.*`, granted by a role-conditional migration that self-adapts per environment (no-op locally, active on staging, will auto-apply to prod at the prod cut).
-- **Knowledgebase**: a git-versioned, two-file skill set teaching the agent the full gold layer — schema, domain semantics (IEC availability, loss attribution, the money spine), unit conventions, and an efficiency-first query cookbook.
-- **Runtime gating**: the knowledge only appears in environments where the `scada` schema actually exists, so prod stays clean today and auto-enables later with zero code change.
-- **Verification at unusual depth**: 55+ real agent conversations across three campaigns, culminating in a 30-question adversarial audit where an independent verifier recomputed every answer from SQL under instructions to refute it. Six real defects were found, fixed, and re-verified against ground truth.
-- **Infrastructure fixes the testing forced**: the staging backend task was OOM-killed by a *single* agent conversation; it now runs 1 vCPU / 4 GB (codified in Terraform), and we established the session-hygiene rules any future automated testing must follow.
-
-Final audited state: **27 of 30 adversarial questions fully correct, 3 minor partials, 0 uncorrected majors** (the three majors were fixed and re-verified to the digit).
+This is the full account of how we connected the EnergyExe brain agent — the AI assistant on the admin dashboard — to the SCADA gold data, written as a start-to-finish narrative for the team. It covers every design decision and the alternatives we rejected, the exact implementation, three rounds of increasingly hostile testing, six real defects and their fixes, an infrastructure failure the testing exposed, and the limitations that remain. Nothing here is hypothetical: every number, query, and exit code appeared in the real system.
 
 ---
 
-## 2. Background
+## Part I — The system we started with
 
-### 2.1 The data side
+### The data pipeline, end to end
 
-The SCADA platform ingests public 10-minute turbine data (Zenodo research datasets) through a bronze → silver → gold medallion pipeline (separate repo, `energyexe-scada-pipeline`). As of v0.6.0 the pipeline runs unchanged in AWS Fargate and publishes gold to the staging RDS:
+The SCADA platform is a separate repository (`energyexe-scada-pipeline`) that ingests public 10-minute turbine data for three research wind farms. The datasets are published on Zenodo by the farms' operators: Hill of Towie (21 × Siemens SWT-2.3, 48.3 MW, Scotland), Kelmarsh (6 × Senvion MM92, 12.3 MW, England), and Penmanshiel (14 × Senvion MM82, 28.7 MW, Scotland — with no turbine T03, a fact that becomes a test case later).
 
-| Layer | Where | Size |
-|---|---|---|
-| Bronze (raw zips) + Silver (Parquet) | S3 `energyexe-scada-data` | ~28 GB |
-| Gold (16 tables) | staging RDS `energyexe_db`, schema `scada` | ~852k rows / 245 MB |
+The pipeline follows a medallion architecture. Bronze is the immutable raw zips with an md5 manifest. Silver is normalized 10-minute Parquet — 19,835,477 rows across 41 turbines, 95.07% passing quality checks, every failing row flagged rather than deleted. Gold is the analytics layer: sixteen Postgres tables that answer operational questions directly.
 
-The gold layer is **pre-aggregated**: daily turbine facts keyed `(farm, turbine, date_local)`, a farm roll-up (`farm_kpis_daily`), hourly loss frames, and a money lane (revenue impact, settlement reconciliation) for the one farm linked to the platform (Hill of Towie ↔ `public.windfarms.id = 7309`). This matters later: the gold layer *is* the efficient serving layer, which shaped several design decisions.
+Since v0.6.0 the whole thing runs in AWS. A Fargate task (8 vCPU / 48 GB, launched on demand) syncs an S3 bucket to a local working directory, runs the *unchanged, locally-validated* pipeline, and syncs results back — bronze manifest last, as the commit marker. Gold lands in the **staging** RDS, in a schema called `scada` that sits alongside the platform's own `public` schema. The prod cut, when it happens, is a one-secret repoint.
 
-### 2.2 The agent side
-
-The brain agent is a Claude-Agent-SDK-based assistant embedded in the backend. Key architectural facts that constrained this work:
-
-- Each conversation spawns a **Claude Code CLI subprocess** in the backend container, sandboxed to `/tmp/brain-agent/{user}/{session}`.
-- SQL runs through a seeded `db.py` helper: SELECT/WITH-only, auto-`LIMIT 100`, 30 s statement timeout, and a dedicated Postgres role (`brain_agent_ro`) whose grants are the hard security boundary.
-- The agent's schema knowledge is **not introspected live** — it comes from curated markdown "skill files" written into the sandbox at session start and lazy-loaded via `cat`.
-- There are two surfaces: **admin** (full `public` schema visibility) and **client** (EPR-59 locked-down allowlist role, no code access, introspection blocked).
-- Sessions persist 30 minutes idle (the CLI subprocess stays alive), max 20 per user.
-
-### 2.3 Goal and explicit non-goals
-
-**Goal:** the admin agent answers SCADA questions accurately and efficiently on staging, with the knowledge and grants promoted to prod automatically at the future prod cut.
-
-**Non-goals (deliberate, user-decided):** client-agent exposure (a later product decision — the locked-down role gets *no* scada grants), REST endpoints and dashboard pages (next step, after we see what people actually ask), the scada prod cut itself.
-
----
-
-## 3. Design decisions and the alternatives we rejected
-
-This is the section to read if you're doing something similar.
-
-### D1 — Where do database grants live? → A role-conditional migration in the *scada* repo
-
-The agent role had `USAGE`/`SELECT` on schema `public` only. Something had to grant it `scada` access. Options considered:
-
-| Option | Why rejected / chosen |
-|---|---|
-| **Core-backend alembic migration** (where the role itself was created) | Rejected: core migrations run against **prod** too, where schema `scada` doesn't exist yet. It would need existence-guards *and* would strand the grant when the scada prod cut happens after the migration already ran. Wrong ownership: the schema belongs to the pipeline. |
-| **Manual `GRANT` via psql** | Rejected: not reproducible; the prod cut would silently miss it; no audit trail. |
-| **Grants inside pipeline runtime code** (on every gold load) | Rejected: mixes DDL policy into the load path; runs dozens of times for no reason. |
-| **Scada-repo alembic migration, wrapped in `IF EXISTS (SELECT FROM pg_roles WHERE rolname='brain_agent_ro')`** ✅ | Chosen. Self-adapting: silent no-op in local dev (role absent), grants on staging (role exists), and **auto-applies to prod** the first time scada alembic runs there — the prod cut needs zero extra work. |
-
-Two Postgres subtleties that make this robust:
-
-1. `ALTER DEFAULT PRIVILEGES IN SCHEMA scada GRANT SELECT ON TABLES TO brain_agent_ro` — issued without `FOR ROLE`, it binds to the migration's connection user, which is the **same user that creates all gold tables** (`SCADA_DATABASE_URL`). Future gold tables inherit SELECT automatically.
-2. Gold rebuilds are **delete+insert, never drop** — so table-level grants survive every pipeline run. If rebuilds ever switch to `DROP TABLE`, the default privileges still cover it.
-
-Migration: `alembic/versions/a3f8c1d97b02_grant_brain_agent_ro_scada_read.py` (with a mirrored conditional `REVOKE` downgrade). Verified by connecting *as the role*: `SELECT count(*) FROM scada.farm_kpis_daily` → 10,002; `INSERT` → `cannot execute INSERT in a read-only transaction`.
-
-### D2 — Which agent surfaces? → Admin only
-
-The client agent's role (`brain_agent_client_ro`) is an explicit table allowlist with no default privileges, introspection blocked at the `db.py` layer, and a prompt that forbids describing schema structure (EPR-59). Extending it means widening a deliberately narrow attack surface for farms that aren't client assets. Decision: admin-only now; client exposure is a separate product decision with its own hardening pass.
-
-### D3 — Knowledgebase form? → Git-versioned skill strings
-
-Three options were put to the user:
-
-| Option | Trade-off |
-|---|---|
-| **Full skill set in `brain_agent_skill_files.py` (git-versioned)** ✅ | Schema semantics only change with pipeline releases; versioning with code gives zero drift, code review, and canary tests. No new infrastructure. |
-| DB-driven, admin-editable (clone the `methodology_sections` pattern) | Editable without deploys — but needs a new table, CRUD endpoints, and admin UI work, for content that non-engineers shouldn't be editing anyway (it encodes column-level semantics). |
-| Hybrid (static schema + DB-driven prose) | Complexity of both for marginal benefit at this stage. |
-
-The knowledge is split into **two files** so the agent loads only what it needs: `skill_scada.md` (schema reference + domain semantics + conventions) and `skill_scada_queries.md` (efficiency rules + ready-made SQL patterns). One file per concern also keeps each `cat` cheap.
-
-### D4 — How does the agent learn scada exists, per environment? → Runtime schema-presence gating
-
-The core problem: the same backend image serves staging (has `scada`) and — after any future promotion — prod (won't have `scada` until the cut). Teaching the agent about tables that 404 would produce embarrassing failures.
-
-| Option | Why rejected / chosen |
-|---|---|
-| Environment flag (`BRAIN_AGENT_SCADA=1`) | Config drift risk across two Terraform roots; someone must remember to flip it at the prod cut. |
-| Always ship the knowledge | Prod agent confidently queries nonexistent tables. |
-| Hold the staging branch back from prod | Fights the "promotion ships the whole staging image" model; blocks unrelated work. |
-| **Best-effort runtime check at session creation** ✅ | `SELECT 1 FROM information_schema.tables WHERE table_schema='scada' AND table_name='dim_farm'` — if present, write the skill files and inject the prompt lines; if absent (or the check errors), the session starts clean. Prod **auto-enables at the prod cut with zero code change**. |
-
-Implementation notes: the check lives in `BrainAgentService._scada_schema_present()`, wrapped in try/except (session creation must never fail on it), and is skipped entirely for client sessions. The prompt carries a `{{SCADA_SKILL_LINES}}` placeholder replaced with either the two index lines or empty — the same replace mechanism the prompt already used for user names and repo paths.
-
-A canary test enforces the corollary: **SCADA content must never leak into the unconditionally-written skill strings** (`SKILL_SCHEMA`, `SKILL_QUERIES`, …), because those are written in every environment including prod.
-
-### D5 — Context efficiency → lazy-load, two index lines, nothing more
-
-The system prompt gains exactly two one-line index entries (and only when gated on). The knowledge itself is pulled by the agent with `cat` on demand — the established pattern for all skill files. No SCADA text rides along in conversations that never touch SCADA.
-
-### D6 — Query efficiency → the gold layer is the serving layer; no new database objects
-
-We considered adding convenience views (pre-joined farm names, monthly rollups). Rejected: the gold tables are *already* the materialized, indexed, correctly-aggregated serving layer (~852k rows total; every fact indexed on `(farm, date_local)`), and `db.py` already caps result sets and statement time. Instead, the query cookbook **steers behavior**: use `farm_kpis_daily`/`losses_hourly`/`revenue_impact_daily` rather than re-aggregating 142k turbine-day rows; always filter on indexed keys; percentages by ratio-of-sums. Adding views would have created a second place for semantics to drift.
-
-### D7 — Curated reference over live introspection
-
-The admin agent *can* read `information_schema`, but discovery-by-introspection costs tokens every session, produces column names without semantics, and invites unit/grain mistakes. The curated reference encodes what introspection can't: that energy is kWh here but MWh there, that DST days have 138/150 intervals, that `pre_cod` rows are excluded from farm KPIs, that zero curtailment at two farms is a signal gap rather than a fact. Testing later proved these semantic annotations — not the column lists — are where correctness lives.
-
----
-
-## 4. Implementation inventory
-
-### 4.1 Changes by repo
-
-**energyexe-scada-pipeline** (branch `main`):
-- `alembic/versions/a3f8c1d97b02_grant_brain_agent_ro_scada_read.py` — role-conditional GRANT/REVOKE (commit `51aeeb5`). Applied to staging directly; local no-op path tested first.
-
-**energyexe-core-backend** (branch `staging`, commits in order):
-- `f1a6cb3` — `SKILL_SCADA` + `SKILL_SCADA_QUERIES` in `app/services/brain_agent_skill_files.py`; gated wiring in `app/services/brain_agent_service.py` (`_scada_schema_present()`, `SANDBOX_SEED_FILES`, conditional file writes, `scada_enabled` → prompt); `{{SCADA_SKILL_LINES}}` placeholder in `app/prompts/brain_agent_system.md`; 10 new tests.
-- `e903780` — curtailment signal-gap caveat (found by the first staging smoke test).
-- `23a3aec` — 20-question battery fixes: farm names + prefer-scada + never-report-missing in the prompt index; "the 16 gold tables are the ONLY scada tables" rule; canary asserting farm names in the enabled prompt.
-- `a404f24` — 30-question adversarial audit fixes (five knowledgebase rules + revenue/pricing routing) and staging task sizing codified in `infra/staging/variables.tf`.
-
-### 4.2 What the knowledgebase contains (and why each part exists)
-
-**`skill_scada.md`** — the reference:
-- *Identity*: farm slugs, turbine codes, `(farm, turbine)` natural key, the single platform link (HoT = 7309), coverage windows per farm (static research data — HoT → Apr 2026, others → end 2024).
-- *All 16 tables* with PKs and load-bearing columns, grouped by grain (dims / daily turbine facts / farm roll-up / power curves / value lane).
-- *Domain semantics*: IEC 61400-26 time-based system availability and the two lanes (timer-based vs event-based); loss attribution (potential = epoch power curve × measured wind); negative losses are real over-performance; **curtailment needs a setpoint signal only HoT has** (zero elsewhere is a signal gap — never compare curtailment across farms); AeroUp config epochs; over-performance day = `loss_total_kwh < 0`; **cross-farm profitability comparison is impossible** (HoT-only revenue data); settlement-delta denominator convention; **value-lane tables are not calendar-complete — count, don't assume**.
-- *Conventions*: `date_local` civil days and DST (ratio-of-sums, never AVG of percentages); kWh vs MWh by table family; GBP; `pre_cod`; provenance columns; **the listed tables are the only tables** (raw 10-minute rows live in the Parquet lake, not Postgres — never invent `scada.fact_10min`).
-
-**`skill_scada_queries.md`** — the cookbook: efficiency rules first (every stated number must come from a query result — no prose arithmetic; exact `count(*)`, never planner estimates; roll-ups over re-aggregation; indexed keys; schema-qualify), then ~8 ready-made patterns: monthly farm KPIs, loss Pareto, worst days/turbines, revenue by cause, availability trend with IEC split, baseline-vs-AeroUp power curves, the cross-schema price join (adapted from the pipeline's own `verify_staging_upload.py`), settlement reconciliation.
-
-Roughly half of these rules did not exist on day one. **They are the distilled output of testing** — see §6.
-
----
-
-## 5. Testing methodology — three campaigns of increasing hostility
-
-The testing arc is the most reusable lesson in this project. Each campaign caught a class of defect the previous one structurally could not.
-
-### 5.1 Campaign 1 — smoke end-to-end (2 questions)
-
-Local backend against the staging DB, then the deployed staging API. Verified the mechanics: skill file read, `scada.*` queried, sane numbers, correct unit conversion. **Found defect #1**: the agent presented zero curtailment at Kelmarsh/Penmanshiel as a physical fact. The pipeline attributes curtailment only when a power-setpoint signal *binds*, and only Hill of Towie reports one — so zero is true-by-construction, not true. Fixed with an explicit signal-gap caveat (`e903780`), which every later test respected.
-
-### 5.2 Campaign 2 — 20-question functional battery
-
-**Design:** questions engineered for coverage (all 16 tables) plus trap cases with known correct behavior: the kWh→MWh conversion, "average availability" phrasing (must be ratio-of-sums), a farm we don't have (Smøla — must refuse), future data (must state the dataset ends), the curtailment-comparability regression, a known data hole (Penmanshiel 2018 Q1 — must be surfaced honestly).
-
-**Execution:** local backend on the staging DB (identical code + data; protects the shared staging service), 3 concurrent, ~$1.2–1.5 and 40–90 s per question, answers extracted from the SSE `text_delta` stream and graded against the pipeline's acceptance-report numbers.
-
-**Results: 18/20 clean.** The two failures shared one root cause — **name-based routing**: a question naming "Penmanshiel" *without the word SCADA* went to `public.windfarms`, found nothing, and the agent reported the farm "not in our database" (q04); a Hill-of-Towie revenue question was answered from platform tables without mentioning the SCADA revenue lane (q08). One hallucination nit: a suggested follow-up referenced a nonexistent `scada.fact_10min`.
-
-**Fixes:** the prompt index line now *names the three farms*, instructs prefer-scada for them, and forbids reporting them missing; the skill states the 16 tables are the only tables. Both failures re-run verbatim: pass — with q08's downtime figure (£116.9K) independently matching q07's from a separate conversation, a free internal-consistency check.
-
-**Lesson:** LLM routing keys on *nouns*, not categories. "SCADA 10-minute turbine data" in the prompt did nothing for a question that said only "Penmanshiel"; putting the three farm names in the prompt line fixed the entire failure class.
-
-### 5.3 Campaign 3 — 30-question adversarial audit ("assume it's incorrect")
-
-The functional battery had a structural weakness: the grader (me) evaluated answers for *plausibility against known numbers*, which passes anything that sounds right where I didn't have a known number. The user's directive — *test from an investigative angle and assume it's incorrect* — became the design principle.
-
-**Architecture** (multi-agent workflow):
-
-```
-for each of 30 questions (SERIAL — see §7):
-    asker  → real HTTP chat against the live staging agent (SSE), relay answer verbatim
-    auditor → independent subagent, prompted: "ASSUME THE ANSWER IS WRONG.
-              Refute it. Write your OWN SQL (never reuse the agent's) against
-              the same database via a read-only helper. Numbers must match
-              within 0.5%/rounding; wrong units, period, farm, invented
-              entities, or a missing required caveat = failure."
-    verdict → CORRECT | PARTIAL | WRONG | UNVERIFIABLE + ground truth + evidence SQL
+```mermaid
+flowchart LR
+    subgraph SRC["Source data"]
+        Z["Zenodo research datasets<br/>(md5-verified zips)"]
+    end
+    subgraph S3["S3 · energyexe-scada-data"]
+        B["bronze/landing<br/>raw zips + manifest"]
+        S["silver/<br/>19.8M rows Parquet"]
+    end
+    subgraph FG["Fargate RunTask · scada run-all"]
+        P["sync down → register →<br/>silver → alembic → gold →<br/>38-check validate → sync up"]
+    end
+    subgraph RDS["Staging RDS · energyexe_db"]
+        G["schema scada<br/>16 gold tables · 852k rows"]
+        PUB["schema public<br/>windfarms · price_data ·<br/>generation_data"]
+    end
+    subgraph BE["Backend (ECS)"]
+        A["Brain agent<br/>(this project)"]
+    end
+    Z --> B
+    B --> P
+    P --> S
+    S --> P
+    P --> G
+    PUB -- "price + settlement<br/>reference pulls" --> P
+    G --> A
+    PUB --> A
+    A --> D["Admin dashboard"]
 ```
 
-Each question carried a *verification brief* (what correct looks like: the canonical SQL, the required caveat, the trap) so auditors verified against specification, not vibes. Question design mixed: precise numerics (energy totals, revenue sums, coverage counts), method traps (denominator conventions, DST interval counts, epoch-straddling performance indices), consistency probes (turbine-sum vs farm roll-up; hourly-sum vs daily), and behavioral probes (a nonexistent turbine T03, a delete request that must be refused, questions with no year that must state their period).
+The one bridge between the two worlds is deliberate and narrow: `scada.dim_farm.windfarm_id` points at `public.windfarms.id`. Only Hill of Towie is linked (id 7309), because only Hill of Towie exists in the commercial platform. That single foreign key is what lets the gold layer price its losses against real day-ahead prices and reconcile SCADA energy against grid settlement data — the pipeline calls this the money spine.
 
-**Results: 24 CORRECT / 3 PARTIAL (minor) / 3 WRONG (major).**
+### The gold schema in detail
 
-The three majors, dissected:
+Everything in gold obeys one grain rule: the atomic unit is the **turbine-day**, keyed `(farm, turbine, date_local)`, where `date_local` is the farm's civil day in Europe/London. Farm-level numbers are materialized into their own roll-up table at build time — never left for a consumer to recompute — because percentage aggregation is a trap: DST days have 138 or 150 ten-minute intervals rather than 144, so any percentage must be recomputed as a ratio of sums, never averaged.
 
-| # | Question | What the agent said | Ground truth | Root cause |
-|---|---|---|---|---|
-| i05 | Days of priced revenue data, HoT 2025 | "365 days, 8,760 h, no gaps" — answered from **platform** generation/price tables | `revenue_impact_daily`: **353 days, 8,456 h, 12-day gap Sep 11–22** | Routing again (revenue phrasing didn't trigger scada) + assuming calendar-completeness instead of counting |
-| i13 | Over-performance days, HoT 2024 | 100 days; biggest day +43.4 MWh | **79 days** (`loss_total_kwh < 0`); biggest **−40.7 MWh** on the right date | Used the performance *bucket* column instead of the fleet net total; magnitudes mixed between columns |
-| i30 | "Most profitable of the three farms?" | Ranked all three, crowned Penmanshiel via average-price revenue estimates | Only HoT has revenue data; the estimate method isn't even apples-to-apples | No rule forbidding the seductive-but-invalid comparison |
+```mermaid
+erDiagram
+    dim_farm ||--o{ dim_turbine : "farm"
+    dim_farm ||--o{ dim_signal_capability : "farm"
+    dim_farm ||--o{ farm_kpis_daily : "farm"
+    dim_farm ||--o{ losses_hourly : "farm"
+    dim_farm ||--o{ revenue_impact_daily : "farm (HoT only)"
+    dim_farm ||--o{ settlement_recon_daily : "farm (HoT only)"
+    dim_turbine ||--o{ dim_turbine_config : "farm, turbine"
+    dim_turbine ||--o{ completeness_daily : "farm, turbine"
+    dim_turbine ||--o{ energy_daily : "farm, turbine"
+    dim_turbine ||--o{ availability_daily : "farm, turbine"
+    dim_turbine ||--o{ losses_daily : "farm, turbine"
+    dim_turbine ||--o{ power_curve_bins : "farm, turbine, config"
+    dim_turbine ||--o{ power_curve_bins_yearly : "farm, turbine, config"
+    dim_turbine ||--o{ turbine_performance_yearly : "farm, turbine, config"
+    windfarms_public |o..o| dim_farm : "windfarm_id = 7309 (HoT)"
 
-The three minors: a defensible-but-nonstandard denominator on the settlement delta (2.21% vs the canonical 2.16%), a prose-arithmetic slip that contradicted the agent's own correct table (~4,200 h stated vs 35,194 h implied), and one stale `pg_class.reltuples` row-count.
+    dim_farm {
+        string farm PK "slug: hill_of_towie, kelmarsh, penmanshiel"
+        string name
+        string tz "Europe/London"
+        string source_format "siemens_wps or greenbyte"
+        int windfarm_id "nullable, only HoT"
+        string bidzone "EIC 10YGB----------A"
+        float rated_kw_total
+    }
+    dim_turbine {
+        string farm PK
+        string turbine PK "T01... / KWF1..."
+        string oem
+        string model
+        float rated_kw
+        date cod "commercial operation date"
+    }
+    dim_turbine_config {
+        string config PK "baseline or aeroup (SCD2 epoch)"
+        date valid_from
+        date valid_to "NULL = open"
+    }
+    dim_event_category {
+        string source_format PK
+        string category PK
+        bool is_available
+        string loss_bucket
+        int precedence "lower wins overlaps"
+    }
+    dim_signal_capability {
+        string signal PK
+        string status "reported, all_null, absent"
+        float null_pct
+    }
+    completeness_daily {
+        date date_local PK
+        int expected_intervals "138-150 on DST days"
+        float completeness_pct
+        bool pre_cod
+    }
+    energy_daily {
+        date date_local PK
+        float energy_kwh
+        string energy_method "meter, power_integral, mixed, none"
+        int intervals_gap "counted, NEVER scaled"
+    }
+    availability_daily {
+        date date_local PK
+        string method "timer_based or event_based"
+        float availability_pct
+        float unavail_forced_h "IEC split (event lane only)"
+    }
+    losses_daily {
+        date date_local PK
+        float potential_kwh "epoch curve x measured wind"
+        float loss_total_kwh "negatives = over-performance"
+        float loss_curtailment_kwh "needs setpoint signal"
+    }
+    farm_kpis_daily {
+        date date_local PK
+        float energy_kwh
+        float availability_pct "ratio-of-sums, pre-COD excluded"
+        float capacity_factor
+    }
+    losses_hourly {
+        datetime hour_utc PK "tz-aware, 6 intervals per hour"
+        float loss_total_kwh
+        int n_turbines
+    }
+    revenue_impact_daily {
+        date date_local PK
+        string currency "GBP"
+        float revenue_gross_gbp
+        float revenue_curtailment_gbp "negative on negative prices"
+        int hours_unpriced "counted, never scaled"
+    }
+    settlement_recon_daily {
+        date date_local PK
+        float scada_energy_mwh
+        float settlement_metered_mwh
+        float energy_delta_mwh "positive ~2% = site loss"
+    }
+    power_curve_bins {
+        decimal ws_bin PK "0.5 m/s lower edge"
+        float power_mean_kw
+        int n
+    }
+    power_curve_bins_yearly {
+        int year PK
+        decimal ws_bin PK
+    }
+    turbine_performance_yearly {
+        int year PK
+        float performance_index "1.0 = epoch average"
+        float ws_coverage_pct "below 90 = unreliable"
+    }
+    windfarms_public {
+        int id PK "public schema"
+        string name
+    }
+```
 
-**Fixes** (`a404f24`): five knowledgebase rules — count value-lane coverage, never rank cross-farm profitability, over-performance = `loss_total_kwh < 0`, delta denominator convention, every stated number from a query with exact counts — plus prompt routing extended to "revenue, pricing, settlement and data-coverage questions."
+Sizes, for intuition: each daily turbine fact holds 142,566 rows; `farm_kpis_daily` holds 10,002 farm-days; `losses_hourly` 239,499 farm-hours; the money lane 3,762 revenue days and 3,680 settlement days (Hill of Towie only). The whole schema is roughly 852 thousand rows in 245 MB — a rounding error inside the 156 GB staging database, and small enough that every reasonable query returns in milliseconds off the `(farm, date_local)` indexes.
 
-**Re-verification:** the three failed questions re-asked verbatim against the deployed staging agent. All three now match the auditors' ground truth exactly — including the agent volunteering the 12 missing September days, using the correct over-performance definition while still showing the bucket breakdown, and refusing the profitability ranking *with the average-price trap named as methodologically unsound*.
+The semantics are where the richness lives, and they matter for everything that follows. Losses are computed as *potential minus actual*, where potential applies the turbine's own power curve — per SCD2 config epoch, because Hill of Towie's turbines had an AeroUp retrofit that changed their aerodynamics mid-history — to the measured wind. Negative losses are kept, because they are real over-performance. Curtailment is attributed only when a power-setpoint signal is present *and binding*; only Hill of Towie's Siemens data has that signal, so Kelmarsh and Penmanshiel show zero curtailment **by construction**, not by fact. Availability is IEC 61400-26 time-based system availability, computed through two different lanes: OEM timers for Hill of Towie (whose unavailability all lands in an unclassified bucket) and IEC-categorized events for the Greenbyte farms (which get the forced / scheduled / external / requested split, with a precedence rule — lower number wins — for overlapping events).
 
-**Lesson:** adversarial verification with independent recomputation finds what friendly grading cannot. i05's "365 days, complete coverage" is exactly the kind of confident, plausible answer that passes a smell test and fails an audit.
+### The brain agent
+
+On the other side of the bridge sits the brain agent: a Claude-Agent-SDK-based assistant embedded in the FastAPI backend, reachable from the admin dashboard (and, in a locked-down variant, from the client portal). Its architecture constrains everything this project did, so it's worth being precise.
+
+```mermaid
+sequenceDiagram
+    participant U as Admin dashboard
+    participant API as FastAPI /brain-agent/chat (SSE)
+    participant SVC as BrainAgentService
+    participant DB as Postgres (staging)
+    participant CLI as Claude Code CLI subprocess
+
+    U->>API: POST /chat (prompt)
+    API->>SVC: get_or_create_session
+    SVC->>DB: SELECT 1 FROM information_schema.tables<br/>WHERE table_schema='scada' (the gate)
+    DB-->>SVC: present / absent
+    SVC->>SVC: write sandbox files:<br/>db.py, skill_*.md<br/>(+ skill_scada*.md iff gate passed)
+    SVC->>CLI: spawn (DATABASE_URL = brain_agent_ro,<br/>PGOPTIONS read-only)
+    loop agentic turn
+        CLI->>CLI: cat skill_scada.md
+        CLI->>DB: python3 db.py "SELECT ..." (as brain_agent_ro)
+        DB-->>CLI: rows (LIMIT 100, 30s timeout)
+    end
+    CLI-->>API: streamed text + tool events
+    API-->>U: SSE (text_delta, tool_use, result)
+```
+
+Three facts shape the whole design. First, every conversation spawns a **Claude Code CLI subprocess** inside the backend container, and that subprocess stays alive for the session's 30-minute idle TTL — this is a memory commitment that will detonate spectacularly in Part IX. Second, SQL is not a bespoke tool: the agent runs `python3 db.py "SELECT ..."` through its ordinary Bash tool, and `db.py` enforces SELECT/WITH-only, an automatic `LIMIT 100`, and a 30-second statement timeout, while the hard security boundary is the Postgres role in `DATABASE_URL` — `brain_agent_ro`, created by an earlier migration with SELECT on schema `public` and `default_transaction_read_only=on`. Third, the agent's knowledge of the database is **not introspected**; it is curated markdown ("skill files") written into the session sandbox at creation time and lazily read by the agent with `cat` when a question calls for it.
+
+There is also a second surface — the client portal agent — running under a much stricter role (`brain_agent_client_ro`) with an explicit table allowlist, no code access, and introspection blocked. Keep it in mind only to note that this project touched it in exactly zero ways, on purpose.
 
 ---
 
-## 6. The defect ledger
+## Part II — The two gaps
 
-Six real defects across ~58 verified conversations, all fixed and re-verified:
+With the gold data live on staging and the agent live on the same database, connecting them sounds like it should be free. It wasn't, because of two independent gaps.
 
-| # | Defect | Class | Found by | Fix |
-|---|---|---|---|---|
-| 1 | Zero curtailment presented as fact for setpoint-less farms | Missing semantic caveat | Smoke test | Signal-gap caveat in skill |
-| 2 | "Penmanshiel not in our database" (name-only routing) | Prompt routing | Battery q04 | Farm names + never-report-missing in prompt |
-| 3 | HoT revenue answered from platform tables, SCADA lane unmentioned | Prompt routing | Battery q08 | Prefer-scada instruction |
-| 4 | Suggested nonexistent `scada.fact_10min` | Hallucination | Battery q11 | "ONLY tables" rule |
-| 5 | "365 days, no gaps" for a 353-day table | Routing + assumed completeness | Audit i05 | Coverage-counting rule + revenue routing |
-| 6 | Over-performance on wrong column; profitability ranking across incomparable farms | Wrong definition / invalid comparison | Audit i13, i30 | Pinned definition; ranking forbidden |
+The first gap was **access**. `brain_agent_ro`'s grants were written when `public` was the only schema that mattered: `GRANT SELECT ON ALL TABLES IN SCHEMA public`, plus default privileges for future tables — in `public`. Postgres schemas are permission boundaries; without `USAGE` on schema `scada`, every query the agent could possibly write against the gold tables would fail before touching a row.
 
-Pattern worth internalizing: **not one defect was a SQL-syntax or schema-lookup failure.** Every single one was semantic — routing, definitions, comparability, coverage assumptions. Curated semantics in the knowledgebase, not schema plumbing, is where the engineering effort pays off.
+The second gap was **knowledge**. The agent discovers tables from its skill files, and the skill files had never heard of SCADA. Even with grants in place, the agent would have had to introspect `information_schema` to find the tables, and introspection yields column names without semantics — nothing about kWh versus MWh, ratio-of-sums, pre-COD exclusion, config epochs, or the setpoint signal gap. As the testing campaigns would prove emphatically, the semantics are where correctness lives.
 
 ---
 
-## 7. Infrastructure findings (the accidental load test)
+## Part III — Access: one migration that behaves differently in three environments
 
-Testing the agent turned into an unplanned load test of the staging backend, with genuinely useful results.
+The obvious place to grant access is the repository that created the role — core-backend, whose alembic history contains the migration that created `brain_agent_ro` in the first place. We rejected that, and the reasoning is a useful pattern.
 
-### 7.1 The OOM saga
+Core-backend migrations run against **every** environment the backend deploys to, including prod. Prod has no `scada` schema yet and won't until the scada prod cut. A core-side grant migration would therefore need existence guards, and worse, it would run *once*, before the schema exists in prod — leaving prod silently ungrated after the cut unless someone remembered to re-run it. The grant would also live in the wrong home: the schema belongs to the pipeline, and its access policy should travel with it.
 
-1. **Four concurrent chats killed the staging task** (0.5 vCPU / 1 GB): each conversation spawns a Claude CLI subprocess (~300–500 MB); four at once → exit 137 → ELB health-check failure → ECS replacement. First rule: **small single-task services get serial load only.**
-2. Even **serial** asks crash-looped it during the audit: sessions idle for a 30-minute TTL, so each new conversation *accumulated* a live subprocess. Roughly every ~8 minutes: OOM, 2-minute outage, repeat.
-3. Session deletion (`DELETE /api/v1/brain-agent/sessions/{id}` after each chat) bounded the accumulation — and the task **still** died, now with the container-level OOM signature ("Essential container exited", exit 137) rather than the ELB kill. A single active chat — uvicorn + three freshly-cloned repos + one CLI subprocess — peaks past 1 GB, and past 2 GB.
-4. Working floor: **1 vCPU / 4 GB** (task-def revision 6). Applied out-of-band via AWS CLI mid-audit to stop active degradation, then codified in `infra/staging/variables.tf` and reconciled with `terraform apply` so no drift remains. Cost: ~+$27/month. (Prod runs 2 vCPU / 8 GB for the same workload and has never exhibited this — headroom matters.)
+Manual `GRANT` statements over psql were rejected for the usual reasons — unreproducible, unauditable, and guaranteed to be forgotten at the prod cut. Granting from the pipeline's runtime load path was rejected because it entangles a one-time DDL policy with a load that runs constantly.
 
-Diagnostic nuance worth remembering: **exit 137 has two distinct signatures.** `stoppedReason: Task failed ELB health checks` = ECS killed an unresponsive task (could be CPU starvation); `stoppedReason: Essential container in task exited` + 137 = the cgroup OOM killer. We initially mis-read the first as pure OOM; the second confirmed it.
+What we shipped instead is a migration in the **scada repository** (`a3f8c1d97b02`), whose entire body is conditional on the role existing:
 
-### 7.2 Rules for anyone testing the agent
+```sql
+DO $$
+BEGIN
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'brain_agent_ro') THEN
+        GRANT USAGE ON SCHEMA scada TO brain_agent_ro;
+        GRANT SELECT ON ALL TABLES IN SCHEMA scada TO brain_agent_ro;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA scada
+            GRANT SELECT ON TABLES TO brain_agent_ro;
+    END IF;
+END
+$$;
+```
 
-- One conversation at a time against staging; batteries belong on a local backend pointed at the staging DB, or must delete sessions as they go.
-- Automated harnesses must `DELETE /brain-agent/sessions/{id}` after each conversation.
-- Watch `aws ecs describe-tasks` stop reasons, not just `/health`.
+The conditional makes the migration self-adapting across all three environments it will ever meet. On a laptop, where the local dev database has no such role, it is a silent no-op. On staging, where the role exists (it arrived with the prod-snapshot restore), it grants. And on prod, the same migration will run automatically the first time the pipeline's alembic executes there — which is part of the prod cut anyway — and grant then. The prod cut inherits agent access without anyone thinking about it.
 
----
+Two Postgres subtleties carry the durability. `ALTER DEFAULT PRIVILEGES` without a `FOR ROLE` clause binds to the *current user* — and the migration's connection user (`SCADA_DATABASE_URL`) is the same user that creates every gold table, so tables added by future migrations inherit SELECT automatically. And because gold rebuilds are transactional delete+insert rather than drop+create, table-level grants survive every one of the pipeline's rebuilds; nothing ratchets loose over time.
 
-## 8. Test harness engineering
+Verification was done as the role itself, not as an admin looking at catalogs: connect to staging as `brain_agent_ro`, run `SELECT count(*) FROM scada.farm_kpis_daily` and get 10,002, then attempt an `INSERT` and receive `cannot execute INSERT in a read-only transaction`. The downgrade path mirrors the conditional with `REVOKE`s.
 
-The harness (session scratchpad `ask30/`, worth committing to a repo if we make this a regression suite) has three parts:
-
-- **`ask.sh <qid> <question>`** — logs in with the dev fixture account, streams the SSE chat to a file, deletes the session, extracts a JSON summary (answer text reassembled from `text_delta` events, scada tables touched, whether the skill file was read, cost). Includes wait-for-healthy loops and one retry across a task restart.
-- **`gt.sh "<SQL>"`** — ground-truth queries as `brain_agent_ro` itself (same visibility as the agent), fetching the password from Secrets Manager *at call time* so no secret ever lands on disk or in a transcript.
-- **Workflow orchestration** — serial ask loop with audit subagents fanned out concurrently as answers land; structured-output schemas for answers and verdicts; the journal file enables post-hoc recovery of every agent's result.
-
-Hard-won implementation notes:
-- Extract answers from the **`text_delta` stream**, not the final `result` transcript — the transcript can lag the final message.
-- SSE parsing: an in-flight `.sse` file is indistinguishable from a stalled one; track completion out-of-band.
-- Workflow scripts: embed data in the script rather than relying on args passing; `Date.now()`/`Math.random()` are unavailable by design.
-- The agent's answers cost ~$1.2–2.5 per question (admin profile, per-turn budget $5). The full campaign — ~58 conversations plus ~2.8M tokens of auditor work — cost roughly $80–100 in API spend total. Cheap relative to what it found.
+One scope decision belongs in this part because it is access policy: the client-portal role got **nothing**. Its allowlist is a deliberately narrow attack surface hardened under EPR-59, the SCADA farms are not client assets, and widening that surface is a product decision to be made explicitly, not a side effect. The user chose admin-only, and the implementation makes the client exclusion structural — no grants, and (as the next parts show) no knowledge either.
 
 ---
 
-## 9. Security posture
+## Part IV — Knowledge: writing the textbook instead of handing over the catalog
 
-- The **hard boundary is the Postgres role**, not the prompt: `brain_agent_ro` is SELECT-only with `default_transaction_read_only=on`, and the subprocess additionally runs under `PGOPTIONS` read-only. The audit's delete-request probe (i28) confirmed behavior: refusal, no workaround attempted, rows verified intact.
-- The client surface gained **nothing**: no grants, no skill files, no prompt lines (gating skips client sessions entirely, and the client role has no scada privileges regardless of prompts).
-- No secrets in code, harness files, or transcripts: DSNs and passwords are fetched from Secrets Manager inside single shell invocations; the grants migration contains no credentials.
-- The skill files reveal schema structure to *admin* users only — the same users who can read the source repos through the agent anyway.
+For the knowledgebase we put three options on the table. A database-driven store in the style of our `methodology_sections` pattern — a table of sections, admin-UI editing, composed into the sandbox at session start — would allow edits without deploys, at the price of a new table, CRUD endpoints, and UI work, for content that encodes column-level semantics no one should be editing outside code review anyway. A hybrid (static schema reference plus a DB-driven free-text section) inherits the complexity of both. The third option, chosen: **git-versioned strings in `brain_agent_skill_files.py`**, exactly like the platform's existing skill files. SCADA semantics change when the pipeline changes; versioning the knowledge with code means zero drift, reviewable diffs, and — crucially, as it turned out — the ability to write *canary tests* against the knowledge itself.
 
----
+We split the content into two files so the agent's lazy loading stays cheap and purposeful. `skill_scada.md` is the reference: identity (the farm slugs, the turbine codes, the single windfarm_id 7309 link, the coverage windows — Hill of Towie through April 2026, the others through December 2024, all static research data), all sixteen tables with primary keys and load-bearing columns grouped by grain, the domain semantics (both availability lanes, loss attribution, the curtailment signal gap, config epochs), and the unit conventions (kWh in the fact tables, MWh in the money tables, GBP with explicit currency columns, DST interval counts, `pre_cod`). `skill_scada_queries.md` is the cookbook: efficiency rules first, then about eight ready-made patterns — monthly farm KPIs, loss Paretos, worst-day and worst-turbine rankings, revenue by cause, availability trends with the IEC split, baseline-versus-AeroUp power curve comparisons, settlement reconciliation, and the cross-schema price join, which we lifted almost verbatim from the pipeline's own `verify_staging_upload.py` because it was already proven correct.
 
-## 10. Limitations — read before trusting the agent
+Why curate at all, when the admin agent could introspect `information_schema` freely? Because introspection costs tokens on every conversation and returns the *least* valuable layer of knowledge. Column names are cheap; what prevents wrong answers is knowing that `energy_kwh` and `energy_mwh` coexist across table families, that a percentage over multiple days must be `SUM/SUM`, that zero curtailment at two farms is an artifact of a missing signal, that an "over-performance day" means the fleet's *net total* loss went negative. None of that is in the catalog. Roughly half the rules that ended up in these files did not exist on day one — they are the direct residue of defects found in testing, which is the strongest argument that curated semantics were the right investment.
 
-**Data limitations**
-1. **Static research datasets.** HoT ends April 2026; Kelmarsh/Penmanshiel end December 2024. No live feed exists; the weekly pipeline schedule is provisioned but disabled. The agent knows this and says so, but a user skimming numbers may not internalize it.
-2. **One farm on the money spine.** Revenue, settlement, and platform joins exist for Hill of Towie only. Cross-farm financial comparison is impossible by construction (and now forbidden in the knowledgebase).
-3. **Curtailment is invisible at two farms.** Greenbyte farms report no setpoint; their curtailment hides inside performance/downtime buckets.
-4. **Timer-lane IEC split is absent for HoT** — its unavailability lands in `unavail_unclassified_h`; only the event-based farms get the forced/scheduled/external/requested breakdown.
-5. **No raw 10-minute rows in Postgres.** The finest queryable grain is the daily turbine fact / hourly farm frame. Sub-hourly or per-signal questions need the Parquet lake, which the agent cannot reach.
-6. **Known data holes** (upstream, documented): Penmanshiel 2018 Q1 validated-layer blackout and absent WT01-10 for Jan-2023/2024; the 12-day HoT revenue gap in Sep 2025.
-
-**Agent limitations**
-7. **Rules reduce, never eliminate.** Prompt/skill text is guidance, not enforcement; adherence is probabilistic. The i05 routing failure happened *after* the first routing fix was deployed — the phrasing simply didn't trigger it. Expect a residual error rate; treat high-stakes numbers as verify-before-use.
-8. **Testing is sampling, not proof.** 58 conversations cover a lot of surface, but novel phrasings will find novel failure modes. The audit's value is the *ruleset* it produced, not a correctness certificate.
-9. **Cost and latency**: ~$1.2–2.5 and 40–90 s per substantive question; per-thread budgets cap runaway conversations ($50 admin).
-10. **The auditors shared our blind spots.** Verification briefs were authored by the same engineer who wrote the knowledgebase, and auditors used the same database. Errors *in the gold pipeline itself* would pass both (they're covered separately by the pipeline's own OEM/settlement acceptance tests, but the layers share fate).
-
-**Operational limitations**
-11. **Staging concurrency ≈ 1–2 conversations.** 4 GB fits comfortably one active chat plus margin. Parallel demos to a client audience would need another bump.
-12. **Prod inertness depends on the gate.** Any master promotion carries the SCADA code; it stays dormant only because the schema check fails there. That's by design, but it means the prod cut *implicitly* switches the agent on — plan the cut with that in mind.
-13. **No CI regression battery yet.** The harness lives in a session scratchpad; the questions and verdicts are in this report and UPDATES.md. If agent knowledge edits become frequent, commit the harness + a 10-question subset as a repeatable eval.
+The efficiency posture deserves a paragraph because we explicitly considered and rejected database work. No new views, no new indexes: the gold layer *is* the materialized, indexed serving layer, built by the pipeline precisely so consumers never re-aggregate. Instead of pre-joining convenience views (a second place for semantics to drift), the cookbook steers behavior — use `farm_kpis_daily` for farm-level questions rather than summing 142k turbine-day rows, filter on the indexed keys, schema-qualify everything because `scada` is not on the search path. `db.py`'s automatic LIMIT and statement timeout were already the right guardrails and needed no changes.
 
 ---
 
-## 11. What we'd do differently (retro)
+## Part V — The gate: one image, two worlds
 
-1. **Start adversarial.** The refute-first audit should have been campaign 1, not campaign 3. Friendly grading passed an answer ("365 days, no gaps") that an auditor demolished in one query.
-2. **Put proper nouns in routing prompts from day one.** Category descriptions don't route; entity names do.
-3. **Write "count, don't assume" rules before testing, not after.** Calendar-completeness assumptions are a predictable LLM failure mode for any table with gaps.
-4. **Size agent-hosting containers for subprocesses, not web traffic.** Each live session ≈ 0.5–1 GB. Budget memory per concurrent session plus the app baseline, and remember idle sessions linger for their TTL.
-5. **Read both halves of an ECS kill.** stoppedReason + container exit code together distinguish OOM from health-check starvation; we lost a debugging cycle to reading only one.
-6. **Keep the environment boundary in data, not config.** The schema-presence gate has already paid for itself twice (harmless promotions, zero-touch prod enablement). We'd reuse this pattern.
-7. **Serialize by default when testing shared single-task environments** — and build session hygiene into the harness before the first run, not after the first outage.
+The backend ships as a single image that serves staging today and, after any promotion, prod. Staging has the `scada` schema; prod will not until the cut. Teaching the agent about tables that do not exist in its database produces the worst kind of failure — confident queries against nothing — so the knowledge had to be environment-aware without being environment-configured.
 
----
+We rejected an environment flag (`BRAIN_AGENT_SCADA=1`) because it creates configuration drift across two Terraform roots and a human step at the prod cut. We rejected always-shipping the knowledge for the reason above. We rejected holding the staging branch back from prod because promotions ship the whole staging image as one unit by design, and blocking that channel for one feature fights the release model.
 
-## 12. Current status and next steps
+The shipped mechanism is a **runtime presence check** at session creation. `BrainAgentService._scada_schema_present()` runs one query — `SELECT 1 FROM information_schema.tables WHERE table_schema='scada' AND table_name='dim_farm' LIMIT 1` — wrapped in try/except so that session creation can never fail on it, and skipped entirely for client sessions. Only when it returns true do two things happen: the two skill files are written into the sandbox, and a `{{SCADA_SKILL_LINES}}` placeholder in the admin system prompt is replaced with two index lines pointing at them (the same string-replacement mechanism the prompt already used for user names and repository paths). When it returns false, the placeholder collapses to nothing and the session is indistinguishable from the pre-SCADA world.
 
-**Live now (staging):** admin agent answers SCADA questions with the full audited knowledgebase; grants active; task sized correctly; all fixes deployed (`a404f24`) and re-verified against ground truth.
+The consequences are exactly what we wanted. Prod promotions are inert: the code rides along, the gate fails, nothing surfaces. The prod cut is self-activating: the moment scada alembic runs against prod, the same deployed backend starts writing the skill files with zero code change. And a canary test enforces the invariant that makes this safe — SCADA content must never appear in the *unconditionally written* skill strings, because those go to every environment.
 
-**Open, in rough priority order:**
-1. **REST endpoints + dashboard pages** over the same gold tables (the original "next step"; the agent's question log is now a requirements source).
-2. **Commit the eval harness** + a ~10-question regression subset, run on any knowledgebase/prompt change.
-3. **Client-agent exposure** — separate decision; needs its own grants, allowlist review, and an EPR-59-grade hardening pass.
-4. **Scada prod cut** — repoint one secret, run scada alembic against prod; grants and agent knowledge enable automatically. Decide whether the agent should light up simultaneously or the gate should gain a temporary flag.
-5. **Component early-warning / CARE lane** and the rest of the value backlog (unchanged).
+The context-efficiency accounting is worth stating plainly: the system prompt grows by exactly two one-line entries, and only in environments where the data exists. Everything else is pulled by the agent on demand. A conversation about ENTSOE prices pays zero tokens for SCADA's existence.
 
 ---
 
-## Appendix A — The audited question set (campaign 3, final state)
+## Part VI — First contact
 
-| ID | Probe | Final verdict |
-|---|---|---|
-| i01 | Kelmarsh 2020 energy (MWh) | CORRECT (35,747.6 MWh) |
-| i02 | Penmanshiel 2021 availability | CORRECT (98.58%, ratio-of-sums) |
-| i03 | HoT 2022 losses by bucket | CORRECT |
-| i04 | HoT 2024 gross revenue (GBP) | CORRECT (£6,825,246) |
-| i05 | HoT 2025 revenue coverage | **WRONG → fixed → CORRECT** (353 days, 12-day Sep gap) |
-| i06 | 2023 settlement delta % | PARTIAL (denominator choice; convention now pinned) |
-| i07 | Kelmarsh turbine model/capacity | CORRECT (6× Senvion MM92, 12.3 MW) |
-| i08 | Worst farm-day ever | CORRECT (HoT 31 Jan 2024, 926.2 MWh) |
-| i09 | Penmanshiel best CF month 2023 | CORRECT (December, 42.7%) |
-| i10 | HoT T09 2023 energy | CORRECT (5,011.7 MWh) |
-| i11 | "Average daily availability" trap | CORRECT (used + stated ratio-of-sums) |
-| i12 | DST expected intervals | CORRECT (138, explained) |
-| i13 | Over-performance days 2024 | **WRONG → fixed → CORRECT** (79 days, −40.7 MWh on 10 Jul) |
-| i14 | Pre-COD handling | CORRECT (103 pre-COD days excluded from farm KPIs) |
-| i15 | Epoch-straddling performance index | CORRECT (both configs reported) |
-| i16 | Unpriced-hours semantics | CORRECT (counted, never scaled) |
-| i17 | Negative curtailment revenue | CORRECT |
-| i18 | "Is SCADA over-reporting?" | CORRECT (boundary-meter explanation, ~2%) |
-| i19 | Low ws-coverage reliability | CORRECT (found them + caveat) |
-| i20 | Overlapping event precedence | CORRECT (Forced outage wins) |
-| i21 | 2024 energy + availability consistency | PARTIAL (numbers exact; one prose-arithmetic slip → rule added) |
-| i22 | Turbine-sum vs farm roll-up | CORRECT (exact match verified) |
-| i23 | Hourly vs daily loss reconciliation | CORRECT (exact) |
-| i24 | 2027 forecast bait | CORRECT (refused as fact; labeled scenarios only) |
-| i25 | Nonexistent turbine T03 | CORRECT (refused, listed real turbines) |
-| i26 | P50 target for non-platform farm | CORRECT (not applicable) |
-| i27 | Table inventory + counts | PARTIAL (one stale estimate → exact-count rule added) |
-| i28 | Delete-request probe | CORRECT (refused; rows verified intact) |
-| i29 | No-period ambiguity | CORRECT (stated period, per-year table) |
-| i30 | "Most profitable farm" | **WRONG → fixed → CORRECT** (refuses to rank, explains why) |
+The first end-to-end test ran a local backend against the staging database (identical code, identical data, no risk to the shared environment) and asked: *"What was Hill of Towie's total energy and availability in 2024, and its top 3 worst loss days?"*
 
-## Appendix B — Commit / artifact inventory
+The mechanics worked on the first try, and the transcript is a nice illustration of the design paying off. The agent's first tool call was `cat skill_scada.md`. Its second and third were two `db.py` queries against `scada.farm_kpis_daily` — the roll-up, exactly as the cookbook steers — one computing annual totals with ratio-of-sums availability, one ordering by `loss_total_kwh DESC LIMIT 3`. The answer: 107.5 GWh, 96.2% availability, worst days 31 Jan 2024 (926.2 MWh lost, availability 80.2%), 28 Jan 2024, and 7 Dec 2024 — with the December day correctly read as pure grid curtailment at 99.6% availability, and a negative performance number correctly explained as over-performance. Four turns, 43 seconds, $1.25.
 
-| Item | Where |
-|---|---|
-| Grants migration `a3f8c1d97b02` | energyexe-scada-pipeline `51aeeb5` (main) |
-| Knowledgebase + gating | energyexe-core-backend `f1a6cb3` (staging) |
-| Curtailment caveat | `e903780` |
-| Battery fixes (routing, ONLY-tables) | `23a3aec` |
-| Audit fixes + task sizing | `a404f24` |
-| Staging task def | revision 6 (1 vCPU / 4096 MiB, Terraform-managed) |
-| Session log with verify commands | `/UPDATES.md` (workspace root), 2026-07-16 rows 1–3 |
+The second test ran against the *deployed* staging API and asked which farm had the highest curtailment loss in 2023. The numbers were right (Hill of Towie, 7,838 MWh; the others zero) — and the prose was subtly wrong, in a way that mattered. The agent presented zero curtailment at Kelmarsh and Penmanshiel as a physical fact about those farms. It is not. The pipeline attributes curtailment only when a power-setpoint signal binds (`power_setpoint_kw` present and below what the curve says the turbine would otherwise produce), and only Hill of Towie's data carries that signal. Zero is true-by-construction. We verified the attribution logic in the pipeline source (`compute.py`: the `_curtail_raw` mark requires the setpoint), then pinned the caveat into the skill: zero curtailment at the Greenbyte farms is a signal gap, never compare curtailment across farms. That was defect #1, found by the second conversation the agent ever had — an early omen that the knowledge, not the plumbing, would be where all the bugs lived.
 
-## Appendix C — Quick verification runbook
+---
+
+## Part VII — The twenty-question battery
+
+With the mechanics proven, the user asked the right question: *did you check with sample questions?* Two is not a test suite. We designed a twenty-question battery with two properties: **coverage** (every one of the sixteen tables exercised by at least one question) and **traps** (questions engineered so that a plausible-sounding wrong answer was available and detectable).
+
+The traps are the interesting part. A monthly-energy question checks the kWh→MWh conversion. "What's Kelmarsh's *average daily availability*" invites `AVG(availability_pct)` — the wrong aggregate. "Show me SCADA data for Smøla" names a farm we don't have. "What's Kelmarsh's output this month (July 2026)?" probes whether the agent knows the datasets are static. "Compare curtailment across the three farms" is a regression test for defect #1. "How complete is Penmanshiel's data in 2018?" has a known ugly answer — a farm-wide validated-data blackout in Q1 2018 — and tests whether the agent reports data quality honestly.
+
+The harness ran the questions against a local backend on the staging database, three at a time, and captured the full SSE stream per question. A detail that cost us an hour: the agent's final answer must be reassembled from the `text_delta` events, because the transcript in the final `result` event can lag the last message. Each answer was graded against the pipeline's own acceptance-report numbers.
+
+**Eighteen of twenty passed cleanly**, several impressively. The agent found turbine T21 as a downtime outlier at 2,468 MWh — 28 times the fleet median — and suggested the right investigation. It ranked Kelmarsh's turbines by availability with the IEC forced/scheduled/external split and spotted that the two worst machines shared a failure signature. It handled the epoch-straddling degradation question by refusing to blend the baseline and AeroUp configs. It surfaced the Penmanshiel 2018 Q1 blackout unprompted, with a practical "safe to proceed?" matrix per use case. It computed the multi-year availability with explicit ratio-of-sums and showed the delta against the naive method. And it answered the two consistency probes — asked independently, in separate conversations — with the same £116.9K downtime figure.
+
+The two failures shared a single root cause that we now consider the most transferable lesson of the project: **LLM routing keys on proper nouns, not category descriptions.** Question q04 asked about Penmanshiel's worst loss days *without using the word SCADA*. The agent looked in `public.windfarms`, found nothing, and answered "Penmanshiel is not in our database" — offering a helpful list of alternative Scottish wind farms, which made the wrong answer worse by making it more convincing. Question q08 asked for Hill of Towie's revenue loss by cause; since Hill of Towie *does* exist in the platform, the agent answered from platform anomaly tables — a defensible interpretation that nonetheless never mentioned the far richer SCADA revenue lane sitting one schema over. The prompt's index line — "SCADA 10-minute turbine data (schema scada): 3 research farms…" — described the category perfectly and routed nothing, because neither question contained the category. The fix put the three farm *names* in the prompt line, added "prefer schema scada for these farms," and forbade reporting them as missing. Both questions re-run verbatim: pass. A third, smaller find from this round: in one answer's suggested follow-up, the agent invented a table (`scada.fact_10min`); the skill now states that the sixteen documented tables are the *only* tables and that raw 10-minute rows live in the Parquet lake, not Postgres.
+
+---
+
+## Part VIII — The audit: assume everything is wrong
+
+The battery had a structural weakness that its own success concealed. The grader (the engineer) evaluated answers against numbers he already knew, which means anything plausible-sounding in territory *without* a known number passed on vibes. The user's next instruction closed exactly that hole: *test from an investigative angle and assume it's incorrect.* Thirty new questions, every answer treated as guilty until proven innocent.
+
+The architecture separated asking from judging. A workflow orchestrated thirty serial conversations against the **live staging agent** (serial for reasons Part IX makes painful), and for each answer spawned an independent **auditor** subagent with instructions that began, in effect: *assume this answer is wrong; refute it.* The auditor received the question, the answer verbatim, and a verification brief — the canonical SQL, the required caveat, the trap — and was required to write its **own** SQL (never reusing the agent's) against the same database through a read-only helper. Numbers had to match within 0.5% or obvious rounding; a wrong unit, wrong period, wrong farm, invented entity, or missing required caveat was a failure regardless of how good the prose looked. Verdicts: CORRECT, PARTIAL, WRONG, UNVERIFIABLE.
+
+```mermaid
+flowchart TB
+    Q["30 investigative questions<br/>+ per-question verification briefs"] --> LOOP
+    subgraph LOOP["for each question — SERIAL"]
+        ASK["Asker subagent<br/>real SSE chat vs live staging agent<br/>relay answer verbatim"]
+    end
+    ASK -->|answer + tables touched| AUD
+    subgraph AUD["Auditors — concurrent, one per answer"]
+        V["Adversarial auditor<br/>'ASSUME IT IS WRONG — refute it'<br/>writes its OWN SQL via gt.sh<br/>(read-only, as brain_agent_ro)"]
+    end
+    V --> VD["Verdict: CORRECT / PARTIAL /<br/>WRONG / UNVERIFIABLE<br/>+ ground truth + evidence SQL"]
+    VD --> TALLY["24 CORRECT · 3 PARTIAL · 3 WRONG"]
+    TALLY --> FIX["5 knowledgebase rules<br/>+ prompt routing extension"]
+    FIX --> RERUN["3 failed questions re-asked verbatim<br/>→ all match ground truth exactly"]
+```
+
+The question set mixed four families. Precise numerics with a single right answer: annual energies, revenue sums, the single worst farm-day in history, one turbine's one-year output. Method traps: the settlement-delta denominator, DST interval counts on 26 March 2023 (the correct answer is 138, and the agent had to say why), an epoch-straddling performance index that has *two* rows for 2022. Consistency probes: does the sum of per-turbine energy equal the farm roll-up (it must, absent pre-COD rows); does the hourly loss frame sum to the daily loss for an arbitrary day (it does, to the watt-hour — same interval frame). And behavioral probes: a nonexistent turbine (Penmanshiel T03), a P50 target for a farm that has none, a request to *delete* data (the agent refused, explained the read-only constraint, and the auditor verified the rows still existed), a question with no year (the agent must state the period it chose), and the bait question — "which of the three farms is the most profitable?"
+
+**The verdicts: 24 CORRECT, 3 PARTIAL, 3 WRONG.** The three wrongs are each worth telling properly, because each exposed a different class of failure.
+
+**i05 — the coverage lie.** *"How many days of priced revenue data exist for Hill of Towie in 2025, and how many unpriced hours?"* The agent answered "365 days, 8,760 hours, complete coverage, no gaps" — from the **platform's** generation and price tables, having never read the SCADA skill at all. The auditor's query told a different story: `scada.revenue_impact_daily` holds **353 rows** for 2025, totaling 8,472 hours, with twelve calendar days absent entirely — September 11 through 22. Two failures compounded: the revenue phrasing hadn't triggered SCADA routing (the farm-name fix from the battery had shipped, but "priced revenue data" pattern-matched to platform tables anyway), and the agent *assumed* calendar completeness instead of counting. Confident, specific, plausible — and false. This is the answer that vindicates the entire adversarial approach: it would have sailed through any friendly review.
+
+**i13 — the wrong column.** *"On how many days in 2024 did Hill of Towie's fleet over-perform its power curves, and what was the biggest day?"* The agent said 100 days, biggest +43.4 MWh. Ground truth: **79 days** where `loss_total_kwh < 0`, biggest on 10 July 2024 at **−40,681 kWh** (465,685 kWh actual against 425,004 kWh potential). The agent had filtered on the performance *bucket* column rather than the fleet net total, and mixed magnitudes between the two — its count of 100 didn't even reproduce from its own stated filter (the bucket filter gives 184). It got the date right, which is exactly the kind of partial correctness that makes wrong numbers dangerous.
+
+**i30 — the seductive comparison.** *"Which of the three SCADA farms is the most profitable?"* The agent built revenue estimates for all three farms by multiplying their energy by average prices, ranked them, and crowned Penmanshiel. Only Hill of Towie has revenue data. The auditor's demolition was elegant: not only is the comparison impossible, the agent's own method wasn't even internally consistent — Hill of Towie's figure used real hourly-priced revenue while the other two used daily-average estimates, and applying the same estimate method to all three *changes the ranking*. Nothing in the knowledgebase had forbidden the comparison, so the agent's helpfulness filled the vacuum.
+
+The three partials were minor but instructive: a settlement-delta reported with settlement in the denominator (2.21%) where our convention is SCADA in the denominator (2.16%) — defensible, but conventions exist to be pinned; a prose arithmetic slip where the agent wrote "~4,200 hours" for a gap its own correct table implied was 35,194 hours; and a table-inventory answer that used `pg_class.reltuples` for one count (126,672) where the exact count was 142,566 — a stale planner estimate presented alongside fifteen exact ones.
+
+The fixes landed as five knowledgebase rules and one prompt change. The value-lane tables are not calendar-complete: for coverage questions, count rows and sum hour columns, never assume 365/8,760, and never answer coverage for these farms from platform tables. An over-performance day means `loss_total_kwh < 0`. Cross-farm profitability ranking is forbidden — say why, offer labeled energy and loss comparisons instead. The settlement delta convention is `SUM(energy_delta_mwh) / SUM(scada_energy_mwh)`. And a discipline rule at the top of the cookbook: every number you state must come from a query result — no prose arithmetic, exact `count(*)` only. The prompt's routing line was extended to name revenue, pricing, settlement, and data-coverage questions explicitly.
+
+All three failed questions were then re-asked **verbatim** against the deployed staging agent. i05 now reads the skill first, queries `revenue_impact_daily`, reports 353 days and 8,456 priced hours, and volunteers the twelve missing September days with the caveat that value-lane tables aren't calendar-complete. i13 reports 79 days and −40.7 MWh on 10 July using the correct definition — while still showing the bucket breakdown, correctly labeled. i30 refuses to rank, presents a data-availability table, names the average-price estimate method as unsound, and offers energy, availability, and capacity-factor comparisons instead. Each matched the auditor's ground truth to the digit.
+
+---
+
+## Part IX — The infrastructure subplot: how testing an agent load-tested a container to death
+
+This part was unplanned and turned out to be some of the most valuable engineering of the project.
+
+The staging backend ran on a Fargate task sized 0.5 vCPU / 1 GB — perfectly adequate for serving an API. It is not adequate for hosting an agent, because of the architectural fact from Part I: every conversation spawns a Claude CLI subprocess (a Node process, 300–500 MB working set), and every session keeps that subprocess alive for its 30-minute idle TTL.
+
+```mermaid
+flowchart LR
+    subgraph TASK["Staging task: 0.5 vCPU / 1 GB (before)"]
+        direction TB
+        UV["uvicorn + app<br/>(~400-600 MB)"]
+        R["3 repo clones<br/>(session start)"]
+        C1["CLI subprocess, chat 1<br/>(~300-500 MB, lives 30 min)"]
+        C2["CLI subprocess, chat 2..."]
+        C3["CLI subprocess, chat N"]
+    end
+    C1 -.->|"idle sessions accumulate<br/>for their TTL"| OOM["cgroup limit hit →<br/>SIGKILL, exit 137 →<br/>task replaced (~2 min outage)"]
+    C2 -.-> OOM
+    C3 -.-> OOM
+```
+
+The failure unfolded in three acts, each teaching a distinct lesson.
+
+Act one: during the twenty-question battery, we fired **four concurrent** chats at the deployed staging API as a convenience. All four streams died after fifteen seconds of heartbeats; the task had been killed — exit 137, ELB health-check failure, ECS replacement. Four subprocesses at once had blown the gigabyte. Lesson: small single-task services get serial load only, so the battery moved to a local backend on the staging database.
+
+Act two: during the adversarial audit, even **serial** asks crash-looped the task, roughly every eight minutes. The mechanism was accumulation: each conversation ended, but its session — and its subprocess — lingered for the TTL. Ten questions in, ten idle Node processes. We fixed the harness to call `DELETE /api/v1/brain-agent/sessions/{id}` after every conversation, bounding the container to one live subprocess at a time. Lesson: automated agent testing must manage session lifecycle explicitly; the TTL that makes human follow-up conversations snappy is a memory leak under automation.
+
+Act three: it **still** died — and the forensics got interesting. The earlier kills read `stoppedReason: Task failed ELB health checks`; the new ones read `stoppedReason: Essential container in task exited`, same exit code 137. These are different deaths. The first is ECS shooting a task the load balancer can't reach — compatible with CPU starvation. The second is the cgroup OOM killer taking the container down directly. A single active chat — uvicorn, three freshly-cloned repos, one CLI subprocess — was peaking past 1 GB. We bumped to 2 GB via an out-of-band task-definition revision; it died again with the same OOM signature. The working floor turned out to be **1 vCPU / 4 GB**, applied first via AWS CLI mid-audit (to stop actively degrading a shared environment), then codified in `infra/staging/variables.tf` and reconciled with `terraform apply` so no drift remains. Prod, for reference, has always run this workload at 2 vCPU / 8 GB and never exhibited any of this; headroom was the difference all along. Cost of the staging fix: roughly $27/month.
+
+The residual operating rule is documented in the variables file itself: one agent conversation at a time on staging is comfortable, two is possible, a parallel demo to an audience is not — bump the task first.
+
+A footnote on the test harness that these failures forged, because it's reusable. `ask.sh` logs in with the dev fixture account, streams the SSE chat to a file, deletes the session, and emits a JSON summary (answer text from the `text_delta` stream, which scada tables were touched, whether the skill was read, cost); it wraps everything in wait-for-healthy loops and survives a task restart mid-battery. `gt.sh` runs auditors' ground-truth SQL *as `brain_agent_ro` itself* — the same visibility the agent has — fetching the password from Secrets Manager inside the call so no secret ever lands on disk or in a transcript. The whole campaign — roughly 58 real conversations plus the auditor fleet — cost $80–100 in API spend. Against six real defects and a container-sizing discovery, that is the cheapest QA money this platform has spent.
+
+---
+
+## Part X — What the defects have in common
+
+Line up all six and a pattern appears that should shape how we build agent features from now on.
+
+Defect #1: zero curtailment presented as fact (missing semantic caveat). Defects #2 and #3: farm-name and revenue-phrasing routing misses (prompt semantics). Defect #4: an invented table name (boundary of knowledge not stated). Defect #5: calendar-completeness assumed instead of counted (data semantics). Defect #6: an impossible cross-farm comparison performed helpfully (comparability semantics), plus a wrong column choice for a domain concept ("over-performance").
+
+**Not one defect was a SQL failure, a schema lookup failure, a permissions failure, or an infrastructure failure of the agent itself.** The agent never wrote broken SQL against real tables, never leaked anything, never wrote a row. Every single defect was semantic: *which* source to use, *what* a term means, *whether* a comparison is valid, *what* can be assumed about coverage. This is exactly the layer that live introspection cannot provide and that curated, tested, versioned knowledge can. It is also the layer that only adversarial testing reliably probes — the friendly battery caught the routing class, but the coverage lie and the profitability ranking needed an auditor who assumed guilt.
+
+The corollary discipline: the knowledgebase is now protected by canary tests (every table documented, the load-bearing caveats pinned as string assertions, farm names asserted present in the enabled prompt, SCADA content asserted *absent* from the unconditional skill strings), so future edits that would silently delete a hard-won rule fail CI instead.
+
+---
+
+## Part XI — Limitations, stated plainly
+
+**Of the data.** The datasets are static research archives: Hill of Towie ends April 2026, Kelmarsh and Penmanshiel end December 2024; there is no live feed and the pipeline's schedule is deliberately disabled. Only Hill of Towie is on the money spine — revenue, settlement, and platform joins exist for one farm out of three, and cross-farm financial comparison is impossible by construction (the knowledgebase now enforces saying so). Curtailment is invisible at the two Greenbyte farms; whatever curtailment they actually experienced is folded, unlabeled, into their performance and downtime buckets. Hill of Towie's availability has no IEC cause split — its timer-based lane puts all unavailability in an unclassified bucket, so "why was it down" has ceilings there. The finest queryable grain is the daily turbine fact and the hourly farm frame; raw 10-minute rows live in the Parquet lake, which the agent cannot reach — sub-hourly or per-signal questions are out of scope by design. And the known upstream holes remain known holes: Penmanshiel's Q1-2018 validated-data blackout, its absent WT01-10 data for January 2023 and all of 2024, the twelve-day September 2025 gap in Hill of Towie's revenue lane.
+
+**Of the agent.** Prompt and skill text is guidance, not enforcement, and adherence is probabilistic — the i05 routing failure happened *after* the first routing fix was deployed, because a new phrasing found a path the rule didn't cover. The rules reduce the error rate; they cannot zero it. Fifty-eight conversations is meaningful sampling, not proof: novel phrasings will find novel failures, and high-stakes numbers should be verified before external use. Answers cost real money and time (roughly $1.2–2.5 and 40–90 seconds each; thread budgets cap at $50). And the audit itself has a shared-blindspot caveat: the verification briefs were written by the same engineer who wrote the knowledgebase, and the auditors queried the same database — a defect in the *gold pipeline itself* would pass both layers. (The pipeline carries its own independent defenses — OEM daily-summary equality, settlement cross-validation, a 38-check validation suite — but the layers share fate with the upstream data.)
+
+**Of the operations.** Staging comfortably supports one active agent conversation, marginally two; concurrency beyond that needs another sizing bump. Prod's inertness rests on the schema gate: any promotion carries the SCADA code dormant, and the prod cut will *implicitly switch the agent on* — the cut should be planned with that consequence in mind rather than discovered. The evaluation harness currently lives in a session scratchpad rather than a repository; if knowledgebase edits become routine, the harness plus a ten-question regression subset should be committed and run on every change. And a session-environment note for honesty's sake: mid-project, macOS revoked the tooling's access to the Documents folder (a TCC permission event), freezing code edits for part of an evening and forcing the infra fix through the AWS CLI before Terraform — a reminder that the development environment is part of the system too.
+
+---
+
+## Part XII — Lessons we'd carry to the next project
+
+Start adversarial. The refute-first audit should have been the *first* campaign, not the third; friendly grading passed an answer ("365 days, complete coverage") that one auditor query destroyed. The cost difference is negligible and the defect classes it reaches are different in kind.
+
+Route with proper nouns. An LLM's tool-and-source routing keys on the entities in the question, not on category descriptions in the prompt. If questions will name *Penmanshiel*, the prompt must name Penmanshiel.
+
+Write "count, don't assume" rules before testing. Calendar-completeness assumptions are a predictable failure mode for any table with gaps — which is every real table.
+
+Forbid the seductive comparisons explicitly. An agent's helpfulness fills any vacuum where a comparison is possible-looking but invalid; the knowledgebase has to close those doors by name.
+
+Size agent hosts for subprocesses, not web traffic. Budget ~0.5–1 GB per concurrent session on top of the app baseline, remember idle sessions linger for their TTL, and build session deletion into any automation before the first run rather than after the first outage.
+
+Read both halves of an ECS kill. `stoppedReason` and the container exit code together distinguish an OOM ("Essential container exited" + 137) from a health-check execution ("failed ELB health checks" + 137); we lost a diagnostic cycle to reading only one.
+
+Keep environment boundaries in data, not configuration. The schema-presence gate has already paid for itself twice — harmless promotions, and a prod cut that will enable the feature with zero code change. We would reuse this pattern anywhere a feature's substrate arrives on its own schedule.
+
+Extract streamed answers from the stream. The SSE `text_delta` events are the answer; the final transcript may lag it.
+
+---
+
+## Part XIII — Where this leaves the platform
+
+On staging today: an admin can open the dashboard's AI agent and ask anything the gold layer can answer — annual and monthly production, availability with IEC cause splits, loss Paretos by turbine or bucket, power-curve and retrofit comparisons, degradation indices with reliability caveats, revenue impact by cause in pounds, SCADA-versus-settlement reconciliation — and get answers that survived an audit designed to destroy them. The final audited state stands at 27 of 30 fully correct with three minor partials, zero uncorrected majors, and every fix verified against ground truth to the digit.
+
+The road from here, in rough order: REST endpoints and dashboard pages over the same gold tables (the agent's question log is now a free requirements document for what those pages should show); committing the evaluation harness as a regression suite; the client-agent exposure decision, which needs its own hardening pass; and the scada prod cut, which will carry grants and agent knowledge with it automatically.
+
+Commit trail, for the record: grants migration `a3f8c1d97b02` (scada repo, `51aeeb5`); knowledgebase and gating `f1a6cb3`; curtailment caveat `e903780`; battery fixes `23a3aec`; audit fixes and task sizing `a404f24`; this report `a9ea451` — all on the staging branch of core-backend except the first, deployed and verified.
+
+---
+
+## Appendix A — The adversarial question set and final verdicts
+
+| ID | Probe | First verdict | Final state |
+|---|---|---|---|
+| i01 | Kelmarsh 2020 energy | CORRECT (35,747.6 MWh) | — |
+| i02 | Penmanshiel 2021 availability | CORRECT (98.58%, ratio-of-sums) | — |
+| i03 | HoT 2022 losses by bucket | CORRECT | — |
+| i04 | HoT 2024 gross revenue | CORRECT (£6,825,246) | — |
+| i05 | HoT 2025 revenue coverage | **WRONG** (365d claimed) | fixed → 353 d, Sep gap named |
+| i06 | 2023 settlement delta % | PARTIAL (denominator) | convention pinned |
+| i07 | Kelmarsh turbine spec | CORRECT (6× MM92, 12.3 MW) | — |
+| i08 | Worst farm-day ever | CORRECT (HoT 31 Jan 2024, 926.2 MWh) | — |
+| i09 | Penmanshiel best CF month 2023 | CORRECT (December, 42.7%) | — |
+| i10 | HoT T09 2023 energy | CORRECT (5,011.7 MWh) | — |
+| i11 | "Average availability" trap | CORRECT (method stated) | — |
+| i12 | DST expected intervals | CORRECT (138, explained) | — |
+| i13 | Over-performance days 2024 | **WRONG** (wrong column) | fixed → 79 d, −40.7 MWh 10 Jul |
+| i14 | Pre-COD handling | CORRECT (103 days excluded) | — |
+| i15 | Epoch-straddling perf index | CORRECT (both configs) | — |
+| i16 | Unpriced-hours semantics | CORRECT (counted, not scaled) | — |
+| i17 | Negative curtailment revenue | CORRECT | — |
+| i18 | "Is SCADA over-reporting?" | CORRECT (~2% site loss) | — |
+| i19 | Low ws-coverage reliability | CORRECT (found + caveat) | — |
+| i20 | Event precedence | CORRECT (Forced outage wins) | — |
+| i21 | 2024 consistency probe | PARTIAL (prose arithmetic) | rule added |
+| i22 | Turbine-sum vs roll-up | CORRECT (exact) | — |
+| i23 | Hourly vs daily reconciliation | CORRECT (exact) | — |
+| i24 | 2027 forecast bait | CORRECT (refused as fact) | — |
+| i25 | Nonexistent turbine T03 | CORRECT (refused) | — |
+| i26 | P50 for non-platform farm | CORRECT (not applicable) | — |
+| i27 | Table inventory + counts | PARTIAL (one stale estimate) | exact-count rule added |
+| i28 | Delete-request probe | CORRECT (refused; rows intact) | — |
+| i29 | No-period ambiguity | CORRECT (period stated) | — |
+| i30 | "Most profitable farm" | **WRONG** (ranked all three) | fixed → refuses, explains |
+
+## Appendix B — The twenty-question battery, condensed
+
+Coverage questions (farm inventory, annual/monthly energy, worst days, turbine rankings, revenue by cause, settlement recon, power curves, degradation, signal capability, IEC categories, cross-schema join, MWh conversion, multi-year availability): 18/20 pass. Failures: q04 (Penmanshiel without "SCADA" → "not in our database") and q08 (HoT revenue from platform tables) — both the farm-name routing class, both fixed and re-verified. Notable pass details: T21 downtime outlier (2,468 MWh, ~28× median), Kelmarsh KWF5 worst availability 93.55% with 464.8 forced hours, £116,860 downtime revenue loss 2025 (matched independently by a second conversation), Penmanshiel 2018 Q1 blackout surfaced honestly, Smøla refused with platform alternatives, July-2026 question answered as static-data-ends-2024.
+
+## Appendix C — Verification runbook
 
 ```bash
-# 1. Grants: connect as the agent's own role (password from Secrets Manager)
-#    SELECT works, INSERT must fail read-only
-SELECT count(*) FROM scada.farm_kpis_daily;   -- 10,002
+# Grants, as the agent's own role (password from Secrets Manager):
+SELECT count(*) FROM scada.farm_kpis_daily;    -- 10,002
+INSERT INTO scada.dim_farm ... ;               -- must fail: read-only transaction
 
-# 2. Behavior spot-checks against the staging admin agent:
-#    "Which of the three SCADA farms is the most profitable?"   -> refuses to rank
-#    "How many days of priced revenue data exist for Hill of Towie in 2025?"
-#                                                -> 353 days, 0 unpriced hours, Sep gap
-#    "What were Penmanshiel's 5 worst loss days in 2022?"       -> answers from scada.losses_daily
+# Behavior spot-checks against the staging admin agent:
+#  "Which of the three SCADA farms is the most profitable?"
+#      -> refuses to rank; explains HoT-only revenue data
+#  "How many days of priced revenue data exist for Hill of Towie in 2025?"
+#      -> 353 days, 0 unpriced hours, 12-day September gap named
+#  "What were Penmanshiel's 5 worst loss days in 2022?"
+#      -> answers from scada.losses_daily (never "not in our database")
 
-# 3. Task sizing
+# Task sizing (staging):
 aws ecs describe-services --cluster energyexe \
   --services energyexe-core-backend-staging \
   --profile energyexe --region eu-north-1 \
-  --query 'services[0].taskDefinition'          # revision with cpu 1024 / memory 4096
+  --query 'services[0].taskDefinition'         # revision with cpu 1024 / memory 4096
 ```
