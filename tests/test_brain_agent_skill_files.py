@@ -156,8 +156,30 @@ def test_scada_skill_covers_all_gold_tables():
         "revenue_impact_daily",
         "settlement_recon_daily",
         "turbine_performance_yearly",
+        "dim_alarm_code",
+        "alarm_events",
+        "alarm_code_daily",
     ):
         assert f"scada.{table}" in SKILL_SCADA, f"scada.{table} missing from SKILL_SCADA"
+
+
+def test_scada_skill_pins_alarm_caveats():
+    """The alarm-lane load-bearing caveats: buckets are proposals, alarm hours
+    are not downtime, undocumented codes are never invented, instantaneous
+    events are filtered for duration analysis."""
+    from app.services.brain_agent_skill_files import (
+        SKILL_SCADA,
+        SKILL_SCADA_QUERIES,
+    )
+
+    assert "PROPOSALS" in SKILL_SCADA  # dim_alarm_code.status = proposed
+    assert "proposed" in SKILL_SCADA and "confirmed" in SKILL_SCADA
+    assert "Alarm hours are NOT downtime hours" in SKILL_SCADA
+    assert "NEVER invent what a code means" in SKILL_SCADA
+    assert "duration_h IS NOT NULL" in SKILL_SCADA
+    assert "alarm_code_daily" in SKILL_SCADA_QUERIES
+    assert "dim_alarm_code" in SKILL_SCADA_QUERIES
+    assert "buckets are proposed" in SKILL_SCADA_QUERIES
 
 
 def test_scada_skill_pins_the_conventions():

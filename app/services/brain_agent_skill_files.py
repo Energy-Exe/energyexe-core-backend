@@ -534,6 +534,13 @@ environment/derating/none), precedence (lower wins overlaps)
 **scada.dim_signal_capability** (PK farm,signal): status (reported|all_null|absent),
 null_pct, first_year, last_year — CHECK THIS before trusting a signal exists
 for a farm.
+**scada.dim_alarm_code** (PK source_format,source_code): Hill of Towie alarm-code
+registry — message (OEM text, NULL for ~most codes), is_stopping, bucket
+(same vocabulary as dim_event_category loss_bucket), is_available,
+status (`proposed`|`confirmed`), confidence (high|medium|low), events_total,
+total_hours (Σ bracketed hours, the Pareto basis), notes (evidence for the
+bucket). Covers the top-80 codes by bracketed hours (91.7% of alarm-hours)
+plus the 12 OEM-documented codes; codes outside it are unclassified tail.
 
 ## Daily turbine facts — PK (farm, turbine, date_local), index (farm, date_local)
 
@@ -571,7 +578,22 @@ lower edge; n, power_mean_kw, power_p50_kw, power_std_kw, ws_mean_ms
 aep_epoch_mwh, performance_index (1.0 = epoch average), bins_used,
 intervals_used, ws_coverage_pct (< ~90 ⇒ index unreliable — say so)
 
-## Value lane (money spine — Hill of Towie only)
+## Alarm & event data (all 3 farms)
+
+**scada.alarm_events** (PK farm,turbine,source_code,time_on; indexes
+(farm,source_code) and (farm,turbine,time_on)): event-grain log, ~8M rows.
+station_id, time_off (NULL = instantaneous status event), duration_h (NULL
+when unbracketed — ALWAYS filter `duration_h IS NOT NULL` for duration
+analysis), severity_class, message, iec_category + service_category
+(greenbyte farms only). Hill of Towie rows are OEM alarm codes;
+Kelmarsh/Penmanshiel rows are Greenbyte status events (join
+dim_event_category on iec_category for their semantics). time_on/time_off
+are UTC.
+**scada.alarm_code_daily** (PK farm,turbine,date_local,source_code; index
+farm,date_local): the rollup to PREFER for per-code Paretos and trends.
+events_started, bracketed_events (onset local day), alarm_hours = hours the
+code was ACTIVE that local day (same-code overlaps union-merged, clipped at
+local midnights, so ≤ day length per row).
 
 **scada.losses_hourly** (PK farm,hour_utc; index farm,date_local): farm-hour
 loss frame for price joins. hour_utc is tz-aware UTC; energy_kwh,
@@ -625,6 +647,23 @@ curtailment_delta_mwh, consumption_mwh, hours_scada/settlement/both
   settlement_recon_daily, COUNT the actual rows and SUM the hour columns —
   never assume 365 days or 8,760 hours, and never answer coverage questions
   about these farms from the platform's generation/price tables.
+- **Alarm hours are NOT downtime hours.** Different codes overlap in time
+  (informational codes fire while the turbine PRODUCES — e.g. code 50950,
+  131,698 alarm-hours, is active during normal operation), so summing
+  alarm_hours across codes double-counts and mixes production time in.
+  `availability_daily` is the ONLY source of truth for downtime; alarms are
+  diagnostic enrichment (which code was active when).
+- **Alarm buckets are PROPOSALS.** dim_alarm_code.status is `proposed` until
+  an analyst confirms it (confidence high/medium/low, evidence in notes).
+  Any bucket-based aggregate MUST carry that caveat. The buckets were derived
+  empirically from signal signatures — not from OEM documentation.
+- **Most Hill of Towie codes are undocumented** (message IS NULL — only 12
+  codes have OEM text). NEVER invent what a code means; report the number,
+  its empirical stats, and the proposed bucket + confidence if present.
+- **~93% of Hill of Towie events are instantaneous** (time_off NULL,
+  duration_h NULL) — status transitions, not outages. Any duration or
+  hours analysis must filter `duration_h IS NOT NULL` (or use
+  alarm_code_daily, which already does).
 
 ## Units & conventions
 
@@ -761,6 +800,52 @@ FROM scada.settlement_recon_daily
 WHERE farm = 'hill_of_towie'
 GROUP BY 1 ORDER BY 1 DESC LIMIT 12
 ```
+
+## Alarm-code Pareto (use alarm_code_daily, join the dim for context)
+
+```sql
+-- top codes by active hours in a period; ALWAYS surface bucket status
+SELECT a.source_code, d.message, d.bucket, d.status, d.confidence,
+       round(SUM(a.alarm_hours)::numeric, 1) AS active_h,
+       SUM(a.events_started)                 AS events
+FROM scada.alarm_code_daily a
+LEFT JOIN scada.dim_alarm_code d
+       ON d.source_format = 'siemens_wps' AND d.source_code = a.source_code
+WHERE a.farm = 'hill_of_towie'
+  AND a.date_local >= '2024-01-01' AND a.date_local < '2025-01-01'
+GROUP BY 1,2,3,4,5 ORDER BY active_h DESC LIMIT 15
+```
+Caveat every bucket-based number with "buckets are proposed, not confirmed"
+while status = 'proposed'. Codes with NULL dim rows are the unclassified tail.
+
+## Alarm activity vs losses on a bad day (diagnostic join)
+
+```sql
+SELECT a.turbine, a.source_code, d.message, d.bucket,
+       round(a.alarm_hours::numeric, 1) AS active_h,
+       round((l.loss_total_kwh/1000)::numeric, 1) AS turbine_loss_mwh
+FROM scada.alarm_code_daily a
+JOIN scada.losses_daily l USING (farm, turbine, date_local)
+LEFT JOIN scada.dim_alarm_code d
+       ON d.source_format = 'siemens_wps' AND d.source_code = a.source_code
+WHERE a.farm = 'hill_of_towie' AND a.date_local = '2024-01-31'
+  AND a.alarm_hours > 1
+ORDER BY l.loss_total_kwh DESC, a.alarm_hours DESC LIMIT 20
+```
+Correlation, not attribution: `availability_daily` stays the downtime truth.
+
+## Longest individual outage events (event grain)
+
+```sql
+SELECT turbine, source_code, time_on, time_off,
+       round(duration_h::numeric, 1) AS hours
+FROM scada.alarm_events
+WHERE farm = 'penmanshiel' AND duration_h IS NOT NULL
+ORDER BY duration_h DESC LIMIT 10
+```
+Greenbyte farms: filter/interpret via iec_category (join
+dim_event_category); Hill of Towie: via source_code (join dim_alarm_code).
+NEVER SUM raw duration_h across codes as "downtime" — codes overlap.
 """
 
 
