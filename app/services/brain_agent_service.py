@@ -378,7 +378,7 @@ class BrainAgentService:
                             # we attach them to the preceding assistant message's toolCalls below.
                             pass
 
-                content = "\n".join(text_parts).strip()
+                content = "\n\n".join(text_parts).strip()
                 if content:
                     messages.append({
                         "id": sm.uuid,
@@ -405,7 +405,9 @@ class BrainAgentService:
                                 "isLoading": False,
                             })
 
-                content = "\n".join(text_parts).strip()
+                # Double newline: single "\n" is a markdown soft-break and the
+                # blocks are separate paragraphs (typically split by tool use).
+                content = "\n\n".join(text_parts).strip()
 
                 msg: Dict[str, Any] = {
                     "id": sm.uuid,
@@ -866,6 +868,15 @@ class BrainAgentService:
                         },
                     )
                 elif content_block.get("type") == "text":
+                    # A new text block after earlier text in the same turn means
+                    # the model paused for tool calls in between. Without an
+                    # explicit separator the frontend concatenates the deltas
+                    # into one run-on paragraph ("...schema.The skill file...").
+                    if session and session.has_any_text:
+                        yield SSEEvent(
+                            event_type="text_delta",
+                            data={"text": "\n\n"},
+                        )
                     yield SSEEvent(
                         event_type="status",
                         data={"phase": "responding"},
@@ -894,9 +905,18 @@ class BrainAgentService:
                         )
                         session.has_any_text = True
                 elif isinstance(block, ToolUseBlock):
-                    # Tool use blocks are already emitted via StreamEvent content_block_start.
-                    # Only emit here as fallback if StreamEvent didn't fire.
-                    pass
+                    # The content_block_start StreamEvent announced this tool
+                    # with an empty input (the input streams as json deltas we
+                    # skip). The complete AssistantMessage carries the full
+                    # input, so backfill it — the frontend uses it for the
+                    # chip label (SQL snippet / command) and persists it.
+                    yield SSEEvent(
+                        event_type="tool_input",
+                        data={
+                            "tool_id": block.id,
+                            "input": block.input if isinstance(block.input, dict) else {},
+                        },
+                    )
 
         elif isinstance(message, UserMessage):
             # UserMessage content can include ToolResultBlocks

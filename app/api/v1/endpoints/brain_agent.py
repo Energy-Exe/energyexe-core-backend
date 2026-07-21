@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -276,6 +276,8 @@ async def get_agent_file(
 
 @router.get("/threads", response_model=List[ThreadListItem])
 async def list_threads(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> List[ThreadListItem]:
@@ -284,7 +286,8 @@ async def list_threads(
         select(AgentThread)
         .where(AgentThread.user_id == current_user.id)
         .order_by(AgentThread.updated_at.desc())
-        .limit(50)
+        .limit(limit)
+        .offset(offset)
     )
     threads = result.scalars().all()
     return [ThreadListItem.model_validate(t) for t in threads]

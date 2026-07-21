@@ -138,5 +138,10 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(json.dumps({"error": "Usage: python3 db.py \\"SELECT ...\\""}))
         sys.exit(1)
-    print(run_query(sys.argv[1]))
+    out = run_query(sys.argv[1])
+    print(out)
+    # Non-zero exit on error output so the Bash tool result is flagged
+    # is_error and the UI doesn't show a green check on a failed query.
+    if out.startswith('{"error"'):
+        sys.exit(2)
 '''

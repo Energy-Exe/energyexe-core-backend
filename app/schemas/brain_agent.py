@@ -1,10 +1,10 @@
 """Schemas for Brain Agent endpoints."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 # "Most capable" option is Opus 4.8 (claude-opus-4-8). claude-opus-4-6 is kept
 # accepted-but-legacy so a stale frontend bundle or a thread saved under the old
@@ -81,6 +81,15 @@ class ThreadListItem(BaseModel):
     is_streaming: bool = False
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("created_at", "updated_at")
+    def _serialize_utc(self, dt: datetime) -> str:
+        # Column is a naive DateTime storing UTC; without an explicit offset
+        # browsers parse the ISO string as local time (threads showed "6h ago"
+        # the moment they were created for a UTC+6 user).
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
 
     model_config = {"from_attributes": True}
 
