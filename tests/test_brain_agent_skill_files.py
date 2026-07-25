@@ -147,6 +147,7 @@ def test_scada_skill_covers_all_gold_tables():
         "dim_signal_capability",
         "completeness_daily",
         "energy_daily",
+        "energy_monthly_utc",
         "availability_daily",
         "losses_daily",
         "farm_kpis_daily",
@@ -161,6 +162,19 @@ def test_scada_skill_covers_all_gold_tables():
         "alarm_code_daily",
     ):
         assert f"scada.{table}" in SKILL_SCADA, f"scada.{table} missing from SKILL_SCADA"
+
+
+def test_scada_skill_pins_frame_caveat():
+    """Gotcha 57: the local-vs-UTC month frame effect must stay explained,
+    with energy_monthly_utc as the UTC-frame reconciliation table."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA
+
+    for phrase in (
+        "scada.energy_monthly_utc",
+        "zero-in-winter fingerprint",
+        "Never mix",
+    ):
+        assert phrase in SKILL_SCADA, f"frame caveat phrase missing: {phrase}"
 
 
 def test_scada_skill_pins_alarm_caveats():

@@ -550,6 +550,12 @@ rows_qc_clean, completeness_pct, pre_cod
 energy_basis (net|export), meter_net_kwh, meter_export_kwh, meter_import_kwh,
 integral_kwh, intervals_meter/integral/gap, pre_cod. Gaps are counted, never
 scaled — energy_kwh is what was measured, not an estimate.
+**scada.energy_monthly_utc** (PK farm,turbine,month_utc; index farm,month_utc):
+the SAME energy bucketed by UTC month instead of local day — energy_kwh,
+intervals_meter/integral/present. Use ONLY for reconciling against UTC-keyed
+external sources (OEM monthly reports, the platform's UTC-day aggregates).
+Never mix it with date_local tables in one analysis — same electricity, two
+clocks (they differ up to ±0.7% in BST months, 0% in GMT months).
 **scada.availability_daily**: method (timer_based|event_based), expected_h,
 available_h, unavailable_h, unaccounted_h, generating_h, availability_pct,
 IEC unavailability split: unavail_forced_h / unavail_scheduled_h /
@@ -675,7 +681,7 @@ curtailment_delta_mwh, consumption_mwh, hours_scada/settlement/both
   to ±0.7% in BST months (the month-edge hour shifts) and by exactly 0% in
   GMT months (Dec–Feb). That zero-in-winter fingerprint = frame effect, NOT
   missing data — say so if asked why monthly totals mismatch an external
-  report; UTC-frame reconciliation is done from silver, outside this DB.
+  report, and use `scada.energy_monthly_utc` for the UTC-frame comparison.
 - Energy is **kWh** in turbine/daily/hourly tables, **MWh** in the money
   tables (revenue_impact_daily, settlement_recon_daily). Divide kWh by 1000
   before comparing.
@@ -716,6 +722,23 @@ FROM scada.farm_kpis_daily
 WHERE farm = 'hill_of_towie' AND date_local >= '2024-01-01' AND date_local < '2025-01-01'
 GROUP BY 1 ORDER BY 1
 ```
+
+## Reconciling monthly energy against a UTC-keyed external report
+
+The Monthly-farm-KPIs pattern above gives LOCAL months. If the user is
+comparing against an OEM report / platform UTC aggregate and sees ±0.5%
+summer-only deltas, that is the clock-frame effect — reconcile in the UTC
+frame instead:
+
+```sql
+SELECT month_utc, round(SUM(energy_kwh)::numeric / 1000, 1) AS energy_mwh
+FROM scada.energy_monthly_utc
+WHERE farm = 'hill_of_towie' AND month_utc >= '2024-01-01' AND month_utc < '2025-01-01'
+GROUP BY 1 ORDER BY 1
+```
+
+State which frame you used. Never join/compare month_utc rows against
+date_local monthly sums as if they were the same months.
 
 ## Loss Pareto by bucket (which loss type dominates)
 
