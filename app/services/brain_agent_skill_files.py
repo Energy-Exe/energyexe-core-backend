@@ -670,6 +670,12 @@ curtailment_delta_mwh, consumption_mwh, hours_scada/settlement/both
 - `date_local` = farm-local civil day (Europe/London). DST days have 138 or
   150 ten-min intervals, not 144 — so pct over multiple days = ratio-of-sums
   (SUM(numerator)/SUM(denominator)), NEVER AVG of daily pct.
+- Monthly totals built from date_local are LOCAL months. Against a UTC-keyed
+  external source (e.g. OEM monthly reports) they legitimately differ by up
+  to ±0.7% in BST months (the month-edge hour shifts) and by exactly 0% in
+  GMT months (Dec–Feb). That zero-in-winter fingerprint = frame effect, NOT
+  missing data — say so if asked why monthly totals mismatch an external
+  report; UTC-frame reconciliation is done from silver, outside this DB.
 - Energy is **kWh** in turbine/daily/hourly tables, **MWh** in the money
   tables (revenue_impact_daily, settlement_recon_daily). Divide kWh by 1000
   before comparing.
