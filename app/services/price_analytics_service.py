@@ -1,8 +1,9 @@
 """Service for price analytics including capture rate calculations."""
 
-from datetime import datetime, timedelta, timezone
+import calendar
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import structlog
 from sqlalchemy import and_, func, select, text
@@ -12,10 +13,94 @@ from app.models.bidzone import Bidzone
 from app.models.generation_data import GenerationData
 from app.models.price_data import PriceData
 from app.models.windfarm import Windfarm
+from app.services.exchange_rate_service import ExchangeRateService
 
 logger = structlog.get_logger()
 
 AggregationType = Literal["hour", "day", "week", "month", "year"]
+
+# price_data rows are stored in the source's native currency (EPR-93)
+_SOURCE_CURRENCY = {"ELEXON": "GBP", "ENTSOE": "EUR"}
+
+GB_BIDZONE_CODE = "10YGB----------A"
+
+
+def _bucket_bounds(
+    period_iso: str, aggregation: str, range_start: date, range_end: date
+) -> Tuple[date, date]:
+    """Date bounds of one DATE_TRUNC bucket, clamped to the query range.
+
+    Only month/year buckets get their own FX window; finer aggregations
+    fall back to the full range to cap rate lookups.
+    """
+    bucket_start = datetime.fromisoformat(period_iso).date()
+    if aggregation == "month":
+        last_day = calendar.monthrange(bucket_start.year, bucket_start.month)[1]
+        bucket_end = bucket_start.replace(day=last_day)
+    elif aggregation == "year":
+        bucket_end = date(bucket_start.year, 12, 31)
+    else:
+        return range_start, range_end
+    clamped_start = max(bucket_start, range_start)
+    clamped_end = min(bucket_end, range_end)
+    if clamped_start > clamped_end:
+        # DATE_TRUNC buckets follow the DB session timezone and can spill just
+        # outside the UTC query range at the edges; an inverted clamp would
+        # make the FX AVG return no rows, so use the bucket's own bounds.
+        return bucket_start, bucket_end
+    return clamped_start, clamped_end
+
+
+def apply_capture_rate_conversion(
+    payload: Dict[str, Any], period_rates: List[Decimal], overall_rate: Decimal
+) -> None:
+    """Scale the monetary fields of a capture-rate payload in place.
+
+    ``capture_rate`` ratios, MWh volumes and hour counts are currency-invariant
+    and must not change. The overall revenue/achieved price are recomputed from
+    the per-bucket-converted periods so the KPI total agrees with the chart.
+    """
+    total_revenue = 0.0
+    for period, rate in zip(payload["periods"], period_rates):
+        r = float(rate)
+        period["revenue_eur"] = round(period["revenue_eur"] * r, 2)
+        if period["achieved_price"] is not None:
+            period["achieved_price"] = period["achieved_price"] * r
+        if period["market_average_price"] is not None:
+            period["market_average_price"] = period["market_average_price"] * r
+        total_revenue += period["revenue_eur"]
+
+    overall = payload["overall"]
+    overall["total_revenue_eur"] = round(total_revenue, 2)
+    if overall["total_generation_mwh"]:
+        overall["achieved_price"] = total_revenue / overall["total_generation_mwh"]
+    if overall["market_average_price"] is not None:
+        overall["market_average_price"] = overall["market_average_price"] * float(overall_rate)
+
+
+def apply_revenue_metrics_conversion(
+    payload: Dict[str, Any], period_rates: List[Decimal]
+) -> None:
+    """Scale the monetary fields of a revenue-metrics payload in place."""
+    for period, rate in zip(payload["periods"], period_rates):
+        r = float(rate)
+        period["day_ahead_revenue_eur"] = round(period["day_ahead_revenue_eur"] * r, 2)
+        period["total_revenue_eur"] = round(period["total_revenue_eur"] * r, 2)
+        if period["avg_day_ahead_price"] is not None:
+            period["avg_day_ahead_price"] = period["avg_day_ahead_price"] * r
+        if period["avg_intraday_price"] is not None:
+            period["avg_intraday_price"] = period["avg_intraday_price"] * r
+
+
+def apply_compare_conversion(payload: Dict[str, Any], rate: Decimal) -> None:
+    """Scale the monetary fields of a compare-capture-rates payload in place."""
+    r = float(rate)
+    for wf in payload["windfarms"]:
+        if wf["achieved_price"] is not None:
+            wf["achieved_price"] = wf["achieved_price"] * r
+        if wf["market_average_price"] is not None:
+            wf["market_average_price"] = wf["market_average_price"] * r
+        wf["total_revenue_eur"] = round(wf["total_revenue_eur"] * r, 2)
 
 
 class PriceAnalyticsService:
@@ -32,6 +117,7 @@ class PriceAnalyticsService:
         aggregation: AggregationType = "month",
         price_type: str = "day_ahead",
         exclude_ramp_up: bool = True,
+        display_currency: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Calculate capture rate for a windfarm.
@@ -46,6 +132,9 @@ class PriceAnalyticsService:
             end_date: End date for analysis
             aggregation: Time aggregation level (hour, day, week, month, year)
             price_type: Price type to use (day_ahead or intraday)
+            display_currency: Convert monetary values to this currency (EPR-93).
+                If a rate is unavailable the response stays in the native
+                currency; the response-level ``currency`` field is authoritative.
 
         Returns:
             Dict with capture rate metrics by period
@@ -187,13 +276,19 @@ class PriceAnalyticsService:
             else None
         )
 
-        return {
+        native_currency = _SOURCE_CURRENCY.get(price_source, "EUR")
+        result_payload = {
             "windfarm_id": windfarm_id,
             "windfarm_name": windfarm.name if windfarm else None,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "aggregation": aggregation,
             "price_type": price_type,
+            # Historical field names say _eur; `currency` is authoritative (EPR-93)
+            "native_currency": native_currency,
+            "currency": native_currency,
+            "display_currency": display_currency,
+            "exchange_rate_used": None,
             "overall": {
                 "total_generation_mwh": float(total_generation),
                 "total_revenue_eur": float(total_revenue),
@@ -204,6 +299,23 @@ class PriceAnalyticsService:
             "periods": periods,
         }
 
+        if display_currency and display_currency != native_currency:
+            rates = await self._resolve_rates(
+                native_currency,
+                display_currency,
+                periods,
+                aggregation,
+                start_date.date(),
+                end_date.date(),
+            )
+            if rates is not None:
+                period_rates, overall_rate = rates
+                apply_capture_rate_conversion(result_payload, period_rates, overall_rate)
+                result_payload["currency"] = display_currency
+                result_payload["exchange_rate_used"] = float(overall_rate)
+
+        return result_payload
+
     async def calculate_revenue_metrics(
         self,
         windfarm_id: int,
@@ -211,6 +323,7 @@ class PriceAnalyticsService:
         end_date: datetime,
         aggregation: AggregationType = "month",
         exclude_ramp_up: bool = True,
+        display_currency: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Calculate revenue metrics for a windfarm.
@@ -220,6 +333,7 @@ class PriceAnalyticsService:
             start_date: Start date for analysis
             end_date: End date for analysis
             aggregation: Time aggregation level
+            display_currency: Convert monetary values to this currency (EPR-93)
 
         Returns:
             Dict with revenue metrics by period
@@ -285,14 +399,36 @@ class PriceAnalyticsService:
                 }
             )
 
-        return {
+        native_currency = _SOURCE_CURRENCY.get(price_source, "EUR")
+        result_payload = {
             "windfarm_id": windfarm_id,
             "windfarm_name": windfarm.name if windfarm else None,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "aggregation": aggregation,
+            "native_currency": native_currency,
+            "currency": native_currency,
+            "display_currency": display_currency,
+            "exchange_rate_used": None,
             "periods": periods,
         }
+
+        if display_currency and display_currency != native_currency:
+            rates = await self._resolve_rates(
+                native_currency,
+                display_currency,
+                periods,
+                aggregation,
+                start_date.date(),
+                end_date.date(),
+            )
+            if rates is not None:
+                period_rates, overall_rate = rates
+                apply_revenue_metrics_conversion(result_payload, period_rates)
+                result_payload["currency"] = display_currency
+                result_payload["exchange_rate_used"] = float(overall_rate)
+
+        return result_payload
 
     async def compare_capture_rates(
         self,
@@ -617,6 +753,7 @@ class PriceAnalyticsService:
         start_date: datetime,
         end_date: datetime,
         exclude_ramp_up: bool = True,
+        display_currency: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Compare capture rates across all windfarms in a bidzone.
@@ -626,6 +763,7 @@ class PriceAnalyticsService:
             start_date: Start date for analysis
             end_date: End date for analysis
             exclude_ramp_up: Whether to exclude ramp-up period records
+            display_currency: Convert monetary values to this currency (EPR-93)
 
         Returns:
             Dict with bidzone info and per-windfarm capture rates
@@ -634,7 +772,7 @@ class PriceAnalyticsService:
 
         # Determine price source for this bidzone
         bidzone_code = bidzone.code if bidzone else None
-        price_source = "ELEXON" if bidzone_code == "10YGB----------A" else "ENTSOE"
+        price_source = "ELEXON" if bidzone_code == GB_BIDZONE_CODE else "ENTSOE"
 
         ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
@@ -725,18 +863,34 @@ class PriceAnalyticsService:
                 }
             )
 
-        return {
+        native_currency = _SOURCE_CURRENCY.get(price_source, "EUR")
+        result_payload = {
             "bidzone_id": bidzone_id,
             "bidzone_code": bidzone_code,
             "bidzone_name": bidzone.name if bidzone else None,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
+            "native_currency": native_currency,
+            "currency": native_currency,
+            "display_currency": display_currency,
+            "exchange_rate_used": None,
             "windfarms": windfarms,
             # Issue #94 root-cause fix: this key was previously omitted, so
             # MKT-01's ``ctx.load_capture_rate()`` always read None and the
             # detector exited. Generation-weighted mean over the farms above.
             "zone_average_capture_rate": self.compute_zone_average_capture_rate(windfarms),
         }
+
+        if display_currency and display_currency != native_currency:
+            rate = await ExchangeRateService(self.db).get_rate_for_period(
+                native_currency, display_currency, start_date.date(), end_date.date()
+            )
+            if rate is not None:
+                apply_compare_conversion(result_payload, rate)
+                result_payload["currency"] = display_currency
+                result_payload["exchange_rate_used"] = float(rate)
+
+        return result_payload
 
     async def zone_capture_rate_by_month(
         self,
@@ -754,7 +908,7 @@ class PriceAnalyticsService:
         """
         bidzone = await self._get_bidzone(bidzone_id)
         bidzone_code = bidzone.code if bidzone else None
-        price_source = "ELEXON" if bidzone_code == "10YGB----------A" else "ENTSOE"
+        price_source = "ELEXON" if bidzone_code == GB_BIDZONE_CODE else "ENTSOE"
 
         ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
@@ -940,6 +1094,51 @@ class PriceAnalyticsService:
         if row is None or row.negative_hours is None:
             return 0
         return int(row.negative_hours)
+
+    async def _resolve_rates(
+        self,
+        native_currency: str,
+        display_currency: str,
+        periods: List[Dict[str, Any]],
+        aggregation: str,
+        range_start: date,
+        range_end: date,
+    ) -> Optional[Tuple[List[Decimal], Decimal]]:
+        """One FX rate per period bucket plus one full-range rate, memoised.
+
+        Returns None if any lookup has no data — callers then leave the whole
+        payload in the native currency (all-or-nothing, unlike the financials
+        per-period fallback; ECB daily coverage makes this path theoretical).
+        """
+        svc = ExchangeRateService(self.db)
+        cache: Dict[Tuple[date, date], Optional[Decimal]] = {}
+
+        async def rate_for(start: date, end: date) -> Optional[Decimal]:
+            key = (start, end)
+            if key not in cache:
+                cache[key] = await svc.get_rate_for_period(
+                    native_currency, display_currency, start, end
+                )
+            return cache[key]
+
+        overall_rate = await rate_for(range_start, range_end)
+        if overall_rate is None:
+            return None
+
+        period_rates: List[Decimal] = []
+        for period in periods:
+            if period.get("period"):
+                start, end = _bucket_bounds(
+                    period["period"], aggregation, range_start, range_end
+                )
+            else:
+                start, end = range_start, range_end
+            rate = await rate_for(start, end)
+            if rate is None:
+                return None
+            period_rates.append(rate)
+
+        return period_rates, overall_rate
 
     async def _get_preferred_price_source(self, windfarm_id: int) -> str:
         """Resolve preferred price source: ELEXON for GB windfarms, ENTSOE for all others."""

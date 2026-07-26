@@ -14,6 +14,7 @@ from app.services.price_data_storage_service import PriceDataStorageService
 from app.services.price_processing_service import PriceProcessingService
 from app.services.price_analytics_service import PriceAnalyticsService
 from app.services.elexon_price_storage_service import ElexonPriceStorageService
+from app.services.exchange_rate_service import ALLOWED_DISPLAY_CURRENCIES
 from app.schemas.price_data import (
     PriceFetchRequest,
     PriceFetchResponse,
@@ -46,6 +47,15 @@ from app.schemas.price_data import (
 )
 
 router = APIRouter(prefix="/prices", tags=["Price Data"])
+
+
+def _validate_display_currency(display_currency: Optional[str]) -> None:
+    if display_currency and display_currency not in ALLOWED_DISPLAY_CURRENCIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported display currency: {display_currency}. "
+            f"Supported: {', '.join(sorted(ALLOWED_DISPLAY_CURRENCIES))}",
+        )
 
 
 # ============================================================
@@ -267,6 +277,9 @@ async def get_windfarm_price_statistics(
     windfarm_id: int,
     start_date: datetime,
     end_date: datetime,
+    display_currency: Optional[str] = Query(
+        None, pattern="^[A-Z]{3}$", description="Convert monetary values (EUR/NOK/GBP/DKK/USD)"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -275,11 +288,13 @@ async def get_windfarm_price_statistics(
 
     Returns average, min, max prices for the specified period.
     """
+    _validate_display_currency(display_currency)
     service = PriceProcessingService(db)
     stats = await service.get_price_statistics(
         windfarm_id=windfarm_id,
         start_date=start_date,
         end_date=end_date,
+        display_currency=display_currency,
     )
     if not stats:
         raise HTTPException(status_code=404, detail="No price data found for windfarm")
@@ -479,12 +494,16 @@ async def get_capture_rate(
     aggregation: Literal["hour", "day", "week", "month", "year"] = Query("month"),
     price_type: Literal["day_ahead", "intraday"] = Query("day_ahead"),
     exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
+    display_currency: Optional[str] = Query(
+        None, pattern="^[A-Z]{3}$", description="Convert monetary values (EUR/NOK/GBP/DKK/USD)"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Get capture rate for a windfarm (GET version).
     """
+    _validate_display_currency(display_currency)
     service = PriceAnalyticsService(db)
     result = await service.calculate_capture_rate(
         windfarm_id=windfarm_id,
@@ -493,6 +512,7 @@ async def get_capture_rate(
         aggregation=aggregation,
         price_type=price_type,
         exclude_ramp_up=exclude_ramp_up,
+        display_currency=display_currency,
     )
     return result
 
@@ -550,12 +570,16 @@ async def get_revenue_metrics(
     end_date: datetime,
     aggregation: Literal["hour", "day", "week", "month", "year"] = Query("month"),
     exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
+    display_currency: Optional[str] = Query(
+        None, pattern="^[A-Z]{3}$", description="Convert monetary values (EUR/NOK/GBP/DKK/USD)"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Get revenue metrics for a windfarm (GET version).
     """
+    _validate_display_currency(display_currency)
     service = PriceAnalyticsService(db)
     result = await service.calculate_revenue_metrics(
         windfarm_id=windfarm_id,
@@ -563,6 +587,7 @@ async def get_revenue_metrics(
         end_date=end_date,
         aggregation=aggregation,
         exclude_ramp_up=exclude_ramp_up,
+        display_currency=display_currency,
     )
     return result
 
@@ -618,6 +643,9 @@ async def compare_capture_rates_by_bidzone(
     start_date: datetime = Query(..., description="Start date"),
     end_date: datetime = Query(..., description="End date"),
     exclude_ramp_up: bool = Query(True, description="Exclude ramp-up period records"),
+    display_currency: Optional[str] = Query(
+        None, pattern="^[A-Z]{3}$", description="Convert monetary values (EUR/NOK/GBP/DKK/USD)"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -627,12 +655,14 @@ async def compare_capture_rates_by_bidzone(
     Returns capture rates for each windfarm in the specified bidzone,
     sorted by performance (highest capture rate first).
     """
+    _validate_display_currency(display_currency)
     service = PriceAnalyticsService(db)
     result = await service.compare_capture_rates_by_bidzone(
         bidzone_id=bidzone_id,
         start_date=start_date,
         end_date=end_date,
         exclude_ramp_up=exclude_ramp_up,
+        display_currency=display_currency,
     )
     return result
 
