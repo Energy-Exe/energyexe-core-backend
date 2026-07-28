@@ -54,6 +54,8 @@ The one bridge between the two worlds is deliberate and narrow: `scada.dim_farm.
 
 Everything in gold obeys one grain rule: the atomic unit is the **turbine-day**, keyed `(farm, turbine, date_local)`, where `date_local` is the farm's civil day in Europe/London. Farm-level numbers are materialized into their own roll-up table at build time — never left for a consumer to recompute — because percentage aggregation is a trap: DST days have 138 or 150 ten-minute intervals rather than 144, so any percentage must be recomputed as a ratio of sums, never averaged.
 
+Local civil days are **deliberate** — GB settlement days are local by market design — but they carry a known consequence (pipeline gotcha 57): against any UTC-keyed source (OEM monthly reports, the main platform's `date_trunc` aggregates), monthly totals differ by up to ±0.7% in BST months because the two month-edge hours land in different months, and by exactly 0.0000% in December–February — the zero-in-winter fingerprint that identifies this effect. Interior day boundaries telescope away; only the month edges survive. This is a bucketing difference, not a data error, and it is **already reconciled**: `scada.energy_monthly_utc` (PK `farm, turbine, month_utc`) recomputes monthly energy from the same 10-minute intervals bucketed by UTC month, with a validation invariant proving per-turbine lifetime totals identical across both frames. Use it for any UTC-frame comparison; never mix `month_utc` and `date_local` aggregates in one analysis — same electricity, two clocks. Do **not** propose adding a `date_utc` column to the existing daily tables: during BST a local-day row spans two UTC calendar days, so relabelling cannot produce UTC aggregates — they must be recomputed from intervals, which is exactly what `energy_monthly_utc` does.
+
 ```mermaid
 erDiagram
     dim_farm ||--o{ dim_turbine : "farm"
@@ -65,6 +67,7 @@ erDiagram
     dim_turbine ||--o{ dim_turbine_config : "farm, turbine"
     dim_turbine ||--o{ completeness_daily : "farm, turbine"
     dim_turbine ||--o{ energy_daily : "farm, turbine"
+    dim_turbine ||--o{ energy_monthly_utc : "farm, turbine"
     dim_turbine ||--o{ availability_daily : "farm, turbine"
     dim_turbine ||--o{ losses_daily : "farm, turbine"
     dim_turbine ||--o{ power_curve_bins : "farm, turbine, config"
@@ -153,6 +156,10 @@ erDiagram
         float scada_energy_mwh
         float settlement_metered_mwh
         float energy_delta_mwh "positive ~2% = site loss"
+    }
+    energy_monthly_utc {
+        date month_utc PK "first day of UTC month"
+        float energy_kwh "same intervals, UTC buckets"
     }
     power_curve_bins {
         decimal ws_bin PK "0.5 m/s lower edge"
@@ -258,7 +265,7 @@ One scope decision belongs in this part because it is access policy: the client-
 
 For the knowledgebase we put three options on the table. A database-driven store in the style of our `methodology_sections` pattern — a table of sections, admin-UI editing, composed into the sandbox at session start — would allow edits without deploys, at the price of a new table, CRUD endpoints, and UI work, for content that encodes column-level semantics no one should be editing outside code review anyway. A hybrid (static schema reference plus a DB-driven free-text section) inherits the complexity of both. The third option, chosen: **git-versioned strings in `brain_agent_skill_files.py`**, exactly like the platform's existing skill files. SCADA semantics change when the pipeline changes; versioning the knowledge with code means zero drift, reviewable diffs, and — crucially, as it turned out — the ability to write *canary tests* against the knowledge itself.
 
-We split the content into two files so the agent's lazy loading stays cheap and purposeful. `skill_scada.md` is the reference: identity (the farm slugs, the turbine codes, the single windfarm_id 7309 link, the coverage windows — Hill of Towie through April 2026, the others through December 2024, all static research data), all sixteen tables with primary keys and load-bearing columns grouped by grain, the domain semantics (both availability lanes, loss attribution, the curtailment signal gap, config epochs), and the unit conventions (kWh in the fact tables, MWh in the money tables, GBP with explicit currency columns, DST interval counts, `pre_cod`). `skill_scada_queries.md` is the cookbook: efficiency rules first, then about eight ready-made patterns — monthly farm KPIs, loss Paretos, worst-day and worst-turbine rankings, revenue by cause, availability trends with the IEC split, baseline-versus-AeroUp power curve comparisons, settlement reconciliation, and the cross-schema price join, which we lifted almost verbatim from the pipeline's own `verify_staging_upload.py` because it was already proven correct.
+We split the content into two files so the agent's lazy loading stays cheap and purposeful. `skill_scada.md` is the reference: identity (the farm slugs, the turbine codes, the single windfarm_id 7309 link, the coverage windows — Hill of Towie through April 2026, the others through December 2024, all static research data), all twenty tables with primary keys and load-bearing columns grouped by grain (the original sixteen, plus the alarm lane — `dim_alarm_code`, `alarm_events`, `alarm_code_daily` — and the UTC-frame reconciliation table `energy_monthly_utc`), the domain semantics (both availability lanes, loss attribution, the curtailment signal gap, config epochs), and the unit conventions (kWh in the fact tables, MWh in the money tables, GBP with explicit currency columns, DST interval counts, `pre_cod`). `skill_scada_queries.md` is the cookbook: efficiency rules first, then about eight ready-made patterns — monthly farm KPIs, loss Paretos, worst-day and worst-turbine rankings, revenue by cause, availability trends with the IEC split, baseline-versus-AeroUp power curve comparisons, settlement reconciliation, and the cross-schema price join, which we lifted almost verbatim from the pipeline's own `verify_staging_upload.py` because it was already proven correct.
 
 Why curate at all, when the admin agent could introspect `information_schema` freely? Because introspection costs tokens on every conversation and returns the *least* valuable layer of knowledge. Column names are cheap; what prevents wrong answers is knowing that `energy_kwh` and `energy_mwh` coexist across table families, that a percentage over multiple days must be `SUM/SUM`, that zero curtailment at two farms is an artifact of a missing signal, that an "over-performance day" means the fleet's *net total* loss went negative. None of that is in the catalog. Roughly half the rules that ended up in these files did not exist on day one — they are the direct residue of defects found in testing, which is the strongest argument that curated semantics were the right investment.
 

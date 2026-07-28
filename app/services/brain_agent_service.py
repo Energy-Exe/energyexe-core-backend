@@ -5,7 +5,7 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -646,13 +646,21 @@ class BrainAgentService:
         (work_dir / "eexe_style.py").write_text(CHART_STYLE_PY)
         # report_pdf.py — branded PDF report builder (EPR-68)
         (work_dir / "report_pdf.py").write_text(REPORT_PDF_PY)
-        (work_dir / "skill_schema.md").write_text(SKILL_SCHEMA)
-        (work_dir / "skill_queries.md").write_text(SKILL_QUERIES)
-        (work_dir / "skill_domain.md").write_text(SKILL_DOMAIN)
-        (work_dir / "skill_sources.md").write_text(SKILL_SOURCES)
+        # Skill files carry a seeded: stamp so the agent can tell that a
+        # resumed conversation's earlier read may be stale (content evolves
+        # between deployments; the system prompt tells it to re-read).
+        seed_stamp = (
+            f"<!-- seeded: {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC — "
+            "re-seeded fresh at every session start; content may have changed "
+            "since earlier turns of a resumed conversation -->\n"
+        )
+        (work_dir / "skill_schema.md").write_text(seed_stamp + SKILL_SCHEMA)
+        (work_dir / "skill_queries.md").write_text(seed_stamp + SKILL_QUERIES)
+        (work_dir / "skill_domain.md").write_text(seed_stamp + SKILL_DOMAIN)
+        (work_dir / "skill_sources.md").write_text(seed_stamp + SKILL_SOURCES)
         if scada_enabled:
-            (work_dir / "skill_scada.md").write_text(SKILL_SCADA)
-            (work_dir / "skill_scada_queries.md").write_text(SKILL_SCADA_QUERIES)
+            (work_dir / "skill_scada.md").write_text(seed_stamp + SKILL_SCADA)
+            (work_dir / "skill_scada_queries.md").write_text(seed_stamp + SKILL_SCADA_QUERIES)
 
         # DB-driven methodology (client-ui #177): compose the admin-editable
         # methodology sections into a skill file so the agent answers
@@ -663,7 +671,7 @@ class BrainAgentService:
 
             methodology_md = await MethodologySectionService.compose_markdown(self.db)
             if methodology_md:
-                (work_dir / "skill_methodology.md").write_text(methodology_md)
+                (work_dir / "skill_methodology.md").write_text(seed_stamp + methodology_md)
         except Exception as exc:
             logger.warning(
                 "brain_agent_methodology_skill_failed",
