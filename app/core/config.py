@@ -152,7 +152,7 @@ class Settings(BaseSettings):
     LLM_MAX_COST_PER_REPORT: float = 0.50  # USD
 
     # Brain Agent default model (used as fallback when caller omits one)
-    BRAIN_MODEL: str = "claude-sonnet-4-6"
+    BRAIN_MODEL: str = "claude-sonnet-5"
 
     # Brain Agent — Postgres read-only role.
     # When the password is set, the agent's bash env uses these credentials so

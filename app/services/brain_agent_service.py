@@ -699,10 +699,16 @@ class BrainAgentService:
         # has no path to emit thinking.type=adaptive for those models, so disable
         # extended thinking for them. Verified against the bundled CLI on Opus 4.8:
         # --max-thinking-tokens 0 (this disabled config) succeeds, while the
-        # default, --effort high, and a positive budget all still 400. Sonnet 4.6
-        # / Opus 4.6 still accept enabled-thinking, so leave them on the default.
-        # Proper fix = upgrade claude-agent-sdk so the bundled CLI uses adaptive.
+        # default, --effort high, and a positive budget all still 400. Re-verified
+        # 2026-07-30 against the live API with the same bundled CLI for Sonnet 5
+        # and Opus 5: both 400 on the default and succeed with thinking disabled.
+        # Sonnet 4.6 / Opus 4.6 still accept enabled-thinking, so leave them on
+        # the default.
+        # Proper fix = upgrade claude-agent-sdk so the bundled CLI uses adaptive
+        # (this is what costs Sonnet 5 / Opus 5 their reasoning depth here).
         ADAPTIVE_ONLY_MODELS = {
+            "claude-sonnet-5",
+            "claude-opus-5",
             "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-fable-5",
