@@ -542,7 +542,7 @@ total_hours (Σ bracketed hours, the Pareto basis), notes (evidence for the
 bucket). Covers the top-80 codes by bracketed hours (91.7% of alarm-hours)
 plus the 12 OEM-documented codes; codes outside it are unclassified tail.
 
-## Daily turbine facts — PK (farm, turbine, date_local), index (farm, date_local)
+## Daily turbine facts — PK (farm, turbine, date_utc), index (farm, date_utc)
 
 **scada.completeness_daily**: expected_intervals, rows_present, rows_valid_core,
 rows_qc_clean, completeness_pct, pre_cod
@@ -551,11 +551,9 @@ energy_basis (net|export), meter_net_kwh, meter_export_kwh, meter_import_kwh,
 integral_kwh, intervals_meter/integral/gap, pre_cod. Gaps are counted, never
 scaled — energy_kwh is what was measured, not an estimate.
 **scada.energy_monthly_utc** (PK farm,turbine,month_utc; index farm,month_utc):
-the SAME energy bucketed by UTC month instead of local day — energy_kwh,
-intervals_meter/integral/present. Use ONLY for reconciling against UTC-keyed
-external sources (OEM monthly reports, the platform's UTC-day aggregates).
-Never mix it with date_local tables in one analysis — same electricity, two
-clocks (they differ up to ±0.7% in BST months, 0% in GMT months).
+per-turbine monthly energy — energy_kwh, intervals_meter/integral/present.
+Since the UTC frame flip this is exactly the monthly rollup of energy_daily
+(same clock); prefer it for direct per-turbine monthly energy queries.
 **scada.availability_daily**: method (timer_based|event_based), expected_h,
 available_h, unavailable_h, unaccounted_h, generating_h, availability_pct,
 IEC unavailability split: unavail_forced_h / unavail_scheduled_h /
@@ -567,7 +565,7 @@ intervals_attributed/no_curve/gap, pre_cod
 
 ## Farm roll-up — USE THIS for farm-level questions
 
-**scada.farm_kpis_daily** (PK farm,date_local; index date_local): n_turbines,
+**scada.farm_kpis_daily** (PK farm,date_utc; index date_utc): n_turbines,
 n_reporting, completeness_pct, energy_kwh, method mixes (n_meter/n_integral/
 n_mixed/n_none, n_timer/n_event/n_signal), available_h, unavailable_h,
 generating_h, availability_pct, potential_kwh, loss_total/downtime/
@@ -595,22 +593,22 @@ analysis), severity_class, message, iec_category + service_category
 Kelmarsh/Penmanshiel rows are Greenbyte status events (join
 dim_event_category on iec_category for their semantics). time_on/time_off
 are UTC.
-**scada.alarm_code_daily** (PK farm,turbine,date_local,source_code; index
-farm,date_local): the rollup to PREFER for per-code Paretos and trends.
-events_started, bracketed_events (onset local day), alarm_hours = hours the
-code was ACTIVE that local day (same-code overlaps union-merged, clipped at
-local midnights, so ≤ day length per row).
+**scada.alarm_code_daily** (PK farm,turbine,date_utc,source_code; index
+farm,date_utc): the rollup to PREFER for per-code Paretos and trends.
+events_started, bracketed_events (onset UTC day), alarm_hours = hours the
+code was ACTIVE that UTC day (same-code overlaps union-merged, clipped at
+UTC midnights, so ≤ 24 h per row).
 
-**scada.losses_hourly** (PK farm,hour_utc; index farm,date_local): farm-hour
+**scada.losses_hourly** (PK farm,hour_utc; index farm,date_utc): farm-hour
 loss frame for price joins. hour_utc is tz-aware UTC; energy_kwh,
 potential_kwh, actual_kwh, loss buckets, n_turbines, intervals_*
-**scada.revenue_impact_daily** (PK farm,date_local): £ by loss cause ×
+**scada.revenue_impact_daily** (PK farm,date_utc): £ by loss cause ×
 day-ahead price. windfarm_id, currency (GBP), price_source, hours_priced/
 unpriced, price_mean_gbp_mwh, energy_mwh, revenue_gross_gbp,
 revenue_downtime_gbp, revenue_curtailment_gbp (negative on negative-price
 hours), revenue_performance_gbp (negative = over-performance),
 revenue_loss_total_gbp
-**scada.settlement_recon_daily** (PK farm,date_local): SCADA (turbine
+**scada.settlement_recon_daily** (PK farm,date_utc): SCADA (turbine
 terminals) vs settlement boundary meter. scada_energy_mwh,
 settlement_metered_mwh, energy_delta_mwh (scada − settlement; small stable
 positive ≈ 2% = quantified site loss, this is expected not an error),
@@ -673,15 +671,17 @@ curtailment_delta_mwh, consumption_mwh, hours_scada/settlement/both
 
 ## Units & conventions
 
-- `date_local` = farm-local civil day (Europe/London). DST days have 138 or
-  150 ten-min intervals, not 144 — so pct over multiple days = ratio-of-sums
+- `date_utc` = UTC calendar day. The WHOLE schema is UTC-keyed (frame
+  decision 2026-07-29): every day has exactly 144 ten-min intervals, no DST
+  special cases. Pct over multiple days is still ratio-of-sums
   (SUM(numerator)/SUM(denominator)), NEVER AVG of daily pct.
-- Monthly totals built from date_local are LOCAL months. Against a UTC-keyed
-  external source (e.g. OEM monthly reports) they legitimately differ by up
-  to ±0.7% in BST months (the month-edge hour shifts) and by exactly 0% in
-  GMT months (Dec–Feb). That zero-in-winter fingerprint = frame effect, NOT
-  missing data — say so if asked why monthly totals mismatch an external
-  report, and use `scada.energy_monthly_utc` for the UTC-frame comparison.
+- UTC days mean totals match UTC-keyed sources (raw SCADA, OEM reports, the
+  platform's aggregates) exactly, every month. Against a GB-LOCAL-keyed
+  source (Elexon settlement statements, invoices, site local-day reports)
+  daily/monthly figures legitimately differ at BST period edges — same
+  month-edge-hour mechanism, now mirrored: zero difference in GMT months
+  (Dec–Feb). If asked why a daily £ figure mismatches a settlement statement
+  line, that is the frame difference, not a data error — say so.
 - Energy is **kWh** in turbine/daily/hourly tables, **MWh** in the money
   tables (revenue_impact_daily, settlement_recon_daily). Divide kWh by 1000
   before comparing.
@@ -706,29 +706,28 @@ SKILL_SCADA_QUERIES = """# SCADA Query Patterns (schema `scada`)
    re-aggregate 142k turbine-day rows when a roll-up already exists.
 3. Farm-level percentages come from `farm_kpis_daily` (ratio-of-sums,
    pre-COD handled). Multi-day pct = SUM/SUM, never AVG(pct).
-4. Always filter on the indexed keys: `farm` + `date_local` (or `hour_utc`).
+4. Always filter on the indexed keys: `farm` + `date_utc` (or `hour_utc`).
 5. Always schema-qualify (`scada.`); cross-schema joins to `public.*` work
    in the same query.
 
 ## Monthly farm KPIs
 
 ```sql
-SELECT date_trunc('month', date_local) AS month,
+SELECT date_trunc('month', date_utc) AS month,
        round(SUM(energy_kwh)::numeric / 1000, 1)            AS energy_mwh,
        round((SUM(available_h) / NULLIF(SUM(available_h) + SUM(unavailable_h), 0))::numeric * 100, 2) AS availability_pct,
        round((SUM(energy_kwh) / NULLIF(SUM(capacity_kw) * 24, 0))::numeric * 100, 2) AS capacity_factor_pct,
        round(SUM(loss_total_kwh)::numeric / 1000, 1)        AS loss_mwh
 FROM scada.farm_kpis_daily
-WHERE farm = 'hill_of_towie' AND date_local >= '2024-01-01' AND date_local < '2025-01-01'
+WHERE farm = 'hill_of_towie' AND date_utc >= '2024-01-01' AND date_utc < '2025-01-01'
 GROUP BY 1 ORDER BY 1
 ```
 
-## Reconciling monthly energy against a UTC-keyed external report
+## Reconciling against external reports (which clock?)
 
-The Monthly-farm-KPIs pattern above gives LOCAL months. If the user is
-comparing against an OEM report / platform UTC aggregate and sees ±0.5%
-summer-only deltas, that is the clock-frame effect — reconcile in the UTC
-frame instead:
+All scada tables are UTC-keyed, so totals match UTC-keyed sources (raw
+SCADA, OEM reports, platform aggregates) exactly — monthly energy is just
+the Monthly-farm-KPIs pattern, or directly:
 
 ```sql
 SELECT month_utc, round(SUM(energy_kwh)::numeric / 1000, 1) AS energy_mwh
@@ -737,8 +736,10 @@ WHERE farm = 'hill_of_towie' AND month_utc >= '2024-01-01' AND month_utc < '2025
 GROUP BY 1 ORDER BY 1
 ```
 
-State which frame you used. Never join/compare month_utc rows against
-date_local monthly sums as if they were the same months.
+If the user compares against a GB-LOCAL-keyed source (Elexon settlement
+statements, invoices) and sees small BST-months-only deltas that vanish
+Dec–Feb, that is the clock-frame difference, not missing data — explain it
+and state which frame you used.
 
 ## Loss Pareto by bucket (which loss type dominates)
 
@@ -747,13 +748,13 @@ SELECT round(SUM(loss_downtime_kwh)::numeric / 1000, 1)    AS downtime_mwh,
        round(SUM(loss_curtailment_kwh)::numeric / 1000, 1) AS curtailment_mwh,
        round(SUM(loss_performance_kwh)::numeric / 1000, 1) AS performance_mwh
 FROM scada.farm_kpis_daily
-WHERE farm = 'kelmarsh' AND date_local BETWEEN '2023-01-01' AND '2023-12-31'
+WHERE farm = 'kelmarsh' AND date_utc BETWEEN '2023-01-01' AND '2023-12-31'
 ```
 
 ## Worst loss days / worst turbines
 
 ```sql
-SELECT date_local, round((loss_total_kwh/1000)::numeric,1) AS loss_mwh,
+SELECT date_utc, round((loss_total_kwh/1000)::numeric,1) AS loss_mwh,
        round((loss_downtime_kwh/1000)::numeric,1) AS downtime_mwh
 FROM scada.farm_kpis_daily WHERE farm = 'penmanshiel'
 ORDER BY loss_total_kwh DESC NULLS LAST LIMIT 10
@@ -762,33 +763,33 @@ ORDER BY loss_total_kwh DESC NULLS LAST LIMIT 10
 -- turbine ranking: turbine grain needed, so losses_daily is correct here
 SELECT turbine, round(SUM(loss_total_kwh)::numeric/1000, 1) AS loss_mwh
 FROM scada.losses_daily
-WHERE farm = 'hill_of_towie' AND date_local >= '2024-01-01' AND NOT pre_cod
+WHERE farm = 'hill_of_towie' AND date_utc >= '2024-01-01' AND NOT pre_cod
 GROUP BY turbine ORDER BY 2 DESC LIMIT 10
 ```
 
 ## Revenue impact by cause (Hill of Towie only)
 
 ```sql
-SELECT date_trunc('month', date_local) AS month,
+SELECT date_trunc('month', date_utc) AS month,
        round(SUM(revenue_gross_gbp)::numeric)      AS gross_gbp,
        round(SUM(revenue_downtime_gbp)::numeric)   AS downtime_gbp,
        round(SUM(revenue_curtailment_gbp)::numeric) AS curtailment_gbp,
        round(SUM(revenue_performance_gbp)::numeric) AS performance_gbp
 FROM scada.revenue_impact_daily
-WHERE farm = 'hill_of_towie' AND date_local >= '2025-01-01'
+WHERE farm = 'hill_of_towie' AND date_utc >= '2025-01-01'
 GROUP BY 1 ORDER BY 1
 ```
 
 ## Availability trend with IEC split (event-based farms)
 
 ```sql
-SELECT date_trunc('month', date_local) AS month,
+SELECT date_trunc('month', date_utc) AS month,
        round((SUM(available_h)/NULLIF(SUM(expected_h),0))::numeric*100, 2) AS avail_pct,
        round(SUM(unavail_forced_h)::numeric, 1)    AS forced_h,
        round(SUM(unavail_scheduled_h)::numeric, 1) AS scheduled_h,
        round(SUM(unavail_external_h)::numeric, 1)  AS external_h
 FROM scada.availability_daily
-WHERE farm = 'kelmarsh' AND NOT pre_cod AND date_local >= '2023-01-01'
+WHERE farm = 'kelmarsh' AND NOT pre_cod AND date_utc >= '2023-01-01'
 GROUP BY 1 ORDER BY 1
 ```
 
@@ -804,16 +805,16 @@ ORDER BY ws_bin, config
 ## Cross-schema join to the platform (windfarm names, prices)
 
 ```sql
-SELECT w.name, k.date_local, round((k.energy_kwh/1000)::numeric, 1) AS mwh,
+SELECT w.name, k.date_utc, round((k.energy_kwh/1000)::numeric, 1) AS mwh,
        round(p.day_ahead_price::numeric, 2) AS da_price
 FROM scada.farm_kpis_daily k
 JOIN scada.dim_farm f USING (farm)
 JOIN public.windfarms w ON w.id = f.windfarm_id
 JOIN public.price_data p
   ON p.windfarm_id = f.windfarm_id
- AND p.hour = k.date_local::timestamp AT TIME ZONE 'UTC' + interval '12 hours'
+ AND p.hour = k.date_utc::timestamp AT TIME ZONE 'UTC' + interval '12 hours'
 WHERE k.farm = 'hill_of_towie'
-ORDER BY k.date_local DESC LIMIT 5
+ORDER BY k.date_utc DESC LIMIT 5
 ```
 (Only hill_of_towie has windfarm_id; Kelmarsh/Penmanshiel rows drop out of
 this join by design.)
@@ -821,7 +822,7 @@ this join by design.)
 ## SCADA vs settlement reconciliation
 
 ```sql
-SELECT date_trunc('month', date_local) AS month,
+SELECT date_trunc('month', date_utc) AS month,
        round(SUM(scada_energy_mwh)::numeric, 1)        AS scada_mwh,
        round(SUM(settlement_metered_mwh)::numeric, 1)  AS settled_mwh,
        round((SUM(energy_delta_mwh)/NULLIF(SUM(scada_energy_mwh),0))::numeric*100, 2) AS delta_pct
@@ -841,7 +842,7 @@ FROM scada.alarm_code_daily a
 LEFT JOIN scada.dim_alarm_code d
        ON d.source_format = 'siemens_wps' AND d.source_code = a.source_code
 WHERE a.farm = 'hill_of_towie'
-  AND a.date_local >= '2024-01-01' AND a.date_local < '2025-01-01'
+  AND a.date_utc >= '2024-01-01' AND a.date_utc < '2025-01-01'
 GROUP BY 1,2,3,4,5 ORDER BY active_h DESC LIMIT 15
 ```
 Caveat every bucket-based number with "buckets are proposed, not confirmed"
@@ -854,10 +855,10 @@ SELECT a.turbine, a.source_code, d.message, d.bucket,
        round(a.alarm_hours::numeric, 1) AS active_h,
        round((l.loss_total_kwh/1000)::numeric, 1) AS turbine_loss_mwh
 FROM scada.alarm_code_daily a
-JOIN scada.losses_daily l USING (farm, turbine, date_local)
+JOIN scada.losses_daily l USING (farm, turbine, date_utc)
 LEFT JOIN scada.dim_alarm_code d
        ON d.source_format = 'siemens_wps' AND d.source_code = a.source_code
-WHERE a.farm = 'hill_of_towie' AND a.date_local = '2024-01-31'
+WHERE a.farm = 'hill_of_towie' AND a.date_utc = '2024-01-31'
   AND a.alarm_hours > 1
 ORDER BY l.loss_total_kwh DESC, a.alarm_hours DESC LIMIT 20
 ```

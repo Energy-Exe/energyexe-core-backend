@@ -165,16 +165,19 @@ def test_scada_skill_covers_all_gold_tables():
 
 
 def test_scada_skill_pins_frame_caveat():
-    """Gotcha 57: the local-vs-UTC month frame effect must stay explained,
-    with energy_monthly_utc as the UTC-frame reconciliation table."""
+    """Gotcha 57, post-flip: the whole schema is UTC-keyed (date_utc); the
+    residual frame caveat is against GB-LOCAL-keyed sources (settlement
+    statements), and date_local must be gone entirely."""
     from app.services.brain_agent_skill_files import SKILL_SCADA
 
     for phrase in (
+        "date_utc",
         "scada.energy_monthly_utc",
-        "zero-in-winter fingerprint",
-        "Never mix",
+        "UTC-keyed",
+        "GB-LOCAL",
     ):
         assert phrase in SKILL_SCADA, f"frame caveat phrase missing: {phrase}"
+    assert "date_local" not in SKILL_SCADA, "date_local resurfaced after the UTC flip"
 
 
 def test_scada_skill_pins_alarm_caveats():

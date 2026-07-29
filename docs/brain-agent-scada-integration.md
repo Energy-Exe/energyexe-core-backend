@@ -14,7 +14,7 @@ This is the full account of how we connected the EnergyExe brain agent — the A
 
 The SCADA platform is a separate repository (`energyexe-scada-pipeline`) that ingests public 10-minute turbine data for three research wind farms. The datasets are published on Zenodo by the farms' operators: Hill of Towie (21 × Siemens SWT-2.3, 48.3 MW, Scotland), Kelmarsh (6 × Senvion MM92, 12.3 MW, England), and Penmanshiel (14 × Senvion MM82, 28.7 MW, Scotland — with no turbine T03, a fact that becomes a test case later).
 
-The pipeline follows a medallion architecture. Bronze is the immutable raw zips with an md5 manifest. Silver is normalized 10-minute Parquet — 19,835,477 rows across 41 turbines, 95.07% passing quality checks, every failing row flagged rather than deleted. Gold is the analytics layer: sixteen Postgres tables that answer operational questions directly.
+The pipeline follows a medallion architecture. Bronze is the immutable raw zips with an md5 manifest. Silver is normalized 10-minute Parquet — 19,835,477 rows across 41 turbines, 95.07% passing quality checks, every failing row flagged rather than deleted. Gold is the analytics layer: twenty Postgres tables that answer operational questions directly.
 
 Since v0.6.0 the whole thing runs in AWS. A Fargate task (8 vCPU / 48 GB, launched on demand) syncs an S3 bucket to a local working directory, runs the *unchanged, locally-validated* pipeline, and syncs results back — bronze manifest last, as the commit marker. Gold lands in the **staging** RDS, in a schema called `scada` that sits alongside the platform's own `public` schema. The prod cut, when it happens, is a one-secret repoint.
 
@@ -31,7 +31,7 @@ flowchart LR
         P["sync down → register →<br/>silver → alembic → gold →<br/>38-check validate → sync up"]
     end
     subgraph RDS["Staging RDS · energyexe_db"]
-        G["schema scada<br/>16 gold tables · 852k rows"]
+        G["schema scada<br/>20 gold tables · 852k rows"]
         PUB["schema public<br/>windfarms · price_data ·<br/>generation_data"]
     end
     subgraph BE["Backend (ECS)"]
@@ -52,9 +52,9 @@ The one bridge between the two worlds is deliberate and narrow: `scada.dim_farm.
 
 ### The gold schema in detail
 
-Everything in gold obeys one grain rule: the atomic unit is the **turbine-day**, keyed `(farm, turbine, date_local)`, where `date_local` is the farm's civil day in Europe/London. Farm-level numbers are materialized into their own roll-up table at build time — never left for a consumer to recompute — because percentage aggregation is a trap: DST days have 138 or 150 ten-minute intervals rather than 144, so any percentage must be recomputed as a ratio of sums, never averaged.
+Everything in gold obeys one grain rule: the atomic unit is the **turbine-day**, keyed `(farm, turbine, date_utc)`, the UTC calendar day. Farm-level numbers are materialized into their own roll-up table at build time — never left for a consumer to recompute — and percentages must still be recomputed as a ratio of sums, never averaged.
 
-Local civil days are **deliberate** — GB settlement days are local by market design — but they carry a known consequence (pipeline gotcha 57): against any UTC-keyed source (OEM monthly reports, the main platform's `date_trunc` aggregates), monthly totals differ by up to ±0.7% in BST months because the two month-edge hours land in different months, and by exactly 0.0000% in December–February — the zero-in-winter fingerprint that identifies this effect. Interior day boundaries telescope away; only the month edges survive. This is a bucketing difference, not a data error, and it is **already reconciled**: `scada.energy_monthly_utc` (PK `farm, turbine, month_utc`) recomputes monthly energy from the same 10-minute intervals bucketed by UTC month, with a validation invariant proving per-turbine lifetime totals identical across both frames. Use it for any UTC-frame comparison; never mix `month_utc` and `date_local` aggregates in one analysis — same electricity, two clocks. Do **not** propose adding a `date_utc` column to the existing daily tables: during BST a local-day row spans two UTC calendar days, so relabelling cannot produce UTC aggregates — they must be recomputed from intervals, which is exactly what `energy_monthly_utc` does.
+The frame has a history worth knowing (pipeline gotcha 57). Gold originally bucketed by farm-local civil days (Europe/London), which made monthly totals differ from any UTC-keyed source by up to ±0.7% in BST months — the two month-edge hours land in different months — and by exactly 0.0000% in December–February, the zero-in-winter fingerprint that identifies the effect. After that cost the team a full QC investigation, the schema was flipped: **everything is now UTC-keyed** (`date_utc`, decision 2026-07-29), analytics and money lanes alike, recomputed from the 10-minute silver intervals (relabelling alone would have been wrong — during BST a local-day row spans two UTC calendar days). Every UTC day has exactly 144 intervals; the DST special cases (138/150) are gone. Totals now match raw SCADA, OEM reports, and the main platform's aggregates exactly, every month. The residual caveat is mirrored: against GB-LOCAL-keyed sources — Elexon settlement statements, invoices — daily £ rows no longer correspond 1:1 to statement lines; that reconciliation is a query-time mapping, and small BST-edge differences against such sources are the frame, not a data error. `scada.energy_monthly_utc` remains as the direct per-turbine monthly rollup (same clock as everything else since the flip).
 
 ```mermaid
 erDiagram
@@ -110,31 +110,31 @@ erDiagram
         float null_pct
     }
     completeness_daily {
-        date date_local PK
-        int expected_intervals "138-150 on DST days"
+        date date_utc PK
+        int expected_intervals "flat 144 (UTC days)"
         float completeness_pct
         bool pre_cod
     }
     energy_daily {
-        date date_local PK
+        date date_utc PK
         float energy_kwh
         string energy_method "meter, power_integral, mixed, none"
         int intervals_gap "counted, NEVER scaled"
     }
     availability_daily {
-        date date_local PK
+        date date_utc PK
         string method "timer_based or event_based"
         float availability_pct
         float unavail_forced_h "IEC split (event lane only)"
     }
     losses_daily {
-        date date_local PK
+        date date_utc PK
         float potential_kwh "epoch curve x measured wind"
         float loss_total_kwh "negatives = over-performance"
         float loss_curtailment_kwh "needs setpoint signal"
     }
     farm_kpis_daily {
-        date date_local PK
+        date date_utc PK
         float energy_kwh
         float availability_pct "ratio-of-sums, pre-COD excluded"
         float capacity_factor
@@ -145,14 +145,14 @@ erDiagram
         int n_turbines
     }
     revenue_impact_daily {
-        date date_local PK
+        date date_utc PK
         string currency "GBP"
         float revenue_gross_gbp
         float revenue_curtailment_gbp "negative on negative prices"
         int hours_unpriced "counted, never scaled"
     }
     settlement_recon_daily {
-        date date_local PK
+        date date_utc PK
         float scada_energy_mwh
         float settlement_metered_mwh
         float energy_delta_mwh "positive ~2% = site loss"
@@ -181,7 +181,7 @@ erDiagram
     }
 ```
 
-Sizes, for intuition: each daily turbine fact holds 142,566 rows; `farm_kpis_daily` holds 10,002 farm-days; `losses_hourly` 239,499 farm-hours; the money lane 3,762 revenue days and 3,680 settlement days (Hill of Towie only). The whole schema is roughly 852 thousand rows in 245 MB — a rounding error inside the 156 GB staging database, and small enough that every reasonable query returns in milliseconds off the `(farm, date_local)` indexes.
+Sizes, for intuition: each daily turbine fact holds 142,566 rows; `farm_kpis_daily` holds 10,002 farm-days; `losses_hourly` 239,499 farm-hours; the money lane 3,762 revenue days and 3,680 settlement days (Hill of Towie only). The whole schema is roughly 852 thousand rows in 245 MB — a rounding error inside the 156 GB staging database, and small enough that every reasonable query returns in milliseconds off the `(farm, date_utc)` indexes.
 
 The semantics are where the richness lives, and they matter for everything that follows. Losses are computed as *potential minus actual*, where potential applies the turbine's own power curve — per SCD2 config epoch, because Hill of Towie's turbines had an AeroUp retrofit that changed their aerodynamics mid-history — to the measured wind. Negative losses are kept, because they are real over-performance. Curtailment is attributed only when a power-setpoint signal is present *and binding*; only Hill of Towie's Siemens data has that signal, so Kelmarsh and Penmanshiel show zero curtailment **by construction**, not by fact. Availability is IEC 61400-26 time-based system availability, computed through two different lanes: OEM timers for Hill of Towie (whose unavailability all lands in an unclassified bucket) and IEC-categorized events for the Greenbyte farms (which get the forced / scheduled / external / requested split, with a precedence rule — lower number wins — for overlapping events).
 
@@ -333,7 +333,7 @@ flowchart TB
     FIX --> RERUN["3 failed questions re-asked verbatim<br/>→ all match ground truth exactly"]
 ```
 
-The question set mixed four families. Precise numerics with a single right answer: annual energies, revenue sums, the single worst farm-day in history, one turbine's one-year output. Method traps: the settlement-delta denominator, DST interval counts on 26 March 2023 (the correct answer is 138, and the agent had to say why), an epoch-straddling performance index that has *two* rows for 2022. Consistency probes: does the sum of per-turbine energy equal the farm roll-up (it must, absent pre-COD rows); does the hourly loss frame sum to the daily loss for an arbitrary day (it does, to the watt-hour — same interval frame). And behavioral probes: a nonexistent turbine (Penmanshiel T03), a P50 target for a farm that has none, a request to *delete* data (the agent refused, explained the read-only constraint, and the auditor verified the rows still existed), a question with no year (the agent must state the period it chose), and the bait question — "which of the three farms is the most profitable?"
+The question set mixed four families. Precise numerics with a single right answer: annual energies, revenue sums, the single worst farm-day in history, one turbine's one-year output. Method traps: the settlement-delta denominator, DST interval counts on 26 March 2023 (at the time gold used local days, so the correct answer was 138 — since the 2026-07-29 UTC flip every day is 144), an epoch-straddling performance index that has *two* rows for 2022. Consistency probes: does the sum of per-turbine energy equal the farm roll-up (it must, absent pre-COD rows); does the hourly loss frame sum to the daily loss for an arbitrary day (it does, to the watt-hour — same interval frame). And behavioral probes: a nonexistent turbine (Penmanshiel T03), a P50 target for a farm that has none, a request to *delete* data (the agent refused, explained the read-only constraint, and the auditor verified the rows still existed), a question with no year (the agent must state the period it chose), and the bait question — "which of the three farms is the most profitable?"
 
 **The verdicts: 24 CORRECT, 3 PARTIAL, 3 WRONG.** The three wrongs are each worth telling properly, because each exposed a different class of failure.
 
@@ -453,7 +453,7 @@ Commit trail, for the record: grants migration `a3f8c1d97b02` (scada repo, `51ae
 | i09 | Penmanshiel best CF month 2023 | CORRECT (December, 42.7%) | — |
 | i10 | HoT T09 2023 energy | CORRECT (5,011.7 MWh) | — |
 | i11 | "Average availability" trap | CORRECT (method stated) | — |
-| i12 | DST expected intervals | CORRECT (138, explained) | — |
+| i12 | DST expected intervals | CORRECT (138, explained — pre-flip local days; now flat 144) | — |
 | i13 | Over-performance days 2024 | **WRONG** (wrong column) | fixed → 79 d, −40.7 MWh 10 Jul |
 | i14 | Pre-COD handling | CORRECT (103 days excluded) | — |
 | i15 | Epoch-straddling perf index | CORRECT (both configs) | — |
