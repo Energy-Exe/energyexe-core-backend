@@ -94,6 +94,34 @@ def test_list_tool_result_content_is_flattened():
     assert out[0]["toolCalls"][0]["result"] == "line1 line2"
 
 
+def test_thinking_only_assistant_entry_is_dropped():
+    """Adaptive thinking writes a thinking block as its own transcript entry.
+
+    It has no text and no tool_use, so persisting it would render an empty
+    assistant bubble. Verified against a live Sonnet 5 run: the transcript came
+    back as user → assistant[thinking] → assistant[tool_use] → user[tool_result]
+    → assistant[text].
+    """
+    sdk_messages = [
+        _sm("user", "u1", [{"type": "text", "text": "Which quarter underperformed?"}]),
+        _sm("assistant", "a1", [{"type": "thinking", "thinking": "", "signature": "sig"}]),
+        _sm("assistant", "a2", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]),
+        _sm(
+            "user",
+            "u2",
+            [{"type": "tool_result", "tool_use_id": "t1", "content": "Q3", "is_error": False}],
+        ),
+        _sm("assistant", "a3", [{"type": "text", "text": "Q3 underperformed."}]),
+    ]
+
+    out = BrainAgentService._convert_sdk_messages(sdk_messages)
+
+    assert [m["id"] for m in out] == ["u1", "a2", "a3"]
+    assert all(m["content"] or m.get("toolCalls") for m in out)
+    # The tool-only entry still carries its call and result.
+    assert out[1]["toolCalls"][0]["result"] == "Q3"
+
+
 # ── SCADA gating (schema-presence check + prompt injection) ──
 
 

@@ -409,6 +409,14 @@ class BrainAgentService:
                 # blocks are separate paragraphs (typically split by tool use).
                 content = "\n\n".join(text_parts).strip()
 
+                # The transcript records each content block as its own assistant
+                # entry, so an extended-thinking turn produces a thinking-only
+                # entry with no text and no tool_use. Persisting it renders an
+                # empty bubble in the UI. Thinking content is encrypted and
+                # never displayed, so drop those entries entirely.
+                if not content and not tool_calls:
+                    continue
+
                 msg: Dict[str, Any] = {
                     "id": sm.uuid,
                     "type": "assistant",
@@ -692,30 +700,19 @@ class BrainAgentService:
                 or getattr(settings, "BRAIN_MODEL", DEFAULT_BRAIN_MODEL)
             )
 
-        # Extended-thinking compatibility: the bundled Claude Code CLI
-        # (2.1.71 in claude-agent-sdk 0.1.48) defaults to thinking.type=enabled,
-        # which newer models reject with a 400 ("\"thinking.type.enabled\" is not
-        # supported for this model. Use \"thinking.type.adaptive\"..."). This CLI
-        # has no path to emit thinking.type=adaptive for those models, so disable
-        # extended thinking for them. Verified against the bundled CLI on Opus 4.8:
-        # --max-thinking-tokens 0 (this disabled config) succeeds, while the
-        # default, --effort high, and a positive budget all still 400. Re-verified
-        # 2026-07-30 against the live API with the same bundled CLI for Sonnet 5
-        # and Opus 5: both 400 on the default and succeed with thinking disabled.
-        # Sonnet 4.6 / Opus 4.6 still accept enabled-thinking, so leave them on
-        # the default.
-        # Proper fix = upgrade claude-agent-sdk so the bundled CLI uses adaptive
-        # (this is what costs Sonnet 5 / Opus 5 their reasoning depth here).
-        ADAPTIVE_ONLY_MODELS = {
-            "claude-sonnet-5",
-            "claude-opus-5",
-            "claude-opus-4-8",
-            "claude-opus-4-7",
-            "claude-fable-5",
-        }
-        thinking_config = (
-            {"type": "disabled"} if resolved_model in ADAPTIVE_ONLY_MODELS else None
-        )
+        # Extended thinking. Sonnet 5 / Opus 5 (and Opus 4.7+/Fable 5) reject
+        # thinking.type=enabled with a 400 and require adaptive, where the model
+        # decides per-turn how much to reason. claude-agent-sdk 0.1.48 bundled
+        # CLI 2.1.71, which had no way to emit adaptive — it silently downgraded
+        # it to `--max-thinking-tokens 32000` — so those models had to run with
+        # thinking off. SDK 0.2.128 bundles CLI 2.1.220, which passes
+        # `--thinking adaptive` through, so thinking is back on for every model
+        # in ALLOWED_BRAIN_MODELS. Verified 2026-07-30 against the live API with
+        # the 2.1.220 bundled CLI: Sonnet 5, Opus 5, Sonnet 4.6 and Opus 4.6 all
+        # succeed on adaptive, and Sonnet 5 / Opus 5 emit thinking blocks on a
+        # multi-step analysis prompt (and skip them on trivial ones — that's the
+        # point of adaptive).
+        thinking_config = {"type": "adaptive"}
 
         # Strict read-only DB access for the agent process:
         #   1. Prefer the dedicated `brain_agent_ro` Postgres role — it has
