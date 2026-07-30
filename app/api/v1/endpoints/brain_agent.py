@@ -4,11 +4,12 @@ import asyncio
 import json
 import mimetypes
 import time
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +25,19 @@ from app.schemas.brain_agent import (
     ThreadTitleUpdate,
     ThreadUpsertRequest,
 )
-from app.services.brain_agent_service import BrainAgentService
+from app.services.brain_agent_service import SANDBOX_SEED_FILES, BrainAgentService
+from app.services.brain_agent_uploads import (
+    MAX_SESSION_UPLOAD_BYTES,
+    MAX_SESSION_UPLOADS,
+    MAX_UPLOAD_BYTES,
+    UPLOAD_MANIFEST,
+    UploadRejected,
+    existing_upload_bytes,
+    read_upload_manifest,
+    record_upload,
+    sanitize_upload_name,
+    work_dir_for,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -201,6 +214,121 @@ async def end_session(
     service = BrainAgentService(db)
     success = await service.end_session(session_id, current_user.id)
     return {"success": success, "session_id": session_id}
+
+
+def _validated_session_id(session_id: str) -> str:
+    """Reject anything that isn't a UUID.
+
+    session_id is interpolated into a filesystem path, and the upload route can
+    be called before a session exists, so there's no ownership record to lean on
+    yet — the format check is what stops `../../` from escaping the sandbox root.
+    Both portals mint the id with crypto.randomUUID(), so this is free.
+    """
+    try:
+        uuid.UUID(session_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid session id.")
+    return session_id
+
+
+@router.post("/sessions/{session_id}/files", status_code=201)
+async def upload_session_file(
+    session_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Attach a file to a chat so the agent can read it.
+
+    The file is written into the session's sandbox — the agent's cwd — so its
+    existing Read/Bash tools reach it with no extra tooling. Uploading is allowed
+    before the first message: the sandbox is keyed by the session id the frontend
+    already generated, and chat() reuses whatever id it is given.
+    """
+    _validated_session_id(session_id)
+
+    try:
+        safe_name = sanitize_upload_name(file.filename, SANDBOX_SEED_FILES)
+    except UploadRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    work_dir = work_dir_for(current_user.id, session_id)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = read_upload_manifest(work_dir)
+    if safe_name not in existing and len(existing) >= MAX_SESSION_UPLOADS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This chat already has {MAX_SESSION_UPLOADS} attachments. "
+            "Start a new chat to attach more.",
+        )
+
+    already_used = existing_upload_bytes(work_dir)
+    if safe_name in existing:
+        # Replacing an existing attachment — its current bytes free up.
+        current_path = work_dir / safe_name
+        if current_path.is_file():
+            already_used -= current_path.stat().st_size
+
+    target = work_dir / safe_name
+    written = 0
+    try:
+        with target.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                # Enforce while streaming — reading the whole upload into memory
+                # first is how a big file takes the API process down with it.
+                if written > MAX_UPLOAD_BYTES:
+                    raise UploadRejected(
+                        f"'{safe_name}' is larger than "
+                        f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+                    )
+                if already_used + written > MAX_SESSION_UPLOAD_BYTES:
+                    raise UploadRejected(
+                        "Attachments for this chat would exceed "
+                        f"{MAX_SESSION_UPLOAD_BYTES // (1024 * 1024)} MB in total."
+                    )
+                out.write(chunk)
+    except UploadRejected as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        logger.error(
+            "brain_agent_upload_write_failed",
+            session_id=session_id,
+            filename=safe_name,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=500, detail="Could not save the attachment.")
+    finally:
+        await file.close()
+
+    if written == 0:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"'{safe_name}' is empty.")
+
+    record_upload(work_dir, safe_name)
+
+    service = BrainAgentService(db)
+    service.register_upload(current_user.id, session_id, safe_name)
+
+    # Mirror to S3 so the attachment survives a task restart (the sandbox lives on
+    # ephemeral disk). Flat keys, same shape as agent outputs, so the existing
+    # file-serving route works unchanged.
+    await service._upload_file_to_s3(current_user.id, session_id, safe_name, target)
+    await service._upload_file_to_s3(
+        current_user.id, session_id, UPLOAD_MANIFEST, work_dir / UPLOAD_MANIFEST
+    )
+
+    logger.info(
+        "brain_agent_upload_received",
+        session_id=session_id,
+        user_id=current_user.id,
+        filename=safe_name,
+        bytes=written,
+    )
+    return {"session_id": session_id, "filename": safe_name, "size": written}
 
 
 ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}

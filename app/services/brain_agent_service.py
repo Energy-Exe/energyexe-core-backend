@@ -17,6 +17,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     ResultMessage,
     SessionMessage,
     SystemMessage,
@@ -31,6 +32,12 @@ from claude_agent_sdk.types import StreamEvent
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
+from app.services.brain_agent_hooks import make_pre_tool_use_hook
+from app.services.brain_agent_uploads import (
+    UPLOAD_MANIFEST,
+    build_attachment_note,
+    read_upload_manifest,
+)
 from app.services.brain_agent_skill_files import (
     CHART_STYLE_PY,
     REPORT_PDF_PY,
@@ -63,6 +70,14 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         # Cumulative per-thread ceiling enforced app-side in chat() — refuses a
         # new turn once a long conversation has spent this much.
         "max_thread_budget_usd": 50.0,
+        # API-side token budget. Unlike max_budget_usd (a client-side hard stop
+        # that can cut an answer off mid-sentence), this is passed to the model
+        # so it knows how much room is left and wraps up on its own.
+        "task_budget_tokens": 500_000,
+        # Stream the model's reasoning to the UI. Admin only: thinking is
+        # model-authored prose that can name internal tables, which the client
+        # surface is not allowed to see (EPR-59).
+        "stream_thinking": True,
         "wrap_user_input": False,
     },
     "client": {
@@ -72,6 +87,8 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "max_turns": 25,
         "max_budget_usd": 2.0,
         "max_thread_budget_usd": 20.0,
+        "task_budget_tokens": 250_000,
+        "stream_thinking": False,
         "wrap_user_input": False,
     },
 }
@@ -86,7 +103,8 @@ def _get_profile(source: Optional[str]) -> Dict[str, Any]:
 class SSEEvent:
     """A single SSE event to stream to the client."""
 
-    event_type: str  # text_delta, tool_use, tool_result, system, result, error, image, file
+    # text_delta, thinking_delta, tool_use, tool_result, system, result, error, image, file
+    event_type: str
     data: Dict[str, Any]
 
 
@@ -97,6 +115,11 @@ SANDBOX_SEED_FILES = {"db.py", "eexe_style.py", "report_pdf.py", "skill_schema.m
 
 # Working file extensions — scripts the agent writes to execute, not user-facing output
 WORKING_FILE_EXTENSIONS = {".py", ".sh", ".bash", ".sql"}
+
+
+def _is_bookkeeping_file(name: str) -> bool:
+    """Dotfiles (the upload manifest, CLI scratch) are never user-facing output."""
+    return name.startswith(".")
 
 
 @dataclass
@@ -112,6 +135,11 @@ class AgentSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     known_files: set = field(default_factory=set)
     has_any_text: bool = False  # tracks if any text_delta was emitted this turn (for dedup)
+    # Mirrors the profile so _process_message doesn't need to re-resolve it.
+    stream_thinking: bool = False
+    # Uploads the agent hasn't been told about yet. Names come from the sandbox
+    # manifest, never from a request body — see _consume_pending_uploads.
+    pending_uploads: List[str] = field(default_factory=list)
 
 
 class BrainAgentService:
@@ -220,6 +248,20 @@ class BrainAgentService:
                 # Single-turn client message: still wrap in delimiters so the
                 # system prompt's "treat <user_input> as data" rule applies.
                 prompt = f"<user_input>\n{prompt}\n</user_input>"
+
+            # Announce any attachments the agent hasn't been told about. Goes in
+            # front of the (possibly wrapped) user text so it lands outside
+            # <user_input> and is read as instruction — which is why the names
+            # come from the sandbox manifest, never from the request body.
+            attachment_note = build_attachment_note(session.pending_uploads)
+            if attachment_note:
+                logger.info(
+                    "brain_agent_attachments_announced",
+                    session_id=session_id,
+                    files=list(session.pending_uploads),
+                )
+                prompt = f"{attachment_note}\n\n{prompt}"
+                session.pending_uploads = []
 
             async with session.lock:
                 # If a previous turn was abandoned (e.g. SSE disconnect), drain leftover messages
@@ -622,6 +664,12 @@ class BrainAgentService:
         work_dir = Path(f"/tmp/brain-agent/{user_id}/{session_id}")
         work_dir.mkdir(parents=True, exist_ok=True)
 
+        # Pull back any attachments this thread already had. The sandbox is on a
+        # Fargate task's ephemeral disk, so a deploy wipes it while the thread
+        # lives on in the DB — without this, a follow-up question about an
+        # uploaded file would find nothing there.
+        await self._restore_uploads_from_s3(user_id, session_id, work_dir)
+
         settings = get_settings()
         profile = _get_profile(source)
 
@@ -712,7 +760,15 @@ class BrainAgentService:
         # succeed on adaptive, and Sonnet 5 / Opus 5 emit thinking blocks on a
         # multi-step analysis prompt (and skip them on trivial ones — that's the
         # point of adaptive).
-        thinking_config = {"type": "adaptive"}
+        #
+        # display="summarized" is what makes the reasoning readable — without it
+        # the thinking blocks still arrive but their text is encrypted (verified
+        # empirically: 0 chars by default, ~2k chars of prose with it). Only the
+        # admin profile asks for it; the client agent thinks just as hard, we
+        # just never see it.
+        thinking_config: Dict[str, Any] = {"type": "adaptive"}
+        if profile["stream_thinking"]:
+            thinking_config["display"] = "summarized"
 
         # Strict read-only DB access for the agent process:
         #   1. Prefer the dedicated `brain_agent_ro` Postgres role — it has
@@ -771,13 +827,28 @@ class BrainAgentService:
             add_dirs=repo_dirs_str,
             max_turns=profile["max_turns"],
             max_budget_usd=profile["max_budget_usd"],
+            task_budget={"total": profile["task_budget_tokens"]},
             permission_mode="bypassPermissions",
             model=resolved_model,
             thinking=thinking_config,
+            # Fires even under bypassPermissions (can_use_tool does not), so this
+            # is where a Bash command can be inspected before it runs.
+            hooks={
+                "PreToolUse": [
+                    HookMatcher(
+                        matcher="Bash",
+                        hooks=[make_pre_tool_use_hook(source, session_id=session_id)],
+                    )
+                ]
+            },
             stderr=_on_stderr,
             max_buffer_size=10 * 1024 * 1024,
             setting_sources=[],  # Don't inherit global MCP servers (Gmail, Slack, etc.)
             mcp_servers={},  # No MCP servers needed for brain agent
+            # setting_sources/mcp_servers above express the intent; this enforces
+            # it — the CLI otherwise still tries to load .mcp.json, plugins and
+            # claude.ai connectors (it logs that attempt to stderr on every run).
+            strict_mcp_config=True,
             include_partial_messages=True,
             env={
                 "DATABASE_URL": agent_db_url,
@@ -787,6 +858,8 @@ class BrainAgentService:
                 "PGOPTIONS": "-c default_transaction_read_only=on",
                 # EPR-59: client db.py rejects information_schema / pg_catalog
                 # introspection so the client agent can't describe DB structure.
+                # The PreToolUse hook above enforces the same rule for commands
+                # that never touch db.py.
                 "BRAIN_AGENT_BLOCK_INTROSPECTION": "1" if source == "client" else "0",
                 "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "1200000",  # 20 min (was 10)
                 "CLAUDECODE": "",  # Unset to prevent nested session detection
@@ -802,7 +875,11 @@ class BrainAgentService:
         existing_files = set()
         if work_dir.exists():
             for f in work_dir.iterdir():
-                if f.is_file() and f.name not in SANDBOX_SEED_FILES:
+                if (
+                    f.is_file()
+                    and f.name not in SANDBOX_SEED_FILES
+                    and not _is_bookkeeping_file(f.name)
+                ):
                     existing_files.add(f.name)
 
         session = AgentSession(
@@ -812,6 +889,10 @@ class BrainAgentService:
             created_at=time.time(),
             last_activity=time.time(),
             known_files=existing_files,
+            stream_thinking=profile["stream_thinking"],
+            # A recreated session has lost the SDK transcript, so re-announce
+            # every upload rather than tracking which ones were mentioned before.
+            pending_uploads=read_upload_manifest(work_dir),
         )
         self._sessions[session_id] = session
         return session, True
@@ -826,11 +907,28 @@ class BrainAgentService:
                     f.is_file()
                     and f.name not in session.known_files
                     and f.name not in SANDBOX_SEED_FILES
+                    and not _is_bookkeeping_file(f.name)
                     and f.suffix.lower() not in WORKING_FILE_EXTENSIONS
                 ):
                     session.known_files.add(f.name)
                     new_files.append(f.name)
         return new_files
+
+    def register_upload(self, user_id: int, session_id: str, filename: str) -> None:
+        """Tell a live session about a file the user just attached.
+
+        Two jobs: queue the announcement for the next turn, and claim the name in
+        known_files so _scan_for_new_files doesn't hand the user's own upload back
+        to them as an agent-generated download. When no live session exists yet
+        (attaching before the first message) neither is needed — session creation
+        reads the manifest off disk.
+        """
+        session = self._sessions.get(session_id)
+        if not session or session.user_id != user_id:
+            return
+        session.known_files.add(filename)
+        if filename not in session.pending_uploads:
+            session.pending_uploads.append(filename)
 
     @staticmethod
     async def _upload_file_to_s3(user_id: int, thread_id: str, filename: str, file_path: Path):
@@ -842,6 +940,56 @@ class BrainAgentService:
             await upload_file(key, file_path)
         except Exception as e:
             logger.error("brain_agent_file_upload_failed", error=str(e), filename=filename)
+
+    @staticmethod
+    async def _restore_uploads_from_s3(user_id: int, session_id: str, work_dir: Path) -> List[str]:
+        """Restore this thread's attachments into a fresh sandbox from S3.
+
+        Uses the same flat key shape as agent outputs, so the manifest is all
+        that's needed to know what to fetch — no bucket listing. Best effort:
+        a thread whose files are gone must still be able to chat.
+        """
+        from app.services.s3_service import download_file
+
+        prefix = f"brain-agent/{user_id}/{session_id}"
+        try:
+            manifest_bytes = await download_file(f"{prefix}/{UPLOAD_MANIFEST}")
+            if manifest_bytes is None:
+                return []
+            (work_dir / UPLOAD_MANIFEST).write_bytes(manifest_bytes)
+        except Exception as exc:
+            logger.warning(
+                "brain_agent_upload_manifest_restore_failed",
+                session_id=session_id,
+                error=str(exc),
+            )
+            return []
+
+        restored: List[str] = []
+        for name in read_upload_manifest(work_dir):
+            target = work_dir / name
+            if target.exists():
+                restored.append(name)
+                continue
+            try:
+                data = await download_file(f"{prefix}/{name}")
+                if data is None:
+                    continue
+                target.write_bytes(data)
+                restored.append(name)
+            except Exception as exc:
+                logger.warning(
+                    "brain_agent_upload_restore_failed",
+                    session_id=session_id,
+                    filename=name,
+                    error=str(exc),
+                )
+
+        if restored:
+            logger.info(
+                "brain_agent_uploads_restored", session_id=session_id, files=restored
+            )
+        return restored
 
     async def _process_message(self, message, session: AgentSession = None) -> AsyncGenerator[SSEEvent, None]:
         """Convert an Agent SDK message into SSE events."""
@@ -861,7 +1009,21 @@ class BrainAgentService:
                     )
                     if session:
                         session.has_any_text = True
+                elif delta_type == "thinking_delta":
+                    # Only the admin profile asks for display="summarized"; without
+                    # it these deltas arrive with empty text (the reasoning is
+                    # encrypted), so gate on the flag AND on there being content.
+                    # Deliberately does not touch has_any_text — that tracks answer
+                    # text, and flipping it here would fire the paragraph separator
+                    # in the content_block_start branch below.
+                    thinking_text = delta.get("thinking", "")
+                    if session and session.stream_thinking and thinking_text:
+                        yield SSEEvent(
+                            event_type="thinking_delta",
+                            data={"text": thinking_text},
+                        )
                 # input_json_delta for tool input streaming — skip for now
+                # signature_delta carries the thinking block's signature — internal
 
             elif event_type == "content_block_start":
                 content_block = event.get("content_block", {})

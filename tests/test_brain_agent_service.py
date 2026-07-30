@@ -122,6 +122,35 @@ def test_thinking_only_assistant_entry_is_dropped():
     assert out[1]["toolCalls"][0]["result"] == "Q3"
 
 
+# ── per-profile SDK options ──
+
+
+def test_only_admin_asks_for_readable_thinking():
+    """Reasoning is model-authored prose that can name internal tables.
+
+    Admin gets display="summarized" (readable, streamed to the UI); the client
+    profile leaves it off so its thinking blocks stay encrypted (EPR-59).
+    """
+    from app.services.brain_agent_service import PROFILES
+
+    assert PROFILES["admin"]["stream_thinking"] is True
+    assert PROFILES["client"]["stream_thinking"] is False
+
+
+def test_every_profile_declares_a_task_budget():
+    """task_budget lets the model pace itself instead of being cut off by
+    max_budget_usd mid-answer — a profile without one silently loses that."""
+    from app.services.brain_agent_service import PROFILES
+
+    for name, profile in PROFILES.items():
+        budget = profile.get("task_budget_tokens")
+        assert isinstance(budget, int) and budget > 0, name
+        # Client is the more constrained surface; keep that ordering true.
+    assert (
+        PROFILES["client"]["task_budget_tokens"] <= PROFILES["admin"]["task_budget_tokens"]
+    )
+
+
 # ── SCADA gating (schema-presence check + prompt injection) ──
 
 
