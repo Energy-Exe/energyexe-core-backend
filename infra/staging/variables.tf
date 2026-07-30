@@ -69,6 +69,12 @@ variable "s3_bucket_name" {
   default     = "energyexe-agent-images"
 }
 
+variable "scada_data_bucket" {
+  description = "SCADA pipeline data lake bucket; task role gets READ-ONLY access to its silver/ prefix (brain-agent 10-min queries)"
+  type        = string
+  default     = "energyexe-scada-data"
+}
+
 variable "backend_sentry_dsn_enabled" {
   description = "When true, wire SENTRY_DSN from the staging secret into the task. Keep false until the energyexe/core-backend-staging/sentry-dsn secret is populated, else the task can't start on an empty secret."
   type        = bool

@@ -62,6 +62,21 @@ resource "aws_iam_role_policy" "task_s3" {
         Effect   = "Allow"
         Action   = ["s3:ListBucket"]
         Resource = "arn:aws:s3:::${var.s3_bucket_name}"
+      },
+      # Brain-agent silver access: read-only over the SCADA Parquet lake's
+      # silver/ prefix only — never bronze (raw zips) or write anywhere.
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "arn:aws:s3:::${var.scada_data_bucket}/silver/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = "arn:aws:s3:::${var.scada_data_bucket}"
+        Condition = {
+          StringLike = { "s3:prefix" = "silver/*" }
+        }
       }
     ]
   })

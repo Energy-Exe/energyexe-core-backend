@@ -232,3 +232,68 @@ def test_scada_content_stays_out_of_unconditional_skills():
     for blob in (SKILL_SCHEMA, SKILL_QUERIES, SKILL_DOMAIN, SKILL_SOURCES):
         assert "scada." not in blob
         assert "hill_of_towie" not in blob
+        assert "silver.py" not in blob
+
+
+# ── SCADA silver lake (silver.py / DuckDB over Parquet) ──
+
+
+def test_scada_skill_routes_to_silver_not_dead_end():
+    """The old boundary said raw 10-min data 'cannot be reached'. Post-silver
+    access, SKILL_SCADA must route to silver.py instead of dead-ending."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA
+
+    assert "silver.py" in SKILL_SCADA
+    assert "skill_scada_silver.md" in SKILL_SCADA
+    assert "fact_10min" in SKILL_SCADA  # never-invent warning stays
+    assert "only the daily/hourly gold aggregates are queryable" not in SKILL_SCADA
+
+
+def test_scada_silver_skill_pins_load_bearing_facts():
+    """Canary for skill_scada_silver.md: the facts that prevent wrong answers."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA_SILVER
+
+    # Views + frame
+    assert "measurements" in SKILL_SCADA_SILVER
+    assert "alarms" in SKILL_SCADA_SILVER
+    assert "ts_start_utc" in SKILL_SCADA_SILVER
+    # qc bitmask semantics + the clean-filter idiom
+    assert "qc = 0" in SKILL_SCADA_SILVER
+    assert "128 pre_commissioning" in SKILL_SCADA_SILVER
+    # capability caveat (greenbyte all-null columns)
+    assert "dim_signal_capability" in SKILL_SCADA_SILVER
+    assert "all-null" in SKILL_SCADA_SILVER
+    # identity + partition pruning + aggregate-first rules
+    assert "COLLIDE" in SKILL_SCADA_SILVER
+    assert "partition pruning" in SKILL_SCADA_SILVER
+    assert "Never SELECT *" in SKILL_SCADA_SILVER or "never SELECT *" in SKILL_SCADA_SILVER
+    # alarms semantics
+    assert "time_off IS NOT NULL" in SKILL_SCADA_SILVER
+    # gold stays authoritative
+    assert "AUTHORITATIVE" in SKILL_SCADA_SILVER
+
+
+def test_silver_helper_script_guardrails_present():
+    """The seeded silver.py must keep its read-only + resource guardrails."""
+    from app.services.brain_agent_silver_script import SILVER_HELPER_SCRIPT
+
+    for token in (
+        "SCADA_SILVER_URI",
+        "credential_chain",
+        "memory_limit",
+        "hive_partitioning",
+        "DANGEROUS_KEYWORDS",
+        "interrupt",
+    ):
+        assert token in SILVER_HELPER_SCRIPT, f"silver.py guardrail missing: {token}"
+    # Efficiency: bind must NOT read every footer (schema is enforced-identical)
+    assert "union_by_name" not in SILVER_HELPER_SCRIPT
+
+
+def test_client_surface_never_mentions_silver():
+    """Client prompt must stay silver/scada-free (EPR-59 posture unchanged)."""
+    from pathlib import Path
+
+    text = Path("app/prompts/brain_agent_system_client.md").read_text(encoding="utf-8")
+    assert "silver.py" not in text
+    assert "scada" not in text.lower()

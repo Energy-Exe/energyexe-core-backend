@@ -52,6 +52,12 @@ variable "s3_bucket_name" {
   default     = "energyexe-agent-images"
 }
 
+variable "scada_data_bucket" {
+  description = "SCADA pipeline data lake bucket; task role gets READ-ONLY access to its silver/ prefix (brain-agent 10-min queries)"
+  type        = string
+  default     = "energyexe-scada-data"
+}
+
 variable "pipeline_daily_enabled" {
   description = "Enables the in-process APScheduler nightly pipeline. Keep false during Railway burn-in — true on both platforms means the pipeline runs twice a night. Flip to true at cutover."
   type        = bool

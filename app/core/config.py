@@ -169,6 +169,13 @@ class Settings(BaseSettings):
     BRAIN_AGENT_CLIENT_RO_USER: str = "brain_agent_client_ro"
     BRAIN_AGENT_CLIENT_RO_PASSWORD: str = ""
 
+    # Brain Agent — SCADA silver Parquet lake root for the sandbox's silver.py
+    # (DuckDB over S3; task role has read-only access to the silver/ prefix).
+    # Admin sessions only, and only when the scada schema is present. Local dev
+    # may point it at a local silver directory. Empty string disables the
+    # helper entirely (it is then not seeded into the sandbox).
+    SCADA_SILVER_URI: str = "s3://energyexe-scada-data/silver"
+
     # Brain Agent — source code access for codebase exploration
     CODE_REPOS_DIR: str = "/tmp/energyexe-repos"
     GITHUB_TOKEN: str = ""  # PAT for cloning private repos at startup

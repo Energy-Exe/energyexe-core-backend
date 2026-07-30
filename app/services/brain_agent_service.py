@@ -32,6 +32,7 @@ from claude_agent_sdk.types import StreamEvent
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
+from app.services.brain_agent_silver_script import SILVER_HELPER_SCRIPT
 from app.services.brain_agent_hooks import make_pre_tool_use_hook
 from app.services.brain_agent_uploads import (
     UPLOAD_MANIFEST,
@@ -45,6 +46,7 @@ from app.services.brain_agent_skill_files import (
     SKILL_QUERIES,
     SKILL_SCADA,
     SKILL_SCADA_QUERIES,
+    SKILL_SCADA_SILVER,
     SKILL_SCHEMA,
     SKILL_SOURCES,
 )
@@ -111,7 +113,7 @@ class SSEEvent:
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
 
 # Files placed in the sandbox at session creation — skip when scanning for agent output
-SANDBOX_SEED_FILES = {"db.py", "eexe_style.py", "report_pdf.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md", "skill_methodology.md", "skill_scada.md", "skill_scada_queries.md"}
+SANDBOX_SEED_FILES = {"db.py", "silver.py", "eexe_style.py", "report_pdf.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md", "skill_methodology.md", "skill_scada.md", "skill_scada_queries.md", "skill_scada_silver.md"}
 
 # Working file extensions — scripts the agent writes to execute, not user-facing output
 WORKING_FILE_EXTENSIONS = {".py", ".sh", ".bash", ".sql"}
@@ -693,6 +695,7 @@ class BrainAgentService:
             user_company_name=user_company_name,
             user_id=user_id,
             scada_enabled=scada_enabled,
+            silver_enabled=bool(settings.SCADA_SILVER_URI),
         )
 
         # Write db.py helper script and skill files to sandbox
@@ -717,6 +720,12 @@ class BrainAgentService:
         if scada_enabled:
             (work_dir / "skill_scada.md").write_text(seed_stamp + SKILL_SCADA)
             (work_dir / "skill_scada_queries.md").write_text(seed_stamp + SKILL_SCADA_QUERIES)
+            # Silver Parquet lake access (10-min measurements, raw alarms):
+            # DuckDB-over-S3 helper + its skill file. Gated on the same
+            # scada_enabled flag plus an explicit URI (empty = off switch).
+            if settings.SCADA_SILVER_URI:
+                (work_dir / "silver.py").write_text(SILVER_HELPER_SCRIPT)
+                (work_dir / "skill_scada_silver.md").write_text(seed_stamp + SKILL_SCADA_SILVER)
 
         # DB-driven methodology (client-ui #177): compose the admin-editable
         # methodology sections into a skill file so the agent answers
@@ -861,6 +870,9 @@ class BrainAgentService:
                 # The PreToolUse hook above enforces the same rule for commands
                 # that never touch db.py.
                 "BRAIN_AGENT_BLOCK_INTROSPECTION": "1" if source == "client" else "0",
+                # Silver Parquet lake root for silver.py (empty when disabled;
+                # the helper isn't seeded then either).
+                "SCADA_SILVER_URI": settings.SCADA_SILVER_URI if scada_enabled else "",
                 "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "1200000",  # 20 min (was 10)
                 "CLAUDECODE": "",  # Unset to prevent nested session detection
             },
@@ -1276,6 +1288,7 @@ class BrainAgentService:
         user_company_name: Optional[str] = None,
         user_id: Optional[int] = None,
         scada_enabled: bool = False,
+        silver_enabled: bool = False,
     ) -> str:
         """Build the system prompt for the Brain Agent."""
         prompt = cls._load_prompt_template(prompt_file)
@@ -1301,6 +1314,15 @@ class BrainAgentService:
             if scada_enabled
             else ""
         )
+        if scada_enabled and silver_enabled:
+            scada_lines += (
+                "\n- `cat skill_scada_silver.md` — RAW 10-minute SCADA data + raw "
+                "alarm events for these farms via `python3 silver.py \"SELECT ...\"` "
+                "(DuckDB over the silver Parquet lake). Use for sub-hourly, "
+                "per-signal (temperatures/pitch/rpm) or event-sequence questions "
+                "that the gold scada tables cannot answer; gold stays authoritative "
+                "for daily/monthly KPIs"
+            )
         prompt = prompt.replace("{{SCADA_SKILL_LINES}}", scada_lines)
         prompt = prompt.replace(
             "{{USER_NAME}}",

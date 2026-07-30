@@ -504,9 +504,12 @@ schema-qualify: `scada.dim_farm`, never `dim_farm`.
 
 The tables documented below are the ONLY tables in schema scada. The raw
 10-minute interval data (individual wind/power/temperature readings) is NOT
-in Postgres — it lives in the pipeline's Parquet lake. Never invent tables
-like `scada.fact_10min`; if a question needs raw 10-minute rows, say that
-only the daily/hourly gold aggregates are queryable here.
+in Postgres — it lives in the pipeline's Parquet lake, which you CAN query
+via `python3 silver.py "SELECT ..."` (DuckDB SQL; read skill_scada_silver.md
+FIRST). Never invent Postgres tables like `scada.fact_10min`. Routing rule:
+daily/monthly KPIs and anything a gold table answers → db.py against schema
+scada (authoritative); sub-hourly, per-signal, or raw alarm-event questions
+→ silver.py.
 
 ## Farms & identity
 
@@ -876,6 +879,98 @@ ORDER BY duration_h DESC LIMIT 10
 Greenbyte farms: filter/interpret via iec_category (join
 dim_event_category); Hill of Towie: via source_code (join dim_alarm_code).
 NEVER SUM raw duration_h across codes as "downtime" — codes overlap.
+"""
+
+SKILL_SCADA_SILVER = """# SCADA Silver Lake — raw 10-minute data via silver.py (DuckDB)
+
+`python3 silver.py "SELECT ..."` queries the pipeline's silver Parquet lake
+(S3) with DuckDB SQL. This is the RAW layer under the gold tables: 10-minute
+turbine measurements (~19.8M rows), raw alarm/status events (~8M rows), and
+the registry dims. Read-only; results cap at 20 displayed rows + a summary.
+
+Routing: gold (db.py, schema scada) stays AUTHORITATIVE for daily/monthly
+KPIs — energy, availability, losses, revenue are pre-computed there with QC
+and meter-vs-integral selection you would otherwise have to re-derive. Use
+silver ONLY for what gold can't answer: sub-hourly behaviour, per-signal
+analysis (temperatures, pitch, rpm, setpoints), power curves from raw points,
+alarm event sequences. NEVER recompute a gold KPI from silver and present it
+as the platform number.
+
+## Views
+
+**measurements** — one row per (farm, turbine, 10-min interval), 46 columns:
+- `ts_start_utc` TIMESTAMP: interval START, UTC (naive — no tz suffix; the
+  whole lake is UTC, same frame as gold's date_utc).
+- `farm`, `turbine`, `station_id` (BIGINT, hill_of_towie only, NULL elsewhere).
+  Key on (farm, turbine) — turbine codes like 'T01' COLLIDE across farms.
+- `year` (BIGINT): hive partition key. ALWAYS filter `farm` and, when you
+  can, `year` — they prune which files are read; a full unfiltered scan
+  reads the whole lake and is slow. `month` is NOT a column — derive from
+  ts_start_utc.
+- 39 signal columns, all DOUBLE. Main ones (unit): power_kw (kW),
+  power_min/max/std_kw, energy_kwh + energy_export/import_kwh (kWh per
+  10 min, hill_of_towie only), wind_speed_ms (+min/max/std, m/s),
+  wind_dir_deg, nacelle_pos_deg, yaw_pos_deg (deg), gen_rpm, rotor_rpm,
+  pitch_a/b/c_deg, power_setpoint_kw, reactive_power_kvar, grid_freq_hz,
+  power_factor, ambient_temp_c, nacelle_temp_c, gear_oil_temp_c,
+  gearbox_hs/ims_gen/rot_temp_c, main_bearing(_rear)_temp_c,
+  gen_bearing_nde/de_temp_c (degC), time_running/ready/error_s (s of 600).
+- `qc` (UINTEGER): QC bitmask. **`qc = 0` means clean (~95% of rows) — for
+  analysis default to `WHERE qc = 0`.** Bits: 1 range_power, 2 range_wind,
+  4 range_temp, 8 range_other, 16 null_core, 32 stuck_anemometer,
+  64 duplicate_source_row, 128 pre_commissioning, 256 off_grid. Test a bit
+  with `(qc & 128) > 0`. Exclude pre-commissioning rows from any KPI.
+
+CAPABILITY CAVEAT — not every farm reports every signal. kelmarsh and
+penmanshiel (greenbyte) have 14 all-null columns incl. energy_kwh,
+time_running_s, power_setpoint_kw, yaw_pos_deg, grid_freq_hz, gearbox_*;
+some signals start late (hill_of_towie wind_dir_deg only from 2022,
+penmanshiel pitch/main-bearing from 2018). CHECK `dim_signal_capability`
+(farm, signal, status reported|all_null, null_pct, first_year) BEFORE
+declaring "no data" or averaging a mostly-null column.
+
+**alarms** — raw event log, one row per event: farm, turbine, station_id,
+time_on, time_off, source_code, severity_class (info|stop|warning|comms|NULL),
+message, iec_category (greenbyte farms only), service_category, year (hive).
+- `time_off` is NULL on ~93% of rows = instantaneous/status event, NOT
+  "still open". For durations filter `time_off IS NOT NULL` and compute
+  `epoch(time_off - time_on)`.
+- Only 12 of ~589 hill_of_towie source_codes are documented
+  (dim_alarm_code). NEVER invent a meaning for an undocumented code — report
+  the code number and say it is undocumented.
+- Alarm durations OVERLAP across codes — never sum them into "downtime";
+  scada.availability_daily (gold) is the downtime truth.
+
+**Dims** (small, safe to SELECT fully): dim_farm, dim_turbine (rated_kw,
+model, cod, lat/lon), dim_turbine_config (baseline/aeroup epochs — power
+curve comparisons must be epoch-scoped), dim_signal (canonical name, unit,
+valid range), dim_signal_map (OEM tag lineage), dim_signal_capability,
+dim_alarm_code, dim_event_category (IEC category → availability semantics).
+
+## Golden rules
+
+1. ALWAYS filter farm (+ year when possible) — partition pruning.
+2. AGGREGATE IN SQL (GROUP BY / avg / percentile_cont / time_bucket via
+   date_trunc). Never SELECT * over raw intervals; for plots, aggregate or
+   sample down to <= a few thousand points first, THEN chart.
+3. `WHERE qc = 0` for clean analysis; state it when you deviate.
+4. DuckDB dialect: date_trunc('hour', ts_start_utc), epoch(interval),
+   percentile_cont(0.5) WITHIN GROUP (ORDER BY x). No Postgres-only syntax
+   like ::interval tricks; LIMIT is auto-added if you omit it.
+5. Gold vs silver numbers may differ slightly by design (gold applies
+   meter-QC bands and integral fallback per interval). If asked to
+   reconcile, name that mechanism instead of guessing.
+
+Example — hourly power curve points for one turbine, one month:
+```sql
+SELECT date_trunc('hour', ts_start_utc) AS hour_utc,
+       avg(wind_speed_ms) AS ws, avg(power_kw) AS kw
+FROM measurements
+WHERE farm='hill_of_towie' AND turbine='T07' AND year=2025
+  AND ts_start_utc >= '2025-06-01' AND ts_start_utc < '2025-07-01'
+  AND qc = 0
+GROUP BY 1 ORDER BY 1
+```
 """
 
 
