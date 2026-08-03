@@ -104,6 +104,36 @@ def test_endpoint_calls_service(app_client, schema_present, known_farms, monkeyp
     assert resp.json()["pot"] == 1.0
 
 
+def test_viz_charts_all_registered(app_client, schema_present, known_farms, monkeypatch):
+    """Every loop-registered viz chart routes to its service method with farm+year."""
+    for path, method in endpoint_module._FARM_YEAR_CHARTS.items():
+
+        async def _fake(self, farm, year, **kwargs):
+            return {"ok": True}
+
+        monkeypatch.setattr(scada_service.ScadaService, method, _fake)
+        resp = app_client.get(f"/scada/{path}", params={"farm": "kelmarsh", "year": 2023})
+        assert resp.status_code == 200, f"{path} -> {resp.status_code}"
+        assert resp.json() == {"ok": True}, path
+
+
+def test_viz_charts_require_year(app_client, schema_present):
+    assert app_client.get("/scada/outage-gantt").status_code == 422
+    assert app_client.get("/scada/temp-cohort").status_code == 422
+
+
+def test_viz_farm_scoped_charts(app_client, schema_present, known_farms, monkeypatch):
+    for path, method in (("wind-index", "wind_index"), ("self-consumption", "self_consumption")):
+
+        async def _fake(self, farm):
+            return {"farm_seen": farm}
+
+        monkeypatch.setattr(scada_service.ScadaService, method, _fake)
+        resp = app_client.get(f"/scada/{path}", params={"farm": "penmanshiel"})
+        assert resp.status_code == 200, path
+        assert resp.json() == {"farm_seen": "penmanshiel"}, path
+
+
 def test_scada_schema_present_caches_true(monkeypatch):
     """Once the schema is seen, later calls never re-query."""
 

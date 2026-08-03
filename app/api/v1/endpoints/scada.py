@@ -221,3 +221,68 @@ async def get_league(
     service = await _service(db)
     await _validated_farm(service, farm)
     return await service.league(farm=farm, year=year)
+
+
+# ---- silver-viz charts (2026-08-03 build) -----------------------------------
+# Same guard rails as above; every endpoint is farm+year scoped unless the
+# chart is inherently multi-year. Farm-limited signals return empty payloads.
+
+_FARM_YEAR_CHARTS = {
+    "curtailment-episodes": "curtailment_episodes",
+    "storms": "storms",
+    "icing": "icing",
+    "outage-gantt": "outage_gantt",
+    "state-hours": "state_hours",
+    "alarm-heatmap": "alarm_heatmap",
+    "temp-cohort": "temp_cohort",
+    "yaw-misalignment": "yaw_misalignment",
+    "watchdog": "watchdog",
+    "layout-map": "layout_map",
+    "wake": "wake",
+    "wind-rose": "wind_rose",
+    "turbulence": "turbulence",
+    "power-curve-density": "power_curve_density",
+    "grid-quality": "grid_quality",
+    "pq-envelope": "pq_envelope",
+    "energy-recon": "energy_recon",
+    "qc-bits": "qc_bits",
+}
+
+
+def _register_farm_year_chart(path: str, method_name: str) -> None:
+    @router.get(f"/{path}", name=f"get_{method_name}")
+    async def _endpoint(
+        farm: str = Query(DEFAULT_FARM),
+        year: int = Query(..., ge=2015, le=2100),
+        current_user: User = Depends(get_current_active_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> Dict[str, Any]:
+        service = await _service(db)
+        await _validated_farm(service, farm)
+        return await getattr(service, method_name)(farm=farm, year=year)
+
+
+for _path, _method in _FARM_YEAR_CHARTS.items():
+    _register_farm_year_chart(_path, _method)
+
+
+@router.get("/wind-index")
+async def get_wind_index(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    return await service.wind_index(farm=farm)
+
+
+@router.get("/self-consumption")
+async def get_self_consumption(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    return await service.self_consumption(farm=farm)
