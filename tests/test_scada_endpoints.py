@@ -123,7 +123,11 @@ def test_viz_charts_require_year(app_client, schema_present):
 
 
 def test_viz_farm_scoped_charts(app_client, schema_present, known_farms, monkeypatch):
-    for path, method in (("wind-index", "wind_index"), ("self-consumption", "self_consumption")):
+    for path, method in (
+        ("wind-index", "wind_index"),
+        ("self-consumption", "self_consumption"),
+        ("midwind-fade", "midwind_fade"),
+    ):
 
         async def _fake(self, farm):
             return {"farm_seen": farm}
@@ -132,6 +136,16 @@ def test_viz_farm_scoped_charts(app_client, schema_present, known_farms, monkeyp
         resp = app_client.get(f"/scada/{path}", params={"farm": "penmanshiel"})
         assert resp.status_code == 200, path
         assert resp.json() == {"farm_seen": "penmanshiel"}, path
+
+
+def test_portfolio_needs_no_farm(app_client, schema_present, monkeypatch):
+    async def _fake(self):
+        return {"farms": []}
+
+    monkeypatch.setattr(scada_service.ScadaService, "portfolio", _fake)
+    resp = app_client.get("/scada/portfolio")
+    assert resp.status_code == 200
+    assert resp.json() == {"farms": []}
 
 
 def test_turbine_charts_all_registered(app_client, schema_present, known_farms, monkeypatch):
@@ -155,9 +169,7 @@ def test_turbine_charts_all_registered(app_client, schema_present, known_farms, 
             return {"t_seen": turbine}
 
         monkeypatch.setattr(scada_service.ScadaService, method, _fake_life)
-        resp = app_client.get(
-            f"/scada/{path}", params={"farm": "hill_of_towie", "turbine": "T07"}
-        )
+        resp = app_client.get(f"/scada/{path}", params={"farm": "hill_of_towie", "turbine": "T07"})
         assert resp.status_code == 200, f"{path} -> {resp.status_code}"
         assert resp.json() == {"t_seen": "T07"}, path
 

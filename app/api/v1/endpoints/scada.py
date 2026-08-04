@@ -246,6 +246,17 @@ _FARM_YEAR_CHARTS = {
     "pq-envelope": "pq_envelope",
     "energy-recon": "energy_recon",
     "qc-bits": "qc_bits",
+    # round-4: reliability & losses page + folded additions
+    "loss-league": "loss_league",
+    "loss-monthly": "loss_monthly",
+    "mtbf-mttr": "mtbf_mttr",
+    "alarm-transitions": "alarm_transitions",
+    "fleet-timers": "fleet_timers",
+    "duration-curve": "duration_curve",
+    "pitch-curve": "pitch_curve",
+    "diurnal": "diurnal",
+    "density-curve": "density_curve",
+    "ramps": "ramps",
 }
 
 
@@ -275,6 +286,28 @@ async def get_wind_index(
     service = await _service(db)
     await _validated_farm(service, farm)
     return await service.wind_index(farm=farm)
+
+
+@router.get("/midwind-fade")
+async def get_midwind_fade(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Per-turbine mean power in the 7-8 m/s band across years."""
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    return await service.midwind_fade(farm=farm)
+
+
+@router.get("/portfolio")
+async def get_portfolio(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """All farms on one normalized monthly CF/availability strip."""
+    service = await _service(db)
+    return await service.portfolio()
 
 
 @router.get("/self-consumption")
@@ -312,6 +345,7 @@ _TURBINE_YEAR_CHARTS = {
     "turbine-alarm-timeline": "turbine_alarm_timeline",
     "turbine-alarm-pareto": "turbine_alarm_pareto",
     "turbine-rose": "turbine_rose",
+    "turbine-losses": "turbine_losses",
 }
 
 # turbine + farm whole-history charts (the life-view lanes)
