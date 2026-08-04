@@ -2205,19 +2205,21 @@ class ScadaService:
         return {"turbines": turbines, "min_hours": min_hours}
 
     async def alarm_transitions(self, farm: str, year: int, limit: int = 12) -> Dict[str, Any]:
-        """Code->code transition counts: among the year's top codes, how often
-        code B fires on the same turbine within 60 min after code A. Each
-        source event counts once per following code (DISTINCT on the A event)."""
-        ystart, yend = datetime(year, 1, 1), datetime(year + 1, 1, 1)
+        """Code x code co-occurrence at day grain from alarm_code_daily:
+        among the year's top codes, on how many turbine-days both were active.
+        Day grain is deliberate — alarm_events self-joins (chatter codes fire
+        100k+ times) take 15s+ on the staging instance; the daily rollup
+        answers the 'which alarms travel together' question in milliseconds."""
+        start, end = date(year, 1, 1), date(year, 12, 31)
         top_res = await self.db.execute(
             text(
                 """
-                SELECT source_code FROM scada.alarm_events
-                WHERE farm = :farm AND time_on >= :ystart AND time_on < :yend
-                GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT :limit
+                SELECT source_code FROM scada.alarm_code_daily
+                WHERE farm = :farm AND date_utc BETWEEN :start AND :end
+                GROUP BY 1 ORDER BY SUM(events_started) DESC LIMIT :limit
                 """
             ),
-            {"farm": farm, "ystart": ystart, "yend": yend, "limit": limit},
+            {"farm": farm, "start": start, "end": end, "limit": limit},
         )
         codes = [r.source_code for r in top_res.fetchall()]
         if not codes:
@@ -2225,21 +2227,21 @@ class ScadaService:
         pair_res = await self.db.execute(
             text(
                 """
+                WITH ev AS (
+                  SELECT turbine, date_utc, source_code
+                  FROM scada.alarm_code_daily
+                  WHERE farm = :farm AND date_utc BETWEEN :start AND :end
+                    AND source_code = ANY(:codes)
+                )
                 SELECT a.source_code AS src, b.source_code AS dst,
-                       COUNT(DISTINCT (a.turbine, a.time_on)) AS n
-                FROM scada.alarm_events a
-                JOIN scada.alarm_events b
-                  ON b.farm = a.farm AND b.turbine = a.turbine
-                 AND b.time_on > a.time_on
-                 AND b.time_on <= a.time_on + INTERVAL '60 minutes'
-                 AND b.source_code <> a.source_code
-                WHERE a.farm = :farm
-                  AND a.time_on >= :ystart AND a.time_on < :yend
-                  AND a.source_code = ANY(:codes) AND b.source_code = ANY(:codes)
+                       COUNT(*) AS n
+                FROM ev a
+                JOIN ev b ON b.turbine = a.turbine AND b.date_utc = a.date_utc
+                         AND b.source_code <> a.source_code
                 GROUP BY 1, 2
                 """
             ),
-            {"farm": farm, "ystart": ystart, "yend": yend, "codes": codes},
+            {"farm": farm, "start": start, "end": end, "codes": codes},
         )
         pairs = [{"src": r.src, "dst": r.dst, "n": int(r.n)} for r in pair_res.fetchall()]
         msg_res = await self.db.execute(
