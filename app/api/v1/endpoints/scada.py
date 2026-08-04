@@ -286,3 +286,71 @@ async def get_self_consumption(
     service = await _service(db)
     await _validated_farm(service, farm)
     return await service.self_consumption(farm=farm)
+
+
+# --- turbine detail page: one dossier per turbine ---
+
+
+@router.get("/turbines")
+async def get_turbines(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Turbine picker payload for the detail page."""
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    return await service.turbines(farm=farm)
+
+
+# turbine + farm + year charts
+_TURBINE_YEAR_CHARTS = {
+    "turbine-summary": "turbine_summary",
+    "turbine-power-curve": "turbine_power_curve",
+    "turbine-daily-rel": "turbine_daily_rel",
+    "turbine-timers": "turbine_timers",
+    "turbine-alarm-timeline": "turbine_alarm_timeline",
+    "turbine-alarm-pareto": "turbine_alarm_pareto",
+    "turbine-rose": "turbine_rose",
+}
+
+# turbine + farm whole-history charts (the life-view lanes)
+_TURBINE_CHARTS = {
+    "turbine-life": "turbine_life",
+    "turbine-perf-index": "turbine_perf_index",
+    "turbine-temp-trend": "turbine_temp_trend",
+}
+
+
+def _register_turbine_year_chart(path: str, method_name: str) -> None:
+    @router.get(f"/{path}", name=f"get_{method_name}")
+    async def _endpoint(
+        turbine: str = Query(..., min_length=1, max_length=32),
+        farm: str = Query(DEFAULT_FARM),
+        year: int = Query(..., ge=2015, le=2100),
+        current_user: User = Depends(get_current_active_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> Dict[str, Any]:
+        service = await _service(db)
+        await _validated_farm(service, farm)
+        return await getattr(service, method_name)(farm=farm, turbine=turbine, year=year)
+
+
+def _register_turbine_chart(path: str, method_name: str) -> None:
+    @router.get(f"/{path}", name=f"get_{method_name}")
+    async def _endpoint(
+        turbine: str = Query(..., min_length=1, max_length=32),
+        farm: str = Query(DEFAULT_FARM),
+        current_user: User = Depends(get_current_active_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> Dict[str, Any]:
+        service = await _service(db)
+        await _validated_farm(service, farm)
+        return await getattr(service, method_name)(farm=farm, turbine=turbine)
+
+
+for _path, _method in _TURBINE_YEAR_CHARTS.items():
+    _register_turbine_year_chart(_path, _method)
+
+for _path, _method in _TURBINE_CHARTS.items():
+    _register_turbine_chart(_path, _method)

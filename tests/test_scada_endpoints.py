@@ -134,6 +134,50 @@ def test_viz_farm_scoped_charts(app_client, schema_present, known_farms, monkeyp
         assert resp.json() == {"farm_seen": "penmanshiel"}, path
 
 
+def test_turbine_charts_all_registered(app_client, schema_present, known_farms, monkeypatch):
+    """Every turbine-dossier chart routes to its service method."""
+    for path, method in endpoint_module._TURBINE_YEAR_CHARTS.items():
+
+        async def _fake(self, farm, turbine, year, **kwargs):
+            return {"t_seen": turbine}
+
+        monkeypatch.setattr(scada_service.ScadaService, method, _fake)
+        resp = app_client.get(
+            f"/scada/{path}",
+            params={"farm": "hill_of_towie", "turbine": "T07", "year": 2024},
+        )
+        assert resp.status_code == 200, f"{path} -> {resp.status_code}"
+        assert resp.json() == {"t_seen": "T07"}, path
+
+    for path, method in endpoint_module._TURBINE_CHARTS.items():
+
+        async def _fake_life(self, farm, turbine, **kwargs):
+            return {"t_seen": turbine}
+
+        monkeypatch.setattr(scada_service.ScadaService, method, _fake_life)
+        resp = app_client.get(
+            f"/scada/{path}", params={"farm": "hill_of_towie", "turbine": "T07"}
+        )
+        assert resp.status_code == 200, f"{path} -> {resp.status_code}"
+        assert resp.json() == {"t_seen": "T07"}, path
+
+
+def test_turbine_charts_require_turbine(app_client, schema_present):
+    assert app_client.get("/scada/turbine-summary", params={"year": 2024}).status_code == 422
+    assert app_client.get("/scada/turbine-life").status_code == 422
+    assert app_client.get("/scada/turbine-timers", params={"turbine": "T07"}).status_code == 422
+
+
+def test_turbines_list(app_client, schema_present, known_farms, monkeypatch):
+    async def _fake(self, farm):
+        return {"turbines": [{"t": "T01"}]}
+
+    monkeypatch.setattr(scada_service.ScadaService, "turbines", _fake)
+    resp = app_client.get("/scada/turbines", params={"farm": "hill_of_towie"})
+    assert resp.status_code == 200
+    assert resp.json()["turbines"][0]["t"] == "T01"
+
+
 def test_scada_schema_present_caches_true(monkeypatch):
     """Once the schema is seen, later calls never re-query."""
 
