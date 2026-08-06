@@ -127,6 +127,7 @@ def test_viz_farm_scoped_charts(app_client, schema_present, known_farms, monkeyp
         ("wind-index", "wind_index"),
         ("self-consumption", "self_consumption"),
         ("midwind-fade", "midwind_fade"),
+        ("replay-days", "replay_days"),
     ):
 
         async def _fake(self, farm):
@@ -136,6 +137,17 @@ def test_viz_farm_scoped_charts(app_client, schema_present, known_farms, monkeyp
         resp = app_client.get(f"/scada/{path}", params={"farm": "penmanshiel"})
         assert resp.status_code == 200, path
         assert resp.json() == {"farm_seen": "penmanshiel"}, path
+
+
+def test_replay_takes_farm_and_day(app_client, schema_present, known_farms, monkeypatch):
+    async def _fake(self, farm, day):
+        return {"day_seen": day.isoformat()}
+
+    monkeypatch.setattr(scada_service.ScadaService, "replay", _fake)
+    resp = app_client.get("/scada/replay", params={"farm": "hill_of_towie", "day": "2025-06-23"})
+    assert resp.status_code == 200
+    assert resp.json() == {"day_seen": "2025-06-23"}
+    assert app_client.get("/scada/replay", params={"farm": "hill_of_towie"}).status_code == 422
 
 
 def test_portfolio_needs_no_farm(app_client, schema_present, monkeypatch):

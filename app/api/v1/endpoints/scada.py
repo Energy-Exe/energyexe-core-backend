@@ -257,6 +257,12 @@ _FARM_YEAR_CHARTS = {
     "diurnal": "diurnal",
     "density-curve": "density_curve",
     "ramps": "ramps",
+    # round-5: farm map, year in review, analyst tools
+    "direction-map": "direction_map",
+    "map-metrics": "map_metrics",
+    "alarm-explorer": "alarm_explorer",
+    "year-summary": "year_summary",
+    "calendar": "calendar",
 }
 
 
@@ -308,6 +314,31 @@ async def get_portfolio(
     """All farms on one normalized monthly CF/availability strip."""
     service = await _service(db)
     return await service.portfolio()
+
+
+@router.get("/replay-days")
+async def get_replay_days(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Curated whole-history replay days for the map's playback mode."""
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    return await service.replay_days(farm=farm)
+
+
+@router.get("/replay")
+async def get_replay(
+    day: date = Query(...),
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """One curated day's 10-min points as aligned arrays."""
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    return await service.replay(farm=farm, day=day)
 
 
 @router.get("/self-consumption")
