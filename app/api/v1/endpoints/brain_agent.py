@@ -44,7 +44,8 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 # SSE heartbeat interval in seconds — keeps connections alive through proxies.
-# Shorter interval (5s) ensures Railway/proxy doesn't buffer or drop the connection.
+# Shorter interval (5s) keeps the ALB (idle_timeout 300s) and browser read
+# timeouts fed even when the agent is quiet between events.
 HEARTBEAT_INTERVAL = 5
 
 # Per-user turn rate limits (turns per 60s window), by effective source. Agent
@@ -102,6 +103,27 @@ async def agent_chat(
             headers={"Retry-After": str(retry_after)},
         )
 
+    # EPR-98: reject a duplicate of the run already live on this session with a
+    # real 409 before the SSE stream opens. Clients treat any non-OK response as
+    # terminal (no retry), so this is what breaks a re-POST storm — without it a
+    # retried send writes the same user turn into the live SDK session again.
+    if request.session_id and BrainAgentService.check_duplicate_send(
+        request.session_id, request.message_id, request.prompt
+    ):
+        logger.info(
+            "brain_agent_duplicate_send_rejected",
+            user_id=current_user.id,
+            session_id=request.session_id,
+            has_message_id=bool(request.message_id),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The agent is still working on your previous message. "
+                "The response will appear in this conversation when it finishes."
+            ),
+        )
+
     user_name = None
     if current_user.first_name:
         user_name = current_user.first_name
@@ -122,6 +144,7 @@ async def agent_chat(
                     model=request.model,
                     conversation_history=request.conversation_history,
                     source=effective_source,
+                    message_id=request.message_id,
                 ),
                 interval=HEARTBEAT_INTERVAL,
             ):

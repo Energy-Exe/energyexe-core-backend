@@ -233,3 +233,224 @@ def test_system_prompt_silver_line_gated_on_both_flags():
     # silver without scada must be a no-op (helper is never seeded then).
     no_scada = BrainAgentService._build_system_prompt(scada_enabled=False, silver_enabled=True)
     assert "silver" not in no_scada.lower() or "skill_scada_silver" not in no_scada
+
+
+# ---------------------------------------------------------------------------
+# EPR-98: duplicate-send guard + transcript de-amplifier
+# ---------------------------------------------------------------------------
+
+import time as _time
+
+from app.services.brain_agent_service import STALE_RUN_SECONDS
+
+
+@pytest.fixture()
+def _isolated_sessions():
+    """Snapshot/restore the class-level session dict so tests can't bleed."""
+    saved = dict(BrainAgentService._sessions)
+    BrainAgentService._sessions.clear()
+    try:
+        yield BrainAgentService._sessions
+    finally:
+        BrainAgentService._sessions.clear()
+        BrainAgentService._sessions.update(saved)
+
+
+def _busy_session(session_id="s1", **overrides):
+    """Duck-typed AgentSession carrying only what check_duplicate_send reads."""
+    defaults = dict(
+        session_id=session_id,
+        is_busy=True,
+        run_started_at=_time.time(),
+        current_message_id="m1",
+        last_message_id="m1",
+        current_prompt="show me T21",
+        detach_task=None,
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def test_duplicate_send_same_message_id_is_rejected(_isolated_sessions):
+    _isolated_sessions["s1"] = _busy_session()
+    assert BrainAgentService.check_duplicate_send("s1", "m1", "show me T21") is True
+
+
+def test_duplicate_send_same_prompt_no_id_is_rejected(_isolated_sessions):
+    # Old deployed clients send no message_id — the raw prompt is the fallback key.
+    _isolated_sessions["s1"] = _busy_session(current_message_id=None, last_message_id=None)
+    assert BrainAgentService.check_duplicate_send("s1", None, "show me T21") is True
+
+
+def test_different_prompt_while_busy_is_not_a_duplicate(_isolated_sessions):
+    # Supersede path: "cancel, then ask something else" must keep working.
+    _isolated_sessions["s1"] = _busy_session()
+    assert BrainAgentService.check_duplicate_send("s1", "m2", "different question") is False
+    assert BrainAgentService.check_duplicate_send("s1", None, "different question") is False
+
+
+def test_idle_session_is_never_a_duplicate(_isolated_sessions):
+    _isolated_sessions["s1"] = _busy_session(is_busy=False)
+    assert BrainAgentService.check_duplicate_send("s1", "m1", "show me T21") is False
+
+
+def test_unknown_session_is_never_a_duplicate(_isolated_sessions):
+    assert BrainAgentService.check_duplicate_send("nope", "m1", "show me T21") is False
+
+
+def test_stale_busy_session_is_not_a_duplicate(_isolated_sessions):
+    # A wedged run older than the TTL must not block the thread forever.
+    _isolated_sessions["s1"] = _busy_session(
+        run_started_at=_time.time() - STALE_RUN_SECONDS - 1
+    )
+    assert BrainAgentService.check_duplicate_send("s1", "m1", "show me T21") is False
+
+
+def test_drop_consecutive_duplicates_collapses_identical_user_pair():
+    messages = [
+        {"type": "user", "content": "same question"},
+        {"type": "user", "content": "same question"},
+        {"type": "assistant", "content": "answer"},
+    ]
+    out = BrainAgentService._drop_consecutive_duplicates(messages)
+    assert [m["type"] for m in out] == ["user", "assistant"]
+
+
+def test_drop_consecutive_duplicates_keeps_alternating_repeats():
+    # user → assistant → user with the same text is a legitimate repeat.
+    messages = [
+        {"type": "user", "content": "yes"},
+        {"type": "assistant", "content": "confirm?"},
+        {"type": "user", "content": "yes"},
+    ]
+    out = BrainAgentService._drop_consecutive_duplicates(messages)
+    assert len(out) == 3
+
+
+def test_drop_consecutive_duplicates_never_touches_tool_call_messages():
+    messages = [
+        {"type": "assistant", "content": "running", "toolCalls": [{"tool_name": "Bash"}]},
+        {"type": "assistant", "content": "running", "toolCalls": [{"tool_name": "Bash"}]},
+    ]
+    out = BrainAgentService._drop_consecutive_duplicates(messages)
+    assert len(out) == 2
+
+
+def test_convert_sdk_messages_dedupes_duplicated_user_turns():
+    # The EPR-98 storm wrote the same user turn into a session twice; the
+    # persisted transcript must not carry the pair.
+    sdk_messages = [
+        _sm("user", "u1", [{"type": "text", "text": "show me T21"}]),
+        _sm("user", "u2", [{"type": "text", "text": "show me T21"}]),
+        _sm("assistant", "a1", [{"type": "text", "text": "T21 report"}]),
+    ]
+    out = BrainAgentService._convert_sdk_messages(sdk_messages)
+    assert [m["type"] for m in out] == ["user", "assistant"]
+
+
+def test_build_prompt_with_history_skips_adjacent_duplicates():
+    history = [
+        {"type": "user", "content": "show me T21"},
+        {"type": "user", "content": "show me T21"},
+        {"type": "assistant", "content": "T21 report"},
+    ]
+    prompt = BrainAgentService._build_prompt_with_history("next question", history)
+    assert prompt.count("Human: show me T21") == 1
+    assert "Assistant: T21 report" in prompt
+    assert prompt.rstrip().endswith("next question")
+
+
+# ---------------------------------------------------------------------------
+# EPR-98: detached-run consumer (_finish_orphaned_run)
+# ---------------------------------------------------------------------------
+
+import asyncio
+
+from claude_agent_sdk import ResultMessage
+
+from app.services.brain_agent_service import AgentSession
+
+
+def _result_message(session_id="sdk-abc"):
+    return ResultMessage(
+        subtype="success",
+        duration_ms=1200,
+        duration_api_ms=1000,
+        is_error=False,
+        num_turns=1,
+        session_id=session_id,
+    )
+
+
+class _FakeClient:
+    """Duck-typed SDK client: yields queued messages, records interrupts."""
+
+    def __init__(self, messages):
+        self._messages = list(messages)
+        self.interrupted = False
+
+    async def receive_messages(self):
+        for m in self._messages:
+            yield m
+
+    async def interrupt(self):
+        self.interrupted = True
+
+
+def _detached_session(client) -> AgentSession:
+    session = AgentSession(
+        session_id="s-detach",
+        user_id=USER_ID_DETACH,
+        client=client,
+        created_at=_time.time(),
+        last_activity=_time.time(),
+    )
+    session.is_busy = True
+    session.current_message_id = "m1"
+    session.current_prompt = "long analysis"
+    session.run_started_at = _time.time()
+    return session
+
+
+USER_ID_DETACH = 77
+
+
+def test_finish_orphaned_run_persists_and_clears_busy(monkeypatch):
+    fake_client = _FakeClient([SimpleNamespace(kind="noise"), _result_message()])
+    session = _detached_session(fake_client)
+
+    persisted = {}
+
+    async def _fake_persist(self, user_id, session_id, result_message, model=None):
+        persisted.update(user_id=user_id, session_id=session_id, result=result_message)
+        return [{"type": "user", "content": "long analysis"}]
+
+    monkeypatch.setattr(BrainAgentService, "_persist_completed_run", _fake_persist)
+    monkeypatch.setattr(BrainAgentService, "_scan_for_new_files", lambda self, s: [])
+
+    service = BrainAgentService(db=None)
+    asyncio.run(service._finish_orphaned_run(session, model="claude-sonnet-5"))
+
+    assert persisted["session_id"] == "s-detach"
+    assert persisted["user_id"] == USER_ID_DETACH
+    assert isinstance(persisted["result"], ResultMessage)
+    # The detach task owns the busy state and must release it when done.
+    assert session.is_busy is False
+    assert session.current_message_id is None
+    assert session.current_prompt is None
+    assert session.detach_task is None
+
+
+def test_finish_orphaned_run_survives_persist_failure(monkeypatch):
+    fake_client = _FakeClient([_result_message()])
+    session = _detached_session(fake_client)
+
+    async def _boom(self, **_kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(BrainAgentService, "_persist_completed_run", _boom)
+
+    service = BrainAgentService(db=None)
+    # Must not raise, and must still clear busy state.
+    asyncio.run(service._finish_orphaned_run(session))
+    assert session.is_busy is False

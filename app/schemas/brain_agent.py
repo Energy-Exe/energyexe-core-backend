@@ -40,6 +40,14 @@ class AgentChatRequest(BaseModel):
         default=None,
         description="Session ID for multi-turn conversation. Auto-generated if omitted.",
     )
+    message_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Client-generated idempotency id for this send. Re-POSTs of the same "
+            "logical message reuse it so the backend can reject duplicates while "
+            "the run is live (EPR-98)."
+        ),
+    )
     model: Optional[BrainModelType] = Field(
         default=None,
         description="Claude model to use. Defaults to claude-sonnet-5.",

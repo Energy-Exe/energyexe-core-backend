@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import structlog
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from claude_agent_sdk import (
@@ -56,6 +56,15 @@ logger = structlog.get_logger(__name__)
 # Session TTL: clean up sessions idle for more than 30 minutes
 SESSION_TTL_SECONDS = 30 * 60
 MAX_CONCURRENT_SESSIONS = 20
+
+# EPR-98 duplicate-send guard: a busy session whose run started longer ago than
+# this is considered wedged, not live — the guard ignores it and chat()'s
+# interrupt-and-drain path takes over as before.
+STALE_RUN_SECONDS = 30 * 60
+# How long a detached run (client disconnected mid-turn) may keep working in the
+# background before being interrupted. Sits above the SDK's 20-min
+# CLAUDE_CODE_STREAM_CLOSE_TIMEOUT so the SDK's own limit fires first.
+DETACH_MAX_SECONDS = 20 * 60
 
 # Per-source agent profiles. Keys map to the AgentSourceType literal in schemas.
 #   - admin: existing behavior (unrestricted, model picks honored)
@@ -142,6 +151,14 @@ class AgentSession:
     # Uploads the agent hasn't been told about yet. Names come from the sandbox
     # manifest, never from a request body — see _consume_pending_uploads.
     pending_uploads: List[str] = field(default_factory=list)
+    # EPR-98 duplicate-send guard + detached-run tracking. In-process state only:
+    # ECS runs uvicorn --workers 1, so one dict entry per session is
+    # authoritative; a multi-worker deployment would need this in Valkey/Postgres.
+    current_message_id: Optional[str] = None  # idempotency id of the live run
+    last_message_id: Optional[str] = None  # retained after completion (dup-of-completed check)
+    current_prompt: Optional[str] = None  # raw prompt of the live run (old-client dedup)
+    run_started_at: float = 0.0  # staleness TTL for the busy guard
+    detach_task: Optional["asyncio.Task"] = None  # background consumer of an orphaned run
 
 
 class BrainAgentService:
@@ -149,9 +166,38 @@ class BrainAgentService:
 
     _sessions: Dict[str, AgentSession] = {}
     _prompt_template: Optional[str] = None
+    # Serializes first-turn session creation per session_id (EPR-98 path D):
+    # without it two concurrent POSTs both spawn a CLI subprocess and orphan one.
+    _create_locks: Dict[str, asyncio.Lock] = {}
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    @classmethod
+    def check_duplicate_send(
+        cls,
+        session_id: str,
+        message_id: Optional[str],
+        prompt: str,
+    ) -> bool:
+        """True iff this send duplicates the run currently live on the session.
+
+        Used by the chat endpoint to 409 a re-POST (stream-retry storms, double
+        clicks, stale tabs) instead of writing the same user turn into the live
+        SDK session a second time (EPR-98). A *different* prompt while busy is
+        NOT a duplicate — that stays on the interrupt-and-supersede path so
+        "cancel, then ask something else" keeps working.
+        """
+        session = cls._sessions.get(session_id)
+        if session is None or not session.is_busy:
+            return False
+        if time.time() - session.run_started_at > STALE_RUN_SECONDS:
+            # Wedged or crashed run — let chat() interrupt-and-drain it.
+            return False
+        if message_id:
+            return message_id == session.current_message_id
+        # Old clients (no message_id) can only be matched by the raw prompt.
+        return prompt == session.current_prompt
 
     async def chat(
         self,
@@ -164,10 +210,21 @@ class BrainAgentService:
         model: Optional[str] = None,
         conversation_history: Optional[list] = None,
         source: Optional[str] = None,
+        message_id: Optional[str] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Send a prompt to the agent and yield SSE events."""
         if not session_id:
             session_id = str(uuid.uuid4())
+
+        # The raw user prompt, before history/wrapping/attachment rewrites —
+        # this is what the endpoint's duplicate guard compares against.
+        raw_prompt = prompt
+        # Ownership flags for the disconnect handler and finally below. A
+        # request that never got past the lock (e.g. a duplicate waiting on a
+        # live run) must not clear that run's busy state on its way out.
+        started_run = False
+        query_sent = False
+        got_result = False
 
         # Clean up stale sessions
         self._cleanup_stale_sessions()
@@ -266,14 +323,52 @@ class BrainAgentService:
                 session.pending_uploads = []
 
             async with session.lock:
-                # If a previous turn was abandoned (e.g. SSE disconnect), drain leftover messages
-                if session.is_busy:
+                # TOCTOU closure for the endpoint's 409 pre-check: a duplicate
+                # that raced past it (e.g. while this session was still being
+                # created) lands here after the first copy already ran.
+                if message_id and message_id == session.last_message_id:
+                    yield SSEEvent(
+                        event_type="error",
+                        data={
+                            "message": "This message was already sent.",
+                            "code": "duplicate_message",
+                        },
+                    )
+                    return
+
+                # A detached run from a dropped connection may still own the
+                # message stream — supersede it before starting a new turn.
+                if session.detach_task is not None and not session.detach_task.done():
+                    session.detach_task.cancel()
+                    try:
+                        await session.detach_task
+                    except asyncio.CancelledError:
+                        pass
+                    session.detach_task = None
+                    # The cancelled detach interrupted the run but did not
+                    # drain it; consume the tail so this turn's receive loop
+                    # starts at a clean run boundary.
+                    await self._interrupt_and_drain(session)
+                elif session.is_busy:
+                    # A previous turn was abandoned (e.g. SSE disconnect before
+                    # the detach handler existed) — drain leftover messages.
                     logger.warning("brain_agent_draining_previous_turn", session_id=session_id)
                     await self._interrupt_and_drain(session)
 
                 session.is_busy = True
+                started_run = True
                 session.last_activity = time.time()
                 session.has_any_text = False  # Reset text dedup for this turn
+                session.current_message_id = message_id
+                if message_id:
+                    session.last_message_id = message_id
+                session.current_prompt = raw_prompt
+                session.run_started_at = time.time()
+
+                # Advisory only (never read as a server-side guard): lets the
+                # UI poll GET /threads/{id} to see a run is live after its
+                # stream dropped. Cleared by every thread save.
+                await self._set_thread_streaming(session_id, True)
 
                 # Yield session_id so frontend knows it
                 yield SSEEvent(
@@ -289,9 +384,9 @@ class BrainAgentService:
 
                 # Send the query
                 await session.client.query(prompt)
+                query_sent = True
 
                 # Stream response messages
-                got_result = False
                 result_message = None
                 async for message in session.client.receive_messages():
                     async for event in self._process_message(message, session):
@@ -304,31 +399,12 @@ class BrainAgentService:
                         break
 
                 if got_result and result_message:
-                    # Read authoritative conversation from SDK transcript.
-                    # Use the SDK's internal session_id (from ResultMessage),
-                    # NOT our session_id — they are different.
-                    sdk_session_id = result_message.session_id if hasattr(result_message, "session_id") else session_id
-                    work_dir = Path(f"/tmp/brain-agent/{user_id}/{session_id}")
-                    try:
-                        sdk_messages = get_session_messages(
-                            session_id=sdk_session_id,
-                            directory=str(work_dir),
-                        )
-                        final_messages = self._convert_sdk_messages(sdk_messages)
-                    except Exception as e:
-                        logger.error("brain_agent_get_session_messages_error", error=str(e), session_id=session_id)
-                        final_messages = []
-
-                    # Save to DB
-                    if final_messages:
-                        await self._save_thread_to_db(
-                            session_id=session_id,
-                            user_id=user_id,
-                            messages=final_messages,
-                            model=model,
-                            cost_usd=result_message.total_cost_usd if hasattr(result_message, "total_cost_usd") else None,
-                            num_turns=result_message.num_turns if hasattr(result_message, "num_turns") else 0,
-                        )
+                    final_messages = await self._persist_completed_run(
+                        user_id=user_id,
+                        session_id=session_id,
+                        result_message=result_message,
+                        model=model,
+                    )
 
                     # Yield result with authoritative messages
                     yield SSEEvent(
@@ -347,6 +423,7 @@ class BrainAgentService:
                         "brain_agent_stream_ended_without_result",
                         session_id=session_id,
                     )
+                    await self._set_thread_streaming(session_id, False)
                     yield SSEEvent(
                         event_type="result",
                         data={
@@ -358,6 +435,21 @@ class BrainAgentService:
                         },
                     )
 
+        except (asyncio.CancelledError, GeneratorExit):
+            # Client disconnected mid-run (tab closed, network drop, abandoned
+            # stream). Don't orphan the run: hand consumption of the live
+            # subprocess to a background task that drains it to the
+            # ResultMessage and persists the thread, so a reload or poll finds
+            # the finished answer — and so the NEXT request can never eat this
+            # run's buffered messages (EPR-98).
+            live_session = self._sessions.get(session_id)
+            if query_sent and not got_result and live_session is not None:
+                live_session.detach_task = asyncio.create_task(
+                    self._finish_orphaned_run(live_session, model=model)
+                )
+                logger.info("brain_agent_run_detached", session_id=session_id)
+            raise
+
         except Exception as e:
             logger.error("brain_agent_error", error=str(e), session_id=session_id)
             if source == "client":
@@ -368,6 +460,8 @@ class BrainAgentService:
                     outcome="errored",
                     error=str(e),
                 )
+            if started_run:
+                await self._set_thread_streaming(session_id, False)
             yield SSEEvent(
                 event_type="error",
                 data={"message": str(e), "code": "agent_error"},
@@ -381,8 +475,19 @@ class BrainAgentService:
                     outcome="completed",
                 )
         finally:
-            if session_id in self._sessions:
-                self._sessions[session_id].is_busy = False
+            # Clear busy state ONLY if this generator owns the run and hasn't
+            # handed it to a detach task. A request that exited while waiting on
+            # the lock (started_run False) must not clear another run's state —
+            # that was the original EPR-98 hole.
+            s = self._sessions.get(session_id)
+            if (
+                started_run
+                and s is not None
+                and (s.detach_task is None or s.detach_task.done())
+            ):
+                s.is_busy = False
+                s.current_message_id = None
+                s.current_prompt = None
 
     @staticmethod
     def _convert_sdk_messages(sdk_messages: List[SessionMessage]) -> List[Dict[str, Any]]:
@@ -502,7 +607,32 @@ class BrainAgentService:
                                     tc["isError"] = is_error
                                     tc["isLoading"] = False
 
-        return messages
+        return BrainAgentService._drop_consecutive_duplicates(messages)
+
+    @staticmethod
+    def _drop_consecutive_duplicates(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Collapse adjacent identical messages (EPR-98 residue).
+
+        The duplicate-send storm wrote the same user turn into a session twice
+        back-to-back; transcripts persisted before the guard landed still carry
+        those pairs. Adjacent same-type same-content messages never occur in a
+        legitimate chat (an assistant reply always sits between two user
+        turns), so collapsing them is safe. Messages carrying toolCalls are
+        never dropped.
+        """
+        deduped: List[Dict[str, Any]] = []
+        for msg in messages:
+            prev = deduped[-1] if deduped else None
+            if (
+                prev is not None
+                and msg.get("type") == prev.get("type")
+                and (msg.get("content") or "") == (prev.get("content") or "")
+                and not msg.get("toolCalls")
+                and not prev.get("toolCalls")
+            ):
+                continue
+            deduped.append(msg)
+        return deduped
 
     async def _save_thread_to_db(
         self,
@@ -560,6 +690,135 @@ class BrainAgentService:
             )
         except Exception as e:
             logger.error("brain_agent_save_thread_error", error=str(e), thread_id=session_id)
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+
+    async def _persist_completed_run(
+        self,
+        user_id: int,
+        session_id: str,
+        result_message: Any,
+        model: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Read the authoritative SDK transcript for a finished run and save it.
+
+        Shared by the live chat() path and the detached (client-disconnected)
+        path. Returns the converted messages ([] if the transcript read failed).
+        """
+        # Use the SDK's internal session_id (from ResultMessage), NOT our
+        # session_id — they are different.
+        sdk_session_id = (
+            result_message.session_id
+            if hasattr(result_message, "session_id")
+            else session_id
+        )
+        work_dir = Path(f"/tmp/brain-agent/{user_id}/{session_id}")
+        try:
+            sdk_messages = get_session_messages(
+                session_id=sdk_session_id,
+                directory=str(work_dir),
+            )
+            final_messages = self._convert_sdk_messages(sdk_messages)
+        except Exception as e:
+            logger.error("brain_agent_get_session_messages_error", error=str(e), session_id=session_id)
+            final_messages = []
+
+        if final_messages:
+            await self._save_thread_to_db(
+                session_id=session_id,
+                user_id=user_id,
+                messages=final_messages,
+                model=model,
+                cost_usd=result_message.total_cost_usd if hasattr(result_message, "total_cost_usd") else None,
+                num_turns=result_message.num_turns if hasattr(result_message, "num_turns") else 0,
+            )
+        return final_messages
+
+    async def _finish_orphaned_run(self, session: AgentSession, model: Optional[str] = None) -> None:
+        """Consume a disconnected turn to completion and persist the result.
+
+        Runs as a background task after the SSE consumer vanished mid-run
+        (EPR-98). The CLI subprocess keeps working regardless; without this its
+        buffered messages would be eaten by the NEXT request's receive loop and
+        the finished answer would never reach the thread. Exactly one consumer
+        owns receive_messages() at any moment: the live chat() loop, this task,
+        or _interrupt_and_drain.
+        """
+        session_id = session.session_id
+        result_message = None
+        try:
+            try:
+                async with asyncio.timeout(DETACH_MAX_SECONDS):
+                    async for message in session.client.receive_messages():
+                        if isinstance(message, ResultMessage):
+                            result_message = message
+                            break
+            except asyncio.TimeoutError:
+                # Run never finished — stop it and drain to a clean boundary so
+                # the next turn doesn't inherit its tail.
+                logger.warning("brain_agent_detached_run_timeout", session_id=session_id)
+                await self._interrupt_and_drain(session)
+                return
+
+            if result_message is None:
+                return
+
+            # The request-scoped DB session that started this run is gone —
+            # persist through a fresh one.
+            from app.core.database import get_session_factory
+
+            async with get_session_factory()() as db:
+                svc = BrainAgentService(db)
+                await svc._persist_completed_run(
+                    user_id=session.user_id,
+                    session_id=session_id,
+                    result_message=result_message,
+                    model=model,
+                )
+
+            # Push any files the run produced to S3. There is no SSE consumer
+            # to announce them; they surface via the thread's file URLs.
+            for fname in self._scan_for_new_files(session):
+                file_path = Path(f"/tmp/brain-agent/{session.user_id}/{session_id}") / fname
+                await self._upload_file_to_s3(session.user_id, session_id, fname, file_path)
+
+            logger.info("brain_agent_detached_run_saved", session_id=session_id)
+        except asyncio.CancelledError:
+            # Superseded by a new turn (which interrupts and drains after
+            # cancelling us) or process shutdown. Best-effort stop.
+            try:
+                await session.client.interrupt()
+            except Exception:
+                pass
+            raise
+        except Exception as e:
+            logger.error("brain_agent_detached_finish_error", session_id=session_id, error=str(e))
+        finally:
+            session.is_busy = False
+            session.current_message_id = None
+            session.current_prompt = None
+            session.detach_task = None
+            session.last_activity = time.time()
+
+    async def _set_thread_streaming(self, session_id: str, value: bool) -> None:
+        """Best-effort advisory flag so the UI can poll a thread for a live run.
+
+        Never read as a server-side guard (the in-memory session state gates
+        duplicate sends), so a crash that leaves it True cannot wedge a thread.
+        The row may not exist yet on a thread's first turn — that's fine.
+        """
+        try:
+            from app.models.agent_thread import AgentThread
+
+            await self.db.execute(
+                update(AgentThread)
+                .where(AgentThread.id == session_id)
+                .values(is_streaming=value)
+            )
+            await self.db.commit()
+        except Exception:
             try:
                 await self.db.rollback()
             except Exception:
@@ -644,17 +903,63 @@ class BrainAgentService:
         user_company_name: Optional[str] = None,
     ) -> tuple[AgentSession, bool]:
         """Get existing session or create a new one. Returns (session, is_new)."""
-        if session_id in self._sessions:
-            # Verify the sandbox directory still exists (could be lost to
-            # container restart, tmpwatch, or manual cleanup).  If it's gone,
-            # discard the stale in-memory session and recreate below.
-            existing = self._sessions[session_id]
-            work_dir_check = Path(f"/tmp/brain-agent/{existing.user_id}/{existing.session_id}")
-            if work_dir_check.exists():
-                return existing, False
-            logger.warning("brain_agent_session_workdir_missing", session_id=session_id)
-            self._sessions.pop(session_id, None)
+        existing = self._existing_live_session(session_id)
+        if existing is not None:
+            return existing, False
 
+        # EPR-98: serialize creation per session_id — two concurrent first-turn
+        # POSTs would otherwise both spawn a CLI subprocess and orphan one.
+        create_lock = self._create_locks.setdefault(session_id, asyncio.Lock())
+        try:
+            async with create_lock:
+                # Re-check under the lock: another request may have finished
+                # creating this session while we waited.
+                existing = self._existing_live_session(session_id)
+                if existing is not None:
+                    return existing, False
+                session = await self._create_session(
+                    user_id,
+                    session_id,
+                    user_name,
+                    model,
+                    source=source,
+                    user_first_name=user_first_name,
+                    user_company_name=user_company_name,
+                )
+                return session, True
+        finally:
+            # Safe to drop: any waiter still holds its own reference to the
+            # lock object, and late arrivals hit the fast path above.
+            self._create_locks.pop(session_id, None)
+
+    def _existing_live_session(self, session_id: str) -> Optional[AgentSession]:
+        """Return the in-memory session iff its sandbox still exists on disk.
+
+        The sandbox can be lost to container restart, tmpwatch, or manual
+        cleanup — then the stale in-memory session is discarded so the caller
+        recreates it.
+        """
+        if session_id not in self._sessions:
+            return None
+        existing = self._sessions[session_id]
+        work_dir_check = Path(f"/tmp/brain-agent/{existing.user_id}/{existing.session_id}")
+        if work_dir_check.exists():
+            return existing
+        logger.warning("brain_agent_session_workdir_missing", session_id=session_id)
+        self._sessions.pop(session_id, None)
+        return None
+
+    async def _create_session(
+        self,
+        user_id: int,
+        session_id: str,
+        user_name: Optional[str] = None,
+        model: Optional[str] = None,
+        source: Optional[str] = None,
+        user_first_name: Optional[str] = None,
+        user_company_name: Optional[str] = None,
+    ) -> AgentSession:
+        """Build the sandbox, options and SDK client for a brand-new session."""
         # Enforce session limit
         user_sessions = [s for s in self._sessions.values() if s.user_id == user_id]
         if len(user_sessions) >= MAX_CONCURRENT_SESSIONS:
@@ -907,7 +1212,7 @@ class BrainAgentService:
             pending_uploads=read_upload_manifest(work_dir),
         )
         self._sessions[session_id] = session
-        return session, True
+        return session
 
     def _scan_for_new_files(self, session: AgentSession) -> list:
         """Scan the session sandbox for new agent-generated output files (images, CSVs, etc.)."""
@@ -1231,11 +1536,19 @@ class BrainAgentService:
         ]
 
         total_chars = 0
+        prev_key = None
         for msg in trimmed:
             msg_type = msg.get("type", "")
             content = (msg.get("content") or "").strip()
             if not content:
                 continue
+
+            # EPR-98 residue: threads polluted by the duplicate-send storm carry
+            # adjacent identical turns — replaying them re-amplifies the
+            # duplication on every session recreation. Skip the repeats.
+            if (msg_type, content) == prev_key and not (msg.get("toolCalls") or []):
+                continue
+            prev_key = (msg_type, content)
 
             if msg_type == "user":
                 wrapped = f"<user_input>\n{content}\n</user_input>" if wrap_user_input else content
