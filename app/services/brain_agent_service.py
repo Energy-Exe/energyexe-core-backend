@@ -715,15 +715,31 @@ class BrainAgentService:
             else session_id
         )
         work_dir = Path(f"/tmp/brain-agent/{user_id}/{session_id}")
-        try:
-            sdk_messages = get_session_messages(
-                session_id=sdk_session_id,
-                directory=str(work_dir),
+        final_messages: List[Dict[str, Any]] = []
+        # The CLI flushes the turn's assistant entry to the transcript file
+        # slightly AFTER emitting the ResultMessage, so an immediate read can
+        # miss the reply we just streamed (verified on staging: the detached
+        # save persisted only the user turn). Retry briefly until the
+        # transcript ends with an assistant message.
+        for attempt in range(8):
+            try:
+                sdk_messages = get_session_messages(
+                    session_id=sdk_session_id,
+                    directory=str(work_dir),
+                )
+                final_messages = self._convert_sdk_messages(sdk_messages)
+            except Exception as e:
+                logger.error("brain_agent_get_session_messages_error", error=str(e), session_id=session_id)
+                final_messages = []
+            if final_messages and final_messages[-1].get("type") == "assistant":
+                break
+            await asyncio.sleep(0.75)
+        else:
+            logger.warning(
+                "brain_agent_transcript_missing_assistant_tail",
+                session_id=session_id,
+                message_count=len(final_messages),
             )
-            final_messages = self._convert_sdk_messages(sdk_messages)
-        except Exception as e:
-            logger.error("brain_agent_get_session_messages_error", error=str(e), session_id=session_id)
-            final_messages = []
 
         if final_messages:
             await self._save_thread_to_db(
