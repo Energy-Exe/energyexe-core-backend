@@ -4,11 +4,12 @@ import asyncio
 import json
 import mimetypes
 import time
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,14 +25,27 @@ from app.schemas.brain_agent import (
     ThreadTitleUpdate,
     ThreadUpsertRequest,
 )
-from app.services.brain_agent_service import BrainAgentService
+from app.services.brain_agent_service import SANDBOX_SEED_FILES, BrainAgentService
+from app.services.brain_agent_uploads import (
+    MAX_SESSION_UPLOAD_BYTES,
+    MAX_SESSION_UPLOADS,
+    MAX_UPLOAD_BYTES,
+    UPLOAD_MANIFEST,
+    UploadRejected,
+    existing_upload_bytes,
+    read_upload_manifest,
+    record_upload,
+    sanitize_upload_name,
+    work_dir_for,
+)
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
 # SSE heartbeat interval in seconds — keeps connections alive through proxies.
-# Shorter interval (5s) ensures Railway/proxy doesn't buffer or drop the connection.
+# Shorter interval (5s) keeps the ALB (idle_timeout 300s) and browser read
+# timeouts fed even when the agent is quiet between events.
 HEARTBEAT_INTERVAL = 5
 
 # Per-user turn rate limits (turns per 60s window), by effective source. Agent
@@ -89,6 +103,27 @@ async def agent_chat(
             headers={"Retry-After": str(retry_after)},
         )
 
+    # EPR-98: reject a duplicate of the run already live on this session with a
+    # real 409 before the SSE stream opens. Clients treat any non-OK response as
+    # terminal (no retry), so this is what breaks a re-POST storm — without it a
+    # retried send writes the same user turn into the live SDK session again.
+    if request.session_id and BrainAgentService.check_duplicate_send(
+        request.session_id, request.message_id, request.prompt
+    ):
+        logger.info(
+            "brain_agent_duplicate_send_rejected",
+            user_id=current_user.id,
+            session_id=request.session_id,
+            has_message_id=bool(request.message_id),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The agent is still working on your previous message. "
+                "The response will appear in this conversation when it finishes."
+            ),
+        )
+
     user_name = None
     if current_user.first_name:
         user_name = current_user.first_name
@@ -109,6 +144,7 @@ async def agent_chat(
                     model=request.model,
                     conversation_history=request.conversation_history,
                     source=effective_source,
+                    message_id=request.message_id,
                 ),
                 interval=HEARTBEAT_INTERVAL,
             ):
@@ -203,6 +239,121 @@ async def end_session(
     return {"success": success, "session_id": session_id}
 
 
+def _validated_session_id(session_id: str) -> str:
+    """Reject anything that isn't a UUID.
+
+    session_id is interpolated into a filesystem path, and the upload route can
+    be called before a session exists, so there's no ownership record to lean on
+    yet — the format check is what stops `../../` from escaping the sandbox root.
+    Both portals mint the id with crypto.randomUUID(), so this is free.
+    """
+    try:
+        uuid.UUID(session_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid session id.")
+    return session_id
+
+
+@router.post("/sessions/{session_id}/files", status_code=201)
+async def upload_session_file(
+    session_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Attach a file to a chat so the agent can read it.
+
+    The file is written into the session's sandbox — the agent's cwd — so its
+    existing Read/Bash tools reach it with no extra tooling. Uploading is allowed
+    before the first message: the sandbox is keyed by the session id the frontend
+    already generated, and chat() reuses whatever id it is given.
+    """
+    _validated_session_id(session_id)
+
+    try:
+        safe_name = sanitize_upload_name(file.filename, SANDBOX_SEED_FILES)
+    except UploadRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    work_dir = work_dir_for(current_user.id, session_id)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = read_upload_manifest(work_dir)
+    if safe_name not in existing and len(existing) >= MAX_SESSION_UPLOADS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This chat already has {MAX_SESSION_UPLOADS} attachments. "
+            "Start a new chat to attach more.",
+        )
+
+    already_used = existing_upload_bytes(work_dir)
+    if safe_name in existing:
+        # Replacing an existing attachment — its current bytes free up.
+        current_path = work_dir / safe_name
+        if current_path.is_file():
+            already_used -= current_path.stat().st_size
+
+    target = work_dir / safe_name
+    written = 0
+    try:
+        with target.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                # Enforce while streaming — reading the whole upload into memory
+                # first is how a big file takes the API process down with it.
+                if written > MAX_UPLOAD_BYTES:
+                    raise UploadRejected(
+                        f"'{safe_name}' is larger than "
+                        f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+                    )
+                if already_used + written > MAX_SESSION_UPLOAD_BYTES:
+                    raise UploadRejected(
+                        "Attachments for this chat would exceed "
+                        f"{MAX_SESSION_UPLOAD_BYTES // (1024 * 1024)} MB in total."
+                    )
+                out.write(chunk)
+    except UploadRejected as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        logger.error(
+            "brain_agent_upload_write_failed",
+            session_id=session_id,
+            filename=safe_name,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=500, detail="Could not save the attachment.")
+    finally:
+        await file.close()
+
+    if written == 0:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"'{safe_name}' is empty.")
+
+    record_upload(work_dir, safe_name)
+
+    service = BrainAgentService(db)
+    service.register_upload(current_user.id, session_id, safe_name)
+
+    # Mirror to S3 so the attachment survives a task restart (the sandbox lives on
+    # ephemeral disk). Flat keys, same shape as agent outputs, so the existing
+    # file-serving route works unchanged.
+    await service._upload_file_to_s3(current_user.id, session_id, safe_name, target)
+    await service._upload_file_to_s3(
+        current_user.id, session_id, UPLOAD_MANIFEST, work_dir / UPLOAD_MANIFEST
+    )
+
+    logger.info(
+        "brain_agent_upload_received",
+        session_id=session_id,
+        user_id=current_user.id,
+        filename=safe_name,
+        bytes=written,
+    )
+    return {"session_id": session_id, "filename": safe_name, "size": written}
+
+
 ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
 
 
@@ -276,6 +427,8 @@ async def get_agent_file(
 
 @router.get("/threads", response_model=List[ThreadListItem])
 async def list_threads(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> List[ThreadListItem]:
@@ -284,7 +437,8 @@ async def list_threads(
         select(AgentThread)
         .where(AgentThread.user_id == current_user.id)
         .order_by(AgentThread.updated_at.desc())
-        .limit(50)
+        .limit(limit)
+        .offset(offset)
     )
     threads = result.scalars().all()
     return [ThreadListItem.model_validate(t) for t in threads]

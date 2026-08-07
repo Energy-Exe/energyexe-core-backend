@@ -52,6 +52,12 @@ variable "s3_bucket_name" {
   default     = "energyexe-agent-images"
 }
 
+variable "scada_data_bucket" {
+  description = "SCADA pipeline data lake bucket; task role gets READ-ONLY access to its silver/ prefix (brain-agent 10-min queries)"
+  type        = string
+  default     = "energyexe-scada-data"
+}
+
 variable "pipeline_daily_enabled" {
   description = "Enables the in-process APScheduler nightly pipeline. Keep false during Railway burn-in — true on both platforms means the pipeline runs twice a night. Flip to true at cutover."
   type        = bool
@@ -110,6 +116,12 @@ variable "backend_sentry_dsn_enabled" {
 
 variable "alert_email" {
   description = "Email address for CloudWatch alarm notifications (SNS). Empty = create the SNS topic but no subscription. The subscription needs a one-time confirmation click. See monitoring.tf."
+  type        = string
+  default     = ""
+}
+
+variable "bastion_security_group_id" {
+  description = "SG of the SSM break-glass bastion allowed Postgres to the prod RDS (energyexe-scada-bastion; instance stays STOPPED between uses). Empty disables the rule. Prod RDS is PRIVATE since 2026-07-15 — this tunnel is the only operator path."
   type        = string
   default     = ""
 }

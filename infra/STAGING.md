@@ -41,7 +41,8 @@ promoted to prod. Staging must be:
                               cluster "energyexe" ◄──────── same SHARED cluster
                                         │                         │
                               RDS energyexedb (prod)     RDS energyexedb-staging (NEW)
-                              db.t4g.large, public       db.t4g.micro, PRIVATE, snapshot-restored
+                              db.t4g.large, PRIVATE      db.t4g.micro, PUBLIC (laptop target), snapshot-restored
+                              (since 2026-07-15)         (since 2026-07-15)
 
   staging-dashboard.energyexe.com → CloudFront → S3 (admin-ui)  ┐  AWS-hosted staging frontends,
   staging-app.energyexe.com       → CloudFront → S3 (client-ui) ┘  pointed at staging-api.energyexe.com
@@ -161,8 +162,9 @@ staging-api). This is purely additive; the prod default action and rules are unt
 
 ### Database — separate instance, restored from a prod snapshot
 
-**Decision:** a **separate RDS instance** restored from a **prod snapshot** (realistic data), kept
-**private**.
+**Decision:** a **separate RDS instance** restored from a **prod snapshot** (realistic data).
+**Posture UPDATED 2026-07-15:** staging is now **PUBLIC** (the laptop/dev target) while **prod went
+PRIVATE** — the exact inverse of the original setup below.
 
 | Option | Trade-off | Decision |
 |---|---|---|
@@ -170,9 +172,10 @@ staging-api). This is purely additive; the prod default action and rules are unt
 | **Snapshot restore** ✅ | Realistic data; inherits the snapshot's ~200 GB storage (can't shrink) and real PII | **Chosen** |
 | Sanitized subset | Realistic-for-cheap, but ongoing extract tooling to maintain | Not chosen — too much upkeep |
 
-Handling: `energyexedb-staging` is **`db.t4g.micro`**, gp3, single-AZ, **`publicly_accessible = false`**
-(tighter than prod — only the in-VPC task reaches it), with its own security group allowing 5432
-*only* from the staging service SG. **PII mitigations:** private networking + a **fresh
+Handling: `energyexedb-staging` is **`db.t4g.micro`**, gp3, single-AZ, **`publicly_accessible = true`**
+(since 2026-07-15 — the laptop/dev target; prod is private), SG allowing 5432 from the staging
+service SG, the scada-pipeline task SG, and 0.0.0.0/0 (deliberate user decision). **PII mitigations:**
+master password ROTATED post-restore (2026-07-15, no longer prod's), `rds.force_ssl=1`, and a **fresh
 `secret-key`** (so prod and staging JWTs never cross). A post-restore scrub is a documented future
 option. To **refresh** staging data, restore a new instance from a fresh snapshot rather than via
 this resource (`snapshot_identifier` changes are ignored — see §6).

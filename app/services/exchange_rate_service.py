@@ -15,6 +15,9 @@ logger = structlog.get_logger()
 # Currencies with ECB rate data
 SUPPORTED_CURRENCIES = {"NOK", "GBP", "DKK", "USD"}
 
+# Valid values for display_currency query params (EUR is the rate base)
+ALLOWED_DISPLAY_CURRENCIES = {"EUR"} | SUPPORTED_CURRENCIES
+
 
 class ExchangeRateService:
     def __init__(self, db: AsyncSession):

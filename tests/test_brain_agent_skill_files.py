@@ -130,3 +130,170 @@ def test_brain_agent_system_prompts_list_all_19_schema_names():
         # INACTIVE schemas flagged so the agent excludes them from active findings.
         assert "INACTIVE" in text, f"INACTIVE semantics missing from {fname}"
         assert "SUPPRESSED" in text, f"SUPPRESSED semantics missing from {fname}"
+
+
+# ── SCADA gold-layer knowledgebase (schema `scada`) ──
+
+
+def test_scada_skill_covers_all_gold_tables():
+    """Canary: every scada gold table stays documented in SKILL_SCADA."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA
+
+    for table in (
+        "dim_farm",
+        "dim_turbine",
+        "dim_turbine_config",
+        "dim_event_category",
+        "dim_signal_capability",
+        "completeness_daily",
+        "energy_daily",
+        "energy_monthly_utc",
+        "availability_daily",
+        "losses_daily",
+        "farm_kpis_daily",
+        "power_curve_bins",
+        "power_curve_bins_yearly",
+        "losses_hourly",
+        "revenue_impact_daily",
+        "settlement_recon_daily",
+        "turbine_performance_yearly",
+        "dim_alarm_code",
+        "alarm_events",
+        "alarm_code_daily",
+    ):
+        assert f"scada.{table}" in SKILL_SCADA, f"scada.{table} missing from SKILL_SCADA"
+
+
+def test_scada_skill_pins_frame_caveat():
+    """Gotcha 57, post-flip: the whole schema is UTC-keyed (date_utc); the
+    residual frame caveat is against GB-LOCAL-keyed sources (settlement
+    statements), and date_local must be gone entirely."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA
+
+    for phrase in (
+        "date_utc",
+        "scada.energy_monthly_utc",
+        "UTC-keyed",
+        "GB-LOCAL",
+    ):
+        assert phrase in SKILL_SCADA, f"frame caveat phrase missing: {phrase}"
+    assert "date_local" not in SKILL_SCADA, "date_local resurfaced after the UTC flip"
+
+
+def test_scada_skill_pins_alarm_caveats():
+    """The alarm-lane load-bearing caveats: buckets are proposals, alarm hours
+    are not downtime, undocumented codes are never invented, instantaneous
+    events are filtered for duration analysis."""
+    from app.services.brain_agent_skill_files import (
+        SKILL_SCADA,
+        SKILL_SCADA_QUERIES,
+    )
+
+    assert "PROPOSALS" in SKILL_SCADA  # dim_alarm_code.status = proposed
+    assert "proposed" in SKILL_SCADA and "confirmed" in SKILL_SCADA
+    assert "Alarm hours are NOT downtime hours" in SKILL_SCADA
+    assert "NEVER invent what a code means" in SKILL_SCADA
+    assert "duration_h IS NOT NULL" in SKILL_SCADA
+    assert "alarm_code_daily" in SKILL_SCADA_QUERIES
+    assert "dim_alarm_code" in SKILL_SCADA_QUERIES
+    assert "buckets are proposed" in SKILL_SCADA_QUERIES
+
+
+def test_scada_skill_pins_the_conventions():
+    """The load-bearing caveats: schema-qualify, units, ratio-of-sums, linkage."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA
+
+    assert "schema-qualify" in SKILL_SCADA
+    assert "hill_of_towie" in SKILL_SCADA
+    assert "kelmarsh" in SKILL_SCADA
+    assert "penmanshiel" in SKILL_SCADA
+    assert "7309" in SKILL_SCADA  # Hill of Towie windfarm_id
+    assert "ratio-of-sums" in SKILL_SCADA
+    assert "kWh" in SKILL_SCADA and "MWh" in SKILL_SCADA
+    assert "pre_cod" in SKILL_SCADA
+    assert "IEC 61400-26" in SKILL_SCADA
+
+
+def test_scada_queries_steer_to_rollups():
+    """Efficiency rules: pre-aggregated tables first, indexed keys, x-schema join."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA_QUERIES
+
+    assert "farm_kpis_daily" in SKILL_SCADA_QUERIES
+    assert "revenue_impact_daily" in SKILL_SCADA_QUERIES
+    assert "settlement_recon_daily" in SKILL_SCADA_QUERIES
+    assert "public.windfarms" in SKILL_SCADA_QUERIES  # cross-schema template
+    assert "never AVG" in SKILL_SCADA_QUERIES or "NEVER AVG" in SKILL_SCADA_QUERIES
+
+
+def test_scada_content_stays_out_of_unconditional_skills():
+    """SCADA text must live ONLY in the gated files — the static skill strings
+    are written to every sandbox including prod, where schema scada may not
+    exist yet."""
+    for blob in (SKILL_SCHEMA, SKILL_QUERIES, SKILL_DOMAIN, SKILL_SOURCES):
+        assert "scada." not in blob
+        assert "hill_of_towie" not in blob
+        assert "silver.py" not in blob
+
+
+# ── SCADA silver lake (silver.py / DuckDB over Parquet) ──
+
+
+def test_scada_skill_routes_to_silver_not_dead_end():
+    """The old boundary said raw 10-min data 'cannot be reached'. Post-silver
+    access, SKILL_SCADA must route to silver.py instead of dead-ending."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA
+
+    assert "silver.py" in SKILL_SCADA
+    assert "skill_scada_silver.md" in SKILL_SCADA
+    assert "fact_10min" in SKILL_SCADA  # never-invent warning stays
+    assert "only the daily/hourly gold aggregates are queryable" not in SKILL_SCADA
+
+
+def test_scada_silver_skill_pins_load_bearing_facts():
+    """Canary for skill_scada_silver.md: the facts that prevent wrong answers."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA_SILVER
+
+    # Views + frame
+    assert "measurements" in SKILL_SCADA_SILVER
+    assert "alarms" in SKILL_SCADA_SILVER
+    assert "ts_start_utc" in SKILL_SCADA_SILVER
+    # qc bitmask semantics + the clean-filter idiom
+    assert "qc = 0" in SKILL_SCADA_SILVER
+    assert "128 pre_commissioning" in SKILL_SCADA_SILVER
+    # capability caveat (greenbyte all-null columns)
+    assert "dim_signal_capability" in SKILL_SCADA_SILVER
+    assert "all-null" in SKILL_SCADA_SILVER
+    # identity + partition pruning + aggregate-first rules
+    assert "COLLIDE" in SKILL_SCADA_SILVER
+    assert "partition pruning" in SKILL_SCADA_SILVER
+    assert "Never SELECT *" in SKILL_SCADA_SILVER or "never SELECT *" in SKILL_SCADA_SILVER
+    # alarms semantics
+    assert "time_off IS NOT NULL" in SKILL_SCADA_SILVER
+    # gold stays authoritative
+    assert "AUTHORITATIVE" in SKILL_SCADA_SILVER
+
+
+def test_silver_helper_script_guardrails_present():
+    """The seeded silver.py must keep its read-only + resource guardrails."""
+    from app.services.brain_agent_silver_script import SILVER_HELPER_SCRIPT
+
+    for token in (
+        "SCADA_SILVER_URI",
+        "credential_chain",
+        "memory_limit",
+        "hive_partitioning",
+        "DANGEROUS_KEYWORDS",
+        "interrupt",
+    ):
+        assert token in SILVER_HELPER_SCRIPT, f"silver.py guardrail missing: {token}"
+    # Efficiency: bind must NOT read every footer (schema is enforced-identical)
+    assert "union_by_name" not in SILVER_HELPER_SCRIPT
+
+
+def test_client_surface_never_mentions_silver():
+    """Client prompt must stay silver/scada-free (EPR-59 posture unchanged)."""
+    from pathlib import Path
+
+    text = Path("app/prompts/brain_agent_system_client.md").read_text(encoding="utf-8")
+    assert "silver.py" not in text
+    assert "scada" not in text.lower()

@@ -1,10 +1,11 @@
 # Staging database: a SEPARATE RDS instance restored from a prod snapshot.
 #
-# Private (unlike prod's public energyexedb) — only the in-VPC staging task
-# reaches it. Storage stays at the snapshot's allocated size (~200GB) — a
-# restore can't shrink it. Engine version, master username, and password are
-# inherited from the snapshot, so the database-url secret uses prod's master
-# credentials against this host (rotate post-restore if desired).
+# PUBLIC since 2026-07-15 (user decision): the laptop/dev workflow targets
+# staging directly, while prod energyexedb went PRIVATE the same day.
+# PII mitigations for the public posture: master password ROTATED
+# post-restore (2026-07-15 — no longer prod's), rds.force_ssl=1 (PG17
+# default), and the 5432 ingress documented in network.tf. Storage stays at
+# the snapshot's allocated size (~200GB) — a restore can't shrink it.
 
 resource "aws_db_subnet_group" "staging" {
   name       = "energyexedb-staging"
@@ -22,7 +23,7 @@ resource "aws_db_instance" "staging" {
   parameter_group_name = "default.postgres17"
 
   vpc_security_group_ids = [aws_security_group.rds.id]
-  publicly_accessible    = false
+  publicly_accessible    = true # laptop/dev target since 2026-07-15 (see header)
   multi_az               = false
 
   # Staging is disposable: allow teardown + skip the final snapshot.

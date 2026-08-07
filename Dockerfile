@@ -41,6 +41,10 @@ RUN mkdir -p /app/generation_processing_logs && chown app:app /app/generation_pr
 # Switch to non-root user
 USER app
 
+# Bake DuckDB extensions (installed under ~/.duckdb) so the brain-agent
+# sandbox's silver.py never downloads them at query time.
+RUN python -c "import duckdb; duckdb.install_extension('httpfs'); duckdb.install_extension('aws')"
+
 # Expose port
 EXPOSE 8001
 
@@ -72,6 +76,10 @@ RUN mkdir -p /tmp/energyexe-repos && chown app:app /tmp/energyexe-repos
 
 # Switch to non-root user
 USER app
+
+# Bake DuckDB extensions (installed under ~/.duckdb) so the brain-agent
+# sandbox's silver.py never downloads them at query time.
+RUN python -c "import duckdb; duckdb.install_extension('httpfs'); duckdb.install_extension('aws')"
 
 # Expose port
 EXPOSE 8001

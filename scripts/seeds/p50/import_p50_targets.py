@@ -49,10 +49,9 @@ from typing import Dict, List, Optional, Tuple
 import asyncpg
 
 
-DB_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://postgres:Energyexe1*@energyexedb.cn8a6ka2u5c3.eu-north-1.rds.amazonaws.com:5432/energyexe_db",
-).replace("postgresql+asyncpg://", "postgresql://")
+DB_URL = os.environ.get("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
+if not DB_URL:
+    raise SystemExit("set DATABASE_URL (no hardcoded fallback — credentials rotated 2026-07-15)")
 
 # Timeout for individual statements (seconds). Remote DB over high-latency
 # connections needs generous limits.

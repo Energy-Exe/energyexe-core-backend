@@ -192,6 +192,11 @@ class PriceStatisticsResponse(BaseModel):
     intraday: Dict[str, Optional[float]]
     negative_hours_count: int = 0
     negative_hours_pct: float = 0.0
+    # EPR-93: currency the returned values are actually in (native unless converted)
+    currency: str = "EUR"
+    native_currency: str = "EUR"
+    display_currency: Optional[str] = None
+    exchange_rate_used: Optional[float] = None
 
 
 class PriceCoverageResponse(BaseModel):
@@ -210,7 +215,11 @@ class PriceCoverageResponse(BaseModel):
 # ============================================================
 
 class CaptureRatePeriod(BaseModel):
-    """Capture rate data for a single period."""
+    """Capture rate data for a single period.
+
+    The ``_eur`` field names are historical — the actual currency of monetary
+    values is the response-level ``currency`` field (EPR-93).
+    """
     period: Optional[str]
     total_generation_mwh: float
     revenue_eur: float
@@ -237,6 +246,11 @@ class CaptureRateResponse(BaseModel):
     end_date: str
     aggregation: str
     price_type: str
+    # EPR-93: currency the returned monetary values are actually in
+    currency: str = "EUR"
+    native_currency: str = "EUR"
+    display_currency: Optional[str] = None
+    exchange_rate_used: Optional[float] = None
     overall: CaptureRateOverall
     periods: List[CaptureRatePeriod]
 
@@ -276,6 +290,11 @@ class RevenueMetricsResponse(BaseModel):
     start_date: str
     end_date: str
     aggregation: str
+    # EPR-93: currency the returned monetary values are actually in
+    currency: str = "EUR"
+    native_currency: str = "EUR"
+    display_currency: Optional[str] = None
+    exchange_rate_used: Optional[float] = None
     periods: List[RevenuePeriod]
 
 

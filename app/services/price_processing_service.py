@@ -401,11 +401,20 @@ class PriceProcessingService:
         windfarm_id: int,
         start_date: datetime,
         end_date: datetime,
+        display_currency: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get price statistics for a windfarm over a period.
 
         Returns statistics like average, min, max prices.
+
+        Only the windfarm's preferred price source is included (ELEXON for GB,
+        ENTSOE otherwise) — mixing sources would average GBP and EUR rows and
+        skew the negative-hours denominator (EPR-93).
+
+        With ``display_currency`` set, prices are converted at the full-range
+        average ECB rate (min/max scaled by the same rate is an approximation —
+        the extremes' own-day rates are not used; acceptable for KPI display).
         """
         stmt = text("""
             SELECT
@@ -422,6 +431,12 @@ class PriceProcessingService:
             WHERE windfarm_id = :windfarm_id
               AND hour >= :start_date
               AND hour < :end_date
+              AND source = (
+                  SELECT CASE WHEN b.code = '10YGB----------A' THEN 'ELEXON' ELSE 'ENTSOE' END
+                  FROM windfarms w
+                  LEFT JOIN bidzones b ON w.bidzone_id = b.id
+                  WHERE w.id = :windfarm_id
+              )
         """)
 
         result = await self.db.execute(
@@ -445,7 +460,19 @@ class PriceProcessingService:
             else 0.0
         )
 
-        return {
+        source_result = await self.db.execute(
+            text("""
+                SELECT CASE WHEN b.code = '10YGB----------A' THEN 'GBP' ELSE 'EUR' END as currency
+                FROM windfarms w
+                LEFT JOIN bidzones b ON w.bidzone_id = b.id
+                WHERE w.id = :windfarm_id
+            """),
+            {"windfarm_id": windfarm_id},
+        )
+        source_row = source_result.fetchone()
+        native_currency = source_row.currency if source_row else "EUR"
+
+        stats = {
             "hours_with_data": row.hours_with_data,
             "day_ahead": {
                 "average": float(row.avg_day_ahead) if row.avg_day_ahead else None,
@@ -459,7 +486,28 @@ class PriceProcessingService:
             },
             "negative_hours_count": negative_hours_count,
             "negative_hours_pct": round(negative_hours_pct, 2),
+            "native_currency": native_currency,
+            "currency": native_currency,
+            "display_currency": display_currency,
+            "exchange_rate_used": None,
         }
+
+        if display_currency and display_currency != native_currency:
+            from app.services.exchange_rate_service import ExchangeRateService
+
+            rate = await ExchangeRateService(self.db).get_rate_for_period(
+                native_currency, display_currency, start_date.date(), end_date.date()
+            )
+            if rate is not None:
+                r = float(rate)
+                for block in ("day_ahead", "intraday"):
+                    for key, value in stats[block].items():
+                        if value is not None:
+                            stats[block][key] = value * r
+                stats["currency"] = display_currency
+                stats["exchange_rate_used"] = r
+
+        return stats
 
     async def get_windfarm_coverage(
         self,

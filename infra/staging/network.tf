@@ -34,6 +34,9 @@ resource "aws_vpc_security_group_egress_rule" "service_all" {
 # --- Staging RDS: Postgres reachable only from the staging service ---
 
 resource "aws_security_group" "rds" {
+  # NOTE: description is immutable (changing it REPLACES the SG — disruptive
+  # on a live RDS). It predates the 2026-07-15 public flip; rules below are
+  # the source of truth for the actual posture.
   name_prefix = "${local.name}-rds-"
   description = "Staging RDS - Postgres from the staging ECS service only"
   vpc_id      = data.aws_vpc.default.id
@@ -50,4 +53,16 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_service" {
   from_port                    = 5432
   to_port                      = 5432
   ip_protocol                  = "tcp"
+}
+
+# Staging is the laptop/dev database since 2026-07-15 (prod went private).
+# Open ingress is a deliberate user decision; mitigations: rotated master
+# password (2026-07-15), rds.force_ssl=1, and this is the only public DB.
+resource "aws_vpc_security_group_ingress_rule" "rds_public" {
+  security_group_id = aws_security_group.rds.id
+  description       = "Postgres open to internet (user decision 2026-07-15; rotated pw + force_ssl)"
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 5432
+  to_port           = 5432
+  ip_protocol       = "tcp"
 }
