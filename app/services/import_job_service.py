@@ -434,6 +434,12 @@ class ImportJobService:
 
         start_date = job.import_start_date.strftime("%Y-%m-%d")
         end_date = job.import_end_date.strftime("%Y-%m-%d")
+        # The price PROCESS step filters `period_start < end_date` (exclusive — see
+        # PriceProcessingService._get_raw_prices_for_bidzone), so it needs the day
+        # AFTER the last day we want included. Without this a single-day job asks
+        # for `>= D AND < D` and silently writes zero rows to price_data.
+        # The FETCH scripts pad --end to 23:59:59 themselves, so they keep end_date.
+        prices_end_date = (job.import_end_date + timedelta(days=1)).strftime("%Y-%m-%d")
 
         # Use python directly (works in Docker without poetry)
         # The app is already in PYTHONPATH when FastAPI starts
@@ -461,11 +467,12 @@ class ImportJobService:
             ),
             "ENTSOE_PRICES": (
                 f"python {prices_path}/import_prices_from_api.py --start {start_date} --end {end_date} --price-types day_ahead && "
-                f"python {prices_path}/process_to_hourly.py --start-date {start_date} --end-date {end_date} --force"
+                f"python {prices_path}/process_to_hourly.py --start-date {start_date} --end-date {prices_end_date} --force"
             ),
             "ELEXON_PRICES": (
                 f"python {prices_path}/elexon/import_elexon_prices.py --start {start_date} --end {end_date} && "
-                f"python {prices_path}/process_to_hourly.py --source ELEXON --start-date {start_date} --end-date {end_date} --force"
+                f"python {prices_path}/process_to_hourly.py --source ELEXON --bidzone-codes 10YGB----------A "
+                f"--start-date {start_date} --end-date {prices_end_date} --force"
             ),
             "ECB_RATES": (
                 f"python {rates_path}/import_ecb_rates.py --start {start_date} --end {end_date}"

@@ -11,6 +11,12 @@ on:
     # ELEXON - Daily at 7:00 AM UTC
     - cron: '0 7 * * *'
 
+    # ENTSOE day-ahead prices - Daily at 8:00 AM UTC
+    - cron: '0 8 * * *'
+
+    # ELEXON market index prices - Daily at 9:00 AM UTC
+    - cron: '0 9 * * *'
+
     # EIA - Monthly on 1st at 2:00 AM UTC
     - cron: '0 2 1 * *'
 
@@ -28,6 +34,8 @@ on:
           - entsoe-daily
           - taipower-hourly
           - elexon-daily
+          - entsoe-prices-daily
+          - elexon-prices-daily
           - eia-monthly
           - ecb-rates-daily
 
@@ -104,6 +112,52 @@ jobs:
           fi
 
           echo "✅ ELEXON import completed successfully"
+
+  # ENTSOE Day-Ahead Prices Daily (runs at 8 AM, after the 6 AM generation import)
+  entsoe-prices-import:
+    if: github.event.schedule == '0 8 * * *' || github.event.inputs.job_name == 'entsoe-prices-daily'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ENTSOE Prices Daily Import
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.API_URL }}/api/v1/import-jobs/trigger/entsoe-prices-daily")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+
+          if [ "$http_code" -ne 200 ]; then
+            echo "❌ Import failed with status $http_code"
+            exit 1
+          fi
+
+          echo "✅ ENTSOE prices import completed successfully"
+
+  # ELEXON Market Index Prices Daily (runs at 9 AM, after the 7 AM generation import)
+  elexon-prices-import:
+    if: github.event.schedule == '0 9 * * *' || github.event.inputs.job_name == 'elexon-prices-daily'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ELEXON Prices Daily Import
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.API_URL }}/api/v1/import-jobs/trigger/elexon-prices-daily")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+
+          if [ "$http_code" -ne 200 ]; then
+            echo "❌ Import failed with status $http_code"
+            exit 1
+          fi
+
+          echo "✅ ELEXON prices import completed successfully"
 
   # EIA Monthly Import (runs on 1st of month)
   eia-import:
