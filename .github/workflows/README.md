@@ -34,9 +34,15 @@ env:
 |-----|-----------|------------|---------------|
 | **entsoe-daily** | Daily | 06:00 | 3 days ago |
 | **elexon-daily** | Daily | 07:00 | 3 days ago |
+| **entsoe-prices-daily** | Daily | 08:00 | 2 days ago (day-ahead prices, 11 bidzones) |
+| **elexon-prices-daily** | Daily | 09:00 | 1 day ago (GB market index prices) |
 | **taipower-hourly** | Hourly | :05 | Current snapshot |
 | **eia-monthly** | Monthly | 1st @ 02:00 | 2 months ago |
 | **ecb-rates-daily** | Weekdays | 15:00 (Mon–Fri) | ECB exchange rates |
+
+> The four daily jobs are deliberately spaced an hour apart. The backend runs a single
+> task with `--workers 1` (`infra/ecs.tf`) and `execute_job` blocks on `subprocess.run`,
+> so two imports firing at once stall each other's event loop.
 
 > GitHub-cron is best-effort — runs can be delayed or skipped under load, so exact times
 > drift. If reliable timing is ever required, move scheduling to EventBridge Scheduler →
