@@ -50,6 +50,22 @@ class TestExclusiveEndDate:
         assert "--end-date 2026-08-09" not in step
 
     @pytest.mark.parametrize("source", ["ENTSOE_PRICES", "ELEXON_PRICES"])
+    def test_bound_is_a_calendar_day_not_a_microsecond(self, source):
+        """Guards against 'refactoring' this to app.utils.date_bounds.exclusive_end().
+
+        That helper returns end + 1 microsecond for a timestamped end, which is
+        correct for a SQL bound but vanishes under %Y-%m-%d formatting — the
+        value here is serialized to a DATE and re-parsed as midnight downstream,
+        so anything short of the next calendar day reinstates the empty window.
+        """
+        from app.utils.date_bounds import exclusive_end
+
+        assert exclusive_end(DAY_END).strftime("%Y-%m-%d") == "2026-08-09"
+        assert f"--end-date {exclusive_end(DAY_END):%Y-%m-%d}" not in process_step(
+            build(source, DAY_START, DAY_END)
+        )
+
+    @pytest.mark.parametrize("source", ["ENTSOE_PRICES", "ELEXON_PRICES"])
     def test_backfill_includes_its_final_day(self, source):
         """?start=A&end=B must process through B inclusive, not B-1."""
         step = process_step(

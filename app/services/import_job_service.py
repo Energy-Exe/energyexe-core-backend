@@ -439,6 +439,11 @@ class ImportJobService:
         # AFTER the last day we want included. Without this a single-day job asks
         # for `>= D AND < D` and silently writes zero rows to price_data.
         # The FETCH scripts pad --end to 23:59:59 themselves, so they keep end_date.
+        #
+        # NOT app.utils.date_bounds.exclusive_end() — that returns +1 microsecond
+        # for a timestamped end, which disappears under %Y-%m-%d formatting and
+        # restores the bug. This value is serialized to a DATE and re-parsed as
+        # midnight downstream, so the bound has to be the next calendar day.
         prices_end_date = (job.import_end_date + timedelta(days=1)).strftime("%Y-%m-%d")
 
         # Use python directly (works in Docker without poetry)
