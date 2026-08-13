@@ -5,8 +5,12 @@ on:
     # ENTSOE - Daily at 6:00 AM UTC
     - cron: '0 6 * * *'
 
-    # Taipower - Every hour at :05
-    - cron: '5 * * * *'
+    # NOTE: Taipower is NOT scheduled here. It moved to EventBridge
+    # (infra/scheduled_imports.tf, `cron(5 * * * ? *)`) because GitHub's
+    # scheduler dropped 15-60% of the hourly runs, and Taipower's API serves
+    # only the CURRENT snapshot — a missed run is an hour of generation lost
+    # permanently. The dated imports below self-heal on the next run, so they
+    # stay here. Manual runs still work via workflow_dispatch.
 
     # ELEXON - Daily at 7:00 AM UTC
     - cron: '0 7 * * *'
@@ -67,9 +71,10 @@ jobs:
 
           echo "✅ ENTSOE import completed successfully"
 
-  # Taipower Hourly Snapshot (runs every hour)
+  # Taipower Hourly Snapshot — scheduled by EventBridge, not by this workflow.
+  # Kept here so it can still be run by hand via workflow_dispatch.
   taipower-import:
-    if: github.event.schedule == '5 * * * *' || github.event.inputs.job_name == 'taipower-hourly'
+    if: github.event.inputs.job_name == 'taipower-hourly'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Taipower Hourly Snapshot
