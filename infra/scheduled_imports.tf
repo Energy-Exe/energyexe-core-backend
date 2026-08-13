@@ -64,11 +64,30 @@ resource "aws_cloudwatch_event_api_destination" "taipower" {
 # :05 keeps the historical slot, and leaves the top of the hour clear of the
 # 06/07/08/09 daily imports (the backend runs one task with --workers 1 and
 # blocks on subprocess.run, so overlapping imports stall each other).
+# ⛔ DISABLED 2026-08-13, and it must stay disabled until the blocker below is
+# fixed. EventBridge API Destinations enforce a hard 5-SECOND invocation
+# timeout. The Taipower import answers in ~7s (execute_job runs subprocess.run
+# synchronously inside the request), so EventBridge records every delivery as
+# FAILED even though the import succeeds server-side — and retries it. One
+# scheduled fire becomes 9 imports, a DLQ message, and a false alarm, every
+# hour. Observed live: a rate(1 minute) test rule produced ~90 imports over 28
+# minutes of backoff (no data damage — the upserts are idempotent — but the
+# single worker was blocked ~37% of that window).
+#
+# To enable: make /import-jobs/trigger/{job} answer inside 5s (return 202 and
+# run the import in the background — which would also lift the 150s
+# blocked-worker health-check ceiling), or front this with a Lambda that calls
+# the endpoint and retries on the real outcome. Then set state = "ENABLED".
+#
+# Also note: `aws events put-targets` without an explicit RetryPolicy defaults
+# to 185 attempts over 24h, and DELETING a rule does not cancel already-queued
+# retries — deauthorize the connection to stop those.
 resource "aws_cloudwatch_event_rule" "taipower_hourly" {
   count               = local.taipower_enabled
   name                = "${local.name}-taipower-hourly"
-  description         = "Hourly Taipower snapshot import (replaces the dropped GitHub cron)."
+  description         = "Hourly Taipower snapshot import. DISABLED — see the comment above before enabling."
   schedule_expression = "cron(5 * * * ? *)"
+  state               = "DISABLED"
 }
 
 resource "aws_cloudwatch_event_target" "taipower_hourly" {
