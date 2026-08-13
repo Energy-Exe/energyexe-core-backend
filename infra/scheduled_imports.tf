@@ -6,144 +6,133 @@
 # per day (15-60% dropped), with delays up to 3h17m.
 #
 # That is tolerable for the daily/monthly imports, which pull a *dated* window
-# and simply catch up the next day. It is NOT tolerable for Taipower: the API
-# serves only the CURRENT snapshot (no historical endpoint), stamped on the
-# hour, so a missed run is an hour of Taiwan generation lost permanently.
+# and catch up on the next run. It is NOT tolerable for Taipower: the API serves
+# only the CURRENT snapshot (no historical endpoint), stamped on the hour, so a
+# missed run is an hour of Taiwan generation lost permanently.
+#
+# WHY A LAMBDA SHIM AND NOT AN API DESTINATION: this was first built as
+# EventBridge -> API Destination -> the trigger endpoint, and that fails.
+# API Destinations enforce a hard 5-SECOND invocation timeout; the import runs
+# synchronously (subprocess.run inside the request) and takes ~7s, so every
+# delivery was recorded FAILED despite succeeding server-side, then retried —
+# 9 imports an hour, a DLQ message and a false alarm every hour. Observed live:
+# a rate(1 minute) test rule produced ~90 imports over 28 minutes of backoff.
+# A Lambda can wait for the real response, so retries are driven by the actual
+# outcome instead of by a timeout.
 #
 # WHY NOT AN IN-PROCESS APScheduler JOB (like app/cron/pipeline_daily.py):
 # that scheduler uses APScheduler's default in-memory jobstore, so a fresh
-# process computes next_run_time forward from now and has no record of a missed
+# process computes next_run_time forward from now with no record of a missed
 # fire — misfire_grace_time/coalesce only rescue a run when the process stayed
 # alive. Any deploy, OOM or crash spanning :05 would lose that hour with no
-# recovery, and the scheduler would share a failure domain with the very
-# service it triggers. EventBridge is external to the app and retries.
+# recovery, and the scheduler would share a failure domain with the service it
+# triggers.
 #
-# The remaining GitHub crons (entsoe/elexon/eia/ecb, and the price imports) stay
+# The remaining GitHub crons (entsoe/elexon/eia/ecb + the price imports) stay
 # where they are — they self-heal on the next run.
 
 locals {
-  taipower_trigger_url = var.api_domain == "" ? "" : "https://${var.api_domain}/api/v1/import-jobs/trigger/taipower-hourly"
-  taipower_enabled     = var.api_domain == "" ? 0 : 1
+  scheduled_imports_enabled = var.api_domain == "" ? 0 : 1
 }
 
-# --- Connection -------------------------------------------------------------
-#
-# API Destinations REQUIRE a Connection with an authorization type, even when
-# the target needs no auth. `/import-jobs/trigger/{job}` is deliberately public
-# (see the endpoint docstring), so this sends a descriptive header rather than a
-# credential — there is no secret here, and none should be added to this file.
-# If that endpoint ever gains auth, this is the seam: swap the value for a
-# Secrets Manager lookup.
-resource "aws_cloudwatch_event_connection" "api_trigger" {
-  count              = local.taipower_enabled
-  name               = "${local.name}-api-trigger"
-  description        = "Calls the public /import-jobs/trigger endpoints. Header is an identifier, not a credential."
-  authorization_type = "API_KEY"
+# --- Lambda: calls the trigger endpoint and waits for the real result --------
+data "archive_file" "trigger_import" {
+  count       = local.scheduled_imports_enabled
+  type        = "zip"
+  source_file = "${path.module}/lambda/trigger_import/index.py"
+  output_path = "${path.module}/lambda/trigger_import.zip"
+}
 
-  auth_parameters {
-    api_key {
-      key   = "X-Triggered-By"
-      value = "eventbridge"
+resource "aws_lambda_function" "trigger_import" {
+  count            = local.scheduled_imports_enabled
+  function_name    = "${local.name}-trigger-import"
+  description      = "POSTs /import-jobs/trigger/{job} and retries on the real outcome."
+  role             = aws_iam_role.trigger_import[0].arn
+  handler          = "index.handler"
+  runtime          = "python3.12"
+  filename         = data.archive_file.trigger_import[0].output_path
+  source_code_hash = data.archive_file.trigger_import[0].output_base64sha256
+
+  # Must comfortably exceed the slowest import this fires plus its in-invocation
+  # retries. Taipower is ~7s; the headroom is for the retry backoff.
+  timeout     = 300
+  memory_size = 128
+
+  environment {
+    variables = {
+      API_URL = "https://${var.api_domain}"
     }
   }
 }
 
-# --- Destination ------------------------------------------------------------
-resource "aws_cloudwatch_event_api_destination" "taipower" {
-  count                            = local.taipower_enabled
-  name                             = "${local.name}-taipower-hourly"
-  description                      = "POST the Taipower hourly snapshot import."
-  invocation_endpoint              = local.taipower_trigger_url
-  http_method                      = "POST"
-  connection_arn                   = aws_cloudwatch_event_connection.api_trigger[0].arn
-  invocation_rate_limit_per_second = 1
+resource "aws_cloudwatch_log_group" "trigger_import" {
+  count             = local.scheduled_imports_enabled
+  name              = "/aws/lambda/${local.name}-trigger-import"
+  retention_in_days = 30
+}
+
+# Async invocations (which is how EventBridge calls Lambda) retry at most twice.
+# On-failure sends the event to the DLQ, which alarms — so an hour that could
+# not be imported at all is visible instead of silent.
+resource "aws_lambda_function_event_invoke_config" "trigger_import" {
+  count                        = local.scheduled_imports_enabled
+  function_name                = aws_lambda_function.trigger_import[0].function_name
+  maximum_retry_attempts       = 2
+  maximum_event_age_in_seconds = 1800 # 30 min — stay inside the hour
+
+  destination_config {
+    on_failure {
+      destination = aws_sqs_queue.eventbridge_dlq[0].arn
+    }
+  }
 }
 
 # --- Schedule ---------------------------------------------------------------
 #
-# :05 keeps the historical slot, and leaves the top of the hour clear of the
+# :05 keeps the historical slot and leaves the top of the hour clear of the
 # 06/07/08/09 daily imports (the backend runs one task with --workers 1 and
 # blocks on subprocess.run, so overlapping imports stall each other).
-# ⛔ DISABLED 2026-08-13, and it must stay disabled until the blocker below is
-# fixed. EventBridge API Destinations enforce a hard 5-SECOND invocation
-# timeout. The Taipower import answers in ~7s (execute_job runs subprocess.run
-# synchronously inside the request), so EventBridge records every delivery as
-# FAILED even though the import succeeds server-side — and retries it. One
-# scheduled fire becomes 9 imports, a DLQ message, and a false alarm, every
-# hour. Observed live: a rate(1 minute) test rule produced ~90 imports over 28
-# minutes of backoff (no data damage — the upserts are idempotent — but the
-# single worker was blocked ~37% of that window).
-#
-# To enable: make /import-jobs/trigger/{job} answer inside 5s (return 202 and
-# run the import in the background — which would also lift the 150s
-# blocked-worker health-check ceiling), or front this with a Lambda that calls
-# the endpoint and retries on the real outcome. Then set state = "ENABLED".
-#
-# Also note: `aws events put-targets` without an explicit RetryPolicy defaults
-# to 185 attempts over 24h, and DELETING a rule does not cancel already-queued
-# retries — deauthorize the connection to stop those.
 resource "aws_cloudwatch_event_rule" "taipower_hourly" {
-  count               = local.taipower_enabled
+  count               = local.scheduled_imports_enabled
   name                = "${local.name}-taipower-hourly"
-  description         = "Hourly Taipower snapshot import. DISABLED — see the comment above before enabling."
+  description         = "Hourly Taipower snapshot import (replaces the dropped GitHub cron)."
   schedule_expression = "cron(5 * * * ? *)"
-  state               = "DISABLED"
+  state               = "ENABLED"
 }
 
 resource "aws_cloudwatch_event_target" "taipower_hourly" {
-  count     = local.taipower_enabled
+  count     = local.scheduled_imports_enabled
   rule      = aws_cloudwatch_event_rule.taipower_hourly[0].name
-  target_id = "taipower-hourly-api"
-  arn       = aws_cloudwatch_event_api_destination.taipower[0].arn
-  role_arn  = aws_iam_role.eventbridge_invoke_api[0].arn
+  target_id = "taipower-hourly-lambda"
+  arn       = aws_lambda_function.trigger_import[0].arn
+  input     = jsonencode({ job_name = "taipower-hourly" })
+}
 
-  # The import takes ~7s, but a deploy takes the single task down for ~1-2 min.
-  # Retry across that window; stop before the next hour's fire, because a retry
-  # that lands after :00 would just re-fetch the *next* hour's snapshot, which
-  # the next scheduled run does anyway.
-  retry_policy {
-    maximum_event_age_in_seconds = 3000 # 50 min
-    maximum_retry_attempts       = 8
-  }
-
-  dead_letter_config {
-    arn = aws_sqs_queue.eventbridge_dlq[0].arn
-  }
+resource "aws_lambda_permission" "taipower_hourly" {
+  count         = local.scheduled_imports_enabled
+  statement_id  = "AllowExecutionFromEventBridgeTaipower"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.trigger_import[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.taipower_hourly[0].arn
 }
 
 # --- Dead letter queue ------------------------------------------------------
 #
-# An hour that exhausts every retry lands here. Depth > 0 is the signal that a
-# Taipower hour was lost for good — the failure the GitHub cron never reported,
-# because a dropped schedule produces no run and therefore no red build.
+# An hour that exhausts the Lambda's in-invocation retries AND its two async
+# retries lands here. Depth > 0 means a Taipower hour was lost for good — the
+# failure the GitHub cron never reported, because a dropped schedule produces no
+# run and therefore no red build.
 resource "aws_sqs_queue" "eventbridge_dlq" {
-  count                     = local.taipower_enabled
+  count                     = local.scheduled_imports_enabled
   name                      = "${local.name}-eventbridge-dlq"
   message_retention_seconds = 1209600 # 14 days
 }
 
-resource "aws_sqs_queue_policy" "eventbridge_dlq" {
-  count     = local.taipower_enabled
-  queue_url = aws_sqs_queue.eventbridge_dlq[0].id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "events.amazonaws.com" }
-      Action    = "sqs:SendMessage"
-      Resource  = aws_sqs_queue.eventbridge_dlq[0].arn
-      Condition = {
-        ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.taipower_hourly[0].arn }
-      }
-    }]
-  })
-}
-
 resource "aws_cloudwatch_metric_alarm" "eventbridge_dlq_not_empty" {
-  count               = local.taipower_enabled
+  count               = local.scheduled_imports_enabled
   alarm_name          = "${local.name}-eventbridge-dlq-not-empty"
-  alarm_description   = "A scheduled import exhausted its retries — that hour's Taipower snapshot is lost."
+  alarm_description   = "A scheduled import exhausted every retry — that hour's Taipower snapshot is lost."
   namespace           = "AWS/SQS"
   metric_name         = "ApproximateNumberOfMessagesVisible"
   statistic           = "Maximum"
@@ -159,36 +148,48 @@ resource "aws_cloudwatch_metric_alarm" "eventbridge_dlq_not_empty" {
 }
 
 # --- IAM --------------------------------------------------------------------
-resource "aws_iam_role" "eventbridge_invoke_api" {
-  count = local.taipower_enabled
-  name  = "${local.name}-eventbridge-invoke-api"
+resource "aws_iam_role" "trigger_import" {
+  count = local.scheduled_imports_enabled
+  name  = "${local.name}-trigger-import-lambda"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Service = "events.amazonaws.com" }
+      Principal = { Service = "lambda.amazonaws.com" }
       Action    = "sts:AssumeRole"
     }]
   })
 }
 
-resource "aws_iam_role_policy" "eventbridge_invoke_api" {
-  count = local.taipower_enabled
-  name  = "invoke-api-destination"
-  role  = aws_iam_role.eventbridge_invoke_api[0].id
+resource "aws_iam_role_policy" "trigger_import" {
+  count = local.scheduled_imports_enabled
+  name  = "logs-and-dlq"
+  role  = aws_iam_role.trigger_import[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = "events:InvokeApiDestination"
-      Resource = aws_cloudwatch_event_api_destination.taipower[0].arn
-    }]
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.trigger_import[0].arn}:*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = "sqs:SendMessage"
+        Resource = aws_sqs_queue.eventbridge_dlq[0].arn
+      },
+    ]
   })
+}
+
+output "trigger_import_lambda" {
+  description = "Lambda that fires the scheduled import HTTP triggers."
+  value       = local.scheduled_imports_enabled == 0 ? "" : aws_lambda_function.trigger_import[0].function_name
 }
 
 output "taipower_schedule_rule" {
   description = "EventBridge rule driving the hourly Taipower import."
-  value       = local.taipower_enabled == 0 ? "" : aws_cloudwatch_event_rule.taipower_hourly[0].name
+  value       = local.scheduled_imports_enabled == 0 ? "" : aws_cloudwatch_event_rule.taipower_hourly[0].name
 }
