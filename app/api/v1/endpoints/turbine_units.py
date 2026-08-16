@@ -5,8 +5,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import DEFAULT_PAGINATION_LIMIT, MAX_PAGINATION_LIMIT, MIN_PAGINATION_LIMIT
 from app.core.database import get_db
-from app.schemas.turbine_unit import TurbineUnit, TurbineUnitCreate, TurbineUnitUpdate
-from app.services.turbine_unit import TurbineUnitService
+from app.schemas.turbine_unit import (
+    TurbineUnit,
+    TurbineUnitBulkCreate,
+    TurbineUnitBulkCreateResult,
+    TurbineUnitCreate,
+    TurbineUnitUpdate,
+)
+from app.services.turbine_unit import TurbineUnitBulkValidationError, TurbineUnitService
 
 router = APIRouter()
 
@@ -15,7 +21,9 @@ router = APIRouter()
 async def get_turbine_units(
     windfarm_id: Optional[int] = Query(None, description="Filter by wind farm ID"),
     model_id: Optional[int] = Query(None, description="Filter by turbine model ID"),
-    status: Optional[str] = Query(None, description="Filter by status (operational, installing, decommissioned)"),
+    status: Optional[str] = Query(
+        None, description="Filter by status (operational, installing, decommissioned)"
+    ),
     search: Optional[str] = Query(None, description="Search by turbine code"),
     skip: int = Query(0, ge=0),
     limit: int = Query(DEFAULT_PAGINATION_LIMIT, ge=MIN_PAGINATION_LIMIT, le=MAX_PAGINATION_LIMIT),
@@ -91,15 +99,15 @@ async def get_turbine_unit_with_relations(turbine_unit_id: int, db: AsyncSession
     """Get a turbine unit with windfarm, turbine model, and generation units"""
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
-    from app.models.turbine_unit import TurbineUnit as TurbineUnitModel
+
     from app.models.generation_unit import GenerationUnit
+    from app.models.turbine_unit import TurbineUnit as TurbineUnitModel
 
     # Get turbine unit with windfarm and turbine_model
     result = await db.execute(
         select(TurbineUnitModel)
         .options(
-            selectinload(TurbineUnitModel.windfarm),
-            selectinload(TurbineUnitModel.turbine_model)
+            selectinload(TurbineUnitModel.windfarm), selectinload(TurbineUnitModel.turbine_model)
         )
         .where(TurbineUnitModel.id == turbine_unit_id)
     )
@@ -113,8 +121,7 @@ async def get_turbine_unit_with_relations(turbine_unit_id: int, db: AsyncSession
     generation_units = []
     if turbine_unit.windfarm_id:
         result = await db.execute(
-            select(GenerationUnit)
-            .where(
+            select(GenerationUnit).where(
                 GenerationUnit.windfarm_id == turbine_unit.windfarm_id,
                 GenerationUnit.is_active == True,
             )
@@ -140,17 +147,27 @@ async def get_turbine_unit_with_relations(turbine_unit_id: int, db: AsyncSession
             "status": turbine_unit.windfarm.status,
             "lat": turbine_unit.windfarm.lat,
             "lng": turbine_unit.windfarm.lng,
-        } if turbine_unit.windfarm else None,
+        }
+        if turbine_unit.windfarm
+        else None,
         "turbine_model": {
             "id": turbine_unit.turbine_model.id,
             "model": turbine_unit.turbine_model.model,
             "supplier": turbine_unit.turbine_model.supplier,
             "original_supplier": turbine_unit.turbine_model.original_supplier,
             "rated_power_kw": turbine_unit.turbine_model.rated_power_kw,
-            "rotor_diameter_m": float(turbine_unit.turbine_model.rotor_diameter_m) if turbine_unit.turbine_model.rotor_diameter_m else None,
-            "hub_height_m": float(turbine_unit.turbine_model.cut_in_wind_speed_ms) if turbine_unit.turbine_model.cut_in_wind_speed_ms else None,
-            "blade_length_m": float(turbine_unit.turbine_model.blade_length_m) if turbine_unit.turbine_model.blade_length_m else None,
-        } if turbine_unit.turbine_model else None,
+            "rotor_diameter_m": float(turbine_unit.turbine_model.rotor_diameter_m)
+            if turbine_unit.turbine_model.rotor_diameter_m
+            else None,
+            "hub_height_m": float(turbine_unit.turbine_model.cut_in_wind_speed_ms)
+            if turbine_unit.turbine_model.cut_in_wind_speed_ms
+            else None,
+            "blade_length_m": float(turbine_unit.turbine_model.blade_length_m)
+            if turbine_unit.turbine_model.blade_length_m
+            else None,
+        }
+        if turbine_unit.turbine_model
+        else None,
         "generation_units": [
             {
                 "id": unit.id,
@@ -162,7 +179,7 @@ async def get_turbine_unit_with_relations(turbine_unit_id: int, db: AsyncSession
                 "is_active": unit.is_active,
             }
             for unit in generation_units
-        ]
+        ],
     }
 
 
@@ -184,6 +201,24 @@ async def create_turbine_unit(turbine_unit: TurbineUnitCreate, db: AsyncSession 
         raise HTTPException(status_code=400, detail="TurbineUnit with this code already exists")
 
     return await TurbineUnitService.create_turbine_unit(db, turbine_unit)
+
+
+@router.post("/bulk", response_model=TurbineUnitBulkCreateResult, status_code=201)
+async def bulk_create_turbine_units(
+    payload: TurbineUnitBulkCreate, db: AsyncSession = Depends(get_db)
+):
+    """Create many turbine units atomically (all-or-nothing, max 500 per request)."""
+    try:
+        created = await TurbineUnitService.bulk_create_turbine_units(db, payload.turbines)
+    except TurbineUnitBulkValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Bulk turbine creation failed",
+                "errors": [e.model_dump() for e in exc.errors],
+            },
+        )
+    return TurbineUnitBulkCreateResult(created=created, total=len(created))
 
 
 @router.put("/{turbine_unit_id}", response_model=TurbineUnit)
