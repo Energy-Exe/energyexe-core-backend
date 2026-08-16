@@ -22,12 +22,14 @@ DataBuilder = Callable[[ReportContext], Awaitable[dict]]
 
 @dataclass(frozen=True)
 class NarrativeSpec:
-    """AI narrative config for a section (consumed by Phase 2's narrative
-    service; declared now so the registry shape is final from day one)."""
+    """AI narrative config for a section (consumed by the narrative service)."""
 
     prompt_key: str  # app/prompts/reports/{report_type}/{prompt_key}.txt
     max_tokens: int = 1500
-    # None -> settings default (REPORTS_LLM_MODEL_SECTION / _SUMMARY for pass 2)
+    # Which settings default supplies the model: 'section' ->
+    # REPORTS_LLM_MODEL_SECTION, 'summary' -> REPORTS_LLM_MODEL_SUMMARY.
+    tier: str = "section"
+    # An explicit model id overrides the tier default.
     model: Optional[str] = None
 
 
@@ -83,7 +85,9 @@ def _build_registry() -> Dict[str, ReportTypeSpec]:
                 kind="narrative",
                 pass_number=2,
                 render_first=True,
-                narrative=NarrativeSpec(prompt_key="executive_summary", max_tokens=1200),
+                narrative=NarrativeSpec(
+                    prompt_key="executive_summary", max_tokens=1200, tier="summary"
+                ),
             ),
             SectionSpec(
                 key="key_metrics",
@@ -103,7 +107,7 @@ def _build_registry() -> Dict[str, ReportTypeSpec]:
                 title="Action Plan",
                 kind="action_plan",
                 layout="two_col_right",
-                narrative=NarrativeSpec(prompt_key="action_plan", max_tokens=2000),
+                narrative=NarrativeSpec(prompt_key="action_plan", max_tokens=2000, tier="summary"),
             ),
         ),
     )

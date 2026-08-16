@@ -42,7 +42,14 @@ class TestRegistry:
         assert spec.section("action_plan").ai_enabled is True
 
     def test_section_kinds_are_frontend_registry_keys(self):
-        valid = {"metric_strip", "findings_table", "action_plan", "narrative", "scorecard", "chart_embed"}
+        valid = {
+            "metric_strip",
+            "findings_table",
+            "action_plan",
+            "narrative",
+            "scorecard",
+            "chart_embed",
+        }
         for spec in REPORT_TYPE_REGISTRY.values():
             for section in spec.sections:
                 assert section.kind in valid, f"{spec.code}.{section.key}: {section.kind}"
@@ -149,3 +156,144 @@ class TestOpportunityPdf:
         report.report_type = "mystery"
         with pytest.raises(ValueError):
             render_report_pdf(report, tmp_path)
+
+    def test_renders_narratives_with_markup_hostile_text(self, tmp_path):
+        """Structured exec summary + action plan render, and '&'/'<' in LLM
+        text must not abort reportlab's markup parser."""
+        from app.services.reports.pdf import render_report_pdf
+
+        report = self._fake_report()
+        report.sections.append(
+            ReportSection(
+                section_key="executive_summary",
+                status=SectionStatus.GENERATED,
+                pass_number=2,
+                display_order=0,
+                narrative_json={
+                    "overall_assessment": "Solid year for O&M <with caveats>.",
+                    "bullets": [
+                        {
+                            "text": "P50 attainment reached 92.1%.",
+                            "source_sections": ["key_metrics"],
+                        },
+                        {
+                            "text": "R&D & maintenance flagged FIN-01.",
+                            "source_sections": ["findings"],
+                        },
+                    ],
+                },
+                narrative_text="fallback",
+                generated_at=datetime(2026, 8, 17),
+            )
+        )
+        report.sections.append(
+            ReportSection(
+                section_key="action_plan",
+                status=SectionStatus.GENERATED,
+                pass_number=1,
+                display_order=3,
+                narrative_json={
+                    "tiers": [
+                        {
+                            "tier": "P1",
+                            "label": "Strategic",
+                            "actions": [
+                                {
+                                    "title": "Audit P50 shortfall & report",
+                                    "horizon": "0-3 months",
+                                    "external": "OEM",
+                                    "linked_schemas": ["FIN-01"],
+                                }
+                            ],
+                            "context": "Grounded in the confirmed attainment gap.",
+                        }
+                    ]
+                },
+                generated_at=datetime(2026, 8, 17),
+            )
+        )
+        out = render_report_pdf(report, tmp_path)
+        assert out.read_bytes()[:5] == b"%PDF-"
+
+
+class TestFactCheck:
+    def test_rounded_and_scaled_values_verify(self):
+        from app.services.reports import fact_check as fc
+
+        payload = {"p50_pct": 83.28, "lost_eur": 1_437_000, "capture_ratio": 0.8328}
+        assert fc.verify_bullet("P50 attainment was 83.3%", [payload]) == []
+        assert fc.verify_bullet("EUR 1.4 million of lost value", [payload]) == []
+        assert fc.verify_bullet("capture rate of 83.3% vs the zone", [payload]) == []
+
+    def test_fabricated_number_fails(self):
+        from app.services.reports import fact_check as fc
+
+        assert fc.verify_bullet("capture rate was 91.2%", [{"capture": 83.3}]) == [91.2]
+
+    def test_identifiers_and_years_are_not_claims(self):
+        from app.services.reports import fact_check as fc
+
+        assert fc.verify_bullet("P50 and MKT_05 in 2024 (EPR-88)", [{"x": 1}]) == []
+
+    def test_numbers_inside_formatted_strings_are_sources(self):
+        from app.services.reports import fact_check as fc
+
+        assert (
+            fc.verify_bullet(
+                "lost value of EUR 45,000", [{"card": {"value": "45,120", "unit": "EUR"}}]
+            )
+            == []
+        )
+
+
+class TestNarrativeService:
+    def test_prompts_load_with_version(self):
+        from app.services.reports.narrative_service import _load_prompt
+
+        for key in ("action_plan", "executive_summary"):
+            version, body = _load_prompt("opportunity", key)
+            assert version == "1"
+            assert "$windfarm_name" in body
+
+    def test_model_resolution_follows_tier(self):
+        from app.core.config import get_settings
+        from app.services.reports.narrative_service import _resolve_model
+
+        settings = get_settings()
+        spec = get_report_type("opportunity")
+        assert _resolve_model(spec.section("action_plan")) == settings.REPORTS_LLM_MODEL_SUMMARY
+        assert (
+            _resolve_model(spec.section("executive_summary")) == settings.REPORTS_LLM_MODEL_SUMMARY
+        )
+
+    def test_summary_payload_only_generated_pass1(self):
+        """'No new claims' layer 1: the exec summary sees only generated
+        Pass-1 outputs — failed sections and raw data stay out."""
+        from app.services.reports.narrative_service import _summary_payload
+
+        report = Report(report_type="opportunity", title="t")
+        report.sections = [
+            ReportSection(
+                section_key="key_metrics",
+                status=SectionStatus.GENERATED,
+                pass_number=1,
+                display_order=1,
+                data={"cards": []},
+            ),
+            ReportSection(
+                section_key="findings",
+                status=SectionStatus.FAILED,
+                pass_number=1,
+                display_order=2,
+                data={"rows": []},
+            ),
+            ReportSection(
+                section_key="executive_summary",
+                status=SectionStatus.GENERATED,
+                pass_number=2,
+                display_order=0,
+                narrative_json={"bullets": []},
+            ),
+        ]
+        payload = _summary_payload(report)
+        assert set(payload.keys()) == {"key_metrics"}

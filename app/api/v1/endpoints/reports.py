@@ -214,7 +214,11 @@ async def get_report_status(
     service = ReportService(db)
     report = await service.get_report(report_id, current_user)
     spec = get_report_type(report.report_type)
-    runnable_keys = {s.key for s in (spec.sections if spec else ()) if s.data_builder is not None}
+    runnable_keys = {
+        s.key
+        for s in (spec.sections if spec else ())
+        if s.data_builder is not None or s.narrative is not None
+    }
     runnable = [s for s in report.sections if s.section_key in runnable_keys]
     done = [
         s
@@ -240,7 +244,7 @@ async def generate_all_sections(
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Re-run all non-generated sections (data sections now; AI sections in Phase 2)."""
+    """Re-run the full pipeline: data sections, AI narratives, exec summary."""
     service = ReportService(db)
     report = await service.get_report(report_id, current_user)
     if report.status in (ReportStatus.PENDING, ReportStatus.GENERATING):
@@ -271,15 +275,28 @@ async def generate_section(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not part of this report")
     if row.status == SectionStatus.GENERATING:
         raise HTTPException(status.HTTP_409_CONFLICT, "Section is already generating")
-    if section_spec.data_builder is None:
-        # Narrative-only sections arrive with the Phase-2 narrative service.
-        raise HTTPException(
-            status.HTTP_501_NOT_IMPLEMENTED,
-            "AI narrative generation is not enabled yet",
-        )
+    if section_spec.pass_number == 2:
+        # EPR-84: the executive summary unlocks only once Pass 1 is complete.
+        missing = [
+            s.section_key
+            for s in report.sections
+            if s.pass_number == 1 and s.status not in (SectionStatus.GENERATED, SectionStatus.STALE)
+        ]
+        if missing:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Executive summary unlocks when all Pass-1 sections are generated "
+                f"(missing: {', '.join(missing)})",
+            )
 
     async def _run_and_finalize():
-        await orchestrator.run_section(report_id, section_spec)
+        if section_spec.data_builder is not None:
+            await orchestrator.run_section(report_id, section_spec)
+        else:
+            await orchestrator.run_narrative_section(report_id, section_spec)
+        if section_spec.pass_number == 1:
+            # The summary must not silently outlive the sections it cites.
+            await orchestrator.mark_pass2_stale(report_id)
         await orchestrator._finalize(report_id)
 
     asyncio.create_task(_run_and_finalize())

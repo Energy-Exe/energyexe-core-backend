@@ -151,6 +151,13 @@ class Settings(BaseSettings):
     LLM_CACHE_DURATION_HOURS: int = 24
     LLM_MAX_COST_PER_REPORT: float = 0.50  # USD
 
+    # Reports platform narratives (EPR-81) — deliberately independent of the
+    # legacy LLM_PROVIDER/LLM_MODEL above (those default to OpenAI for the
+    # retired commentary system). Reports always use Anthropic.
+    REPORTS_LLM_MODEL_SECTION: str = "claude-sonnet-5"  # per-section narratives
+    REPORTS_LLM_MODEL_SUMMARY: str = "claude-opus-5"  # action plan + exec summary
+    REPORTS_MAX_COST_USD: float = 0.50  # hard budget per report generation run
+
     # Brain Agent default model (used as fallback when caller omits one)
     BRAIN_MODEL: str = "claude-sonnet-5"
 

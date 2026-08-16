@@ -5,19 +5,22 @@ Runs as a fire-and-forget asyncio task (the ``weather_imports`` pattern):
 ``GET /reports/{id}/status``. Every concurrently-running section opens its own
 session — an AsyncSession must never be shared across tasks.
 
-Phase 1 scope: deterministic data sections only. Sections that are
-narrative-only (AI) stay UNGENERATED until the Phase-2 narrative service
-lands; the report still completes.
+A run is three waves: Pass-1 data sections concurrently, then Pass-1 narrative
+sections (they consume the fresh data sections), then the Pass-2 executive
+summary (synthesises everything, renders first). Narrative sections respect
+the REPORTS_MAX_COST_USD budget — once exceeded they are SKIPPED and the
+report lands PARTIAL.
 """
 
 import asyncio
 import tempfile
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_session_factory
@@ -66,17 +69,31 @@ async def run(report_id: int) -> None:
             await db.commit()
 
         # Pass 1 — deterministic data sections, concurrently, each in its own session.
-        pass1 = [s for s in spec.sections if s.pass_number == 1 and s.data_builder is not None]
+        pass1_data = [s for s in spec.sections if s.pass_number == 1 and s.data_builder is not None]
         semaphore = asyncio.Semaphore(_SECTION_CONCURRENCY)
 
         async def run_bounded(section_spec: SectionSpec) -> None:
             async with semaphore:
                 await run_section(report_id, section_spec)
 
-        await asyncio.gather(*(run_bounded(s) for s in pass1), return_exceptions=True)
+        await asyncio.gather(*(run_bounded(s) for s in pass1_data), return_exceptions=True)
 
-        # Pass 2 (executive summary) is narrative-only — Phase 2 wires the
-        # narrative service here, after the Pass-1 gather.
+        # Pass 1 narratives — consume the data sections just built.
+        pass1_ai = [
+            s
+            for s in spec.sections
+            if s.pass_number == 1 and s.data_builder is None and s.narrative is not None
+        ]
+
+        async def run_ai_bounded(section_spec: SectionSpec) -> None:
+            async with semaphore:
+                await run_narrative_section(report_id, section_spec)
+
+        await asyncio.gather(*(run_ai_bounded(s) for s in pass1_ai), return_exceptions=True)
+
+        # Pass 2 — the executive summary synthesises all Pass-1 outputs.
+        for section_spec in (s for s in spec.sections if s.pass_number == 2):
+            await run_narrative_section(report_id, section_spec)
 
         await _finalize(report_id)
     except Exception as exc:
@@ -129,6 +146,119 @@ async def run_section(report_id: int, section_spec: SectionSpec) -> None:
         await db.commit()
 
 
+async def run_narrative_section(report_id: int, section_spec: SectionSpec) -> None:
+    """Generate one AI narrative section; own session, contained errors.
+
+    Skips (never fails) when the API key is missing or the report has hit the
+    REPORTS_MAX_COST_USD budget, so a data-complete report still ships.
+    """
+    from app.core.config import get_settings
+    from app.services.reports import narrative_service
+
+    factory = get_session_factory()
+    async with factory() as db:
+        result = await db.execute(
+            select(ReportSection).where(
+                ReportSection.report_id == report_id,
+                ReportSection.section_key == section_spec.key,
+            )
+        )
+        section = result.scalar_one_or_none()
+        if section is None:
+            return
+
+        settings = get_settings()
+        report = await _load_report_for_narrative(db, report_id)
+        if not settings.ANTHROPIC_API_KEY:
+            section.status = SectionStatus.SKIPPED
+            section.error = "AI narratives disabled: ANTHROPIC_API_KEY is not configured"
+            await db.commit()
+            return
+        spent = float(report.total_cost_usd or 0)
+        if spent >= settings.REPORTS_MAX_COST_USD:
+            section.status = SectionStatus.SKIPPED
+            section.error = (
+                f"Budget exhausted: ${spent:.2f} spent of "
+                f"${settings.REPORTS_MAX_COST_USD:.2f} allowed"
+            )
+            await db.commit()
+            return
+
+        section.status = SectionStatus.GENERATING
+        section.error = None
+        await db.commit()
+
+        started = _utcnow()
+        try:
+            spec = get_report_type(report.report_type)
+            result_obj = await narrative_service.generate(report, spec, section_spec)
+            section.narrative_json = result_obj.narrative_json
+            section.narrative_text = result_obj.narrative_text
+            if result_obj.data is not None:
+                section.data = result_obj.data
+            section.llm_model = result_obj.model
+            section.prompt_version = result_obj.prompt_version
+            section.input_tokens = result_obj.input_tokens
+            section.output_tokens = result_obj.output_tokens
+            cost = Decimal(str(round(result_obj.cost_usd, 6)))
+            section.cost_usd = cost
+            section.status = SectionStatus.GENERATED
+            section.generated_at = _utcnow()
+            section.duration_ms = int((_utcnow() - started).total_seconds() * 1000)
+            # SQL-side accumulation: safe even if narratives ever run concurrently.
+            await db.execute(
+                update(Report)
+                .where(Report.id == report_id)
+                .values(
+                    total_cost_usd=func.coalesce(Report.total_cost_usd, 0) + cost,
+                    total_input_tokens=func.coalesce(Report.total_input_tokens, 0)
+                    + result_obj.input_tokens,
+                    total_output_tokens=func.coalesce(Report.total_output_tokens, 0)
+                    + result_obj.output_tokens,
+                )
+            )
+        except Exception as exc:
+            logger.error(
+                "report_narrative_failed",
+                report_id=report_id,
+                section=section_spec.key,
+                error=str(exc),
+                exc_info=True,
+            )
+            section.status = SectionStatus.FAILED
+            section.error = str(exc)[:2000]
+        await db.commit()
+
+
+async def _load_report_for_narrative(db, report_id: int) -> Report:
+    result = await db.execute(
+        select(Report)
+        .options(
+            selectinload(Report.sections),
+            selectinload(Report.windfarm),
+            selectinload(Report.portfolio),
+        )
+        .where(Report.id == report_id)
+    )
+    return result.scalar_one()
+
+
+async def mark_pass2_stale(report_id: int) -> None:
+    """A Pass-1 section changed — flag generated Pass-2 sections as STALE."""
+    factory = get_session_factory()
+    async with factory() as db:
+        await db.execute(
+            update(ReportSection)
+            .where(
+                ReportSection.report_id == report_id,
+                ReportSection.pass_number == 2,
+                ReportSection.status == SectionStatus.GENERATED,
+            )
+            .values(status=SectionStatus.STALE)
+        )
+        await db.commit()
+
+
 async def _build_context(db, report_id: int) -> ReportContext:
     result = await db.execute(
         select(Report)
@@ -170,13 +300,19 @@ async def _finalize(report_id: int) -> None:
         if report is None:
             return
 
-        ran = [s for s in report.sections if s.pass_number == 1]
-        failed = [s for s in ran if s.status == SectionStatus.FAILED]
-        generated = [s for s in ran if s.status == SectionStatus.GENERATED]
+        # STALE still carries generated content — it only awaits a refresh.
+        generated = [
+            s for s in report.sections if s.status in (SectionStatus.GENERATED, SectionStatus.STALE)
+        ]
+        incomplete = [
+            s
+            for s in report.sections
+            if s.status in (SectionStatus.FAILED, SectionStatus.SKIPPED, SectionStatus.UNGENERATED)
+        ]
         if not generated:
             report.status = ReportStatus.FAILED
             report.error = "All sections failed"
-        elif failed:
+        elif incomplete:
             report.status = ReportStatus.PARTIAL
         else:
             report.status = ReportStatus.COMPLETE
