@@ -19,7 +19,7 @@ def render(report: Report, tmp_dir: Path) -> Path:
     scope_name = report.windfarm.name if report.windfarm is not None else report.title
     subtitle = (
         f"Opportunity assessment · {report.period_start:%d %b %Y} – {report.period_end:%d %b %Y}"
-        f" · generated {datetime.now(timezone.utc):%d %b %Y}"
+        f" · generated {datetime.now(timezone.utc):%d %b %Y} · v{report.version}"
     )
     pdf = PdfBuilder(f"{scope_name} — Opportunity Report", subtitle=subtitle)
 

@@ -153,6 +153,12 @@ class Report(Base):
         ),
     )
 
+    @property
+    def is_frozen(self) -> bool:
+        """Retain-on-export: once a version's PDF left the platform (or it was
+        explicitly locked), its content and stored artifact never change."""
+        return self.locked or self.pdf_downloaded_at is not None
+
     def __repr__(self) -> str:
         return (
             f"<Report(id={self.id}, type={self.report_type}, wf={self.windfarm_id}, "

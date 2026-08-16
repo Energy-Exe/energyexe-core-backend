@@ -260,7 +260,13 @@ class ReportService:
     async def _version_chain(self, report: Report) -> List[Report]:
         """All retained versions for the same target + type + period."""
         result = await self.db.execute(
-            select(Report).where(
+            select(Report)
+            .options(
+                selectinload(Report.windfarm).selectinload(Windfarm.bidzone),
+                selectinload(Report.windfarm).selectinload(Windfarm.country),
+                selectinload(Report.portfolio),
+            )
+            .where(
                 Report.report_type == report.report_type,
                 Report.windfarm_id == report.windfarm_id,
                 Report.portfolio_id == report.portfolio_id,
@@ -270,6 +276,17 @@ class ReportService:
             )
         )
         return list(result.scalars().all())
+
+    async def version_history(self, report_id: int, user: User) -> List[Report]:
+        """The report's whole retained version chain, newest first.
+
+        Superseded versions survive only if they were exported or locked
+        (retain-on-export pruning), so this is exactly the set of documents
+        that may exist outside the platform, plus the live version.
+        """
+        report = await self.get_report(report_id, user)
+        chain = await self._version_chain(report)
+        return sorted(chain, key=lambda r: r.version, reverse=True)
 
     async def mark_pdf_downloaded(self, report: Report) -> None:
         if report.pdf_downloaded_at is None:

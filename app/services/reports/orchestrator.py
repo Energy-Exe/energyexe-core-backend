@@ -323,23 +323,48 @@ async def _finalize(report_id: int) -> None:
             await _render_and_store_pdf(db, report)
 
 
+def pdf_is_stale(report: Report) -> bool:
+    """The stored artifact predates a section change (or doesn't exist)."""
+    if report.pdf_s3_key is None or report.pdf_generated_at is None:
+        return True
+    newest = max(
+        (
+            s.generated_at
+            for s in report.sections
+            if s.generated_at is not None
+            and s.status in (SectionStatus.GENERATED, SectionStatus.STALE)
+        ),
+        default=None,
+    )
+    return newest is not None and report.pdf_generated_at < newest
+
+
 async def _render_and_store_pdf(db, report: Report) -> None:
     """Render the PDF from the stored sections and upload it to S3.
 
     A PDF failure never fails the report — the download endpoint falls back
-    to an on-demand render.
+    to an on-demand render. A frozen version's stored artifact is never
+    overwritten (retain-on-export: exported bytes stay exported).
     """
     from app.services.reports.pdf import render_report_pdf
 
+    if report.is_frozen and report.pdf_s3_key is not None:
+        logger.info("report_pdf_frozen_skip", report_id=report.id, version=report.version)
+        return
     try:
         with tempfile.TemporaryDirectory(prefix="report-pdf-") as tmp:
             pdf_path = await asyncio.to_thread(render_report_pdf, report, Path(tmp))
             slug = f"{report.report_type}-{report.windfarm_id or report.portfolio_id}"
             key = f"reports/{report.id}/v{report.version}/{slug}.pdf"
-            await s3_service.upload_file(key, pdf_path, content_type="application/pdf")
-        report.pdf_s3_key = key
-        report.pdf_generated_at = _utcnow()
-        await db.commit()
+            stored = await s3_service.upload_file(key, pdf_path, content_type="application/pdf")
+        if stored:
+            report.pdf_s3_key = stored
+            report.pdf_generated_at = _utcnow()
+            await db.commit()
+        else:
+            # S3 disabled (local dev) — recording a key nothing was stored
+            # under would poison downloads; the endpoint renders on demand.
+            logger.info("report_pdf_not_stored_s3_disabled", report_id=report.id)
     except Exception as exc:
         logger.error("report_pdf_render_failed", report_id=report.id, error=str(exc), exc_info=True)
 

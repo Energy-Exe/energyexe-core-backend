@@ -216,6 +216,57 @@ class TestOpportunityPdf:
         assert out.read_bytes()[:5] == b"%PDF-"
 
 
+class TestRetainOnExport:
+    def _report(self, **kw) -> Report:
+        fields = dict(
+            report_type="opportunity",
+            scope_type="windfarm",
+            windfarm_id=1,
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+            version=1,
+            status=ReportStatus.COMPLETE,
+            title="t",
+            requested_by_id=1,
+            locked=False,
+        )
+        fields.update(kw)
+        report = Report(**fields)
+        report.sections = []
+        return report
+
+    def test_frozen_on_export_or_lock(self):
+        assert self._report().is_frozen is False
+        assert self._report(pdf_downloaded_at=datetime(2026, 8, 17)).is_frozen is True
+        assert self._report(locked=True).is_frozen is True
+
+    def test_pdf_staleness_predicate(self):
+        from app.services.reports.orchestrator import pdf_is_stale
+
+        report = self._report()
+        assert pdf_is_stale(report) is True  # no artifact at all
+
+        report.pdf_s3_key = "reports/1/v1/x.pdf"
+        report.pdf_generated_at = datetime(2026, 8, 17, 12, 0)
+        report.sections = [
+            ReportSection(
+                section_key="findings",
+                status=SectionStatus.GENERATED,
+                pass_number=1,
+                display_order=1,
+                generated_at=datetime(2026, 8, 17, 11, 0),
+            )
+        ]
+        assert pdf_is_stale(report) is False  # artifact newer than sections
+
+        report.sections[0].generated_at = datetime(2026, 8, 17, 13, 0)
+        assert pdf_is_stale(report) is True  # section regenerated after render
+
+        # FAILED sections never make the artifact stale
+        report.sections[0].status = SectionStatus.FAILED
+        assert pdf_is_stale(report) is False
+
+
 class TestFactCheck:
     def test_rounded_and_scaled_values_verify(self):
         from app.services.reports import fact_check as fc

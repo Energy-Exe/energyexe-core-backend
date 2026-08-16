@@ -35,14 +35,23 @@ from app.services.reports.service import ReportInFlightError, ReportService
 logger = structlog.get_logger()
 router = APIRouter()
 
+# Retain-on-export: once a version's PDF was downloaded (or the version was
+# locked), its content is immutable — regeneration must go through a new version.
+_FROZEN_MESSAGE = (
+    "This version has been exported and is frozen — use Re-run to create a new version"
+)
+
 
 # ── serialization helpers ───────────────────────────────────────────────
 
 
 def _pdf_available(report: Report) -> bool:
+    # SUPERSEDED rows only survive retain-on-export pruning when they were
+    # exported — retained history is always downloadable.
     return report.pdf_s3_key is not None or report.status in (
         ReportStatus.COMPLETE,
         ReportStatus.PARTIAL,
+        ReportStatus.SUPERSEDED,
     )
 
 
@@ -61,6 +70,8 @@ def _to_summary(service: ReportService, report: Report) -> ReportSummary:
         title=report.title,
         pdf_available=_pdf_available(report),
         locked=report.locked,
+        frozen=report.is_frozen,
+        pdf_downloaded_at=report.pdf_downloaded_at,
         requested_by_id=report.requested_by_id,
         created_at=report.created_at,
     )
@@ -108,6 +119,8 @@ def _to_response(service: ReportService, report: Report) -> ReportResponse:
         title=report.title,
         pdf_available=_pdf_available(report),
         locked=report.locked,
+        frozen=report.is_frozen,
+        pdf_downloaded_at=report.pdf_downloaded_at,
         requested_by_id=report.requested_by_id,
         requested_by_name=requested_by_name,
         total_cost_usd=float(report.total_cost_usd or 0),
@@ -238,6 +251,19 @@ async def get_report_status(
     )
 
 
+@router.get("/{report_id}/versions", response_model=List[ReportSummary])
+async def get_report_versions(
+    report_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The retained version chain, newest first (retain-on-export): the live
+    version plus every superseded version whose PDF left the platform."""
+    service = ReportService(db)
+    chain = await service.version_history(report_id, current_user)
+    return [_to_summary(service, r) for r in chain]
+
+
 @router.post("/{report_id}/generate", response_model=ReportResponse, status_code=202)
 async def generate_all_sections(
     report_id: int,
@@ -249,6 +275,8 @@ async def generate_all_sections(
     report = await service.get_report(report_id, current_user)
     if report.status in (ReportStatus.PENDING, ReportStatus.GENERATING):
         raise HTTPException(status.HTTP_409_CONFLICT, "Report is already generating")
+    if report.is_frozen:
+        raise HTTPException(status.HTTP_409_CONFLICT, _FROZEN_MESSAGE)
     report.status = ReportStatus.GENERATING
     await db.commit()
     orchestrator.start(report.id)
@@ -275,6 +303,8 @@ async def generate_section(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not part of this report")
     if row.status == SectionStatus.GENERATING:
         raise HTTPException(status.HTTP_409_CONFLICT, "Section is already generating")
+    if report.is_frozen:
+        raise HTTPException(status.HTTP_409_CONFLICT, _FROZEN_MESSAGE)
     if section_spec.pass_number == 2:
         # EPR-84: the executive summary unlocks only once Pass 1 is complete.
         missing = [
@@ -329,15 +359,29 @@ async def download_report_pdf(
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Stream the stored PDF (renders on demand if no artifact exists yet)."""
+    """Stream the stored PDF (renders on demand if no artifact exists yet).
+
+    A live version whose sections changed since the artifact was stored is
+    re-rendered before its bytes leave the platform; a frozen version always
+    serves the exact bytes that were exported.
+    """
     service = ReportService(db)
     report = await service.get_report(report_id, current_user)
+
+    if not report.is_frozen and orchestrator.pdf_is_stale(report) and report.pdf_s3_key:
+        await orchestrator._render_and_store_pdf(db, report)
 
     content: Optional[bytes] = None
     if report.pdf_s3_key:
         content = await s3_service.download_file(report.pdf_s3_key)
     if content is None:
-        if report.status not in (ReportStatus.COMPLETE, ReportStatus.PARTIAL):
+        # SUPERSEDED versions reaching this endpoint are retained (exported)
+        # history — they must stay downloadable even without a stored artifact.
+        if report.status not in (
+            ReportStatus.COMPLETE,
+            ReportStatus.PARTIAL,
+            ReportStatus.SUPERSEDED,
+        ):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Report has no content to render yet")
         content = await orchestrator.render_pdf_on_demand(report)
     if content is None:

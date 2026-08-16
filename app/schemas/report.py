@@ -68,6 +68,8 @@ class ReportResponse(BaseModel):
     title: str
     pdf_available: bool = False
     locked: bool = False
+    frozen: bool = False  # exported (or locked) — content and PDF are immutable
+    pdf_downloaded_at: Optional[datetime] = None
     requested_by_id: int
     requested_by_name: Optional[str] = None
     total_cost_usd: float = 0
@@ -96,6 +98,8 @@ class ReportSummary(BaseModel):
     title: str
     pdf_available: bool = False
     locked: bool = False
+    frozen: bool = False  # exported (or locked) — content and PDF are immutable
+    pdf_downloaded_at: Optional[datetime] = None
     requested_by_id: int
     created_at: datetime
 
