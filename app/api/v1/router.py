@@ -41,6 +41,7 @@ from app.api.v1.endpoints import (
     raw_data_fetch,
     regions,
     report_commentary,
+    reports,
     scada,
     states,
     structural_constraints,
@@ -186,6 +187,9 @@ api_router.include_router(
 
 # SCADA portal (14-chart dashboard over gold schema `scada`; 503s until the schema exists)
 api_router.include_router(scada.router, prefix="/scada", tags=["scada"])
+
+# Reports platform (EPR-81/82 — generated reports store + async two-pass pipeline)
+api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 
 # Legacy endpoints - commented out as they're replaced by unified generation endpoints
 # api_router.include_router(entsoe.router, prefix="/entsoe", tags=["entsoe"])
