@@ -117,6 +117,99 @@ resource "aws_cloudwatch_metric_alarm" "glitchtip_no_healthy_hosts" {
   ok_actions    = [aws_sns_topic.alerts.arn]
 }
 
+# --- Backend: task memory ---
+#
+# Declared here to match what is already live. These four alarms were created
+# out-of-band and existed in state with no configuration, so every untargeted
+# `terraform apply` planned to DESTROY them — including this one, which is the
+# only thing watching the known backend memory leak. Re-declared from the live
+# definitions so `terraform plan` is clean and `-target` is no longer required.
+resource "aws_cloudwatch_metric_alarm" "backend_memory_high" {
+  alarm_name          = "${local.name}-memory-high"
+  alarm_description   = "Backend task memory >90% for 15 min — OOM-kill / restart risk. Bump task_memory or decouple the pipeline."
+  namespace           = "AWS/ECS"
+  metric_name         = "MemoryUtilization"
+  statistic           = "Average"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 90
+  period              = 300
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    ClusterName = aws_ecs_cluster.this.name
+    ServiceName = aws_ecs_service.api.name
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+}
+
+# --- RDS ---
+#
+# The prod instance is console-managed, not Terraform-managed (see infra/README),
+# so these reference it by identifier rather than by resource attribute.
+locals {
+  rds_instance_identifier = "energyexedb"
+}
+
+resource "aws_cloudwatch_metric_alarm" "rds_cpu_high" {
+  alarm_name          = "${local.name}-rds-cpu-high"
+  alarm_description   = "energyexedb CPU >90% for 1h — pipeline overrun or a runaway query starving the live API."
+  namespace           = "AWS/RDS"
+  metric_name         = "CPUUtilization"
+  statistic           = "Average"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 90
+  period              = 300
+  evaluation_periods  = 12
+  datapoints_to_alarm = 12
+  treat_missing_data  = "notBreaching"
+
+  dimensions    = { DBInstanceIdentifier = local.rds_instance_identifier }
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "rds_low_memory" {
+  alarm_name          = "${local.name}-rds-low-memory"
+  alarm_description   = "energyexedb freeable memory <512 MB — risk of swapping / dropped connections."
+  namespace           = "AWS/RDS"
+  metric_name         = "FreeableMemory"
+  statistic           = "Minimum"
+  comparison_operator = "LessThanThreshold"
+  threshold           = 536870912 # 512 MB
+  period              = 300
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  treat_missing_data  = "notBreaching"
+
+  dimensions    = { DBInstanceIdentifier = local.rds_instance_identifier }
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+}
+
+# treat_missing_data = "breaching" here (unlike the others): FreeStorageSpace is
+# emitted continuously, so a gap means the instance stopped reporting — itself
+# worth knowing about.
+resource "aws_cloudwatch_metric_alarm" "rds_low_storage" {
+  alarm_name          = "${local.name}-rds-low-storage"
+  alarm_description   = "energyexedb free storage <25 GB — check growth / confirm storage autoscaling raises the ceiling."
+  namespace           = "AWS/RDS"
+  metric_name         = "FreeStorageSpace"
+  statistic           = "Minimum"
+  comparison_operator = "LessThanThreshold"
+  threshold           = 26843545600 # 25 GB
+  period              = 300
+  evaluation_periods  = 1
+  treat_missing_data  = "breaching"
+
+  dimensions    = { DBInstanceIdentifier = local.rds_instance_identifier }
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+}
+
 output "alerts_sns_topic_arn" {
   description = "SNS topic CloudWatch alarms publish to."
   value       = aws_sns_topic.alerts.arn
