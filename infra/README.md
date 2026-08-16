@@ -16,10 +16,11 @@ Internet ──► ALB (:80/:443) ──► Fargate task (uvicorn :8001, 1 worke
 
 Key design decisions (see inline comments for detail):
 
-- **`desired_count = 1`, deploys stop-then-start** — APScheduler runs inside the
-  app process; two tasks = every cron fires twice. Accepts ~1–2 min downtime per
-  deploy. If horizontal scaling is ever needed, move scheduling to EventBridge →
-  the existing `/import-jobs/trigger/...` endpoints first.
+- **`desired_count = 1`, deploys stop-then-start** — the nightly performance
+  pipeline still runs on in-process APScheduler; two tasks = it fires twice.
+  Accepts ~1–2 min downtime per deploy. Moving that job to a scheduled ECS task
+  is the remaining prerequisite for horizontal scaling; the data imports no
+  longer stand in the way (see below).
 - **One uvicorn worker** (task def overrides the Dockerfile's `--workers 4`) —
   each worker runs the lifespan and would start its own scheduler.
 - **`alembic upgrade head` runs in the container command** before uvicorn starts.
@@ -35,6 +36,22 @@ Key design decisions (see inline comments for detail):
 
 Estimated cost: ~$45–50/mo for the task (1 vCPU / 4 GB) + ~$20/mo ALB
 + ~$6–7/mo Valkey ≈ **$75/mo total**.
+
+## Scheduled jobs live here, not in GitHub Actions
+
+`scheduled_imports.tf` owns every recurring data import: an EventBridge rule per
+job → one Lambda → `POST /api/v1/import-jobs/trigger/{job_name}`, with retries
+and an SQS DLQ that alarms. Adding a job means adding one entry to
+`local.import_schedules`; rule, target and Lambda permission fan out from it.
+
+This replaced GitHub Actions `schedule:` on 2026-08-17. **Do not add a
+`schedule:` block to a workflow** — GitHub's scheduler is best-effort and was
+dropping 15–60% of the hourly Taipower runs and delaying every daily import by
+21–80 minutes. Rationale, measurements and the API-Destination footgun are in
+the header comment of `scheduled_imports.tf` and in `.github/workflows/README.md`.
+
+The one job not yet here is the nightly performance pipeline
+(`app/cron/pipeline_daily.py`, 03:00 UTC), still scheduled in-process.
 
 ## Bootstrap (first deploy)
 

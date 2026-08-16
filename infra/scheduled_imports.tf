@@ -5,10 +5,16 @@
 # 2026-08-04..08-11, the hourly Taipower trigger fired on only 9-20 of 24 hours
 # per day (15-60% dropped), with delays up to 3h17m.
 #
-# That is tolerable for the daily/monthly imports, which pull a *dated* window
-# and catch up on the next run. It is NOT tolerable for Taipower: the API serves
-# only the CURRENT snapshot (no historical endpoint), stamped on the hour, so a
-# missed run is an hour of Taiwan generation lost permanently.
+# Taipower moved here first because it is the one that cannot self-heal: the API
+# serves only the CURRENT snapshot (no historical endpoint), stamped on the hour,
+# so a missed run is an hour of Taiwan generation lost permanently. The dated
+# imports do catch up on the next run, but they were still landing 21-80 MINUTES
+# late on every single run (measured 2026-08-14..08-16), and the 06/07/08/09
+# spacing is not cosmetic — the backend runs one task with one worker and
+# execute_job blocks on subprocess.run, so an hour of separation is what stops
+# two imports stalling each other. Under GitHub that separation was luck; here it
+# is guaranteed. So all of them now live in this file and nothing schedules work
+# from outside AWS.
 #
 # WHY A LAMBDA SHIM AND NOT AN API DESTINATION: this was first built as
 # EventBridge -> API Destination -> the trigger endpoint, and that fails.
@@ -28,11 +34,49 @@
 # recovery, and the scheduler would share a failure domain with the service it
 # triggers.
 #
-# The remaining GitHub crons (entsoe/elexon/eia/ecb + the price imports) stay
-# where they are — they self-heal on the next run.
-
 locals {
   scheduled_imports_enabled = var.api_domain == "" ? 0 : 1
+
+  # Every scheduled import, keyed by the job_name the trigger endpoint expects —
+  # the key is passed straight through to the Lambda as {"job_name": <key>}.
+  # Adding a job here is the whole change: rule, target and permission all fan
+  # out from this map.
+  #
+  # Times match app/services/import_job_service.py::_calculate_next_run, so the
+  # admin /import-jobs "next run" column stays truthful. Keep them in sync.
+  #
+  # EventBridge cron is 6 fields (min hour day-of-month month day-of-week year)
+  # and exactly one of day-of-month / day-of-week must be "?".
+  import_schedules = local.scheduled_imports_enabled == 0 ? {} : {
+    "taipower-hourly" = {
+      expression  = "cron(5 * * * ? *)"
+      description = "Hourly Taipower snapshot — current-snapshot API, a missed hour is unrecoverable."
+    }
+    "entsoe-daily" = {
+      expression  = "cron(0 6 * * ? *)"
+      description = "Daily ENTSOE generation import (06:00 UTC)."
+    }
+    "elexon-daily" = {
+      expression  = "cron(0 7 * * ? *)"
+      description = "Daily Elexon generation import (07:00 UTC)."
+    }
+    "entsoe-prices-daily" = {
+      expression  = "cron(0 8 * * ? *)"
+      description = "Daily ENTSOE day-ahead price import (08:00 UTC, after the 06:00 generation run)."
+    }
+    "elexon-prices-daily" = {
+      expression  = "cron(0 9 * * ? *)"
+      description = "Daily Elexon market index price import (09:00 UTC, after the 07:00 generation run)."
+    }
+    "eia-monthly" = {
+      expression  = "cron(0 2 1 * ? *)"
+      description = "Monthly EIA import (02:00 UTC on the 1st)."
+    }
+    "ecb-rates-daily" = {
+      expression  = "cron(0 15 ? * MON-FRI *)"
+      description = "ECB exchange rates on weekdays (15:00 UTC, after the 14:15 CET publication)."
+    }
+  }
 }
 
 # --- Lambda: calls the trigger endpoint and waits for the real result --------
@@ -87,34 +131,50 @@ resource "aws_lambda_function_event_invoke_config" "trigger_import" {
   }
 }
 
-# --- Schedule ---------------------------------------------------------------
+# --- Schedules --------------------------------------------------------------
 #
-# :05 keeps the historical slot and leaves the top of the hour clear of the
-# 06/07/08/09 daily imports (the backend runs one task with --workers 1 and
-# blocks on subprocess.run, so overlapping imports stall each other).
-resource "aws_cloudwatch_event_rule" "taipower_hourly" {
-  count               = local.scheduled_imports_enabled
-  name                = "${local.name}-taipower-hourly"
-  description         = "Hourly Taipower snapshot import (replaces the dropped GitHub cron)."
-  schedule_expression = "cron(5 * * * ? *)"
+# Taipower runs at :05 rather than :00 to keep the top of the hour clear of the
+# 06/07/08/09 daily imports, for the single-worker reason described above.
+resource "aws_cloudwatch_event_rule" "import" {
+  for_each            = local.import_schedules
+  name                = "${local.name}-${each.key}"
+  description         = each.value.description
+  schedule_expression = each.value.expression
   state               = "ENABLED"
 }
 
-resource "aws_cloudwatch_event_target" "taipower_hourly" {
-  count     = local.scheduled_imports_enabled
-  rule      = aws_cloudwatch_event_rule.taipower_hourly[0].name
-  target_id = "taipower-hourly-lambda"
+resource "aws_cloudwatch_event_target" "import" {
+  for_each  = local.import_schedules
+  rule      = aws_cloudwatch_event_rule.import[each.key].name
+  target_id = "${each.key}-lambda"
   arn       = aws_lambda_function.trigger_import[0].arn
-  input     = jsonencode({ job_name = "taipower-hourly" })
+  input     = jsonencode({ job_name = each.key })
 }
 
-resource "aws_lambda_permission" "taipower_hourly" {
-  count         = local.scheduled_imports_enabled
-  statement_id  = "AllowExecutionFromEventBridgeTaipower"
+resource "aws_lambda_permission" "import" {
+  for_each      = local.import_schedules
+  statement_id  = "AllowExecutionFromEventBridge-${each.key}"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.trigger_import[0].function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.taipower_hourly[0].arn
+  source_arn    = aws_cloudwatch_event_rule.import[each.key].arn
+}
+
+# Taipower was these resources before the map existed. Without these `moved`
+# blocks Terraform would destroy and recreate the live hourly rule.
+moved {
+  from = aws_cloudwatch_event_rule.taipower_hourly[0]
+  to   = aws_cloudwatch_event_rule.import["taipower-hourly"]
+}
+
+moved {
+  from = aws_cloudwatch_event_target.taipower_hourly[0]
+  to   = aws_cloudwatch_event_target.import["taipower-hourly"]
+}
+
+moved {
+  from = aws_lambda_permission.taipower_hourly[0]
+  to   = aws_lambda_permission.import["taipower-hourly"]
 }
 
 # --- Dead letter queue ------------------------------------------------------
@@ -189,7 +249,7 @@ output "trigger_import_lambda" {
   value       = local.scheduled_imports_enabled == 0 ? "" : aws_lambda_function.trigger_import[0].function_name
 }
 
-output "taipower_schedule_rule" {
-  description = "EventBridge rule driving the hourly Taipower import."
-  value       = local.scheduled_imports_enabled == 0 ? "" : aws_cloudwatch_event_rule.taipower_hourly[0].name
+output "import_schedule_rules" {
+  description = "EventBridge rules driving the scheduled imports, keyed by job name."
+  value       = { for k, r in aws_cloudwatch_event_rule.import : k => r.schedule_expression }
 }
