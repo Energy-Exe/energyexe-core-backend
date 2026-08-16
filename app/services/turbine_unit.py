@@ -1,13 +1,23 @@
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
-from app.models.turbine_unit import TurbineUnit
 from app.models.turbine_model import TurbineModel
-from app.schemas.turbine_unit import TurbineUnitCreate, TurbineUnitUpdate
+from app.models.turbine_unit import TurbineUnit
+from app.models.windfarm import Windfarm
+from app.schemas.turbine_unit import TurbineUnitBulkError, TurbineUnitCreate, TurbineUnitUpdate
+
+
+class TurbineUnitBulkValidationError(Exception):
+    """Raised when bulk create fails validation; carries per-row errors."""
+
+    def __init__(self, errors: List[TurbineUnitBulkError]):
+        self.errors = errors
+        super().__init__(f"{len(errors)} row(s) failed validation")
 
 
 class TurbineUnitService:
@@ -68,6 +78,111 @@ class TurbineUnitService:
         return await TurbineUnitService.get_turbine_unit(db, db_turbine_unit.id)
 
     @staticmethod
+    async def bulk_create_turbine_units(
+        db: AsyncSession, turbines: List[TurbineUnitCreate]
+    ) -> List[TurbineUnit]:
+        """Create many turbine units atomically: validate every row first, then one commit.
+
+        Raises TurbineUnitBulkValidationError (with per-row errors) without writing
+        anything if any row is invalid.
+        """
+        errors: List[TurbineUnitBulkError] = []
+
+        # Duplicate codes within the payload itself
+        seen: Dict[str, int] = {}
+        for i, t in enumerate(turbines):
+            if t.code in seen:
+                errors.append(
+                    TurbineUnitBulkError(
+                        index=i,
+                        code=t.code,
+                        field="code",
+                        message=f"Duplicate code in request (first used at row {seen[t.code] + 1})",
+                    )
+                )
+            else:
+                seen[t.code] = i
+
+        # Codes that already exist (code is globally unique) — one query
+        existing_result = await db.execute(
+            select(TurbineUnit.code).where(TurbineUnit.code.in_(seen.keys()))
+        )
+        existing_codes = set(existing_result.scalars().all())
+        for i, t in enumerate(turbines):
+            if t.code in existing_codes:
+                errors.append(
+                    TurbineUnitBulkError(
+                        index=i,
+                        code=t.code,
+                        field="code",
+                        message="TurbineUnit with this code already exists",
+                    )
+                )
+
+        # FK existence
+        windfarm_ids = {t.windfarm_id for t in turbines}
+        model_ids = {t.turbine_model_id for t in turbines}
+        found_windfarms = set(
+            (await db.execute(select(Windfarm.id).where(Windfarm.id.in_(windfarm_ids)))).scalars()
+        )
+        found_models = set(
+            (
+                await db.execute(select(TurbineModel.id).where(TurbineModel.id.in_(model_ids)))
+            ).scalars()
+        )
+        for i, t in enumerate(turbines):
+            if t.windfarm_id not in found_windfarms:
+                errors.append(
+                    TurbineUnitBulkError(
+                        index=i,
+                        code=t.code,
+                        field="windfarm_id",
+                        message=f"Windfarm {t.windfarm_id} does not exist",
+                    )
+                )
+            if t.turbine_model_id not in found_models:
+                errors.append(
+                    TurbineUnitBulkError(
+                        index=i,
+                        code=t.code,
+                        field="turbine_model_id",
+                        message=f"Turbine model {t.turbine_model_id} does not exist",
+                    )
+                )
+
+        if errors:
+            raise TurbineUnitBulkValidationError(errors)
+
+        db_units = [TurbineUnit(**t.model_dump()) for t in turbines]
+        db.add_all(db_units)
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Covers the check-then-insert race on the unique code constraint.
+            await db.rollback()
+            raise TurbineUnitBulkValidationError(
+                [
+                    TurbineUnitBulkError(
+                        index=0,
+                        field="code",
+                        message="One or more codes were created concurrently; refresh and retry",
+                    )
+                ]
+            )
+
+        # Re-fetch with relations eager-loaded so the TurbineUnit response_model can
+        # serialize `windfarm`/`turbine_model` without triggering an async lazy load
+        # (MissingGreenlet). ids are populated post-commit (expire_on_commit=False).
+        ids = [u.id for u in db_units]
+        result = await db.execute(
+            select(TurbineUnit)
+            .options(selectinload(TurbineUnit.windfarm), selectinload(TurbineUnit.turbine_model))
+            .where(TurbineUnit.id.in_(ids))
+            .order_by(TurbineUnit.code)
+        )
+        return result.scalars().all()
+
+    @staticmethod
     async def update_turbine_unit(
         db: AsyncSession, turbine_unit_id: int, turbine_unit_update: TurbineUnitUpdate
     ) -> Optional[TurbineUnit]:
@@ -119,12 +234,9 @@ class TurbineUnitService:
         limit: int = 100,
     ) -> List[TurbineUnit]:
         """Get turbine units with optional filters."""
-        query = (
-            select(TurbineUnit)
-            .options(
-                selectinload(TurbineUnit.windfarm),
-                selectinload(TurbineUnit.turbine_model),
-            )
+        query = select(TurbineUnit).options(
+            selectinload(TurbineUnit.windfarm),
+            selectinload(TurbineUnit.turbine_model),
         )
 
         # Build filter conditions
@@ -191,9 +303,8 @@ class TurbineUnitService:
         avg_hub_height = hub_height_result.scalar()
 
         # Count by status
-        status_query = (
-            select(TurbineUnit.status, func.count(TurbineUnit.id))
-            .group_by(TurbineUnit.status)
+        status_query = select(TurbineUnit.status, func.count(TurbineUnit.id)).group_by(
+            TurbineUnit.status
         )
         if conditions:
             # For status count, we exclude the status filter

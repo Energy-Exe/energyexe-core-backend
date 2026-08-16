@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -66,3 +66,19 @@ class TurbineUnit(TurbineUnitBase):
 
     class Config:
         from_attributes = True
+
+
+class TurbineUnitBulkCreate(BaseModel):
+    turbines: List[TurbineUnitCreate] = Field(..., min_length=1, max_length=500)
+
+
+class TurbineUnitBulkError(BaseModel):
+    index: int  # 0-based index into the request's turbines[] list
+    code: Optional[str] = None
+    field: Optional[str] = None  # "code" | "windfarm_id" | "turbine_model_id"
+    message: str
+
+
+class TurbineUnitBulkCreateResult(BaseModel):
+    created: List[TurbineUnit]
+    total: int

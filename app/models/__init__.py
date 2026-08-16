@@ -40,6 +40,7 @@ from .peer_group_aggregate import PeerGroupAggregate
 from .performance_anomaly import PerformanceAnomaly
 from .performance_summary import PerformanceSummary
 from .platform_update import PlatformUpdate
+from .report import Report, ReportScope, ReportSection, ReportStatus, ReportType, SectionStatus
 from .portfolio import Portfolio, PortfolioItem, PortfolioType, UserFavorite
 from .power_curve_bin import PowerCurveBin
 from .ppa import PPA
@@ -133,4 +134,10 @@ __all__ = [
     "PeerGroupAggregate",
     "GenerationConcentrationSummary",
     "ConstraintLossSummary",
+    "Report",
+    "ReportSection",
+    "ReportType",
+    "ReportScope",
+    "ReportStatus",
+    "SectionStatus",
 ]

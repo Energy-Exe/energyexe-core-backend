@@ -40,6 +40,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("brain_agent_repo_setup_failed", error=str(e))
 
+    # Fail report generations orphaned by the previous task's death (EPR-81).
+    # Releases the in-flight unique index so users can retry immediately.
+    try:
+        from app.services.reports.orchestrator import sweep_stuck_reports
+
+        await sweep_stuck_reports()
+    except Exception as e:
+        logger.warning("report_sweeper_failed", error=str(e))
+
     # Start daily pipeline scheduler (PRE-D for spec items 1-6).
     # Opt-in via PIPELINE_DAILY_ENABLED=true so dev machines don't run it.
     try:
