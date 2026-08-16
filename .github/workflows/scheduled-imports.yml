@@ -1,33 +1,16 @@
-name: Scheduled Data Imports
+name: Manual Data Import
+
+# NOT a schedule. Every import is scheduled by EventBridge in AWS —
+# see infra/scheduled_imports.tf (`local.import_schedules`). This workflow is
+# the manual escape hatch: re-running a job by hand, or driving a short backfill
+# with the start/end overrides.
+#
+# GitHub `schedule:` was retired here on 2026-08-17. It is best-effort and was
+# measurably unreliable for this repo: the hourly Taipower trigger fired on only
+# 9-20 of 24 hours per day (15-60% dropped), and every daily import landed
+# 21-80 minutes late. Do not add a `schedule:` block back — put it in Terraform.
 
 on:
-  schedule:
-    # ENTSOE - Daily at 6:00 AM UTC
-    - cron: '0 6 * * *'
-
-    # NOTE: Taipower is NOT scheduled here. It moved to EventBridge
-    # (infra/scheduled_imports.tf, `cron(5 * * * ? *)`) because GitHub's
-    # scheduler dropped 15-60% of the hourly runs, and Taipower's API serves
-    # only the CURRENT snapshot — a missed run is an hour of generation lost
-    # permanently. The dated imports below self-heal on the next run, so they
-    # stay here. Manual runs still work via workflow_dispatch.
-
-    # ELEXON - Daily at 7:00 AM UTC
-    - cron: '0 7 * * *'
-
-    # ENTSOE day-ahead prices - Daily at 8:00 AM UTC
-    - cron: '0 8 * * *'
-
-    # ELEXON market index prices - Daily at 9:00 AM UTC
-    - cron: '0 9 * * *'
-
-    # EIA - Monthly on 1st at 2:00 AM UTC
-    - cron: '0 2 1 * *'
-
-    # ECB Exchange Rates - Daily at 3:00 PM UTC (after ECB publishes at 2:15 PM CET)
-    - cron: '0 15 * * 1-5'
-
-  # Allow manual triggering from GitHub UI
   workflow_dispatch:
     inputs:
       job_name:
@@ -42,170 +25,55 @@ on:
           - elexon-prices-daily
           - eia-monthly
           - ecb-rates-daily
+      start:
+        description: 'Override window start (YYYY-MM-DD, optional)'
+        required: false
+        type: string
+      end:
+        description: 'Override window end (YYYY-MM-DD, inclusive, optional)'
+        required: false
+        type: string
 
 env:
-  # Cutover 2026-06-17: imports now hit AWS Fargate (was the Railway URL).
   API_URL: https://api.energyexe.com
 
 jobs:
-  # ENTSOE Daily Import (runs at 6 AM)
-  entsoe-import:
-    if: github.event.schedule == '0 6 * * *' || github.event.inputs.job_name == 'entsoe-daily'
+  trigger:
+    name: Trigger ${{ github.event.inputs.job_name }}
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger ENTSOE Daily Import
+      - name: Trigger import
         run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ env.API_URL }}/api/v1/import-jobs/trigger/entsoe-daily")
+          url="${{ env.API_URL }}/api/v1/import-jobs/trigger/${{ github.event.inputs.job_name }}"
+          query=""
+          [ -n "${{ github.event.inputs.start }}" ] && query="?start=${{ github.event.inputs.start }}"
+          if [ -n "${{ github.event.inputs.end }}" ]; then
+            [ -n "$query" ] && query="$query&end=${{ github.event.inputs.end }}" \
+                            || query="?end=${{ github.event.inputs.end }}"
+          fi
 
+          response=$(curl -s -w "\n%{http_code}" -X POST "${url}${query}")
           http_code=$(echo "$response" | tail -n1)
           body=$(echo "$response" | sed '$d')
 
           echo "HTTP Status: $http_code"
           echo "Response: $body"
 
+          # A 504 here is the known ALB-idle-timeout false alarm: the import
+          # keeps running server-side and updates its own job row. Check
+          # /import-jobs before assuming it failed, and never blindly retry —
+          # the backend runs a single worker and a retry stacks a second
+          # blocking subprocess on it.
           if [ "$http_code" -ne 200 ]; then
-            echo "❌ Import failed with status $http_code"
+            echo "❌ Trigger returned $http_code"
             exit 1
           fi
 
-          echo "✅ ENTSOE import completed successfully"
-
-  # Taipower Hourly Snapshot — scheduled by EventBridge, not by this workflow.
-  # Kept here so it can still be run by hand via workflow_dispatch.
-  taipower-import:
-    if: github.event.inputs.job_name == 'taipower-hourly'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger Taipower Hourly Snapshot
-        run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ env.API_URL }}/api/v1/import-jobs/trigger/taipower-hourly")
-
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-
-          echo "HTTP Status: $http_code"
-          echo "Response: $body"
-
-          if [ "$http_code" -ne 200 ]; then
-            echo "❌ Import failed with status $http_code"
+          # The endpoint returns 200 with the job row even when the import
+          # itself failed, so the status field is the real signal.
+          if echo "$body" | grep -q '"status":"failed"'; then
+            echo "❌ Job reported failed"
             exit 1
           fi
 
-          echo "✅ Taipower snapshot completed successfully"
-
-  # ELEXON Daily Import (runs at 7 AM)
-  elexon-import:
-    if: github.event.schedule == '0 7 * * *' || github.event.inputs.job_name == 'elexon-daily'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger ELEXON Daily Import
-        run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ env.API_URL }}/api/v1/import-jobs/trigger/elexon-daily")
-
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-
-          echo "HTTP Status: $http_code"
-          echo "Response: $body"
-
-          if [ "$http_code" -ne 200 ]; then
-            echo "❌ Import failed with status $http_code"
-            exit 1
-          fi
-
-          echo "✅ ELEXON import completed successfully"
-
-  # ENTSOE Day-Ahead Prices Daily (runs at 8 AM, after the 6 AM generation import)
-  entsoe-prices-import:
-    if: github.event.schedule == '0 8 * * *' || github.event.inputs.job_name == 'entsoe-prices-daily'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger ENTSOE Prices Daily Import
-        run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ env.API_URL }}/api/v1/import-jobs/trigger/entsoe-prices-daily")
-
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-
-          echo "HTTP Status: $http_code"
-          echo "Response: $body"
-
-          if [ "$http_code" -ne 200 ]; then
-            echo "❌ Import failed with status $http_code"
-            exit 1
-          fi
-
-          echo "✅ ENTSOE prices import completed successfully"
-
-  # ELEXON Market Index Prices Daily (runs at 9 AM, after the 7 AM generation import)
-  elexon-prices-import:
-    if: github.event.schedule == '0 9 * * *' || github.event.inputs.job_name == 'elexon-prices-daily'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger ELEXON Prices Daily Import
-        run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ env.API_URL }}/api/v1/import-jobs/trigger/elexon-prices-daily")
-
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-
-          echo "HTTP Status: $http_code"
-          echo "Response: $body"
-
-          if [ "$http_code" -ne 200 ]; then
-            echo "❌ Import failed with status $http_code"
-            exit 1
-          fi
-
-          echo "✅ ELEXON prices import completed successfully"
-
-  # EIA Monthly Import (runs on 1st of month)
-  eia-import:
-    if: github.event.schedule == '0 2 1 * *' || github.event.inputs.job_name == 'eia-monthly'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger EIA Monthly Import
-        run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ env.API_URL }}/api/v1/import-jobs/trigger/eia-monthly")
-
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-
-          echo "HTTP Status: $http_code"
-          echo "Response: $body"
-
-          if [ "$http_code" -ne 200 ]; then
-            echo "❌ Import failed with status $http_code"
-            exit 1
-          fi
-
-          echo "✅ EIA import completed successfully"
-
-  # ECB Exchange Rates Daily (runs at 3 PM UTC, Mon-Fri)
-  ecb-rates-import:
-    if: github.event.schedule == '0 15 * * 1-5' || github.event.inputs.job_name == 'ecb-rates-daily'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger ECB Rates Daily Import
-        run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ env.API_URL }}/api/v1/import-jobs/trigger/ecb-rates-daily")
-
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-
-          echo "HTTP Status: $http_code"
-          echo "Response: $body"
-
-          if [ "$http_code" -ne 200 ]; then
-            echo "❌ Import failed with status $http_code"
-            exit 1
-          fi
-
-          echo "✅ ECB rates import completed successfully"
+          echo "✅ ${{ github.event.inputs.job_name }} completed"

@@ -42,11 +42,11 @@ locals {
     ANTHROPIC_API_KEY              = "anthropic-api-key"
     BRAIN_AGENT_RO_PASSWORD        = "brain-agent-ro-password"
     BRAIN_AGENT_CLIENT_RO_PASSWORD = "brain-agent-client-ro-password"
-    CDSAPI_KEY              = "cdsapi-key"
-    EIA_API_KEY             = "eia-api-key"
-    ENTSOE_API_KEY          = "entsoe-api-key"
-    GITHUB_TOKEN            = "github-token"
-    RESEND_API_KEY          = "resend-api-key"
+    CDSAPI_KEY                     = "cdsapi-key"
+    EIA_API_KEY                    = "eia-api-key"
+    ENTSOE_API_KEY                 = "entsoe-api-key"
+    GITHUB_TOKEN                   = "github-token"
+    RESEND_API_KEY                 = "resend-api-key"
   }
 }
 
