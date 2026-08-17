@@ -5,7 +5,14 @@ from pathlib import Path
 
 from app.models.report import Report, SectionStatus
 from app.services.reports.pdf.builder import MUTED, SEVERITY_COLORS, PdfBuilder
-from app.services.reports.pdf.charts import severity_bar_chart
+from app.services.reports.pdf.charts import (
+    capture_rate_line_chart,
+    generation_comparison_chart,
+    severity_bar_chart,
+    wind_norm_chart,
+)
+
+_FLAGGED = ("confirmed", "indicative", "watch")
 
 
 def _section(report: Report, key: str):
@@ -13,6 +20,10 @@ def _section(report: Report, key: str):
         if s.section_key == key:
             return s
     return None
+
+
+def _generated(section) -> bool:
+    return section is not None and section.status == SectionStatus.GENERATED and section.data
 
 
 def render(report: Report, tmp_dir: Path) -> Path:
@@ -37,12 +48,27 @@ def render(report: Report, tmp_dir: Path) -> Path:
                     pdf.paragraph(para.strip())
 
     metrics = _section(report, "key_metrics")
-    if metrics is not None and metrics.status == SectionStatus.GENERATED and metrics.data:
+    if _generated(metrics):
         pdf.heading("Key Metrics")
-        pdf.metric_cards(metrics.data.get("cards", []))
+        cards = metrics.data.get("cards", [])
+        # Six cards overflow the fixed-width card row — chunk into rows of <=4.
+        for i in range(0, len(cards), 4):
+            pdf.metric_cards(cards[i : i + 4])
+        if metrics.data.get("previous_label"):
+            pdf.small(f"Deltas vs {metrics.data['previous_label']}.")
+
+    generation = _section(report, "generation_chart")
+    if _generated(generation) and (generation.data.get("series") or {}).get("current", {}).get(
+        "points"
+    ):
+        pdf.heading("Generation")
+        chart_path = generation_comparison_chart(
+            generation.data["series"], tmp_dir / "generation.png"
+        )
+        pdf.image(chart_path, width_in=6.2)
 
     findings = _section(report, "findings")
-    if findings is not None and findings.status == SectionStatus.GENERATED and findings.data:
+    if _generated(findings):
         pdf.heading("Performance Snapshot")
         counts = findings.data.get("severity_counts", {})
         chart_path = severity_bar_chart(counts, tmp_dir / "severity.png")
@@ -73,6 +99,39 @@ def render(report: Report, tmp_dir: Path) -> Path:
         for r in suppressed:
             if r.get("suppression_reason"):
                 pdf.small(f"{r['schema_code']} suppressed: {r['suppression_reason']}")
+
+        # Per-finding evidence for flagged rows (pass/suppressed skipped to
+        # keep the PDF tight). Values are builder-formatted — identical to web.
+        flagged = [
+            r for r in rows if (r.get("severity") or "").lower() in _FLAGGED and r.get("evidence")
+        ]
+        if flagged:
+            pdf.heading("Finding Evidence", level=2)
+            for r in flagged:
+                pdf.heading(f"{r.get('schema_code', '')} — {r.get('display_name', '')}", level=3)
+                if r.get("one_liner"):
+                    pdf.small(r["one_liner"])
+                pdf.table(
+                    ["Metric", "Value"],
+                    [[item.get("label", ""), item.get("value", "")] for item in r["evidence"]],
+                )
+                for note in r.get("notes") or []:
+                    pdf.small(note)
+                period = r.get("detection_period") or {}
+                if period.get("start") and period.get("end"):
+                    pdf.small(f"Detected over {period['start']} – {period['end']}.")
+
+    wind_norm = _section(report, "wind_norm_chart")
+    if _generated(wind_norm) and (wind_norm.data.get("series") or {}).get("points"):
+        pdf.heading("Wind-Normalised Performance")
+        chart_path = wind_norm_chart(wind_norm.data["series"], tmp_dir / "wind_norm.png")
+        pdf.image(chart_path, width_in=6.2)
+
+    capture = _section(report, "capture_rate_chart")
+    if _generated(capture) and (capture.data.get("series") or {}).get("points"):
+        pdf.heading("Capture Rate Trend")
+        chart_path = capture_rate_line_chart(capture.data["series"], tmp_dir / "capture_rate.png")
+        pdf.image(chart_path, width_in=6.2)
 
     action_plan = _section(report, "action_plan")
     if action_plan is not None and (action_plan.narrative_json or action_plan.narrative_text):

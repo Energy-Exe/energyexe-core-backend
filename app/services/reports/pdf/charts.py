@@ -79,6 +79,104 @@ def generation_comparison_chart(series: dict, out_path: Path) -> Path:
     return out_path
 
 
+def wind_norm_chart(series: dict, out_path: Path) -> Path:
+    """Monthly wind-normalised performance index: bars above/below the P50
+    baseline (green over, orange under), dashed reference at the baseline."""
+    points = series.get("points") or []
+    baseline = float(series.get("baseline", 100))
+    labels = [p["label"] for p in points]
+    values = [float(p["index"]) for p in points]
+    colors = ["#22C55E" if v >= baseline else "#F97316" for v in values]
+
+    fig, ax = plt.subplots(figsize=(6.4, 2.6), dpi=200)
+    try:
+        x = range(len(values))
+        ax.bar(x, values, color=colors, width=0.7)
+        ax.axhline(baseline, color=_SLATE, linestyle="--", linewidth=1.0)
+        ax.text(
+            len(values) - 0.4 if values else 0,
+            baseline,
+            f"P50 = {baseline:.0f}",
+            fontsize=7,
+            color=_SLATE,
+            va="bottom",
+            ha="right",
+        )
+        # Zoom to the interesting band around the baseline rather than 0.
+        if values:
+            lo, hi = min(values + [baseline]), max(values + [baseline])
+            pad = max((hi - lo) * 0.25, 2.0)
+            ax.set_ylim(lo - pad, hi + pad)
+        ax.set_xticks(list(x))
+        step = max(1, len(labels) // 10)
+        ax.set_xticklabels(
+            [lbl if i % step == 0 else "" for i, lbl in enumerate(labels)],
+            fontsize=8,
+            color=_SLATE,
+        )
+        ax.tick_params(colors=_SLATE, labelsize=8, length=0)
+        ax.set_ylabel("Index (P50 = 100)", fontsize=9, color=_SLATE)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        for spine in ("left", "bottom"):
+            ax.spines[spine].set_color(_LINE)
+        ax.set_title(
+            "Wind-normalised performance",
+            loc="left",
+            fontsize=11,
+            color=_INK,
+            fontweight="bold",
+        )
+        fig.tight_layout()
+        fig.savefig(out_path, bbox_inches="tight", facecolor="white")
+    finally:
+        plt.close(fig)
+    return out_path
+
+
+def capture_rate_line_chart(series: dict, out_path: Path) -> Path:
+    """Monthly capture rate (%) with a dashed reference at 100% (= market
+    average price achieved)."""
+    points = series.get("points") or []
+    labels = [p["label"] for p in points]
+    values = [float(p["capture_rate_pct"]) for p in points]
+
+    fig, ax = plt.subplots(figsize=(6.4, 2.6), dpi=200)
+    try:
+        x = list(range(len(values)))
+        ax.plot(x, values, color="#2563EB", linewidth=1.6, marker="o", markersize=3)
+        ax.axhline(100, color=_SLATE, linestyle="--", linewidth=1.0)
+        ax.text(
+            x[-1] if x else 0,
+            100,
+            "market avg",
+            fontsize=7,
+            color=_SLATE,
+            va="bottom",
+            ha="right",
+        )
+        ax.margins(y=0.15)
+        ax.set_xticks(x)
+        step = max(1, len(labels) // 10)
+        ax.set_xticklabels(
+            [lbl if i % step == 0 else "" for i, lbl in enumerate(labels)],
+            fontsize=8,
+            color=_SLATE,
+        )
+        ax.tick_params(colors=_SLATE, labelsize=8, length=0)
+        ax.set_ylabel("Capture rate (%)", fontsize=9, color=_SLATE)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        for spine in ("left", "bottom"):
+            ax.spines[spine].set_color(_LINE)
+        ax.set_title("Capture rate", loc="left", fontsize=11, color=_INK, fontweight="bold")
+        fig.tight_layout()
+        fig.savefig(out_path, bbox_inches="tight", facecolor="white")
+    finally:
+        plt.close(fig)
+    return out_path
+
+
 def severity_bar_chart(severity_counts: dict, out_path: Path) -> Path:
     """Horizontal bar chart of findings by severity for the PDF header area."""
     order = ["confirmed", "indicative", "watch", "pass", "suppressed"]
