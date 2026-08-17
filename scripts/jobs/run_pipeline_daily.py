@@ -17,6 +17,8 @@ alarm keys on.
 
 import argparse
 import asyncio
+import logging
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +30,19 @@ from app.core.config import get_settings  # noqa: E402
 from app.core.database import close_db  # noqa: E402
 from app.core.observability import init_sentry  # noqa: E402
 from app.cron.pipeline_daily import run_pipeline_job  # noqa: E402
+
+# MUST come before structlog.configure: the `filter_by_level` processor below
+# defers to the *stdlib* logger's level, and an unconfigured stdlib root defaults
+# to WARNING. The API never hits this because uvicorn configures logging itself;
+# a standalone script has nothing doing that, so without this line every
+# logger.info() is silently dropped and the job runs near-invisibly — no
+# job_started, no batch_complete, no job_complete. Confirmed on a staging run
+# that emitted 10 warnings and zero info lines.
+logging.basicConfig(
+    format="%(message)s",
+    stream=sys.stdout,
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+)
 
 # Same JSON renderer the API uses (scripts/start.py). Without this, structlog
 # falls back to its dev-console renderer and CloudWatch gets coloured
