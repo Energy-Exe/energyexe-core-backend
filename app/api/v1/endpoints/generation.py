@@ -134,7 +134,10 @@ async def get_hourly_data(
             'source': record.source,
             'quality_score': float(record.quality_score) if record.quality_score else None,
             'quality_flag': record.quality_flag,
-            'is_manual_override': record.is_manual_override
+            # is_manual_override is not a real GenerationData column; accessing
+            # it raised AttributeError and 500'd this endpoint whenever rows
+            # were returned. Default until the column actually exists.
+            'is_manual_override': bool(getattr(record, 'is_manual_override', False))
         }
         for record in data
     ]
