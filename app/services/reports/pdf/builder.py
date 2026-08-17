@@ -95,30 +95,50 @@ class PdfBuilder:
         return self
 
     def metric_cards(self, cards):
-        """A single-row strip of metric cards: [{label, value, unit}]."""
+        """A single-row strip of metric cards: [{label, value, unit}].
+
+        Cards may optionally carry ``delta_pct`` (change vs the prior period);
+        when any card in the row has one, a third sub-line row is added.
+        """
         if not cards:
             return self
         values = [
             f"{c.get('value', 'n/a')}{(' ' + c['unit']) if c.get('unit') else ''}" for c in cards
         ]
         labels = [c.get("label", "") for c in cards]
-        t = Table([values, labels], hAlign="LEFT", colWidths=[1.65 * inch] * len(cards))
-        t.setStyle(
-            TableStyle(
+        grid = [values, labels]
+        has_deltas = any(c.get("delta_pct") is not None for c in cards)
+        if has_deltas:
+            grid.append(
                 [
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, 0), 14),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), INK),
-                    ("FONTSIZE", (0, 1), (-1, 1), 8),
-                    ("TEXTCOLOR", (0, 1), (-1, 1), SLATE),
-                    ("BOX", (0, 0), (-1, -1), 0.5, LINE),
-                    ("INNERGRID", (0, 0), (-1, -1), 0.5, LINE),
-                    ("TOPPADDING", (0, 0), (-1, 0), 8),
-                    ("BOTTOMPADDING", (0, 1), (-1, 1), 8),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    (
+                        f"{c['delta_pct']:+.1f}% vs prior period"
+                        if c.get("delta_pct") is not None
+                        else ""
+                    )
+                    for c in cards
                 ]
             )
-        )
+        t = Table(grid, hAlign="LEFT", colWidths=[1.65 * inch] * len(cards))
+        style = [
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 14),
+            ("TEXTCOLOR", (0, 0), (-1, 0), INK),
+            ("FONTSIZE", (0, 1), (-1, 1), 8),
+            ("TEXTCOLOR", (0, 1), (-1, 1), SLATE),
+            ("BOX", (0, 0), (-1, -1), 0.5, LINE),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, LINE),
+            ("TOPPADDING", (0, 0), (-1, 0), 8),
+            ("BOTTOMPADDING", (0, 1), (-1, 1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ]
+        if has_deltas:
+            style += [
+                ("FONTSIZE", (0, 2), (-1, 2), 7),
+                ("TEXTCOLOR", (0, 2), (-1, 2), SLATE),
+                ("BOTTOMPADDING", (0, 2), (-1, 2), 8),
+            ]
+        t.setStyle(TableStyle(style))
         self._flow.append(t)
         self._flow.append(Spacer(1, 12))
         return self

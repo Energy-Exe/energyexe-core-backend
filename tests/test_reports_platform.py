@@ -21,9 +21,17 @@ class TestRegistry:
         assert {s.key for s in spec.sections} == {
             "executive_summary",
             "key_metrics",
+            "generation_chart",
             "findings",
+            "wind_norm_chart",
+            "capture_rate_chart",
             "action_plan",
         }
+        # The trend charts pair up side-by-side; findings + action plan are full.
+        assert spec.section("wind_norm_chart").layout == "two_col_left"
+        assert spec.section("capture_rate_chart").layout == "two_col_right"
+        assert spec.section("findings").layout == "full"
+        assert spec.section("action_plan").layout == "full"
 
     def test_exec_summary_is_pass2_and_renders_first(self):
         spec = get_report_type("opportunity")
@@ -303,7 +311,7 @@ class TestNarrativeService:
 
         for key in ("action_plan", "executive_summary"):
             version, body = _load_prompt("opportunity", key)
-            assert version == "1"
+            assert version == "2"  # bumped for the EPR-88 enrichment
             assert "$windfarm_name" in body
 
     def test_model_resolution_follows_tier(self):
@@ -593,3 +601,283 @@ class TestFactCheckSigns:
 
         payload = {"rows": [{"key": "capture_rate", "delta_pct": {"previous": -2.7}}]}
         assert verify_bullet("Capture rate slipped 8.9% vs Q3.", [payload]) == [8.9]
+
+
+class TestEvidenceFormatter:
+    def test_ops04_degradation_slots(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.OPS_04,
+            {
+                "slope_pct_per_year": -2.31,
+                "p_value": 0.032,
+                "r_squared": 0.61,
+                "ci_lower_95_pct": -3.4,
+                "ci_upper_95_pct": -1.2,
+                "years_of_data": 4.2,
+                "n_constraint_hours_excluded": 812,
+                "period": "2021-01..2025-12",
+                "baseline_caveat": True,
+            },
+        )
+        by_label = {i["label"]: i["value"] for i in out["items"]}
+        assert by_label["Degradation slope"] == "-2.31%/yr"
+        assert by_label["p-value"] == "0.032"
+        assert by_label["95% CI"] == "-3.4 to -1.2%/yr"
+        assert by_label["Constraint hours excluded"] == "812"
+        # period is excluded; the caveat becomes a note, not a grid item.
+        assert "period" not in {i["label"].lower() for i in out["items"]}
+        assert any("baseline" in n.lower() for n in out["notes"])
+
+    def test_mkt01_ratios_render_as_percent(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.MKT_01,
+            {"capture_rate": 0.831, "zone_avg_capture": 0.902, "gap_pp": 7.1, "price_zone": "NO3"},
+        )
+        by_label = {i["label"]: i["value"] for i in out["items"]}
+        assert by_label["Capture rate"] == "83.1%"
+        assert by_label["Zone average"] == "90.2%"
+        assert by_label["Gap vs zone"] == "7.1 pp"
+        assert by_label["Price zone"] == "NO3"
+
+    def test_month_list_caps_and_counts_extra(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        months = [f"2025-{m:02d}" for m in range(1, 10)]
+        out = format_evidence(SchemaCode.OPS_01, {"disruption_month_list": months})
+        (value,) = [i["value"] for i in out["items"] if i["label"] == "Disrupted months"]
+        assert value.endswith("+3 more")
+
+    def test_daterange_and_missing_slots_skipped(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.DQ_01,
+            {"max_gap_hours": 96, "largest_gap_start": "2025-03-01T00:00:00"},
+        )
+        labels = [i["label"] for i in out["items"]]
+        assert "Largest gap" in labels
+        assert "Largest gap window" not in labels  # end missing -> pair skipped
+        assert "Gaps in period" not in labels  # absent slot skipped
+
+    def test_reclassified_and_downgrade_notes(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.MKT_03,
+            {"cannibalisation_index": 1.21, "reclassified_from": ["MKT_01"]},
+        )
+        assert any("MKT-01" in n for n in out["notes"])
+
+    def test_empty_slots_yield_empty_items(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(SchemaCode.FIN_01, {})
+        assert out == {"items": [], "notes": []}
+        assert format_evidence(SchemaCode.FIN_01, None)["items"] == []
+
+
+class TestKeyMetricsCards:
+    def test_card_with_delta_fields(self):
+        from app.services.reports.data_builders.opportunity import _card
+
+        card = _card("Generation", 96.5, "GWh", ",.1f", previous=88.0, good_direction="up")
+        assert card["value"] == "96.5"
+        assert card["unit"] == "GWh"
+        assert card["raw"] == 96.5
+        assert card["direction"] == "up"
+        assert card["good_direction"] == "up"
+        assert card["delta_pct"] == 9.7
+
+    def test_card_without_good_direction_stays_legacy_shape(self):
+        from app.services.reports.data_builders.opportunity import _card
+
+        card = _card("Anything", 12.0, "%", ".1f")
+        assert set(card) == {"label", "value", "unit", "raw"}
+
+    def test_card_none_value_degrades(self):
+        from app.services.reports.data_builders.opportunity import _card
+
+        card = _card("Capture", None, "%", ".1f", previous=90.0, good_direction="up")
+        assert card["value"] == "n/a"
+        assert card["unit"] is None
+        assert card["delta_pct"] is None
+        assert card["direction"] is None
+
+
+class TestEnrichedOpportunityPdf:
+    def test_render_with_evidence_deltas_and_charts(self, tmp_path):
+        from app.services.reports.pdf import render_report_pdf
+
+        report = Report(
+            report_type="opportunity",
+            scope_type="windfarm",
+            windfarm_id=1,
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+            version=2,
+            status=ReportStatus.COMPLETE,
+            title="Opportunity Report — Testfarm",
+            requested_by_id=1,
+        )
+        report.windfarm = Windfarm(name="Testfarm", code="TESTF")
+        month_points = [{"label": f"{m:02d} 2025", "gwh": 3.0 + m * 0.1} for m in range(1, 13)]
+        report.sections = [
+            ReportSection(
+                section_key="key_metrics",
+                status=SectionStatus.GENERATED,
+                pass_number=1,
+                display_order=1,
+                data={
+                    "cards": [
+                        {
+                            "label": "P50 attainment",
+                            "value": "92.1",
+                            "unit": "%",
+                            "raw": 92.1,
+                            "delta_pct": 4.2,
+                            "direction": "up",
+                            "good_direction": "up",
+                        },
+                        {"label": "Generation", "value": "40.7", "unit": "GWh", "raw": 40.7},
+                        {"label": "Capacity factor", "value": "35.4", "unit": "%", "raw": 35.4},
+                        {"label": "Lost value (period)", "value": "47,959", "unit": "EUR"},
+                        {"label": "Capture rate vs zone", "value": "83.3", "unit": "%"},
+                        {"label": "Schemas flagged", "value": "7"},
+                    ],
+                    "previous_label": "2024",
+                },
+                generated_at=datetime(2026, 8, 17),
+            ),
+            ReportSection(
+                section_key="generation_chart",
+                status=SectionStatus.GENERATED,
+                pass_number=1,
+                display_order=2,
+                data={
+                    "chart_key": "windfarm_generation",
+                    "series": {
+                        "unit": "GWh",
+                        "current": {"label": "2025", "points": month_points},
+                        "previous": {"label": "2024", "points": month_points},
+                    },
+                },
+                generated_at=datetime(2026, 8, 17),
+            ),
+            ReportSection(
+                section_key="findings",
+                status=SectionStatus.GENERATED,
+                pass_number=1,
+                display_order=3,
+                data={
+                    "rows": [
+                        {
+                            "schema_code": "FIN-01",
+                            "domain": "Financial",
+                            "display_name": "P50 Generation Attainment",
+                            "one_liner": "Actual generation below the P50 target.",
+                            "key_metric": "Attainment %: 89",
+                            "severity": "confirmed",
+                            "evidence": [
+                                {"label": "P50 attainment", "value": "89.3%"},
+                                {"label": "Actual generation", "value": "40.7 GWh"},
+                                {"label": "P50 target", "value": "45.6 GWh"},
+                            ],
+                            "notes": ["Provisional pending review."],
+                            "detection_period": {"start": "2024-06-26", "end": "2026-06-26"},
+                        },
+                        {
+                            "schema_code": "OPS-02",
+                            "domain": "Operational",
+                            "display_name": "Performance Seasonality",
+                            "severity": "pass",
+                            "evidence": None,
+                            "notes": [],
+                        },
+                    ],
+                    "severity_counts": {"confirmed": 1, "pass": 1},
+                    "assessed_schemas": 2,
+                },
+                generated_at=datetime(2026, 8, 17),
+            ),
+            ReportSection(
+                section_key="wind_norm_chart",
+                status=SectionStatus.GENERATED,
+                pass_number=1,
+                display_order=4,
+                data={
+                    "chart_key": "wind_norm_monthly",
+                    "series": {
+                        "unit": "index",
+                        "baseline": 100,
+                        "points": [
+                            {"label": f"{m:02d} 2025", "index": 95 + m} for m in range(1, 13)
+                        ],
+                    },
+                },
+                generated_at=datetime(2026, 8, 17),
+            ),
+            ReportSection(
+                section_key="capture_rate_chart",
+                status=SectionStatus.GENERATED,
+                pass_number=1,
+                display_order=5,
+                data={
+                    "chart_key": "capture_rate_monthly",
+                    "series": {
+                        "unit": "%",
+                        "points": [
+                            {"label": f"{m:02d} 2025", "capture_rate_pct": 80.0 + m}
+                            for m in range(1, 13)
+                        ],
+                        "overall_capture_rate_pct": 86.2,
+                        "currency": "EUR",
+                    },
+                },
+                generated_at=datetime(2026, 8, 17),
+            ),
+        ]
+
+        out = render_report_pdf(report, tmp_path)
+        assert out.exists()
+        content = out.read_bytes()
+        assert content[:5] == b"%PDF-"
+        assert len(content) > 30_000  # three charts + tables embedded
+
+    def test_empty_chart_series_skipped(self, tmp_path):
+        """Chart sections with no points must not break the render."""
+        from app.services.reports.pdf import render_report_pdf
+
+        report = Report(
+            report_type="opportunity",
+            scope_type="windfarm",
+            windfarm_id=1,
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+            version=1,
+            status=ReportStatus.COMPLETE,
+            title="Opportunity Report — Testfarm",
+            requested_by_id=1,
+        )
+        report.windfarm = Windfarm(name="Testfarm", code="TESTF")
+        report.sections = [
+            ReportSection(
+                section_key="wind_norm_chart",
+                status=SectionStatus.GENERATED,
+                pass_number=1,
+                display_order=1,
+                data={"chart_key": "wind_norm_monthly", "series": {"points": []}},
+                generated_at=datetime(2026, 8, 17),
+            ),
+        ]
+        out = render_report_pdf(report, tmp_path)
+        assert out.read_bytes()[:5] == b"%PDF-"
