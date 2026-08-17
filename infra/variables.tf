@@ -137,3 +137,35 @@ variable "bastion_security_group_id" {
   type        = string
   default     = ""
 }
+
+# --- Production frontends (S3 + CloudFront, replacing Vercel — frontend.tf) ---
+
+variable "admin_ui_domain" {
+  description = "Production hostname of the admin-ui (CloudFront alias once frontend_certificate_arn is set)."
+  type        = string
+  default     = "dashboard.energyexe.com"
+}
+
+variable "client_ui_domain" {
+  description = "Production hostname of the client-ui (CloudFront alias once frontend_certificate_arn is set)."
+  type        = string
+  default     = "app.energyexe.com"
+}
+
+variable "frontend_certificate_arn" {
+  description = "us-east-1 ACM cert ARN for *.energyexe.com. Empty until DNS-validated (phase 1); setting it (phase 2) attaches the alias + cert to BOTH prod frontend CloudFront dists. Wildcard on purpose — per-hostname certs cannot issue while app./dashboard. still CNAME to Vercel (CAA), see frontend.tf."
+  type        = string
+  default     = ""
+}
+
+variable "github_admin_ui_repo" {
+  description = "owner/repo of the admin-ui; its master branch may deploy to the prod admin bucket + invalidate its CloudFront dist."
+  type        = string
+  default     = "faisal-energyexe/energyexe-admin-ui"
+}
+
+variable "github_client_ui_repo" {
+  description = "owner/repo of the client-ui; its main branch may deploy to the prod client bucket + invalidate its CloudFront dist."
+  type        = string
+  default     = "faisal-energyexe/energyexe-client-ui"
+}
