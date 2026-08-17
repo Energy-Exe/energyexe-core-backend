@@ -1,11 +1,12 @@
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, delete, func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
+from app.models.generation_data import GenerationData
 from app.models.turbine_model import TurbineModel
 from app.models.turbine_unit import TurbineUnit
 from app.models.windfarm import Windfarm
@@ -222,6 +223,44 @@ class TurbineUnitService:
         await db.delete(db_turbine_unit)
         await db.commit()
         return db_turbine_unit
+
+    @staticmethod
+    async def bulk_delete_turbine_units(db: AsyncSession, ids: List[int]) -> List[int]:
+        """Delete many turbine units atomically (all-or-nothing).
+
+        Raises TurbineUnitBulkValidationError (with per-id errors) without deleting
+        anything if any id does not exist.
+
+        Deliberately uses set-based Core statements instead of per-row ORM deletes:
+        the ORM path lazy-loads every related generation_data row per turbine to
+        null its FK, which costs a full-table scan per delete. Here the
+        de-association is ONE UPDATE and the delete ONE statement, both served by
+        the partial index on generation_data.turbine_unit_id.
+        """
+        unique_ids = list(dict.fromkeys(ids))
+
+        found_result = await db.execute(
+            select(TurbineUnit.id).where(TurbineUnit.id.in_(unique_ids))
+        )
+        found_ids = set(found_result.scalars().all())
+        errors = [
+            TurbineUnitBulkError(index=i, field="ids", message=f"Turbine unit {unit_id} not found")
+            for i, unit_id in enumerate(ids)
+            if unit_id not in found_ids
+        ]
+        if errors:
+            raise TurbineUnitBulkValidationError(errors)
+
+        # De-associate generation data (mirrors the ORM single-delete behavior,
+        # which nulls the FK rather than deleting the data).
+        await db.execute(
+            update(GenerationData)
+            .where(GenerationData.turbine_unit_id.in_(unique_ids))
+            .values(turbine_unit_id=None)
+        )
+        await db.execute(delete(TurbineUnit).where(TurbineUnit.id.in_(unique_ids)))
+        await db.commit()
+        return unique_ids
 
     @staticmethod
     async def get_turbine_units_filtered(

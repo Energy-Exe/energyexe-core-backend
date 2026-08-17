@@ -82,3 +82,12 @@ class TurbineUnitBulkError(BaseModel):
 class TurbineUnitBulkCreateResult(BaseModel):
     created: List[TurbineUnit]
     total: int
+
+
+class TurbineUnitBulkDelete(BaseModel):
+    ids: List[int] = Field(..., min_length=1, max_length=500)
+
+
+class TurbineUnitBulkDeleteResult(BaseModel):
+    deleted: int
+    ids: List[int]
