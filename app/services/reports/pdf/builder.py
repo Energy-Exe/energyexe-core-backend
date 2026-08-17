@@ -4,6 +4,8 @@ module for the reports platform. Keep the two visually in sync until the seed
 constant is refactored to read this module.
 """
 
+from xml.sax.saxutils import escape
+
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
@@ -37,6 +39,12 @@ SEVERITY_COLORS = {
 }
 
 
+def _esc(text) -> str:
+    """Paragraph() parses XML-ish markup — free text (windfarm names, LLM
+    narratives) must be escaped or a stray '&'/'<' aborts the whole render."""
+    return escape(str(text))
+
+
 class PdfBuilder:
     """Flowing-document builder: heading/paragraph/bullets/table/image/save."""
 
@@ -62,26 +70,26 @@ class PdfBuilder:
             "sm", parent=ss["Normal"], textColor=MUTED, fontSize=8, leading=11, spaceAfter=6
         )
         if title:
-            self._flow.append(Paragraph(str(title), self.s_title))
+            self._flow.append(Paragraph(_esc(title), self.s_title))
         if subtitle:
-            self._flow.append(Paragraph(str(subtitle), self.s_sub))
+            self._flow.append(Paragraph(_esc(subtitle), self.s_sub))
 
     def heading(self, text, level=2):
         style = self.s_title if level <= 1 else self.s_h2 if level == 2 else self.s_h3
-        self._flow.append(Paragraph(str(text), style))
+        self._flow.append(Paragraph(_esc(text), style))
         return self
 
     def paragraph(self, text, style=None):
         st = self.s_sub if str(style).lower() in ("subtitle", "sub", "lead") else self.s_body
-        self._flow.append(Paragraph(str(text), st))
+        self._flow.append(Paragraph(_esc(text), st))
         return self
 
     def small(self, text):
-        self._flow.append(Paragraph(str(text), self.s_small))
+        self._flow.append(Paragraph(_esc(text), self.s_small))
         return self
 
     def bullets(self, items):
-        li = [ListItem(Paragraph(str(x), self.s_body), leftIndent=10) for x in items]
+        li = [ListItem(Paragraph(_esc(x), self.s_body), leftIndent=10) for x in items]
         self._flow.append(ListFlowable(li, bulletType="bullet", bulletColor=BRAND, start="square"))
         self._flow.append(Spacer(1, 6))
         return self

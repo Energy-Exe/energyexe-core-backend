@@ -1,6 +1,7 @@
 """ENTSOE API client service."""
 
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -16,6 +17,62 @@ logger = structlog.get_logger()
 # Retry constants
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2  # seconds, exponential backoff: 2, 4, 8
+
+# EIC identifier: 16 chars — 2-digit issuing-office number + 13 chars + check char.
+EIC_CODE_PATTERN = re.compile(r"^[0-9]{2}[A-Z0-9\-]{14}$")
+
+_METRIC_MARKERS = ("Actual Aggregated", "Actual Consumption")
+
+
+def _parse_plant_column(col) -> Optional[Dict[str, Optional[str]]]:
+    """Parse one MultiIndex column from query_generation_per_plant output.
+
+    entsoe-py 0.7.1 builds column names as (plantname, psrtype, metric, eic)
+    when a TimeSeries has <psrType> and include_eic=True, but
+    (plantname, metric, eic) when it lacks <psrType>; pandas pads mixed-length
+    tuples with NaN floats. Level positions therefore cannot be assumed.
+
+    Returns {unit_name, eic_code, data_direction, production_type} or None when
+    no level is a valid EIC code (caller skips the column).
+    """
+    if not isinstance(col, tuple) or not col:
+        return None
+    unit_name = col[0] if isinstance(col[0], str) else str(col[0])
+
+    # Metric: the level containing an Actual Aggregated/Consumption marker.
+    metric = next(
+        (level for level in col[1:] if isinstance(level, str)
+         and any(m in level for m in _METRIC_MARKERS)),
+        None,
+    )
+
+    # EIC: scan non-name levels last-to-first (entsoe-py appends eic last).
+    # The regex cannot match psr names ("Wind Offshore") or metrics (spaces).
+    eic_code = next(
+        (level for level in reversed(col[1:]) if isinstance(level, str)
+         and EIC_CODE_PATTERN.match(level)),
+        None,
+    )
+    if eic_code is None:
+        return None
+
+    # Production type: first remaining string level that is neither the
+    # metric nor the EIC (None for 3-tuples without psrtype).
+    production_type = next(
+        (level for level in col[1:] if isinstance(level, str)
+         and level != metric and level != eic_code),
+        None,
+    )
+
+    data_direction = (
+        "consumption" if metric and "Consumption" in metric else "generation"
+    )
+    return {
+        "unit_name": unit_name,
+        "eic_code": eic_code,
+        "data_direction": data_direction,
+        "production_type": production_type,
+    }
 
 
 class ENTSOEClient:
@@ -313,11 +370,28 @@ class ENTSOEClient:
                     last_error = retry_err
                     err_type = type(retry_err).__name__
                     err_msg = str(retry_err)
-                    # entsoe-py bug: RangeIndex.set_levels on empty response (e.g. GB)
+                    # entsoe-py bug: RangeIndex.set_levels raised when the API
+                    # returns an empty document. Either a genuinely empty area
+                    # (e.g. GB for this query type) OR a transient empty
+                    # response under throttling (EPR-108: PL came back empty
+                    # while an identical query succeeded 22s earlier). Retry
+                    # with backoff; only conclude "no data" on the final
+                    # attempt.
                     if "set_levels" in err_msg and "RangeIndex" in err_msg:
+                        if attempt < MAX_RETRIES:
+                            delay = RETRY_BASE_DELAY ** attempt
+                            logger.warning(
+                                f"Empty ENTSOE response for {area_code} "
+                                f"(entsoe-py RangeIndex.set_levels) on attempt "
+                                f"{attempt}/{MAX_RETRIES}, retrying in {delay}s "
+                                f"in case it is transient"
+                            )
+                            await asyncio.sleep(delay)
+                            continue
                         logger.warning(
                             f"entsoe-py library bug for {area_code}: empty API response "
-                            f"caused RangeIndex.set_levels error (no data available)"
+                            f"caused RangeIndex.set_levels error on all {MAX_RETRIES} "
+                            f"attempts (no data available)"
                         )
                         df = pd.DataFrame()
                         break
@@ -356,10 +430,9 @@ class ENTSOEClient:
                 # --- Diagnostic pre-scan: extract all EIC codes from API response ---
                 api_eic_codes = set()
                 for col in df.columns:
-                    if len(col) > 3 and isinstance(col[3], str) and "W" in col[3]:
-                        api_eic_codes.add(col[3])
-                    elif len(col) > 1 and isinstance(col[1], str) and "W" in col[1]:
-                        api_eic_codes.add(col[1])
+                    parsed = _parse_plant_column(col)
+                    if parsed:
+                        api_eic_codes.add(parsed["eic_code"])
 
                 if eic_codes:
                     requested_set = set(eic_codes)
@@ -394,34 +467,26 @@ class ENTSOEClient:
                 # --- End diagnostic pre-scan ---
 
                 for col in df.columns:
-                    # Extract unit info from column
-                    unit_name = col[0] if isinstance(col, tuple) else str(col)
+                    parsed = _parse_plant_column(col)
+                    if parsed is None:
+                        logger.debug(f"Skipping column without valid EIC code: {col}")
+                        continue
 
-                    # EIC code position varies:
-                    # For wind offshore/onshore: position 3 in (name, type, aggregation, eic_code)
-                    # For other types: might be at position 1
-                    eic_code = None
-                    if len(col) > 3 and isinstance(col[3], str) and "W" in col[3]:
-                        eic_code = col[3]
-                        # Also check if it's a wind type we want
-                        if production_types and "wind" in production_types:
-                            # Accept both offshore and onshore wind
-                            if "Wind" not in str(col[1]):
-                                continue
-                    elif len(col) > 1 and isinstance(col[1], str) and "W" in col[1]:
-                        eic_code = col[1]
+                    unit_name = parsed["unit_name"]
+                    eic_code = parsed["eic_code"]
+                    data_direction = parsed["data_direction"]
+
+                    # Production-type filter: only when a psrtype-looking level
+                    # exists (3-tuples without psrtype are kept, matching the
+                    # old fallback branch which never type-filtered).
+                    if production_types and "wind" in production_types:
+                        ptype = parsed["production_type"]
+                        if ptype is not None and "Wind" not in ptype:
+                            continue
 
                     # If we have specific EIC codes to filter, skip others
-                    if eic_codes and eic_code and eic_code not in eic_codes:
+                    if eic_codes and eic_code not in eic_codes:
                         continue
-
-                    # Skip if no EIC code found
-                    if not eic_code:
-                        continue
-
-                    # Determine data direction from col[2]: 'Actual Aggregated' vs 'Actual Consumption'
-                    metric = col[2] if len(col) > 2 else None
-                    data_direction = "consumption" if metric and "Consumption" in str(metric) else "generation"
 
                     # Create record for this unit
                     unit_df = pd.DataFrame(df[col])
