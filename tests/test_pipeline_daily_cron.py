@@ -1,12 +1,16 @@
-"""Tests for the daily pipeline cron job wiring (issue #113).
+"""Tests for the nightly pipeline job body (issue #113).
 
 Verifies that `run_pipeline_job`:
   * runs the performance batch and THEN opportunity detection (exactly once),
-  * still fires the failure alert when the batch raises, and in that case
-    does NOT run detection (so detection cannot mask a batch failure).
+  * skips detection when the batch raises, so detection cannot mask a batch
+    failure,
+  * returns a truthful **exit code** in each case.
 
-No database required — the service classes, alert service and session factory
-are fully mocked.
+That last point is the contract the ECS task-failure alarm depends on. The job
+previously returned `None` on every path — including both failure paths — so a
+failed nightly run exited 0 and looked like a success.
+
+No database required — the service classes and session factory are fully mocked.
 """
 
 from contextlib import asynccontextmanager
@@ -33,7 +37,7 @@ def _fake_session_factory():
 
 @pytest.mark.asyncio
 async def test_detection_invoked_after_pipeline_batch():
-    """Detection runs exactly once, AFTER the pipeline batch."""
+    """Detection runs exactly once, AFTER the pipeline batch, and the job passes."""
     calls = []
 
     async def fake_batch(*args, **kwargs):
@@ -54,8 +58,9 @@ async def test_detection_invoked_after_pipeline_batch():
         "app.services.opportunity_detection_service.OpportunityDetectionService.run_detection_job",
         detection_mock,
     ):
-        await pipeline_daily.run_pipeline_job()
+        exit_code = await pipeline_daily.run_pipeline_job()
 
+    assert exit_code == pipeline_daily.EXIT_OK
     batch_mock.assert_called_once()
     detection_mock.assert_called_once()
     # Ordering: batch before detection.
@@ -63,14 +68,10 @@ async def test_detection_invoked_after_pipeline_batch():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_failure_still_alerts():
-    """A batch failure fires the alert path and detection is NOT run."""
+async def test_batch_failure_skips_detection_and_fails_the_job():
+    """A batch failure returns EXIT_BATCH_FAILED and detection is NOT run."""
     batch_mock = AsyncMock(side_effect=RuntimeError("boom"))
     detection_mock = AsyncMock(return_value={})
-    create_alert_mock = AsyncMock(return_value=None)
-
-    alert_instance = MagicMock()
-    alert_instance.create_system_alert = create_alert_mock
 
     with patch("app.core.database.get_session_factory", _fake_session_factory), patch(
         "app.services.performance_pipeline_service.PerformancePipelineService.run_pipeline_batch",
@@ -78,17 +79,71 @@ async def test_pipeline_failure_still_alerts():
     ), patch(
         "app.services.opportunity_detection_service.OpportunityDetectionService.run_detection_job",
         detection_mock,
-    ), patch(
-        "app.services.alert_service.AlertService", return_value=alert_instance
     ):
-        # Must not propagate — the cron job swallows + alerts.
-        await pipeline_daily.run_pipeline_job()
+        # Must not propagate — the job reports failure through its return value.
+        exit_code = await pipeline_daily.run_pipeline_job()
 
+    assert exit_code == pipeline_daily.EXIT_BATCH_FAILED
     batch_mock.assert_called_once()
-    # Alert fired for the batch failure.
-    create_alert_mock.assert_called_once()
-    _, alert_kwargs = create_alert_mock.call_args
-    assert alert_kwargs["title"] == "Pipeline daily job failed"
-    assert alert_kwargs["severity"] == "HIGH"
     # Detection skipped — it cannot mask the batch failure.
+    detection_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_detection_failure_fails_the_job_but_batch_stands():
+    """A detection failure is its own exit code — the batch still ran."""
+    batch_mock = AsyncMock(return_value={"windfarms_processed": 3})
+    detection_mock = AsyncMock(side_effect=RuntimeError("detection boom"))
+
+    with patch("app.core.database.get_session_factory", _fake_session_factory), patch(
+        "app.services.performance_pipeline_service.PerformancePipelineService.run_pipeline_batch",
+        batch_mock,
+    ), patch(
+        "app.services.opportunity_detection_service.OpportunityDetectionService.run_detection_job",
+        detection_mock,
+    ):
+        exit_code = await pipeline_daily.run_pipeline_job()
+
+    assert exit_code == pipeline_daily.EXIT_DETECTION_FAILED
+    batch_mock.assert_called_once()
+    detection_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_windfarm_ids_scope_both_phases():
+    """--windfarm-ids reaches both services — this is what makes a smoke test fast."""
+    batch_mock = AsyncMock(return_value={"windfarms_processed": 2})
+    detection_mock = AsyncMock(return_value={})
+
+    with patch("app.core.database.get_session_factory", _fake_session_factory), patch(
+        "app.services.performance_pipeline_service.PerformancePipelineService.run_pipeline_batch",
+        batch_mock,
+    ), patch(
+        "app.services.opportunity_detection_service.OpportunityDetectionService.run_detection_job",
+        detection_mock,
+    ):
+        exit_code = await pipeline_daily.run_pipeline_job(windfarm_ids=[7404, 7200])
+
+    assert exit_code == pipeline_daily.EXIT_OK
+    assert batch_mock.call_args.kwargs["windfarm_ids"] == [7404, 7200]
+    assert detection_mock.call_args.kwargs["windfarm_ids"] == [7404, 7200]
+
+
+@pytest.mark.asyncio
+async def test_skip_detection():
+    """--skip-detection runs the batch alone and still passes."""
+    batch_mock = AsyncMock(return_value={"windfarms_processed": 1})
+    detection_mock = AsyncMock(return_value={})
+
+    with patch("app.core.database.get_session_factory", _fake_session_factory), patch(
+        "app.services.performance_pipeline_service.PerformancePipelineService.run_pipeline_batch",
+        batch_mock,
+    ), patch(
+        "app.services.opportunity_detection_service.OpportunityDetectionService.run_detection_job",
+        detection_mock,
+    ):
+        exit_code = await pipeline_daily.run_pipeline_job(skip_detection=True)
+
+    assert exit_code == pipeline_daily.EXIT_OK
+    batch_mock.assert_called_once()
     detection_mock.assert_not_called()

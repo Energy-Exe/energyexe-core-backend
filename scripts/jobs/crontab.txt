@@ -55,18 +55,12 @@ PROJECT_DIR=/Users/mohammadfaisal/Documents/energyexe/energyexe-core-backend
 0 2 1 * * cd $PROJECT_DIR && poetry run python scripts/jobs/run_import_with_tracking.py eia-monthly >> /tmp/eia-monthly.log 2>&1
 
 # ============================================================================
-# Performance Pipeline (anomaly detection + power curves) - Daily at 5:00 AM
+# Performance Pipeline + Opportunity Detection — NOT scheduled here
 # ============================================================================
-# MAD-based outliers vs q50 power curve, lost MWh / lost EUR per windfarm
-# Persists to performance_anomalies and performance_summary tables
-0 5 * * * cd $PROJECT_DIR && poetry run python scripts/jobs/run_detection_jobs.py performance-pipeline >> /tmp/performance-pipeline.log 2>&1
-
-# ============================================================================
-# Opportunity Detection (OPS/MKT schemas) - Daily at 6:00 AM
-# ============================================================================
-# Scans 24-month rolling window for OPS-01..MKT-03 patterns
-# Persists to opportunities table; supersedes prior runs
-0 6 * * * cd $PROJECT_DIR && poetry run python scripts/jobs/run_detection_jobs.py opportunity-detection >> /tmp/opportunity-detection.log 2>&1
+# These run in AWS as a single nightly ECS task at 03:00 UTC, scheduled by
+# EventBridge (infra/pipeline_daily.tf -> scripts/jobs/run_pipeline_daily.py).
+# The two local cron lines that used to live here were laptop-only and are gone;
+# run_detection_jobs.py remains available for a manual single-phase re-run.
 
 # Note: data-anomaly-detection (capacity-factor / gap / spike) is NOT yet
 # scheduled — DataAnomalyService.detect_anomalies() is read-only today and

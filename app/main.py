@@ -49,24 +49,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("report_sweeper_failed", error=str(e))
 
-    # Start daily pipeline scheduler (PRE-D for spec items 1-6).
-    # Opt-in via PIPELINE_DAILY_ENABLED=true so dev machines don't run it.
-    try:
-        from app.cron.pipeline_daily import start_pipeline_scheduler
-
-        start_pipeline_scheduler()
-    except Exception as e:
-        logger.warning("pipeline_scheduler_start_failed", error=str(e))
+    # No in-process scheduler here. The nightly performance pipeline runs as its
+    # own EventBridge-scheduled ECS task (infra/pipeline_daily.tf →
+    # scripts/jobs/run_pipeline_daily.py); the data imports run on EventBridge
+    # too (infra/scheduled_imports.tf). Nothing schedules work from inside the
+    # API process — see .github/workflows/README.md for the rule.
 
     yield
-
-    # Shut down scheduler so APScheduler doesn't hold the event loop open.
-    try:
-        from app.cron.pipeline_daily import stop_pipeline_scheduler
-
-        stop_pipeline_scheduler()
-    except Exception as e:
-        logger.warning("pipeline_scheduler_stop_failed", error=str(e))
 
     logger.info("Shutting down application")
 

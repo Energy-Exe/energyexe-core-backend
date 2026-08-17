@@ -79,7 +79,7 @@ Three triggers:
 
 | Trigger | File | Notes |
 |---|---|---|
-| Daily cron | `app/cron/pipeline_daily.py:run_pipeline_job` | 03:00 UTC default (after weather + generation imports finish ~02:30). Configurable via `PIPELINE_DAILY_ENABLED`, `PIPELINE_DAILY_HOUR`, `PIPELINE_DAILY_MINUTE`. `max_instances=1`, `coalesce=True`. |
+| Nightly ECS task | `scripts/jobs/run_pipeline_daily.py` → `app/cron/pipeline_daily.py:run_pipeline_job` | 03:00 UTC (after weather + generation imports finish ~02:30). Scheduled by **EventBridge**, declared in `infra/pipeline_daily.tf` — not in-process. Hour comes from `var.pipeline_daily_hour`, which drives both the rule and the `PIPELINE_DAILY_HOUR` the container reports to the GlitchTip cron monitor. Exits 0/1/2 (ok / batch failed / detection failed); a non-zero exit or an abnormal stop alarms to SNS. |
 | Manual API | `POST /api/v1/performance-pipeline/run` | Admin UI "Run Pipeline" button. Optional `windfarm_ids` filter. |
 | Read API | `GET /api/v1/performance-pipeline/...` | Read-only endpoints for power curves, ODI, wind-norm, degradation, commercial summary. Consumed by admin-ui and client-ui. |
 

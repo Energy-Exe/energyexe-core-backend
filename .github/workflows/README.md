@@ -37,10 +37,11 @@ task with `--workers 1` (`infra/ecs.tf`) and `execute_job` blocks on
 Keep these times in sync with `_calculate_next_run` in
 `app/services/import_job_service.py`, which drives the admin "next run" column.
 
-The nightly *performance pipeline* (`app/cron/pipeline_daily.py`, 03:00 UTC) is
-the one remaining exception: it is still scheduled in-process by APScheduler
-rather than by AWS. Moving it to its own scheduled ECS task is tracked
-separately.
+The nightly *performance pipeline* also runs on EventBridge, as its own
+run-to-completion ECS task at 03:00 UTC rather than through the Lambda —
+`infra/pipeline_daily.tf` → `scripts/jobs/run_pipeline_daily.py`. It is a task
+rather than an HTTP trigger because it runs for ~3 hours; nothing is left running
+on an in-process scheduler.
 
 ### Why GitHub cron was retired (2026-08-17)
 

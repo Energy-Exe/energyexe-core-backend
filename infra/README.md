@@ -16,11 +16,11 @@ Internet ──► ALB (:80/:443) ──► Fargate task (uvicorn :8001, 1 worke
 
 Key design decisions (see inline comments for detail):
 
-- **`desired_count = 1`, deploys stop-then-start** — the nightly performance
-  pipeline still runs on in-process APScheduler; two tasks = it fires twice.
-  Accepts ~1–2 min downtime per deploy. Moving that job to a scheduled ECS task
-  is the remaining prerequisite for horizontal scaling; the data imports no
-  longer stand in the way (see below).
+- **`desired_count = 1`, deploys stop-then-start** — now historical. It existed
+  because the nightly pipeline ran on an in-process APScheduler and two tasks
+  would have fired it twice. That scheduler is gone (see below), so this and the
+  `--workers 1` override can be revisited; both are left in place deliberately
+  rather than changing API concurrency in the same step as the pipeline move.
 - **One uvicorn worker** (task def overrides the Dockerfile's `--workers 4`) —
   each worker runs the lifespan and would start its own scheduler.
 - **`alembic upgrade head` runs in the container command** before uvicorn starts.
@@ -50,8 +50,15 @@ dropping 15–60% of the hourly Taipower runs and delaying every daily import by
 21–80 minutes. Rationale, measurements and the API-Destination footgun are in
 the header comment of `scheduled_imports.tf` and in `.github/workflows/README.md`.
 
-The one job not yet here is the nightly performance pipeline
-(`app/cron/pipeline_daily.py`, 03:00 UTC), still scheduled in-process.
+The nightly performance pipeline is here too, in `pipeline_daily.tf`, but as a
+**one-off ECS task** rather than an HTTP trigger — it runs ~3 hours, far past any
+request timeout. EventBridge → `ecs:RunTask` → `scripts/jobs/run_pipeline_daily.py`,
+which exits 0/1/2 (ok / batch failed / detection failed). A non-zero exit *or* an
+abnormal stop (OOM, image-pull failure, capacity error) alarms to SNS.
+
+Create the task definition with `pipeline_schedule_enabled = false`, smoke-test it
+by hand with `terraform output pipeline_run_task_command` plus
+`--overrides` carrying `--windfarm-ids`, then flip the schedule on.
 
 ## Bootstrap (first deploy)
 
