@@ -2,12 +2,13 @@
 
 import json
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 from typing import List, Dict, Any, Optional, Tuple
 from decimal import Decimal
 
 import pandas as pd
 import structlog
-from sqlalchemy import select, and_
+from sqlalchemy import and_, func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.generation_data import GenerationDataRaw
@@ -46,6 +47,42 @@ def _detect_entsoe_resolution(df: pd.DataFrame) -> str:
     elif min_delta <= 1800:
         return "PT30M"
     return "PT60M"
+
+
+def _build_raw_upsert_stmt(batch: List[Dict[str, Any]]):
+    """Bulk upsert into generation_data_raw.
+
+    On conflict, the OLD value_extracted is stashed into data['previous_value']
+    for revision tracking: in ON CONFLICT DO UPDATE, the table-qualified column
+    refers to the existing row while excluded.* refers to the proposed new row.
+
+    The jsonb_set path argument must render as an inline literal, not a bind
+    parameter: a VARCHAR bind makes Postgres fail at parse time with
+    "function jsonb_set(jsonb, character varying, jsonb) does not exist"
+    (EPR-108). jsonb_set is also STRICT, so a NULL old value must be coalesced
+    to a jsonb null or the whole data column would become SQL NULL.
+    """
+    from sqlalchemy.dialects.postgresql import insert
+
+    stmt = insert(GenerationDataRaw).values(batch)
+    return stmt.on_conflict_do_update(
+        index_elements=['source', 'source_type', 'identifier', 'period_start'],
+        set_={
+            'value_extracted': stmt.excluded.value_extracted,
+            'data': func.jsonb_set(
+                stmt.excluded.data,
+                literal_column("'{previous_value}'"),
+                func.coalesce(
+                    func.to_jsonb(GenerationDataRaw.value_extracted),
+                    literal_column("'null'::jsonb"),
+                ),
+            ),
+            'updated_at': datetime.now(timezone.utc),
+            'period_end': stmt.excluded.period_end,
+            'period_type': stmt.excluded.period_type,
+            'unit': stmt.excluded.unit,
+        },
+    )
 
 
 class RawDataStorageService:
@@ -288,6 +325,9 @@ class RawDataStorageService:
 
         # Get windfarms with generation units
         windfarms = await self._get_windfarms_with_units(request.windfarm_ids, source)
+        # Snapshot names now: a later rollback expires the ORM instances and a
+        # sync attribute refresh would raise MissingGreenlet.
+        windfarm_names = [w.name for w in windfarms]
 
         if not windfarms:
             return RawDataFetchResponse(
@@ -366,11 +406,18 @@ class RawDataStorageService:
                     'eic_codes': []
                 }
 
-            # Add windfarm and its units to the area group
+            # Add windfarm and its units to the area group.
+            # Snapshot plain values: Session.rollback() expires ORM instances
+            # unconditionally (expire_on_commit=False does NOT cover rollback),
+            # and refreshing them from sync code raises MissingGreenlet.
+            unit_snapshots = [
+                SimpleNamespace(id=u.id, code=u.code, name=u.name, capacity_mw=u.capacity_mw)
+                for u in entsoe_units
+            ]
             area_groups[area_code]['windfarms'].append(windfarm)
-            area_groups[area_code]['units'].extend(entsoe_units)
+            area_groups[area_code]['units'].extend(unit_snapshots)
             area_groups[area_code]['eic_codes'].extend([
-                u.code for u in entsoe_units if u.code and u.code != 'nan'
+                u.code for u in unit_snapshots if u.code and u.code != 'nan'
             ])
 
         logger.info(f"Grouped {len(windfarms)} windfarms into {len(area_groups)} control areas")
@@ -475,6 +522,13 @@ class RawDataStorageService:
                 error_msg = f"Error fetching ENTSOE data for area {zone_data['area_name']}: {str(e)}"
                 logger.error(error_msg)
                 all_errors.append(error_msg)
+                # Recover the session so one failed area cannot poison
+                # subsequent areas (a failed statement leaves the transaction
+                # aborted until rollback).
+                try:
+                    await self.db.rollback()
+                except Exception:
+                    logger.warning("Rollback after area failure also failed", exc_info=True)
 
         # Post-import completeness check
         total_days = max(1, (request.end_date - request.start_date).days)
@@ -502,7 +556,7 @@ class RawDataStorageService:
             success=len(all_errors) == 0,
             source=source,
             windfarm_ids=request.windfarm_ids,
-            windfarm_names=[w.name for w in windfarms],
+            windfarm_names=windfarm_names,
             date_range={
                 "start": request.start_date.isoformat(),
                 "end": request.end_date.isoformat(),
@@ -520,7 +574,7 @@ class RawDataStorageService:
     async def _store_entsoe_records(
         self,
         df: pd.DataFrame,
-        unit: GenerationUnit,
+        unit: Any,
         area_code: str,
         user_id: int,
         api_metadata: Dict,
@@ -531,10 +585,11 @@ class RawDataStorageService:
         Records are inserted in batches to avoid PostgreSQL's parameter limit (65,535).
 
         Args:
+            unit: GenerationUnit or plain snapshot with id/code/name/capacity_mw
+                (snapshots survive session rollback; ORM instances do not).
             area_code: Control area code (or bidzone code as fallback).
             source_type_override: Use 'api' for generation, 'api_consumption' for consumption.
         """
-        from sqlalchemy.dialects.postgresql import insert
         from decimal import Decimal
 
         if df.empty:
@@ -638,26 +693,7 @@ class RawDataStorageService:
             for i in range(0, total_records, BATCH_SIZE):
                 batch = records_to_insert[i:i + BATCH_SIZE]
 
-                stmt = insert(GenerationDataRaw).values(batch)
-
-                # Use upsert to handle existing records
-                # On conflict: store previous value in JSONB for revision tracking
-                from sqlalchemy import func
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=['source', 'source_type', 'identifier', 'period_start'],
-                    set_={
-                        'value_extracted': stmt.excluded.value_extracted,
-                        'data': func.jsonb_set(
-                            stmt.excluded.data,
-                            '{previous_value}',
-                            func.to_jsonb(GenerationDataRaw.value_extracted),
-                        ),
-                        'updated_at': datetime.now(timezone.utc),
-                        'period_end': stmt.excluded.period_end,
-                        'period_type': stmt.excluded.period_type,
-                        'unit': stmt.excluded.unit,
-                    }
-                )
+                stmt = _build_raw_upsert_stmt(batch)
 
                 await self.db.execute(stmt)
                 records_stored += len(batch)
@@ -809,7 +845,6 @@ class RawDataStorageService:
 
         Records are inserted in batches to avoid PostgreSQL's parameter limit (65,535).
         """
-        from sqlalchemy.dialects.postgresql import insert
         from decimal import Decimal
 
         if df.empty:
@@ -902,26 +937,7 @@ class RawDataStorageService:
             for i in range(0, total_records, BATCH_SIZE):
                 batch = records_to_insert[i:i + BATCH_SIZE]
 
-                stmt = insert(GenerationDataRaw).values(batch)
-
-                # Use upsert to handle existing records
-                # On conflict: store previous value in JSONB for revision tracking
-                from sqlalchemy import func
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=['source', 'source_type', 'identifier', 'period_start'],
-                    set_={
-                        'value_extracted': stmt.excluded.value_extracted,
-                        'data': func.jsonb_set(
-                            stmt.excluded.data,
-                            '{previous_value}',
-                            func.to_jsonb(GenerationDataRaw.value_extracted),
-                        ),
-                        'updated_at': datetime.now(timezone.utc),
-                        'period_end': stmt.excluded.period_end,
-                        'period_type': stmt.excluded.period_type,
-                        'unit': stmt.excluded.unit,
-                    }
-                )
+                stmt = _build_raw_upsert_stmt(batch)
 
                 await self.db.execute(stmt)
                 records_stored += len(batch)
