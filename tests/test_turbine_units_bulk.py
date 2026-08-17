@@ -1,17 +1,18 @@
 """
-Tests for TurbineUnitService.bulk_create_turbine_units (EPR-107).
+Tests for TurbineUnitService.bulk_create_turbine_units and
+bulk_delete_turbine_units (EPR-107).
 
-The bulk create is all-or-nothing: every row is validated (in-payload duplicate
-codes, already-existing codes, FK existence) before a single commit; any error
-raises TurbineUnitBulkValidationError carrying per-row errors and writes nothing.
-Returned units must have windfarm/turbine_model eager-loaded (MissingGreenlet
-guard — see test_turbine_units_service.py for background).
+Both bulk operations are all-or-nothing: every row/id is validated before a
+single commit; any error raises TurbineUnitBulkValidationError carrying per-row
+errors and writes/deletes nothing. Created units must have windfarm/
+turbine_model eager-loaded (MissingGreenlet guard — see
+test_turbine_units_service.py for background).
 """
 
 import pydantic
 import pytest
 import pytest_asyncio
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.future import select
 from sqlalchemy.pool import StaticPool
@@ -21,7 +22,7 @@ from app.models.turbine_model import TurbineModel
 from app.models.turbine_unit import TurbineUnit as TurbineUnitModel
 from app.models.windfarm import Windfarm
 from app.schemas.turbine_unit import TurbineUnit as TurbineUnitSchema
-from app.schemas.turbine_unit import TurbineUnitBulkCreate, TurbineUnitCreate
+from app.schemas.turbine_unit import TurbineUnitBulkCreate, TurbineUnitBulkDelete, TurbineUnitCreate
 from app.services.turbine_unit import TurbineUnitBulkValidationError, TurbineUnitService
 
 
@@ -37,6 +38,16 @@ async def test_session():
     async with engine.begin() as conn:
         for table in tables:
             await conn.run_sync(table.create, checkfirst=True)
+        # Minimal shadow of generation_data: the ORM table uses Postgres-only
+        # types (ARRAY) that don't compile on SQLite, and bulk delete only ever
+        # touches turbine_unit_id on it.
+        await conn.execute(
+            text(
+                "CREATE TABLE generation_data ("
+                "id TEXT PRIMARY KEY, hour TIMESTAMP, turbine_unit_id INTEGER, "
+                "generation_mwh NUMERIC, source TEXT, updated_at TIMESTAMP)"
+            )
+        )
 
     factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as session:
@@ -160,3 +171,90 @@ def test_bulk_create_schema_rejects_over_cap():
         TurbineUnitBulkCreate(turbines=rows)
     # at the cap it validates fine
     assert len(TurbineUnitBulkCreate(turbines=rows[:500]).turbines) == 500
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_happy_path(test_session):
+    windfarm_id, model_id = await _seed_windfarm_and_model(test_session)
+    created = await TurbineUnitService.bulk_create_turbine_units(
+        test_session, [_row(f"WF_BULK-{i:03d}", windfarm_id, model_id) for i in range(1, 4)]
+    )
+
+    deleted_ids = await TurbineUnitService.bulk_delete_turbine_units(
+        test_session, [created[0].id, created[1].id]
+    )
+
+    assert sorted(deleted_ids) == sorted([created[0].id, created[1].id])
+    remaining = (await test_session.execute(select(TurbineUnitModel.code))).scalars().all()
+    assert remaining == ["WF_BULK-003"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_missing_id_is_all_or_nothing(test_session):
+    windfarm_id, model_id = await _seed_windfarm_and_model(test_session)
+    created = await TurbineUnitService.bulk_create_turbine_units(
+        test_session, [_row("WF_BULK-001", windfarm_id, model_id)]
+    )
+
+    with pytest.raises(TurbineUnitBulkValidationError) as exc_info:
+        await TurbineUnitService.bulk_delete_turbine_units(
+            test_session, [created[0].id, created[0].id + 999]
+        )
+
+    errors = exc_info.value.errors
+    assert len(errors) == 1
+    assert errors[0].index == 1
+    assert "not found" in errors[0].message
+    # the existing unit must NOT have been deleted
+    assert await _count_units(test_session) == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_deduplicates_ids(test_session):
+    windfarm_id, model_id = await _seed_windfarm_and_model(test_session)
+    created = await TurbineUnitService.bulk_create_turbine_units(
+        test_session, [_row("WF_BULK-001", windfarm_id, model_id)]
+    )
+
+    deleted_ids = await TurbineUnitService.bulk_delete_turbine_units(
+        test_session, [created[0].id, created[0].id]
+    )
+
+    assert deleted_ids == [created[0].id]
+    assert await _count_units(test_session) == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_nulls_generation_data_fk(test_session):
+    windfarm_id, model_id = await _seed_windfarm_and_model(test_session)
+    created = await TurbineUnitService.bulk_create_turbine_units(
+        test_session,
+        [_row("WF_BULK-001", windfarm_id, model_id), _row("WF_BULK-002", windfarm_id, model_id)],
+    )
+    kept_id = created[1].id
+    await test_session.execute(
+        text(
+            "INSERT INTO generation_data (id, turbine_unit_id, generation_mwh, source) VALUES "
+            "('g1', :del_id, 1.0, 'TEST'), ('g2', :kept_id, 2.0, 'TEST')"
+        ),
+        {"del_id": created[0].id, "kept_id": kept_id},
+    )
+    await test_session.commit()
+
+    await TurbineUnitService.bulk_delete_turbine_units(test_session, [created[0].id])
+
+    rows = (
+        await test_session.execute(
+            text("SELECT id, turbine_unit_id FROM generation_data ORDER BY id")
+        )
+    ).all()
+    # deleted turbine's generation data is de-associated, not deleted; others untouched
+    assert rows == [("g1", None), ("g2", kept_id)]
+
+
+def test_bulk_delete_schema_rejects_over_cap():
+    with pytest.raises(pydantic.ValidationError):
+        TurbineUnitBulkDelete(ids=list(range(1, 502)))
+    with pytest.raises(pydantic.ValidationError):
+        TurbineUnitBulkDelete(ids=[])
+    assert len(TurbineUnitBulkDelete(ids=list(range(1, 501))).ids) == 500

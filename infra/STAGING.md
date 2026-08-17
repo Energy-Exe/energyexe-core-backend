@@ -189,8 +189,9 @@ this resource (`snapshot_identifier` changes are ignored — see §6).
 
 ### Scaling / sizing & compute model
 
-Staging serves only the API — the **nightly pipeline is disabled** (`PIPELINE_DAILY_ENABLED=false`),
-so there's no scheduler load. The task is **0.5 vCPU / 1 GB** (vs prod's 2 vCPU / 8 GB), single task
+Staging serves only the API — there is **no nightly pipeline** on staging (prod runs it as a separate
+EventBridge-scheduled ECS task, `infra/pipeline_daily.tf`; staging has no equivalent), so there's no
+batch load. The task is **0.5 vCPU / 1 GB** (vs prod's 2 vCPU / 8 GB), single task
 (`desired_count = 1`). **Valkey is skipped** entirely (no `REDIS_URL`) — the report cache and rate
 limiter degrade gracefully (no-cache / fail-open).
 

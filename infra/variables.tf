@@ -58,16 +58,28 @@ variable "scada_data_bucket" {
   default     = "energyexe-scada-data"
 }
 
-variable "pipeline_daily_enabled" {
-  description = "Enables the in-process APScheduler nightly pipeline. Keep false during Railway burn-in — true on both platforms means the pipeline runs twice a night. Flip to true at cutover."
+variable "pipeline_daily_hour" {
+  description = "UTC hour the nightly pipeline task runs. Drives both the EventBridge rule and the PIPELINE_DAILY_HOUR the container reports to GlitchTip — keep them derived from this one value so they cannot drift."
+  type        = string
+  default     = "3"
+}
+
+variable "pipeline_schedule_enabled" {
+  description = "Enables the nightly pipeline EventBridge rule. Default false so the task definition can be created and smoke-tested by hand before anything fires on a schedule."
   type        = bool
   default     = false
 }
 
-variable "pipeline_daily_hour" {
-  description = "UTC hour the nightly pipeline runs. Default 3 matches Railway; offset (e.g. 5) during burn-in so AWS and Railway don't run concurrently against the shared RDS."
-  type        = string
-  default     = "3"
+variable "pipeline_task_cpu" {
+  description = "Fargate CPU units for the nightly pipeline task. Mirrors the API's 2048: measured peak was ~47% of 2 vCPU, but tfvars records 97% CPU at 1 vCPU, so don't shrink without evidence."
+  type        = number
+  default     = 2048
+}
+
+variable "pipeline_task_memory" {
+  description = "Fargate memory (MiB) for the nightly pipeline task. An OOM here loses the whole night, and the task only runs ~3h/day, so headroom is cheap."
+  type        = number
+  default     = 8192
 }
 
 variable "cors_origins" {

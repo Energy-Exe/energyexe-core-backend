@@ -52,10 +52,16 @@ resource "aws_ecs_task_definition" "api" {
     image     = "${aws_ecr_repository.this.repository_url}:${var.image_tag}"
     essential = true
 
-    # Overrides the Dockerfile CMD for two reasons:
-    #  - migrations run before the server starts (single task => no race)
-    #  - exactly ONE uvicorn worker: APScheduler starts in each worker's
-    #    lifespan, so the Dockerfile's `--workers 4` would run every cron 4x.
+    # Overrides the Dockerfile CMD so migrations run before the server starts
+    # (single task => no race).
+    #
+    # `--workers 1` is now historical: it existed because APScheduler started in
+    # every worker's lifespan and would have fired the nightly pipeline N times.
+    # That scheduler is gone (the pipeline runs as its own ECS task — see
+    # pipeline_daily.tf), so this and the zero-downtime-percent deployment
+    # settings below can be revisited. Left alone deliberately: changing API
+    # concurrency in the same change as the pipeline move would mean debugging
+    # two variables at once.
     command = [
       "sh", "-c",
       "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${local.container_port} --workers 1"
@@ -72,11 +78,8 @@ resource "aws_ecs_task_definition" "api" {
         { name = "LOG_LEVEL", value = "INFO" },
         # Tags errors in GlitchTip. Harmless when SENTRY_DSN is unset (init no-ops).
         { name = "SENTRY_ENVIRONMENT", value = "production" },
-        { name = "PIPELINE_DAILY_ENABLED", value = tostring(var.pipeline_daily_enabled) },
-        # Hour (UTC) the in-process nightly pipeline runs. Offset from Railway's
-        # 03:00 during burn-in so the two never run concurrently against the
-        # shared RDS; reset to 3 once Railway is gone.
-        { name = "PIPELINE_DAILY_HOUR", value = tostring(var.pipeline_daily_hour) },
+        # No PIPELINE_DAILY_* here any more — the nightly pipeline is not run by
+        # this container. It has its own task definition in pipeline_daily.tf.
         { name = "CDSAPI_URL", value = "https://cds.climate.copernicus.eu/api" },
         # Region for boto3; credentials come from the task role, not env keys.
         { name = "AWS_DEFAULT_REGION", value = var.region },

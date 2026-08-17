@@ -9,6 +9,8 @@ from app.schemas.turbine_unit import (
     TurbineUnit,
     TurbineUnitBulkCreate,
     TurbineUnitBulkCreateResult,
+    TurbineUnitBulkDelete,
+    TurbineUnitBulkDeleteResult,
     TurbineUnitCreate,
     TurbineUnitUpdate,
 )
@@ -219,6 +221,24 @@ async def bulk_create_turbine_units(
             },
         )
     return TurbineUnitBulkCreateResult(created=created, total=len(created))
+
+
+@router.post("/bulk-delete", response_model=TurbineUnitBulkDeleteResult)
+async def bulk_delete_turbine_units(
+    payload: TurbineUnitBulkDelete, db: AsyncSession = Depends(get_db)
+):
+    """Delete many turbine units atomically (all-or-nothing, max 500 per request)."""
+    try:
+        deleted_ids = await TurbineUnitService.bulk_delete_turbine_units(db, payload.ids)
+    except TurbineUnitBulkValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Bulk turbine deletion failed",
+                "errors": [e.model_dump() for e in exc.errors],
+            },
+        )
+    return TurbineUnitBulkDeleteResult(deleted=len(deleted_ids), ids=deleted_ids)
 
 
 @router.put("/{turbine_unit_id}", response_model=TurbineUnit)

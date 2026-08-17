@@ -20,4 +20,8 @@ def render_report_pdf(report: Report, tmp_dir: Path) -> Path:
         from app.services.reports.pdf.renderers.opportunity import render
 
         return render(report, tmp_dir)
+    if report.report_type == "digest":
+        from app.services.reports.pdf.renderers.digest import render
+
+        return render(report, tmp_dir)
     raise ValueError(f"No PDF renderer for report type {report.report_type}")
