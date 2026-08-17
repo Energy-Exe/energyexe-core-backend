@@ -72,6 +72,7 @@ class ReportTypeSpec:
 
 def _build_registry() -> Dict[str, ReportTypeSpec]:
     # Imported here to avoid a registry -> builders -> registry cycle.
+    from app.services.reports.data_builders import digest as dig
     from app.services.reports.data_builders import opportunity as opp
 
     opportunity_report = ReportTypeSpec(
@@ -112,7 +113,54 @@ def _build_registry() -> Dict[str, ReportTypeSpec]:
         ),
     )
 
-    return {opportunity_report.code: opportunity_report}
+    digest_report = ReportTypeSpec(
+        code="digest",
+        title="Periodic Digest",
+        scope="windfarm",
+        sections=(
+            SectionSpec(
+                key="executive_summary",
+                title="Executive Summary",
+                kind="narrative",
+                pass_number=2,
+                render_first=True,
+                narrative=NarrativeSpec(
+                    prompt_key="executive_summary", max_tokens=1200, tier="summary"
+                ),
+            ),
+            SectionSpec(
+                key="scorecard",
+                title="Period Scorecard",
+                kind="scorecard",
+                data_builder=dig.build_scorecard,
+            ),
+            SectionSpec(
+                key="finding_changes",
+                title="Finding Changes",
+                kind="scorecard",
+                layout="two_col_left",
+                data_builder=dig.build_finding_changes,
+            ),
+            SectionSpec(
+                key="wind_resource",
+                title="Wind Resource",
+                kind="metric_strip",
+                layout="two_col_right",
+                data_builder=dig.build_wind_resource,
+            ),
+            SectionSpec(
+                key="generation_chart",
+                title="Generation",
+                kind="chart_embed",
+                data_builder=dig.build_generation_chart,
+            ),
+        ),
+    )
+
+    return {
+        opportunity_report.code: opportunity_report,
+        digest_report.code: digest_report,
+    }
 
 
 REPORT_TYPE_REGISTRY: Dict[str, ReportTypeSpec] = _build_registry()

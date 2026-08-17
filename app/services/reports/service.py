@@ -80,6 +80,7 @@ class ReportService:
             params={
                 "sections": section_keys,
                 "generate_narratives": payload.generate_narratives,
+                "period_type": payload.period_type,
             },
             requested_by_id=user.id,
             status=ReportStatus.PENDING,

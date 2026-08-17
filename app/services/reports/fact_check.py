@@ -75,7 +75,12 @@ def harvest_numbers(node) -> List[float]:
 
 
 def _matches(claim: float, sources: Iterable[float]) -> bool:
+    # Sign-insensitive: deltas are stored signed but cited with the sign in
+    # words ("capture rate slipped 2.7%" vs a stored -2.7). Direction is not
+    # checkable here — provenance of the figure is.
+    claim = abs(claim)
     for source in sources:
+        source = abs(source)
         if abs(claim - source) <= max(_REL_TOLERANCE * abs(source), _ABS_TOLERANCE):
             return True
         # The model may quote a large value without its magnitude word

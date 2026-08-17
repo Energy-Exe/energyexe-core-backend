@@ -15,6 +15,8 @@ class ReportCreate(BaseModel):
     # Optional whitelist of section keys to generate (default: all in registry).
     sections: Optional[List[str]] = None
     generate_narratives: bool = True
+    # Digest cadence hint (EPR-87): how the period was chosen, for labelling.
+    period_type: Optional[str] = None
 
     @model_validator(mode="after")
     def _check_scope_and_period(self) -> "ReportCreate":
@@ -22,6 +24,12 @@ class ReportCreate(BaseModel):
             raise ValueError("Provide exactly one of windfarm_id or portfolio_id")
         if self.period_start > self.period_end:
             raise ValueError("period_start must be on or before period_end")
+        if self.period_type is not None and self.period_type not in (
+            "monthly",
+            "quarterly",
+            "annual",
+        ):
+            raise ValueError("period_type must be one of monthly, quarterly, annual")
         return self
 
 

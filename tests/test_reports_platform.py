@@ -348,3 +348,248 @@ class TestNarrativeService:
         ]
         payload = _summary_payload(report)
         assert set(payload.keys()) == {"key_metrics"}
+
+
+class TestDigestPeriods:
+    def test_previous_window_full_month(self):
+        from app.services.reports.data_builders.digest import previous_window
+
+        assert previous_window(date(2026, 7, 1), date(2026, 7, 31)) == (
+            date(2026, 6, 1),
+            date(2026, 6, 30),
+        )
+
+    def test_previous_window_quarter_and_year_boundary(self):
+        from app.services.reports.data_builders.digest import previous_window
+
+        assert previous_window(date(2026, 1, 1), date(2026, 3, 31)) == (
+            date(2025, 10, 1),
+            date(2025, 12, 31),
+        )
+
+    def test_previous_window_arbitrary_dates_shift_by_length(self):
+        from app.services.reports.data_builders.digest import previous_window
+
+        start, end = previous_window(date(2026, 7, 10), date(2026, 7, 19))
+        assert (end - start).days == 9
+        assert end == date(2026, 7, 9)
+
+    def test_yoy_window_full_month_handles_leap_length(self):
+        from app.services.reports.data_builders.digest import yoy_window
+
+        # Feb 2025 (28d) -> Feb 2024 must be the FULL leap month, not 28 days.
+        assert yoy_window(date(2025, 2, 1), date(2025, 2, 28)) == (
+            date(2024, 2, 1),
+            date(2024, 2, 29),
+        )
+
+    def test_yoy_equals_previous_for_annual(self):
+        from app.services.reports.data_builders.digest import previous_window, yoy_window
+
+        window = (date(2025, 1, 1), date(2025, 12, 31))
+        assert previous_window(*window) == yoy_window(*window)
+
+    def test_period_labels(self):
+        from app.services.reports.data_builders.digest import period_label
+
+        assert period_label(date(2026, 7, 1), date(2026, 7, 31)) == "Jul 2026"
+        assert period_label(date(2026, 4, 1), date(2026, 6, 30)) == "Q2 2026"
+        assert period_label(date(2025, 1, 1), date(2025, 12, 31)) == "2025"
+        assert period_label(date(2026, 7, 10), date(2026, 7, 19)) == "10 Jul 2026 – 19 Jul 2026"
+
+
+class TestDigestScorecard:
+    def test_direction_uses_flat_tolerance(self):
+        from app.services.reports.data_builders.digest import _direction
+
+        assert _direction(100.0, 100.3) == "flat"
+        assert _direction(110.0, 100.0) == "up"
+        assert _direction(90.0, 100.0) == "down"
+        assert _direction(None, 100.0) is None
+        assert _direction(100.0, None) is None
+
+    def test_scorecard_row_shape_and_deltas(self):
+        from app.services.reports.data_builders.digest import _scorecard_row
+
+        metrics = {
+            "current": {"generation_gwh": 96.5},
+            "previous": {"generation_gwh": 88.1},
+            "yoy": {"generation_gwh": None},
+        }
+        row = _scorecard_row("generation", "Generation", "GWh", metrics, "generation_gwh")
+        assert row["values"] == {"current": "96.5", "previous": "88.1", "yoy": "n/a"}
+        assert row["direction"] == {"previous": "up"}
+        assert row["delta_pct"]["previous"] == 9.5
+        assert "yoy" not in row["delta_pct"]
+
+    def test_registry_digest_spec(self):
+        spec = get_report_type("digest")
+        assert spec is not None
+        assert spec.scope == "windfarm"
+        assert {s.key for s in spec.sections} == {
+            "executive_summary",
+            "scorecard",
+            "finding_changes",
+            "wind_resource",
+            "generation_chart",
+        }
+        # Every Pass-1 digest section MUST have a data builder — a builderless
+        # section stays UNGENERATED and pins the whole report at PARTIAL.
+        for section in spec.sections:
+            if section.pass_number == 1:
+                assert section.data_builder is not None, section.key
+        assert spec.section("executive_summary").narrative.tier == "summary"
+        assert spec.display_ordered()[0].key == "executive_summary"
+
+
+class TestDigestPdf:
+    def test_digest_pdf_renders(self, tmp_path):
+        from app.services.reports.pdf.renderers.digest import render
+
+        windfarm = Windfarm(id=1, name="Testfarm & Co <AS>", code="TEST")
+        report = Report(
+            id=1,
+            report_type="digest",
+            scope_type="windfarm",
+            windfarm_id=1,
+            period_start=date(2026, 4, 1),
+            period_end=date(2026, 6, 30),
+            version=1,
+            status=ReportStatus.COMPLETE,
+            title="Periodic Digest — Testfarm",
+            requested_by_id=1,
+        )
+        report.windfarm = windfarm
+        scorecard_data = {
+            "columns": [
+                {"key": "current", "label": "Q2 2026"},
+                {"key": "previous", "label": "Q1 2026"},
+            ],
+            "rows": [
+                {
+                    "key": "generation",
+                    "label": "Generation",
+                    "unit": "GWh",
+                    "values": {"current": "96.5", "previous": "88.1"},
+                    "raw": {"current": 96.5, "previous": 88.1},
+                    "direction": {"previous": "up"},
+                    "delta_pct": {"previous": 9.5},
+                }
+            ],
+            "notes": ["A note with markup-hostile chars: <5% & rising"],
+        }
+        report.sections = [
+            ReportSection(
+                id=1,
+                report_id=1,
+                section_key="executive_summary",
+                pass_number=2,
+                display_order=0,
+                layout="full",
+                status=SectionStatus.GENERATED,
+                narrative_json={
+                    "overall_assessment": "Generation rose 9.5% on stronger wind.",
+                    "bullets": [
+                        {"text": "Generation 88.1 → 96.5 GWh.", "source_sections": ["scorecard"]}
+                    ],
+                },
+            ),
+            ReportSection(
+                id=2,
+                report_id=1,
+                section_key="scorecard",
+                pass_number=1,
+                display_order=1,
+                layout="full",
+                status=SectionStatus.GENERATED,
+                data=scorecard_data,
+            ),
+            ReportSection(
+                id=3,
+                report_id=1,
+                section_key="finding_changes",
+                pass_number=1,
+                display_order=2,
+                layout="two_col_left",
+                status=SectionStatus.GENERATED,
+                data={
+                    "columns": [{"key": "current", "label": "As of 30 Jun 2026"}],
+                    "rows": [
+                        {
+                            "key": "confirmed",
+                            "label": "Confirmed",
+                            "unit": None,
+                            "values": {"current": "3"},
+                            "raw": {"current": 3},
+                            "direction": {},
+                            "delta_pct": {},
+                        }
+                    ],
+                    "notes": ["No detection history before 01 Apr 2026."],
+                },
+            ),
+            ReportSection(
+                id=4,
+                report_id=1,
+                section_key="wind_resource",
+                pass_number=1,
+                display_order=3,
+                layout="two_col_right",
+                status=SectionStatus.GENERATED,
+                data={
+                    "cards": [
+                        {"label": "P50 attainment", "value": "96.2", "unit": "%", "raw": 96.2}
+                    ],
+                    "note": "Expected generation is the P50 model output.",
+                },
+            ),
+            ReportSection(
+                id=5,
+                report_id=1,
+                section_key="generation_chart",
+                pass_number=1,
+                display_order=4,
+                layout="full",
+                status=SectionStatus.GENERATED,
+                data={
+                    "chart_key": "windfarm_generation",
+                    "series": {
+                        "unit": "GWh",
+                        "current": {
+                            "label": "Q2 2026",
+                            "points": [
+                                {"label": "Apr 2026", "gwh": 30.1},
+                                {"label": "May 2026", "gwh": 33.2},
+                                {"label": "Jun 2026", "gwh": 33.2},
+                            ],
+                        },
+                        "previous": {
+                            "label": "Q1 2026",
+                            "points": [
+                                {"label": "Jan 2026", "gwh": 29.0},
+                                {"label": "Feb 2026", "gwh": 28.4},
+                                {"label": "Mar 2026", "gwh": 30.7},
+                            ],
+                        },
+                    },
+                },
+            ),
+        ]
+        out = render(report, tmp_path)
+        assert out.exists()
+        assert out.stat().st_size > 5000
+
+
+class TestFactCheckSigns:
+    def test_signed_delta_backs_unsigned_claim(self):
+        from app.services.reports.fact_check import verify_bullet
+
+        payload = {"rows": [{"key": "capture_rate", "delta_pct": {"previous": -2.7}}]}
+        assert verify_bullet("Capture rate slipped 2.7% vs Q3.", [payload]) == []
+        assert verify_bullet("Capture rate moved -2.7% vs Q3.", [payload]) == []
+
+    def test_fabricated_number_still_fails(self):
+        from app.services.reports.fact_check import verify_bullet
+
+        payload = {"rows": [{"key": "capture_rate", "delta_pct": {"previous": -2.7}}]}
+        assert verify_bullet("Capture rate slipped 8.9% vs Q3.", [payload]) == [8.9]
