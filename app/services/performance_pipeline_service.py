@@ -85,25 +85,63 @@ class PerformancePipelineService:
                         # no-op safety net for any tail writes / early returns.
                         await wf_db.commit()
                     results[wf_id] = wf_result
+                    if "error" in wf_result:
+                        # A windfarm can fail WITHOUT raising: run_pipeline
+                        # returns an error dict for data-coverage conditions
+                        # (no capacity, no hourly data, no usable years). Those
+                        # used to vanish into the succeeded/failed tally with no
+                        # record of which farm or why, so a farm could fail every
+                        # night unnoticed. Warning, not error: these are data
+                        # gaps, not defects, and error level is reserved for the
+                        # exception path below.
+                        logger.warning(
+                            "pipeline_windfarm_failed",
+                            windfarm_id=wf_id,
+                            error_code=wf_result.get("error_code", "unknown"),
+                            error=str(wf_result.get("error")),
+                        )
                 except Exception as e:
-                    logger.error("pipeline_windfarm_error", windfarm_id=wf_id, error=str(e))
-                    results[wf_id] = {"error": str(e)}
+                    logger.error(
+                        "pipeline_windfarm_error",
+                        windfarm_id=wf_id,
+                        error_code="exception",
+                        error=str(e),
+                        exc_info=True,
+                    )
+                    results[wf_id] = {"error": str(e), "error_code": "exception"}
 
             succeeded = sum(1 for r in results.values() if "error" not in r)
             job = await self.db.get(ImportJobExecution, job_id)
             job.mark_success(records_imported=succeeded)
             await self.db.commit()
 
+            # One line that answers "what failed tonight and why" without
+            # trawling the per-windfarm lines above.
+            failed_ids = sorted(wf for wf, r in results.items() if "error" in r)
+            reason_counts: Dict[str, int] = {}
+            for r in results.values():
+                if "error" in r:
+                    code = r.get("error_code", "unknown")
+                    reason_counts[code] = reason_counts.get(code, 0) + 1
+
             logger.info(
                 "performance_pipeline_complete",
                 windfarms=len(windfarm_ids),
                 succeeded=succeeded,
+                failed=len(failed_ids),
+                failure_reasons=reason_counts,
+                failed_windfarm_ids=failed_ids,
             )
             return {
                 "job_id": job_id,
                 "windfarms_processed": len(windfarm_ids),
                 "succeeded": succeeded,
-                "failed": len(windfarm_ids) - succeeded,
+                "failed": len(failed_ids),
+                # Splatted into pipeline_daily_batch_complete by the cron layer,
+                # so the nightly summary line carries the breakdown too. The full
+                # id list stays in performance_pipeline_complete rather than here
+                # — it would bloat the trigger endpoint's HTTP response.
+                "failure_reasons": reason_counts,
             }
 
         except Exception as e:
@@ -148,7 +186,11 @@ class PerformancePipelineService:
         )
         rated_mw = wf_result.scalar_one_or_none()
         if not rated_mw or rated_mw <= 0:
-            return {"windfarm_id": windfarm_id, "error": "No rated capacity"}
+            return {
+                "windfarm_id": windfarm_id,
+                "error": "No rated capacity",
+                "error_code": "no_rated_capacity",
+            }
 
         # ── SINGLE DATA LOAD ── reused by all modules
         pcs = PowerCurveService(self.db)
@@ -158,7 +200,11 @@ class PerformancePipelineService:
             windfarm_id, start_year, end_year, float(rated_mw), include_capacity_norm=True
         )
         if df_all.empty:
-            return {"windfarm_id": windfarm_id, "error": "No hourly data"}
+            return {
+                "windfarm_id": windfarm_id,
+                "error": "No hourly data",
+                "error_code": "no_hourly_data",
+            }
         # Output normalised by the capacity online each hour — detection only, so
         # phased windfarms aren't flagged for capacity not yet built. Popped here
         # so curves / ODI / commercial modules see the unchanged nameplate p_pu.
@@ -229,6 +275,11 @@ class PerformancePipelineService:
         )
         result["power_curves"] = curves
         if "error" in curves:
+            # Promote to a top-level error: run_pipeline_batch classifies on the
+            # top-level key, so leaving this nested under "power_curves" made a
+            # failed curve build count as a SUCCESS in the batch tally.
+            result["error"] = curves["error"]
+            result["error_code"] = "power_curve_failed"
             return result
 
         # Extract df_no_over and remove from the response dict (large DF;
@@ -242,6 +293,7 @@ class PerformancePipelineService:
         years = [int(y) for y in curves.get("years", [])]
         if not years:
             result["error"] = "No years with data"
+            result["error_code"] = "no_years_with_data"
             return result
 
         logger.info(

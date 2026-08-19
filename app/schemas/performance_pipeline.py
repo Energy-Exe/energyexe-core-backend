@@ -19,6 +19,10 @@ class PipelineRunResponse(BaseModel):
     windfarms_processed: int
     succeeded: int
     failed: int
+    # {error_code: count} for the windfarms that failed, e.g.
+    # {"no_hourly_data": 112, "no_rated_capacity": 20}. Without this a caller
+    # only sees a failure count with no way to tell a data gap from a defect.
+    failure_reasons: Dict[str, int] = {}
 
 
 class PowerCurveBinResponse(BaseModel):
