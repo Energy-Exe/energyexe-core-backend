@@ -133,13 +133,16 @@ class Report(Base):
     )
 
     __table_args__ = (
-        # One in-flight generation per logical target: a concurrent duplicate
-        # POST hits this index and surfaces as a 409 instead of a second run.
+        # One in-flight generation per logical target *per user*: a concurrent
+        # duplicate POST hits this index and surfaces as a 409 instead of a
+        # second run. Scoped by requester (EPR-112) — reports are private, so a
+        # global index would 409 one user against a report they cannot open.
         Index(
             "uq_reports_inflight",
             "report_type",
             "windfarm_id",
             "portfolio_id",
+            "requested_by_id",
             unique=True,
             postgresql_where=(status.in_(("PENDING", "GENERATING"))),
         ),

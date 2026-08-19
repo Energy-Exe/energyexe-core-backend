@@ -19,13 +19,17 @@ from app.services.opportunity_schemas.registry import SCHEMA_STATUS
 from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES, SCHEMA_ONE_LINERS
 from app.services.reports.context import ReportContext
 from app.services.reports.data_builders.common import (
+    bidzone_names,
     build_generation_chart_data,
+    coverage_note,
     delta_pct,
     direction,
+    effective_window,
     monthly_summaries,
     period_label,
     previous_window,
     window_metrics,
+    yoy_window,
 )
 
 logger = structlog.get_logger()
@@ -112,6 +116,7 @@ async def build_findings(ctx: ReportContext) -> dict:
         )
     )
     by_schema = {row.schema_code: row for row in result.scalars().all()}
+    zone_names = await bidzone_names(ctx)
 
     rows: list[dict[str, Any]] = []
     for code in SchemaCode:
@@ -122,7 +127,7 @@ async def build_findings(ctx: ReportContext) -> dict:
         evidence = None
         notes: list[str] = []
         if finding is not None:
-            formatted = format_evidence(code, finding.data_slots)
+            formatted = format_evidence(code, finding.data_slots, zone_names=zone_names)
             evidence = formatted["items"]
             notes = formatted["notes"]
         rows.append(
@@ -182,11 +187,26 @@ def _card(
 async def build_key_metrics(ctx: ReportContext) -> dict:
     """The six-card strip with deltas vs the previous window (EPR-88 v2):
     P50 attainment, generation, capacity factor, lost value, capture rate vs
-    zone, schemas flagged."""
-    start, end = ctx.period_start, ctx.period_end
-    prev_start, prev_end = previous_window(start, end)
+    zone, schemas flagged.
 
-    current = await window_metrics(ctx, start, end)
+    Both windows are measured over the *covered* span (EPR-111): if the farm's
+    data stops mid-window, comparing what exists against a full prior period
+    reports a ~50% collapse that is pure coverage artefact.
+
+    A clipped window compares against the same dates a year earlier rather than
+    against the immediately preceding span. The two are equivalent for the
+    usual full-year window, but once clipping shortens it they diverge, and the
+    preceding span would pit (say) a Norwegian autumn against the spring that
+    came before it — trading the coverage artefact for a seasonal one.
+    """
+    start, end = ctx.period_start, ctx.period_end
+    eff_start, eff_end, data_through = await effective_window(ctx, start, end)
+    if data_through is None:
+        prev_start, prev_end = previous_window(eff_start, eff_end)
+    else:
+        prev_start, prev_end = yoy_window(eff_start, eff_end)
+
+    current = await window_metrics(ctx, eff_start, eff_end)
     previous = await window_metrics(ctx, prev_start, prev_end)
     # A previous window with no generation data yields meaningless deltas.
     if previous["hours_with_data"] == 0:
@@ -247,11 +267,17 @@ async def build_key_metrics(ctx: ReportContext) -> dict:
         ),
         {"label": "Schemas flagged", "value": str(flagged), "unit": None, "raw": flagged},
     ]
-    return {
+    payload = {
         "cards": cards,
         "months_covered": current["months_covered"],
         "previous_label": period_label(prev_start, prev_end),
     }
+    if data_through is not None:
+        payload["data_through"] = data_through.isoformat()
+        note = coverage_note(end, data_through, eff_start, eff_end)
+        if note:
+            payload["note"] = note
+    return payload
 
 
 # ── chart sections ──────────────────────────────────────────────────────

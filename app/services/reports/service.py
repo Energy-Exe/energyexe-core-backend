@@ -95,6 +95,7 @@ class ReportService:
                     Report.report_type == spec.code,
                     Report.windfarm_id == payload.windfarm_id,
                     Report.portfolio_id == payload.portfolio_id,
+                    Report.requested_by_id == user.id,
                     Report.status.in_((ReportStatus.PENDING, ReportStatus.GENERATING)),
                 )
             )
@@ -138,8 +139,11 @@ class ReportService:
         report = result.scalar_one_or_none()
         if report is None:
             raise NotFoundException("Report not found")
-        if is_client_request(user) and report.requested_by_id != user.id:
-            # v1 scoping: no org model yet — clients see their own reports only.
+        if report.requested_by_id != user.id:
+            # EPR-112: reports are private to the user who generated them —
+            # superusers get no bypass (every internal account is one, so a
+            # role-based exemption would leave the library shared in practice).
+            # 404, not 403: never disclose that someone else's report exists.
             raise NotFoundException("Report not found")
         return report
 
@@ -161,10 +165,8 @@ class ReportService:
                 selectinload(Report.windfarm).selectinload(Windfarm.country),
                 selectinload(Report.portfolio),
             )
-            .where(Report.deleted_at.is_(None))
+            .where(Report.deleted_at.is_(None), Report.requested_by_id == user.id)
         )
-        if is_client_request(user):
-            query = query.where(Report.requested_by_id == user.id)
         if not include_superseded:
             query = query.where(Report.status != ReportStatus.SUPERSEDED)
         if report_type:
@@ -193,7 +195,10 @@ class ReportService:
             return ScopeMeta(
                 name=wf.name,
                 capacity_mw=wf.nameplate_capacity_mw,
-                bidzone=wf.bidzone.code if wf.bidzone is not None else None,
+                # EPR-110: the readable label ('NO2'), not bidzones.code — which
+                # is the raw ENTSOE EIC ('10YNO-2--------T'). Resolved at
+                # serialisation time, so frozen reports render it too.
+                bidzone=wf.bidzone.name if wf.bidzone is not None else None,
                 country=wf.country.name if wf.country is not None else None,
             )
         if report.portfolio is not None:
@@ -259,7 +264,13 @@ class ReportService:
         await self.db.commit()
 
     async def _version_chain(self, report: Report) -> List[Report]:
-        """All retained versions for the same target + type + period."""
+        """All retained versions for the same target + type + period.
+
+        Owner-scoped (EPR-112): two users may hold their own report for the
+        same windfarm/type/period, and the chain drives ``soft_delete`` — an
+        unscoped match would let one user's delete stamp ``deleted_at`` on the
+        other's rows and leak their versions through ``version_history``.
+        """
         result = await self.db.execute(
             select(Report)
             .options(
@@ -273,6 +284,7 @@ class ReportService:
                 Report.portfolio_id == report.portfolio_id,
                 Report.period_start == report.period_start,
                 Report.period_end == report.period_end,
+                Report.requested_by_id == report.requested_by_id,
                 Report.deleted_at.is_(None),
             )
         )

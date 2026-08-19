@@ -13,11 +13,17 @@ finding's detection window separately.
 """
 
 from datetime import date, datetime
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from app.models.opportunity import SchemaCode
 
 _MONTH_LIST_CAP = 6
+
+# Slots holding a bidzone code. Detectors persist ``bidzones.code`` — the raw
+# ENTSOE EIC ('10YNO-2--------T') — so the value is resolved to the readable
+# name ('NO2') at render time via the caller's map (EPR-110). Fixing this in
+# the detectors instead would leave every already-stored finding unreadable.
+_ZONE_SLOTS = frozenset({"price_zone"})
 
 
 # ── value formatters ────────────────────────────────────────────────────
@@ -272,12 +278,19 @@ def _annotation_notes(slots: dict) -> list[str]:
 # ── public API ──────────────────────────────────────────────────────────
 
 
-def format_evidence(schema_code: SchemaCode, data_slots: Optional[dict]) -> dict:
+def format_evidence(
+    schema_code: SchemaCode,
+    data_slots: Optional[dict],
+    zone_names: Optional[Mapping[str, str]] = None,
+) -> dict:
     """Curated, formatted evidence for one finding.
 
     Returns ``{"items": [{"label", "value"}], "notes": [str]}``. Unknown or
     missing slots are skipped; formatter errors skip the single slot rather
     than dropping the whole panel.
+
+    ``zone_names`` maps bidzone code → display name; when supplied, zone slots
+    render the name. An unmapped code passes through unchanged.
     """
     slots = data_slots or {}
     items: list[dict[str, str]] = []
@@ -293,6 +306,8 @@ def format_evidence(schema_code: SchemaCode, data_slots: Optional[dict]) -> dict
             value = slots.get(key)
             if value is None:
                 continue
+            if key in _ZONE_SLOTS and zone_names:
+                value = zone_names.get(str(value), value)
             items.append({"label": label, "value": formatter(value)})
         except (TypeError, ValueError):
             continue
