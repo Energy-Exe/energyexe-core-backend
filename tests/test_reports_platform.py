@@ -7,6 +7,8 @@ real reportlab+matplotlib render from in-memory model instances.
 
 from datetime import date, datetime
 
+import pytest
+
 from app.models.report import Report, ReportSection, ReportStatus, SectionStatus
 from app.models.windfarm import Windfarm
 from app.services.reports.data_builders.opportunity import _fmt_number, _key_metric
@@ -881,3 +883,273 @@ class TestEnrichedOpportunityPdf:
         ]
         out = render_report_pdf(report, tmp_path)
         assert out.read_bytes()[:5] == b"%PDF-"
+
+
+# ── EPR-110 / EPR-111 / EPR-112 ─────────────────────────────────────────
+
+
+class _FakeResult:
+    """Canned result for a single ``session.execute`` call."""
+
+    def __init__(self, value=None, rows=None):
+        self._value = value
+        self._rows = rows or []
+
+    def scalar_one_or_none(self):
+        return self._value
+
+    def scalar_one(self):
+        return self._value
+
+    def all(self):
+        return self._rows
+
+    def scalars(self):
+        return self
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _FakeSession:
+    """Records the statements it is handed and replays canned results."""
+
+    def __init__(self, *results):
+        self.results = list(results)
+        self.statements = []
+
+    async def execute(self, statement, *args, **kwargs):
+        self.statements.append(statement)
+        return self.results.pop(0) if self.results else _FakeResult()
+
+    def sql(self, index: int = 0) -> str:
+        return str(self.statements[index])
+
+
+class TestReportOwnershipScoping:
+    """EPR-112 — reports are private to the user who generated them."""
+
+    def _report(self, requested_by_id: int) -> Report:
+        report = Report(
+            report_type="opportunity",
+            scope_type="windfarm",
+            windfarm_id=1,
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+            version=1,
+            status=ReportStatus.COMPLETE,
+            title="t",
+            requested_by_id=requested_by_id,
+        )
+        report.windfarm = None
+        report.portfolio = None
+        return report
+
+    def _user(self, user_id: int, is_superuser: bool = False):
+        from app.models.user import User
+
+        return User(id=user_id, email="u@x.com", username="u", is_superuser=is_superuser)
+
+    async def test_owner_can_read_own_report(self):
+        from app.services.reports.service import ReportService
+
+        session = _FakeSession(_FakeResult(value=self._report(requested_by_id=7)))
+        report = await ReportService(session).get_report(1, self._user(7))
+        assert report.requested_by_id == 7
+
+    async def test_other_user_gets_not_found(self):
+        from app.core.exceptions import NotFoundException
+        from app.services.reports.service import ReportService
+
+        session = _FakeSession(_FakeResult(value=self._report(requested_by_id=7)))
+        with pytest.raises(NotFoundException):
+            await ReportService(session).get_report(1, self._user(8))
+
+    async def test_superuser_gets_no_bypass(self):
+        """Every internal account is a superuser, so an exemption would leave
+        the library shared in practice — which is the bug EPR-112 reports."""
+        from app.core.exceptions import NotFoundException
+        from app.services.reports.service import ReportService
+
+        session = _FakeSession(_FakeResult(value=self._report(requested_by_id=7)))
+        with pytest.raises(NotFoundException):
+            await ReportService(session).get_report(1, self._user(8, is_superuser=True))
+
+    async def test_list_filters_by_requester_for_superusers_too(self):
+        from app.services.reports.service import ReportService
+
+        session = _FakeSession(_FakeResult(value=0), _FakeResult(rows=[]))
+        await ReportService(session).list_reports(self._user(8, is_superuser=True))
+        assert "reports.requested_by_id = " in session.sql(0)
+
+    async def test_version_chain_is_owner_scoped(self):
+        """The chain drives soft_delete — unscoped, one user's delete stamps
+        deleted_at on another user's report for the same farm/type/period."""
+        from app.services.reports.service import ReportService
+
+        session = _FakeSession(_FakeResult(rows=[]))
+        await ReportService(session)._version_chain(self._report(requested_by_id=7))
+        assert "reports.requested_by_id = " in session.sql(0)
+
+
+class TestBidzoneDisplayNames:
+    """EPR-110 — bidzones.code is the raw EIC; bidzones.name is readable."""
+
+    def _report_with_zone(self, code: str, name: str) -> Report:
+        from app.models.bidzone import Bidzone
+        from app.models.country import Country
+
+        report = Report(
+            report_type="opportunity",
+            scope_type="windfarm",
+            windfarm_id=1,
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+            title="t",
+            requested_by_id=1,
+        )
+        report.portfolio = None
+        report.windfarm = Windfarm(name="Tellenes", code="TELLENES", nameplate_capacity_mw=168)
+        report.windfarm.bidzone = Bidzone(code=code, name=name)
+        report.windfarm.country = Country(name="Norway", code="NOR")
+        return report
+
+    def test_scope_meta_emits_the_name_not_the_eic(self):
+        from app.services.reports.service import ReportService
+
+        meta = ReportService.scope_meta(self._report_with_zone("10YNO-2--------T", "NO2"))
+        assert meta.bidzone == "NO2"
+        assert meta.capacity_mw == 168
+        assert meta.country == "Norway"
+
+    def test_evidence_resolves_zone_code_to_name(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.MKT_03,
+            {"cannibalisation_index": 1.11, "price_zone": "10YNO-2--------T"},
+            zone_names={"10YNO-2--------T": "NO2"},
+        )
+        by_label = {i["label"]: i["value"] for i in out["items"]}
+        assert by_label["Price zone"] == "NO2"
+
+    def test_unmapped_zone_code_passes_through(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.MKT_01, {"price_zone": "50Y0JVU59B4JWQCU"}, zone_names={"X": "Y"}
+        )
+        assert {i["value"] for i in out["items"]} == {"50Y0JVU59B4JWQCU"}
+
+    def test_no_map_keeps_previous_behaviour(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(SchemaCode.MKT_02, {"price_zone": "NO3"})
+        assert {i["value"] for i in out["items"]} == {"NO3"}
+
+
+class TestCoverageAwareMetrics:
+    """EPR-111 — a part-covered window must not read as a collapse."""
+
+    def test_capacity_factor_uses_covered_hours(self):
+        from app.services.reports.data_builders.common import capacity_factor_pct
+
+        # Tellenes: 221.8 GWh over 3,264 covered hours of a 8,784-hour window.
+        assert round(capacity_factor_pct(221_800, 168, 3264), 1) == 40.4
+        # The pre-fix denominator is what produced the reported 15.0%.
+        assert round(capacity_factor_pct(221_800, 168, 8784), 1) == 15.0
+
+    def test_capacity_factor_degrades_on_no_coverage(self):
+        from app.services.reports.data_builders.common import capacity_factor_pct
+
+        assert capacity_factor_pct(221_800, 168, 0) is None
+        assert capacity_factor_pct(None, 168, 3264) is None
+        assert capacity_factor_pct(221_800, None, 3264) is None
+        # A genuine zero-generation period is 0%, not "unknown".
+        assert capacity_factor_pct(0.0, 168, 3264) == 0.0
+
+    def test_coverage_note_only_for_material_gaps(self):
+        from app.services.reports.data_builders.common import coverage_note
+
+        note = coverage_note(
+            date(2026, 8, 18), date(2025, 12, 31), date(2025, 8, 18), date(2025, 12, 31)
+        )
+        assert "31 Dec 2025" in note
+        # A window short by ordinary import lag stays quiet.
+        assert (
+            coverage_note(
+                date(2026, 8, 18), date(2026, 8, 16), date(2025, 8, 18), date(2026, 8, 16)
+            )
+            is None
+        )
+        assert coverage_note(date(2026, 8, 18), None, date(2025, 8, 18), date(2026, 8, 18)) is None
+
+    async def test_effective_window_clips_to_last_hour_with_data(self):
+        from app.services.reports.context import ReportContext
+        from app.services.reports.data_builders.common import effective_window
+
+        session = _FakeSession(_FakeResult(value=datetime(2025, 12, 31, 23, 0)))
+        ctx = ReportContext(
+            db=session,
+            report_id=1,
+            scope_type="windfarm",
+            period_start=date(2025, 8, 18),
+            period_end=date(2026, 8, 18),
+            windfarm=Windfarm(id=7220, name="Tellenes", code="TELLENES"),
+        )
+        start, end, data_through = await effective_window(ctx, date(2025, 8, 18), date(2026, 8, 18))
+        assert (start, end, data_through) == (
+            date(2025, 8, 18),
+            date(2025, 12, 31),
+            date(2025, 12, 31),
+        )
+
+    async def test_effective_window_untouched_when_fully_covered(self):
+        from app.services.reports.context import ReportContext
+        from app.services.reports.data_builders.common import effective_window
+
+        ctx_kwargs = dict(
+            report_id=1,
+            scope_type="windfarm",
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+            windfarm=Windfarm(id=1, name="F", code="F"),
+        )
+        covered = ReportContext(
+            db=_FakeSession(_FakeResult(value=datetime(2025, 12, 31, 23, 0))), **ctx_kwargs
+        )
+        assert await effective_window(covered, date(2025, 1, 1), date(2025, 12, 31)) == (
+            date(2025, 1, 1),
+            date(2025, 12, 31),
+            None,
+        )
+        # No data at all — leave the window alone and let the caller's
+        # empty-comparison guard render n/a.
+        empty = ReportContext(db=_FakeSession(_FakeResult(value=None)), **ctx_kwargs)
+        assert await effective_window(empty, date(2025, 1, 1), date(2025, 12, 31)) == (
+            date(2025, 1, 1),
+            date(2025, 12, 31),
+            None,
+        )
+
+    def test_clipped_window_compares_against_the_same_season(self):
+        """A clipped window compares year-over-year, not against the span that
+        happens to precede it — otherwise the coverage artefact is merely
+        traded for a seasonal one (a Norwegian autumn against its spring)."""
+        from app.services.reports.data_builders.common import previous_window, yoy_window
+
+        # Unclipped full year: the two are the same window, so nothing moves.
+        assert previous_window(date(2025, 8, 18), date(2026, 8, 17)) == yoy_window(
+            date(2025, 8, 18), date(2026, 8, 17)
+        )
+        # Clipped to the covered 136 days, they diverge — the preceding span
+        # lands in spring, the year-earlier span keeps the same months.
+        clipped = (date(2025, 8, 18), date(2025, 12, 31))
+        assert previous_window(*clipped) == (date(2025, 4, 4), date(2025, 8, 17))
+        assert yoy_window(*clipped) == (date(2024, 8, 18), date(2024, 12, 31))
+        # Same length either way — the comparison stays like-for-like.
+        yoy = yoy_window(*clipped)
+        assert (yoy[1] - yoy[0]).days == (clipped[1] - clipped[0]).days

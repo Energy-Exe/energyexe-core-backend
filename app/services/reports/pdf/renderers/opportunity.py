@@ -56,6 +56,8 @@ def render(report: Report, tmp_dir: Path) -> Path:
             pdf.metric_cards(cards[i : i + 4])
         if metrics.data.get("previous_label"):
             pdf.small(f"Deltas vs {metrics.data['previous_label']}.")
+        if metrics.data.get("note"):
+            pdf.small(metrics.data["note"])
 
     generation = _section(report, "generation_chart")
     if _generated(generation) and (generation.data.get("series") or {}).get("current", {}).get(

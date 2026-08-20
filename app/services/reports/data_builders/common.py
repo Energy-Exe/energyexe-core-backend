@@ -13,6 +13,7 @@ from typing import Optional
 import structlog
 from sqlalchemy import func, select
 
+from app.models.bidzone import Bidzone
 from app.models.financial_data import FinancialData
 from app.models.generation_data import GenerationData
 from app.models.performance_summary import PerformanceSummary
@@ -23,6 +24,10 @@ logger = structlog.get_logger()
 
 # Relative change below this renders as "flat" rather than an arrow.
 FLAT_TOLERANCE = 0.005
+
+# A window clipped by less than this is not worth a coverage caveat — every
+# window ending "today" is short a day or two of import lag.
+COVERAGE_NOTE_MIN_DAYS = 7
 
 
 # ── period arithmetic ───────────────────────────────────────────────────
@@ -125,6 +130,36 @@ def fmt(value: Optional[float], decimals: int = 1) -> str:
     return f"{value:,.{decimals}f}"
 
 
+# ── coverage ────────────────────────────────────────────────────────────
+
+
+def capacity_factor_pct(
+    generation_mwh: Optional[float], capacity_mw: Optional[float], covered_hours: Optional[int]
+) -> Optional[float]:
+    """Capacity factor over the hours that actually carry a reading (EPR-111).
+
+    Dividing by the *requested* window instead understates the factor in
+    proportion to the empty tail — a farm whose data stops five months into a
+    twelve-month window reads 15% where it ran at 40%.
+    """
+    if generation_mwh is None or not capacity_mw or not covered_hours:
+        return None
+    return generation_mwh / (capacity_mw * covered_hours) * 100
+
+
+def coverage_note(
+    requested_end: date, data_through: Optional[date], eff_start: date, eff_end: date
+) -> Optional[str]:
+    """Caption for a window clipped short by missing data, or None if the gap
+    is small enough to be ordinary import lag."""
+    if data_through is None or (requested_end - data_through).days < COVERAGE_NOTE_MIN_DAYS:
+        return None
+    return (
+        f"Generation data available through {data_through:%d %b %Y} — metrics and deltas "
+        f"cover {eff_start:%d %b} – {eff_end:%d %b %Y}, not the full reporting period."
+    )
+
+
 # ── shared window metrics ───────────────────────────────────────────────
 
 
@@ -135,7 +170,10 @@ async def generation_totals(ctx: ReportContext, start: date, end: date) -> dict:
         select(
             func.sum(func.coalesce(GenerationData.metered_mwh, GenerationData.generation_mwh)),
             func.sum(GenerationData.curtailed_mwh),
-            func.count(GenerationData.hour),
+            # Hours that carry a reading — COUNT over the coalesced value, not
+            # over `hour`, so a row present with both columns NULL does not
+            # inflate coverage (it is the capacity-factor denominator).
+            func.count(func.coalesce(GenerationData.metered_mwh, GenerationData.generation_mwh)),
         ).where(
             GenerationData.windfarm_id == ctx.windfarm_id,
             GenerationData.hour >= window_start,
@@ -148,6 +186,46 @@ async def generation_totals(ctx: ReportContext, start: date, end: date) -> dict:
         "curtailed_mwh": float(curtailed_mwh) if curtailed_mwh is not None else None,
         "hours_with_data": int(hours or 0),
     }
+
+
+async def effective_window(
+    ctx: ReportContext, start: date, end: date
+) -> tuple[date, date, Optional[date]]:
+    """The requested window clipped to the last day that has generation data.
+
+    A report window may run past the data — Norwegian (NVE) farms in particular
+    lag by months — and comparing a part-covered window against a fully covered
+    one reads as a collapse that never happened (EPR-111). Returns
+    ``(start, effective_end, data_through)`` where ``data_through`` is set only
+    when the window was actually clipped.
+    """
+    window_start, window_end = utc_bounds(start, end)
+    result = await ctx.db.execute(
+        select(func.max(GenerationData.hour)).where(
+            GenerationData.windfarm_id == ctx.windfarm_id,
+            GenerationData.hour >= window_start,
+            GenerationData.hour < window_end,
+            func.coalesce(GenerationData.metered_mwh, GenerationData.generation_mwh).isnot(None),
+        )
+    )
+    last_hour = result.scalar_one_or_none()
+    if last_hour is None:
+        # No data at all in the window — leave it alone; the caller's
+        # empty-comparison guard renders the metrics as n/a.
+        return start, end, None
+    last_day = last_hour.date()
+    if last_day >= end:
+        return start, end, None
+    return start, last_day, last_day
+
+
+async def bidzone_names(ctx: ReportContext) -> dict[str, str]:
+    """Bidzone code → display name ('10YNO-2--------T' → 'NO2'), for EPR-110.
+
+    83 rows; one query per report run beats a per-finding lookup.
+    """
+    result = await ctx.db.execute(select(Bidzone.code, Bidzone.name))
+    return {code: name for code, name in result.all() if code and name}
 
 
 async def monthly_summaries(ctx: ReportContext, start: date, end: date) -> list[PerformanceSummary]:
@@ -233,10 +311,9 @@ async def window_metrics(ctx: ReportContext, start: date, end: date) -> dict:
     fin = await financials_for(ctx, end)
 
     capacity_mw = ctx.windfarm.nameplate_capacity_mw if ctx.windfarm is not None else None
-    window_hours = ((end - start).days + 1) * 24
-    capacity_factor = None
-    if gen["generation_mwh"] is not None and capacity_mw and window_hours:
-        capacity_factor = gen["generation_mwh"] / (capacity_mw * window_hours) * 100
+    capacity_factor = capacity_factor_pct(
+        gen["generation_mwh"], capacity_mw, gen["hours_with_data"]
+    )
 
     ebitda_margin = None
     opex_per_mwh = None
