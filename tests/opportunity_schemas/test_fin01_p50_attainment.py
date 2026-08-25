@@ -194,3 +194,23 @@ async def test_detect_cod_partial_year_excluded():
     assert result.severity is Severity.WATCH
     assert result.data_slots["attainment_year"] == 2025
     assert result.data_slots["prior_attainment_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_detect_non_consecutive_prior_caps_at_watch():
+    """A gap year between the two available full years breaks the "two
+    consecutive years" streak → treated as single-year (WATCH cap)."""
+    ctx = _ctx(annual={2023: 84.0, 2025: 82.0}, target=100.0)
+    result = await detect(ctx)
+    assert result is not None
+    assert result.severity is Severity.WATCH
+    assert result.data_slots["prior_attainment_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_detect_stale_data_returns_none():
+    """The loader is full-history, so a farm whose data ended before the
+    detection window must not resurface its last full year as "latest"."""
+    # Window is 2024-01 → 2026-01; latest full year 2022 predates it → None.
+    ctx = _ctx(annual={2021: 84.0, 2022: 82.0}, target=100.0)
+    assert await detect(ctx) is None

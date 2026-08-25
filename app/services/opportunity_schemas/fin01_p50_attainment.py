@@ -8,6 +8,12 @@ only and NEVER substitutes an internal estimate. Farms that have actual
 generation but **no sourced P50 target** still surface a *blank finding* so the
 data gap itself is visible (see "Blank finding" below).
 
+Annual actuals are **complete calendar years only** (``load_annual_generation_gwh``
+returns years with data in all 12 months, over the farm's full history — never
+clipped to the detection window, which used to divide a partial-year sum by the
+full-year target). The assessed year must reach into the detection window, and
+the prior year counts only when it is the literally consecutive calendar year.
+
 Attainment metric (``compute_attainment_pct``)
 ==============================================
     attainment_pct = actual_gwh / p50_target_gwh * 100
@@ -201,8 +207,16 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     cod = _commercial_operational_date(ctx)
 
     # Keep only full operating years (drop the COD partial year), newest last.
+    # ``annual`` only contains COMPLETE calendar years (12 months of data) over
+    # the farm's full history — see ``load_annual_generation_gwh``.
     years = sorted(y for y in annual.keys() if not is_cod_year_excluded(cod, _as_year(y)))
     if not years:
+        return None
+
+    # Recency guard: the loader is no longer window-clipped, so a farm whose data
+    # ended years ago would otherwise resurface its last full year as "latest".
+    # The assessed year must reach into the detection window.
+    if _as_year(years[-1]) < ctx.period_start.year:
         return None
 
     target = await ctx.load_p50_target()
@@ -219,8 +233,11 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     actual_gwh = float(annual[latest_year])
     attainment = compute_attainment_pct(actual_gwh, target)
 
+    # "Two consecutive years" escalation demands literally consecutive calendar
+    # years — a gap year (missing months) between them breaks the streak and the
+    # severity caps at WATCH like a single-year observation.
     prior_attainment: Optional[float] = None
-    if len(years) >= 2:
+    if len(years) >= 2 and _as_year(years[-2]) == _as_year(latest_year) - 1:
         prior_year = years[-2]
         prior_actual = annual.get(prior_year)
         if prior_actual is not None:

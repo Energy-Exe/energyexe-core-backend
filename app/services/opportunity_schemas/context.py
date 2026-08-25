@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Union
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.opportunity import SchemaCode, Severity
@@ -891,12 +891,29 @@ class DetectionContext:
         from app.models.p50_target import P50Target
 
         try:
+            # Prefer a target whose validity range covers the detection window;
+            # fall back to the latest target when none overlaps (better a dated
+            # sourced target than silently dropping the finding).
             result = await self.db.execute(
                 select(P50Target.p50_target_volume_gwh)
-                .where(P50Target.windfarm_id == self.windfarm_id)
+                .where(
+                    P50Target.windfarm_id == self.windfarm_id,
+                    P50Target.p50_target_start_date <= self.period_end.date(),
+                    or_(
+                        P50Target.p50_target_end_date.is_(None),
+                        P50Target.p50_target_end_date >= self.period_start.date(),
+                    ),
+                )
                 .order_by(P50Target.p50_target_start_date.desc())
             )
             value = result.scalars().first()
+            if value is None:
+                result = await self.db.execute(
+                    select(P50Target.p50_target_volume_gwh)
+                    .where(P50Target.windfarm_id == self.windfarm_id)
+                    .order_by(P50Target.p50_target_start_date.desc())
+                )
+                value = result.scalars().first()
         except Exception:
             return None
 
@@ -905,12 +922,17 @@ class DetectionContext:
         return float(value)
 
     async def load_annual_generation_gwh(self) -> Optional[Dict[int, float]]:
-        """Actual annual generation in GWh per calendar year (FIN-01).
+        """Actual annual generation in GWh per COMPLETE calendar year (FIN-01).
 
         Sums ``generation_data.generation_mwh`` per ``EXTRACT(YEAR FROM hour)`` over
-        the detection window and converts MWh → GWh (``/ 1000``). Returns a dict
-        ``{year: gwh}`` (one entry per calendar year with non-NULL generation), so
-        FIN-01 can pick the latest year and the immediately prior year.
+        the farm's FULL history (deliberately NOT clipped to the detection window:
+        clipping produced partial-year sums divided by full-year P50 targets — a
+        window starting 2024-07-06 made every farm's prior-year attainment roughly
+        half its true value) and converts MWh → GWh (``/ 1000``). Only years with
+        data in all 12 months are returned, so a partial leading/trailing year can
+        never be compared against a full-year target. Returns a dict
+        ``{year: gwh}`` so FIN-01 can pick the latest year and the immediately
+        prior year (FIN-01 applies its own recency guard against the window).
 
         Returns ``None`` when there is **no** actual generation data for the
         window — this is the snapshot-safety contract: the M1 legacy scenarios
@@ -935,17 +957,14 @@ class DetectionContext:
                 SUM(generation_mwh) AS generation_mwh
             FROM generation_data
             WHERE windfarm_id = :wf_id
-              AND hour >= :start AND hour < :end
               AND generation_mwh IS NOT NULL
             GROUP BY EXTRACT(YEAR FROM hour)::int
+            HAVING COUNT(DISTINCT EXTRACT(MONTH FROM hour)) = 12
             ORDER BY year
         """
         )
         try:
-            result = await self.db.execute(
-                query,
-                {"wf_id": self.windfarm_id, "start": self.period_start, "end": self.period_end},
-            )
+            result = await self.db.execute(query, {"wf_id": self.windfarm_id})
             rows = result.fetchall()
         except Exception:
             return None

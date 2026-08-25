@@ -9,9 +9,15 @@ underperformance against that empirical baseline.
 
 Signal
 ======
-The detector finds the **longest run of consecutive months strictly below the
-tier floor (80)** in the chronological series, then classifies severity from the
-representative norm_index over that run together with the run length.
+The detector measures the **trailing run of consecutive months strictly below
+the tier floor (80)** — counted backwards from the most recent month with data —
+then classifies severity from the representative norm_index over that run
+together with the run length. "Persistent underperformance" is a statement about
+the asset's CURRENT state: an old below-threshold episode that later recovered
+(typically the commissioning ramp-up — Midtfjellet's Nov 2012–Aug 2013 run kept
+surfacing as a Confirmed finding in 2026) must never fire. The run's month range
+is reported in ``run_start_month`` / ``run_end_month`` so the evidence always
+shows WHEN the underperformance happened.
 
 Severity tiers (spec thresholds; require ``consecutive_months >= 6``):
 
@@ -63,30 +69,27 @@ MIN_MONTHS_OF_DATA = 24  # < 2 years of usable monthly points → suppress
 # ─── Pure, DB-free helpers ────────────────────────────────────────────────────
 
 
-def count_consecutive_months_below(
+def count_trailing_months_below(
     norm_index_series: Sequence[Optional[float]],
     threshold: float,
 ) -> int:
-    """Longest run of consecutive months strictly below ``threshold``.
+    """Trailing run of consecutive months strictly below ``threshold``.
 
-    ``norm_index_series`` is a chronological sequence of monthly norm-index values
-    (``None`` entries break a run — they neither count as "below" nor extend it).
-    Returns the length of the longest contiguous stretch where every value is
-    ``< threshold``; ``0`` when no value is below.
+    ``norm_index_series`` is a chronological sequence of monthly norm-index values.
+    Counts backwards from the LAST entry; any value ``>= threshold`` or ``None``
+    (data gap) ends the run. ``0`` when the latest month is at/above threshold.
 
-    Example: ``count_consecutive_months_below([95,79,78,77,81,76,75,74,73,72], 80)``
-    is ``5`` (the final 76,75,74,73,72 run; the earlier 79,78,77 run is broken by
-    81).
+    Example: ``count_trailing_months_below([95,79,78,77,81,76,75,74,73,72], 80)``
+    is ``5`` (the final 76,75,74,73,72 run; the earlier 79,78,77 episode is
+    history, not the current state).
     """
-    longest = 0
-    current = 0
-    for value in norm_index_series:
+    count = 0
+    for value in reversed(norm_index_series):
         if value is not None and value < threshold:
-            current += 1
-            longest = max(longest, current)
+            count += 1
         else:
-            current = 0
-    return longest
+            break
+    return count
 
 
 def classify_underperformance_severity(
@@ -143,22 +146,20 @@ def _extract_values(series: Any) -> List[Optional[float]]:
     return values
 
 
-def _longest_run_below(values: Sequence[Optional[float]], threshold: float) -> List[float]:
-    """Return the values of the longest run strictly below ``threshold``.
+def _trailing_run_below(values: Sequence[Optional[float]], threshold: float) -> List[float]:
+    """Return the values of the trailing run strictly below ``threshold``.
 
-    Empty list when there is no below-threshold value. Ties keep the FIRST
-    longest run encountered.
+    Chronological order preserved. Empty list when the latest value is at/above
+    threshold (or ``None`` — a gap means the current state is unknown, not bad).
     """
-    best: List[float] = []
-    current: List[float] = []
-    for value in values:
+    run: List[float] = []
+    for value in reversed(values):
         if value is not None and value < threshold:
-            current.append(value)
-            if len(current) > len(best):
-                best = list(current)
+            run.append(value)
         else:
-            current = []
-    return best
+            break
+    run.reverse()
+    return run
 
 
 # ─── Detector entrypoint ──────────────────────────────────────────────────────
@@ -176,8 +177,10 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
 
     Otherwise emits a ``DetectorResult`` classified per
     ``classify_underperformance_severity``. The representative norm_index used for
-    classification is the **mean of the longest below-80 run** (the sustained
-    depth of underperformance), reported in ``data_slots["norm_index_p50"]``.
+    classification is the **mean of the trailing below-80 run** (the sustained
+    depth of the CURRENT underperformance), reported in
+    ``data_slots["norm_index_p50"]``, with the run's month range in
+    ``run_start_month`` / ``run_end_month``.
     """
     series = await ctx.load_norm_index_series()
     if not series:
@@ -190,11 +193,11 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     if len(usable) < MIN_MONTHS_OF_DATA:
         return None
 
-    consecutive_months = count_consecutive_months_below(values, OPS06_INDEX_CONFIRMED)
+    consecutive_months = count_trailing_months_below(values, OPS06_INDEX_CONFIRMED)
     if consecutive_months < MIN_CONSECUTIVE_MONTHS:
         return None
 
-    run_values = _longest_run_below(values, OPS06_INDEX_CONFIRMED)
+    run_values = _trailing_run_below(values, OPS06_INDEX_CONFIRMED)
     # Representative index over the run = its mean (sustained depth of the dip).
     norm_index = sum(run_values) / len(run_values) if run_values else None
 
@@ -202,9 +205,18 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     if severity is None:
         return None
 
+    # Month labels of the trailing run ("YYYY-MM"); None for bare-number test
+    # series that carry no month metadata.
+    run_months = [
+        item.get("month") if isinstance(item, dict) else None
+        for item in list(series)[-consecutive_months:]
+    ]
+
     data_slots = {
         "norm_index_p50": round(norm_index, 2) if norm_index is not None else None,
         "consecutive_months_below_threshold": consecutive_months,
+        "run_start_month": run_months[0] if run_months else None,
+        "run_end_month": run_months[-1] if run_months else None,
         "threshold": OPS06_INDEX_CONFIRMED,
         "months_observed": len(usable),
         "period": f"{ctx.period_start.date()} to {ctx.period_end.date()}",

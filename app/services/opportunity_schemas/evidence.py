@@ -146,6 +146,24 @@ def _daterange(start_key: str, end_key: str, label: str) -> ComputedSlot:
     return compute
 
 
+def _fmt_month(v: Any) -> str:
+    # "YYYY-MM" → "Nov 2012"; anything else passes through.
+    try:
+        return f"{datetime.strptime(str(v), '%Y-%m'):%b %Y}"
+    except ValueError:
+        return str(v)
+
+
+def _monthrange(start_key: str, end_key: str, label: str) -> ComputedSlot:
+    def compute(slots: dict) -> Optional[tuple[str, str]]:
+        start, end = slots.get(start_key), slots.get(end_key)
+        if start is None or end is None:
+            return None
+        return label, f"{_fmt_month(start)} – {_fmt_month(end)}"
+
+    return compute
+
+
 _FIN_OPEX_SLOTS: tuple = (
     ("opex_per_mwh", "Opex per MWh", lambda v: _num(float(v))),
     ("zone_opex_median", "Peer median opex/MWh", lambda v: _num(float(v))),
@@ -184,6 +202,7 @@ EVIDENCE_SLOTS: dict[SchemaCode, tuple] = {
     SchemaCode.OPS_06: (
         ("norm_index_p50", "Wind-normalised index", _fmt_index),
         ("consecutive_months_below_threshold", "Consecutive months below", _fmt_int),
+        _monthrange("run_start_month", "run_end_month", "Below-threshold run"),
         ("threshold", "Threshold", lambda v: _num(float(v))),
         ("months_observed", "Months observed", _fmt_int),
     ),
@@ -236,11 +255,15 @@ EVIDENCE_SLOTS: dict[SchemaCode, tuple] = {
         ("negative_price_hours_per_year", "Hours per year", lambda v: _num(float(v))),
         ("window_days", "Window analysed", lambda v: f"{int(v):,} days"),
     ),
+    # FIN-01 labels name the bankable baseline explicitly: the digest scorecard's
+    # "Weather-adjusted attainment" uses a different denominator (the farm's own
+    # power curve), and the two rendered side-by-side as "P50 attainment" is what
+    # confused a client-facing Midtfjellet digest.
     SchemaCode.FIN_01: (
-        ("attainment_pct", "P50 attainment", _fmt_pct),
+        ("attainment_pct", "Attainment vs bankable P50", _fmt_pct),
         ("actual_gwh", "Actual generation", _fmt_gwh),
         ("p50_target_gwh", "P50 target", _fmt_gwh),
-        ("prior_attainment_pct", "Prior-year attainment", _fmt_pct),
+        ("prior_attainment_pct", "Prior year vs bankable P50", _fmt_pct),
         ("attainment_year", "Assessment year", _fmt_year),
     ),
     SchemaCode.FIN_02: _FIN_OPEX_SLOTS,
