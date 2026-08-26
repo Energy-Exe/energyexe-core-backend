@@ -1,21 +1,40 @@
-"""Opportunity Report data builders (EPR-88).
+"""Opportunity Report data builders (EPR-88, EPR-117).
 
-The findings table snapshots the *current* ACTIVE detection state (one row per
-assessed schema, Pass rows derived for ACTIVE schemas with no finding), now
-with per-schema formatted evidence from ``data_slots``; the metric strip is
-computed over the report's date window with deltas vs the previous window; the
-chart sections emit ``chart_embed`` payloads (client re-renders the platform's
-own charts, the compact ``series`` block feeds the PDF).
+The findings table assesses every ACTIVE schema over the *report's own window*
+(EPR-117): the detection registry is run on demand — write-free, via
+``evaluate_for_windfarm`` — over the requested period clipped to the last day
+with generation data, the same ``effective_window`` the metric strip uses, so
+evidence, charts and metrics all describe one period. Nothing is persisted:
+the nightly ACTIVE board stays the live state; the report is a period-scoped
+assessment. Pass rows are derived for ACTIVE schemas with no finding; schemas
+whose detector needs more in-window history than the window offers are marked
+Suppressed / not assessable rather than Pass. The metric strip is computed
+over the same window with deltas vs the previous window (its "Schemas flagged"
+card reads the persisted findings counts); the chart sections emit
+``chart_embed`` payloads (client re-renders the platform's own charts, the
+compact ``series`` block feeds the PDF).
 """
 
+from datetime import date, datetime, time, timezone
+from types import SimpleNamespace
 from typing import Any, Optional
 
 import structlog
 from sqlalchemy import select
 
-from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode, Severity
+from app.core.database import get_session_factory
+from app.models.opportunity import SchemaCode
+from app.models.report import ReportSection, SectionStatus
+from app.services.opportunity_schemas.context import DetectionContext
 from app.services.opportunity_schemas.evidence import format_evidence
-from app.services.opportunity_schemas.registry import SCHEMA_STATUS
+from app.services.opportunity_schemas.ops02_performance_seasonality import (
+    MIN_MONTHS_REQUIRED as _OPS02_MIN_MONTHS,
+)
+from app.services.opportunity_schemas.registry import (
+    SCHEMA_STATUS,
+    _json_safe,
+    evaluate_for_windfarm,
+)
 from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES, SCHEMA_ONE_LINERS
 from app.services.reports.context import ReportContext
 from app.services.reports.data_builders.common import (
@@ -26,6 +45,7 @@ from app.services.reports.data_builders.common import (
     direction,
     effective_window,
     monthly_summaries,
+    months_spanned,
     period_label,
     previous_window,
     window_metrics,
@@ -89,62 +109,154 @@ def _key_metric(data_slots: dict) -> Optional[str]:
     return None
 
 
-def _detection_period(finding: Opportunity) -> Optional[dict]:
-    start = finding.detection_period_start
-    end = finding.detection_period_end
-    if start is None and end is None:
-        return None
-    return {
-        "start": start.date().isoformat() if start is not None else None,
-        "end": end.date().isoformat() if end is not None else None,
-    }
+# Module seams — tests swap these so ``build_findings`` runs DB-free.
+_session_factory = get_session_factory
+_evaluate = evaluate_for_windfarm
+
+
+def _severity_str(severity: Any) -> str:
+    """'confirmed' from ``Severity.CONFIRMED`` or a plain 'CONFIRMED' string."""
+    return str(getattr(severity, "value", severity)).lower()
+
+
+def _windfarm_snapshot(ctx: ReportContext) -> Any:
+    """A detached snapshot of the windfarm attributes the detectors read.
+
+    The ORM object's relationships are selectin-loaded by the orchestrator, but
+    a lazy-load inside a detector would surface as ``MissingGreenlet`` and be
+    swallowed by the registry's per-detector guard — silently dropping that
+    schema. A plain namespace cannot lazy-load.
+    """
+    wf = ctx.windfarm
+    if wf is None:
+        return ctx.windfarm_id
+    bidzone = getattr(wf, "bidzone", None)
+    country = getattr(wf, "country", None)
+    return SimpleNamespace(
+        id=wf.id,
+        bidzone_id=getattr(wf, "bidzone_id", None),
+        commercial_operational_date=getattr(wf, "commercial_operational_date", None),
+        foundation_type=getattr(wf, "foundation_type", None),
+        location_type=getattr(wf, "location_type", None),
+        bidzone=(
+            SimpleNamespace(code=getattr(bidzone, "code", None)) if bidzone is not None else None
+        ),
+        country=(
+            SimpleNamespace(code=getattr(country, "code", None)) if country is not None else None
+        ),
+    )
+
+
+async def _evaluate_window(ctx: ReportContext, eff_start: date, eff_end: date) -> dict:
+    """Run the detection registry over ``[eff_start, eff_end]`` without persisting.
+
+    Own throwaway session: ``run_section`` writes the section row on ``ctx.db``,
+    and the detection accessors swallow their query errors — which in Postgres
+    abort the transaction, so one failed detector query would turn the
+    section's COMMIT into a silent rollback. The session is closed (rolled
+    back) on exit; nothing is ever committed.
+
+    The end bound is the last *instant* of the final day, not the next
+    midnight: detectors derive calendar units from ``period_end`` (OPS-07 fleet
+    age, MKT-04 expiry horizon, the loaders' month/year clips), and a half-open
+    end would assess a 2025 report as of 2026. SQL binds (``hour < :end``) still
+    include the day's 23:00 row.
+    """
+    start = datetime.combine(eff_start, time.min, tzinfo=timezone.utc)
+    end = datetime.combine(eff_end, time.max, tzinfo=timezone.utc)
+    factory = _session_factory()
+    async with factory() as eval_db:
+        det_ctx = DetectionContext(
+            db=eval_db,
+            windfarm=_windfarm_snapshot(ctx),
+            period_start=start,
+            period_end=end,
+        )
+        results, _ordered = await _evaluate(det_ctx)
+    return results
+
+
+def _contains_complete_calendar_year(start: date, end: date) -> bool:
+    return any(
+        start <= date(year, 1, 1) and end >= date(year, 12, 31)
+        for year in range(start.year, end.year + 1)
+    )
+
+
+def _not_assessable_reason(code: SchemaCode, eff_start: date, eff_end: date) -> Optional[str]:
+    """Why a schema cannot be tested over this window (``None`` = it can).
+
+    Only schemas whose detector needs a minimum span of *in-window* data and
+    returns "no finding" when short of it — those render as Suppressed / not
+    assessable instead of a misleading Pass. History-based schemas (OPS-06 reads
+    months before the window; FIN-02/03 count fiscal years) are not listed.
+    """
+    months = months_spanned(eff_start, eff_end)
+    if code is SchemaCode.OPS_02 and months < _OPS02_MIN_MONTHS:
+        return (
+            f"Not assessable over this window: needs {_OPS02_MIN_MONTHS} months of monthly "
+            f"performance data (window covers {months})."
+        )
+    if code is SchemaCode.FIN_01 and not _contains_complete_calendar_year(eff_start, eff_end):
+        return (
+            "Not assessable over this window: needs a complete calendar year (Jan–Dec) "
+            "inside the window."
+        )
+    return None
 
 
 async def build_findings(ctx: ReportContext) -> dict:
     """One row per assessed schema, Pass included (EPR-88: passes are not noise).
 
-    Reads the current ACTIVE detection state (the engine keeps exactly one
-    ACTIVE row per windfarm+schema). Pass is derived: an ACTIVE-status schema
-    with no finding row produced by the engine's latest run. INACTIVE schemas
-    (data-blocked, e.g. MKT_05/MKT_07) are omitted entirely. Flagged rows carry
-    formatted per-schema ``evidence`` from ``data_slots`` (shared web/PDF).
+    EPR-117: the schemas are evaluated over the report's own window — the
+    requested period clipped to the last day with generation data (the same
+    ``effective_window`` the key metrics use) — by running the detection
+    registry write-free. Pass is derived: an ACTIVE schema with no result.
+    Schemas that cannot be tested on a window this short are Suppressed with a
+    "not assessable" reason. INACTIVE schemas (data-blocked, e.g. MKT_05/MKT_07)
+    are omitted entirely. Flagged rows carry formatted per-schema ``evidence``
+    from ``data_slots`` (shared web/PDF).
     """
-    result = await ctx.db.execute(
-        select(Opportunity).where(
-            Opportunity.windfarm_id == ctx.windfarm_id,
-            Opportunity.status == OpportunityStatus.ACTIVE,
-        )
-    )
-    by_schema = {row.schema_code: row for row in result.scalars().all()}
+    start, end = ctx.period_start, ctx.period_end
+    eff_start, eff_end, data_through = await effective_window(ctx, start, end)
     zone_names = await bidzone_names(ctx)
+    results = await _evaluate_window(ctx, eff_start, eff_end)
+
+    window = {"start": eff_start.isoformat(), "end": eff_end.isoformat()}
+    months = months_spanned(eff_start, eff_end)
 
     rows: list[dict[str, Any]] = []
     for code in SchemaCode:
         if SCHEMA_STATUS.get(code) != "ACTIVE":
             continue
-        finding = by_schema.get(code.value)
-        severity = finding.severity if finding is not None else "PASS"
+        result = results.get(code)
         evidence = None
         notes: list[str] = []
-        if finding is not None:
-            formatted = format_evidence(code, finding.data_slots, zone_names=zone_names)
+        key_metric = None
+        if result is not None:
+            slots = _json_safe(result.data_slots or {})
+            formatted = format_evidence(code, slots, zone_names=zone_names)
             evidence = formatted["items"]
             notes = formatted["notes"]
+            key_metric = _key_metric(slots)
+            severity = _severity_str(result.severity)
+            suppression_reason = result.suppression_reason
+        else:
+            suppression_reason = _not_assessable_reason(code, eff_start, eff_end)
+            severity = "suppressed" if suppression_reason else "pass"
         rows.append(
             {
                 "schema_code": code.value.replace("_", "-"),  # display form, e.g. FIN-01
                 "domain": _DOMAINS.get(code.value.split("_")[0], "Other"),
                 "display_name": SCHEMA_NAMES[code],
                 "one_liner": SCHEMA_ONE_LINERS.get(code),
-                "severity": severity.lower(),
-                "key_metric": _key_metric(finding.data_slots) if finding is not None else None,
+                "severity": severity,
+                "key_metric": key_metric,
                 "evidence": evidence,
                 "notes": notes,
-                "detection_period": _detection_period(finding) if finding is not None else None,
-                "suppression_reason": finding.suppression_reason if finding is not None else None,
-                "detected_at": (
-                    finding.detection_period_end.isoformat() if finding is not None else None
-                ),
+                "detection_period": dict(window),
+                "suppression_reason": suppression_reason,
+                "detected_at": window["end"],
             }
         )
 
@@ -160,7 +272,47 @@ async def build_findings(ctx: ReportContext) -> dict:
     for r in rows:
         counts[r["severity"]] = counts.get(r["severity"], 0) + 1
 
-    return {"rows": rows, "severity_counts": counts, "assessed_schemas": len(rows)}
+    payload: dict[str, Any] = {
+        "rows": rows,
+        "severity_counts": counts,
+        "assessed_schemas": len(rows),
+        "evaluation_window": window,
+        "label": period_label(eff_start, eff_end),
+        "months_covered": months,
+    }
+    if data_through is not None:
+        payload["data_through"] = data_through.isoformat()
+        note = coverage_note(end, data_through, eff_start, eff_end)
+        if note:
+            payload["note"] = note
+    if months < 12:
+        payload["window_note"] = (
+            f"Window covers {months} month{'s' if months != 1 else ''} — schemas that need a "
+            "full year or more of in-window history are marked not assessable."
+        )
+    return payload
+
+
+async def _flagged_from_findings(ctx: ReportContext) -> Optional[int]:
+    """"Schemas flagged" from the persisted findings section (EPR-117).
+
+    The findings section evaluates the schemas over the report window; this
+    section runs after it (``SectionSpec.after``) and reads its counts, so the
+    card and the table cannot disagree and the evaluation runs once. ``None``
+    when findings has not generated (rendered as n/a).
+    """
+    result = await ctx.db.execute(
+        select(ReportSection.data).where(
+            ReportSection.report_id == ctx.report_id,
+            ReportSection.section_key == "findings",
+            ReportSection.status == SectionStatus.GENERATED,
+        )
+    )
+    data = result.scalar_one_or_none()
+    if not data:
+        return None
+    counts = data.get("severity_counts") or {}
+    return sum(int(counts.get(key) or 0) for key in ("confirmed", "indicative", "watch"))
 
 
 def _card(
@@ -212,17 +364,7 @@ async def build_key_metrics(ctx: ReportContext) -> dict:
     if previous["hours_with_data"] == 0:
         previous = {key: None for key in previous}
 
-    flagged_result = await ctx.db.execute(
-        select(Opportunity.severity).where(
-            Opportunity.windfarm_id == ctx.windfarm_id,
-            Opportunity.status == OpportunityStatus.ACTIVE,
-        )
-    )
-    flagged = sum(
-        1
-        for (sev,) in flagged_result.all()
-        if sev in (Severity.CONFIRMED, Severity.INDICATIVE, Severity.WATCH)
-    )
+    flagged = await _flagged_from_findings(ctx)
 
     cards = [
         # "Weather-adjusted", not "P50": the metric is actual vs the farm's own
@@ -268,7 +410,12 @@ async def build_key_metrics(ctx: ReportContext) -> dict:
             previous["capture_rate_pct"],
             "up",
         ),
-        {"label": "Schemas flagged", "value": str(flagged), "unit": None, "raw": flagged},
+        {
+            "label": "Schemas flagged",
+            "value": str(flagged) if flagged is not None else "n/a",
+            "unit": None,
+            "raw": flagged,
+        },
     ]
     payload = {
         "cards": cards,

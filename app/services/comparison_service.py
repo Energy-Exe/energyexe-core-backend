@@ -8,14 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, case, exists, text
 from sqlalchemy.orm import joinedload
 
-from app.models.generation_data import GenerationData
+from app.models.generation_data import MONTHLY_SOURCES, GenerationData
 from app.models.windfarm import Windfarm
 
-# Sources that report ONE generation_data row per month (the whole month's MWh
-# stored at a single hour). Their rows must be weighted by hours-in-month when
-# computing capacity factors — treating them as one hour inflates CF ~720x
-# (client-ui #27/#112: 35,727% CF on USA/Denmark charts).
-MONTHLY_SOURCES = ("EIA", "ENERGISTYRELSEN")
+__all__ = ["ComparisonService", "MONTHLY_SOURCES"]
 
 
 class ComparisonService:

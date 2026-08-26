@@ -13,6 +13,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
+from app.models.generation_data import MONTHLY_SOURCES
 from app.models.import_job_execution import ImportJobExecution, ImportJobStatus
 from app.models.performance_summary import PerformanceSummary
 from app.models.power_curve_bin import PowerCurveBin
@@ -70,10 +71,7 @@ class PerformancePipelineService:
 
         try:
             if not windfarm_ids:
-                result = await self.db.execute(
-                    select(Windfarm.id).where(Windfarm.status == "operational")
-                )
-                windfarm_ids = [r[0] for r in result.fetchall()]
+                windfarm_ids = await self._select_eligible_windfarms()
 
             results = {}
             for wf_id in windfarm_ids:
@@ -150,6 +148,100 @@ class PerformancePipelineService:
                 job.mark_failed(str(e))
                 await self.db.commit()
             raise
+
+    async def _select_eligible_windfarms(self) -> List[int]:
+        """Operational windfarms that the HOURLY pipeline can actually analyse.
+
+        Excludes windfarms whose generation data comes only from MONTHLY_SOURCES
+        (EIA, ENERGISTYRELSEN). Those store a whole month's MWh at a single hour,
+        so `p_pu = generation / nameplate` lands in the hundreds against a
+        plausibility ceiling of 1.20 — every row is rejected and no power curve
+        can ever be built. Measured on prod 2026-08-26: 1318 of 1368 nightly
+        "failures" were exactly these farms, failing identically every night.
+
+        They are out of scope, not broken, so they are excluded up front rather
+        than counted as failures. A farm with even ONE hourly-source row stays
+        in — mixed-source farms are analysable on the hourly part.
+
+        Windfarms with no generation data at all are also excluded here, but
+        counted and logged separately: an operational farm with zero rows is a
+        data-integrity question, not a resolution mismatch.
+
+        Explicitly-passed windfarm_ids bypass this entirely — a caller naming
+        windfarms gets exactly those, so smoke tests and manual re-runs still
+        work on any farm.
+        """
+        operational = (
+            (await self.db.execute(select(Windfarm.id).where(Windfarm.status == "operational")))
+            .scalars()
+            .all()
+        )
+
+        # Correlated EXISTS per windfarm: uses the generation_data windfarm_id
+        # index instead of aggregating the whole 25M-row table.
+        eligible = set(
+            (
+                await self.db.execute(
+                    text(
+                        """
+                        SELECT w.id FROM windfarms w
+                        WHERE w.status = 'operational'
+                          AND EXISTS (
+                            SELECT 1 FROM generation_data gd
+                            WHERE gd.windfarm_id = w.id
+                              AND gd.generation_mwh IS NOT NULL
+                              AND gd.source <> ALL(:monthly)
+                          )
+                        """
+                    ),
+                    {"monthly": list(MONTHLY_SOURCES)},
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        with_any_data = set(
+            (
+                await self.db.execute(
+                    text(
+                        """
+                        SELECT w.id FROM windfarms w
+                        WHERE w.status = 'operational'
+                          AND EXISTS (
+                            SELECT 1 FROM generation_data gd
+                            WHERE gd.windfarm_id = w.id
+                              AND gd.generation_mwh IS NOT NULL
+                          )
+                        """
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        monthly_only = with_any_data - eligible
+        no_data = set(operational) - with_any_data
+
+        # Scope is logged, never silent. Dropping ~1300 farms without saying so
+        # would repeat exactly the invisibility this pipeline just got fixed for.
+        logger.info(
+            "pipeline_batch_scope",
+            operational=len(operational),
+            eligible=len(eligible),
+            excluded_monthly_only=len(monthly_only),
+            excluded_no_generation_data=len(no_data),
+            monthly_sources=list(MONTHLY_SOURCES),
+        )
+        if no_data:
+            logger.warning(
+                "pipeline_operational_windfarms_without_generation_data",
+                count=len(no_data),
+                windfarm_ids=sorted(no_data),
+            )
+
+        return sorted(eligible)
 
     # ─── Single windfarm pipeline ──────────────────────────────
 

@@ -42,8 +42,9 @@ Cache keys (stable — downstream tests depend on these):
 
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy import or_, select, text
@@ -65,7 +66,46 @@ _COD_PARTIAL_YEAR_MONTH = 5
 # timeout) leaving the connection in an aborted state. Computing it once per zone
 # per process collapses that to a single scan. Window is hour-rounded so the
 # per-windfarm second-level differences in ``now`` still hit the same entry.
+#
+# Entries are ``(monotonic_computed_at, payload)`` with a TTL and a size cap
+# (EPR-117): the Opportunity report evaluates fixed historical windows whose
+# keys never rotate the way the nightly's ``now`` does, so without expiry the
+# first "2025" report's zone average would be served for the process lifetime,
+# across re-imports.
 _ZONE_CAPTURE_CACHE: Dict[tuple, Any] = {}
+_ZONE_CAPTURE_TTL_SECONDS = 24 * 3600
+_ZONE_CAPTURE_MAX_ENTRIES = 64
+
+
+def _zone_cache_get(key: tuple) -> Optional[Any]:
+    entry = _ZONE_CAPTURE_CACHE.get(key)
+    if entry is None:
+        return None
+    computed_at, payload = entry
+    if _time.monotonic() - computed_at > _ZONE_CAPTURE_TTL_SECONDS:
+        _ZONE_CAPTURE_CACHE.pop(key, None)
+        return None
+    return payload
+
+
+def _zone_cache_put(key: tuple, payload: Any) -> None:
+    while len(_ZONE_CAPTURE_CACHE) >= _ZONE_CAPTURE_MAX_ENTRIES:
+        oldest = min(_ZONE_CAPTURE_CACHE, key=lambda k: _ZONE_CAPTURE_CACHE[k][0])
+        _ZONE_CAPTURE_CACHE.pop(oldest, None)
+    _ZONE_CAPTURE_CACHE[key] = (_time.monotonic(), payload)
+
+
+def last_complete_calendar_year(period_end: datetime) -> int:
+    """The latest calendar year that ends on or before ``period_end``.
+
+    A year counts as complete only when the window reaches its 31 December —
+    an assessment "as of" June 2025 must not consume July–December 2025 data
+    even if the database already holds it (EPR-117).
+    """
+    end = period_end.date() if isinstance(period_end, datetime) else period_end
+    if end.month == 12 and end.day == 31:
+        return end.year
+    return end.year - 1
 
 
 def _is_cod_partial_year(commercial_operational_date: Optional[date], year: int) -> bool:
@@ -156,7 +196,9 @@ class DetectionContext:
         """Load PPA info for suppression / branch selection.
 
         Mirrors legacy ``_load_ppa_info``: latest PPA (by end date) for the
-        windfarm, or ``{}`` when none exists.
+        windfarm, or ``{}`` when none exists. Deliberately NOT window-scoped:
+        the contract in force is a property of the asset, not of the period
+        (a period-scoped Opportunity report reads the same contract).
         """
         if "ppa_info" in self._cache:
             return self._cache["ppa_info"]
@@ -212,6 +254,12 @@ class DetectionContext:
                     PerformanceSummary.period_type == "month",
                     PerformanceSummary.year >= start.year,
                     PerformanceSummary.year <= end.year,
+                    # Month granularity (EPR-117): the year range above keeps the
+                    # query sargable; this bound stops a Sep-2024 window pulling
+                    # Jan-2024 months into OPS-01/02/03 evidence.
+                    (PerformanceSummary.year * 12 + PerformanceSummary.month).between(
+                        start.year * 12 + start.month, end.year * 12 + end.month
+                    ),
                     PerformanceSummary.odi_pct_underperf.isnot(None),
                 )
                 .order_by(PerformanceSummary.year, PerformanceSummary.month)
@@ -300,6 +348,11 @@ class DetectionContext:
                     PerformanceSummary.windfarm_id == self.windfarm_id,
                     PerformanceSummary.period_type == "month",
                     PerformanceSummary.norm_index_p50.isnot(None),
+                    # History *before* the window is deliberately kept (OPS-06
+                    # needs 24 months and a trailing run), but nothing after the
+                    # window end: the run is assessed "as of" period_end (EPR-117).
+                    (PerformanceSummary.year * 12 + PerformanceSummary.month)
+                    <= self.period_end.year * 12 + self.period_end.month,
                 )
                 .order_by(PerformanceSummary.year, PerformanceSummary.month)
             )
@@ -373,9 +426,8 @@ class DetectionContext:
             start.replace(minute=0, second=0, microsecond=0),
             end.replace(minute=0, second=0, microsecond=0),
         )
-        if _zk in _ZONE_CAPTURE_CACHE:
-            zone_data = _ZONE_CAPTURE_CACHE[_zk]
-        else:
+        zone_data = _zone_cache_get(_zk)
+        if zone_data is None:
             try:
                 zone_data = await price_analytics.compare_capture_rates_by_bidzone(
                     bidzone_id=bidzone_id,
@@ -387,7 +439,7 @@ class DetectionContext:
                     "opportunity_zone_capture_error", bidzone_id=bidzone_id, error=str(e)
                 )
                 return None
-            _ZONE_CAPTURE_CACHE[_zk] = zone_data
+            _zone_cache_put(_zk, zone_data)
 
         zone_avg = zone_data.get("zone_average_capture_rate")
         if zone_avg is None:
@@ -696,11 +748,18 @@ class DetectionContext:
     async def _compute_degradation_result(self) -> Optional[dict]:
         from app.models.degradation_result import DegradationResult
 
+        as_of = (
+            self.period_end.date() if isinstance(self.period_end, datetime) else self.period_end
+        )
         try:
             result = await self.db.execute(
                 select(DegradationResult)
                 .where(DegradationResult.windfarm_id == self.windfarm_id)
                 .order_by(
+                    # Assessed "as of" the window end (EPR-117): a regression that
+                    # ends inside the window beats one that runs past it; when no
+                    # such row exists the latest row is used as before.
+                    (DegradationResult.analysis_end <= as_of).desc().nullslast(),
                     # Prefer the q50 (P50) reference curve, then the most recent
                     # pipeline run, then a stable id tie-breaker.
                     (DegradationResult.reference_curve == "q50").desc(),
@@ -826,7 +885,11 @@ class DetectionContext:
         try:
             result = await self.db.execute(
                 select(StructuralConstraintFlag).where(
-                    StructuralConstraintFlag.windfarm_id == self.windfarm_id
+                    StructuralConstraintFlag.windfarm_id == self.windfarm_id,
+                    # Only constraints that overlap the detection window (EPR-117):
+                    # a 2021 constraint is not a finding for a 2024–2026 window.
+                    StructuralConstraintFlag.period_start < self.period_end,
+                    StructuralConstraintFlag.period_end > self.period_start,
                 )
             )
             rows = result.scalars().all()
@@ -925,10 +988,12 @@ class DetectionContext:
         """Actual annual generation in GWh per COMPLETE calendar year (FIN-01).
 
         Sums ``generation_data.generation_mwh`` per ``EXTRACT(YEAR FROM hour)`` over
-        the farm's FULL history (deliberately NOT clipped to the detection window:
-        clipping produced partial-year sums divided by full-year P50 targets — a
-        window starting 2024-07-06 made every farm's prior-year attainment roughly
-        half its true value) and converts MWh → GWh (``/ 1000``). Only years with
+        whole calendar years (deliberately NOT clipped to the detection window
+        start: clipping produced partial-year sums divided by full-year P50
+        targets — a window starting 2024-07-06 made every farm's prior-year
+        attainment roughly half its true value), bounded to the four calendar
+        years ending at the last complete year before the window end (EPR-117),
+        and converts MWh → GWh (``/ 1000``). Only years with
         data in all 12 months are returned, so a partial leading/trailing year can
         never be compared against a full-year target. Returns a dict
         ``{year: gwh}`` so FIN-01 can pick the latest year and the immediately
@@ -958,13 +1023,26 @@ class DetectionContext:
             FROM generation_data
             WHERE windfarm_id = :wf_id
               AND generation_mwh IS NOT NULL
+              AND hour >= :since
+              AND hour < :until
             GROUP BY EXTRACT(YEAR FROM hour)::int
             HAVING COUNT(DISTINCT EXTRACT(MONTH FROM hour)) = 12
             ORDER BY year
         """
         )
+        # Years after the window end never count, and the window's own final
+        # year only when it runs through 31 December (EPR-117). FIN-01 reads only
+        # the latest complete year and the one before it, so the scan is bounded
+        # to the last four candidate years (COD-year exclusion and a partial
+        # trailing year still leave a consecutive pair) — a range on
+        # idx_gen_windfarm_hour instead of the farm's whole history.
+        last_year = last_complete_calendar_year(self.period_end)
+        since = datetime(last_year - 3, 1, 1, tzinfo=timezone.utc)
+        until = datetime(last_year + 1, 1, 1, tzinfo=timezone.utc)
         try:
-            result = await self.db.execute(query, {"wf_id": self.windfarm_id})
+            result = await self.db.execute(
+                query, {"wf_id": self.windfarm_id, "since": since, "until": until}
+            )
             rows = result.fetchall()
         except Exception:
             return None
@@ -1027,12 +1105,16 @@ class DetectionContext:
                 ON fd.financial_entity_id = wfe.financial_entity_id
             WHERE wfe.windfarm_id = :wf_id
               AND wfe.relationship_type = 'primary_asset'
+              AND EXTRACT(YEAR FROM fd.period_start)::int <= :end_year
             GROUP BY EXTRACT(YEAR FROM fd.period_start)::int
             ORDER BY year
         """
         )
         try:
-            result = await self.db.execute(query, {"wf_id": self.windfarm_id})
+            # Fiscal years after the window end are not this window's costs (EPR-117).
+            result = await self.db.execute(
+                query, {"wf_id": self.windfarm_id, "end_year": self.period_end.year}
+            )
             rows = result.fetchall()
         except Exception:
             return None

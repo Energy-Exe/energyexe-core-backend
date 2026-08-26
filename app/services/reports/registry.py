@@ -44,6 +44,11 @@ class SectionSpec:
     narrative: Optional[NarrativeSpec] = None
     # Executive summary: generated last (pass 2) but rendered first.
     render_first: bool = False
+    # Pass-1 data sections that read another data section's persisted payload
+    # (EPR-117: key_metrics takes "Schemas flagged" from findings' counts). The
+    # orchestrator runs sections with an ``after`` only once the independent
+    # sections have landed.
+    after: tuple = ()
 
     @property
     def ai_enabled(self) -> bool:
@@ -95,6 +100,7 @@ def _build_registry() -> Dict[str, ReportTypeSpec]:
                 title="Key Metrics",
                 kind="metric_strip",
                 data_builder=opp.build_key_metrics,
+                after=("findings",),
             ),
             SectionSpec(
                 key="generation_chart",
