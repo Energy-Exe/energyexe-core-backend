@@ -886,7 +886,7 @@ class TestEnrichedOpportunityPdf:
                                 {"label": "P50 target", "value": "45.6 GWh"},
                             ],
                             "notes": ["Provisional pending review."],
-                            "detection_period": {"start": "2024-06-26", "end": "2026-06-26"},
+                            "detection_period": {"start": "2025-01-01", "end": "2025-12-31"},
                         },
                         {
                             "schema_code": "OPS-02",
@@ -899,6 +899,9 @@ class TestEnrichedOpportunityPdf:
                     ],
                     "severity_counts": {"confirmed": 1, "pass": 1},
                     "assessed_schemas": 2,
+                    "evaluation_window": {"start": "2025-01-01", "end": "2025-12-31"},
+                    "label": "2025",
+                    "months_covered": 12,
                 },
                 generated_at=datetime(2026, 8, 17),
             ),
@@ -1244,3 +1247,224 @@ class TestCoverageAwareMetrics:
         # Same length either way — the comparison stays like-for-like.
         yoy = yoy_window(*clipped)
         assert (yoy[1] - yoy[0]).days == (clipped[1] - clipped[0]).days
+
+
+# ── EPR-117 — period-scoped findings ───────────────────────────────────
+
+
+class _FakeEvalSession:
+    """Throwaway detection session; the fake evaluator never touches it."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _fake_session_factory():
+    return _FakeEvalSession
+
+
+class TestPeriodScopedFindings:
+    """The findings table evaluates the schemas over the report's own window."""
+
+    def _ctx(self, session, start, end):
+        from app.services.reports.context import ReportContext
+
+        return ReportContext(
+            db=session,
+            report_id=1,
+            scope_type="windfarm",
+            period_start=start,
+            period_end=end,
+            windfarm=Windfarm(id=7, name="Testfarm", code="TESTF"),
+        )
+
+    def _patch(self, monkeypatch, results):
+        import app.services.reports.data_builders.opportunity as opp
+
+        captured = {}
+
+        async def evaluate(det_ctx):
+            captured["ctx"] = det_ctx
+            return results, list(results)
+
+        monkeypatch.setattr(opp, "_session_factory", _fake_session_factory)
+        monkeypatch.setattr(opp, "_evaluate", evaluate)
+        return captured
+
+    async def test_rows_carry_the_report_window(self, monkeypatch):
+        from datetime import timezone
+
+        from app.models.opportunity import SchemaCode, Severity
+        from app.services.opportunity_schemas.context import DetectorResult
+        from app.services.reports.data_builders.opportunity import build_findings
+
+        results = {
+            SchemaCode.OPS_01: DetectorResult(
+                schema_code=SchemaCode.OPS_01,
+                severity=Severity.CONFIRMED,
+                data_slots={"odi_pct": 95.5, "months_below_threshold": 9},
+            ),
+            SchemaCode.MKT_01: DetectorResult(
+                schema_code=SchemaCode.MKT_01,
+                severity=Severity.SUPPRESSED,
+                data_slots={"capture_rate": 0.402},
+                suppression_reason="Absorbed by MKT-03",
+            ),
+        }
+        captured = self._patch(monkeypatch, results)
+        session = _FakeSession(
+            _FakeResult(value=datetime(2025, 12, 31, 23, 0)),  # effective_window
+            _FakeResult(rows=[]),  # bidzone_names
+        )
+        payload = await build_findings(self._ctx(session, date(2025, 1, 1), date(2025, 12, 31)))
+
+        det_ctx = captured["ctx"]
+        assert det_ctx.period_start == datetime(2025, 1, 1, tzinfo=timezone.utc)
+        # Inclusive end instant — a half-open midnight would read as 2026.
+        assert det_ctx.period_end == datetime(
+            2025, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc
+        )
+        assert det_ctx.period_end.date() == date(2025, 12, 31)
+        assert det_ctx.windfarm.id == 7
+        assert not isinstance(det_ctx.windfarm, Windfarm)  # detached snapshot
+
+        assert payload["evaluation_window"] == {"start": "2025-01-01", "end": "2025-12-31"}
+        assert payload["label"] == "2025"
+        assert payload["months_covered"] == 12
+        assert "note" not in payload
+        assert "window_note" not in payload
+        assert all(r["detection_period"] == payload["evaluation_window"] for r in payload["rows"])
+        assert all(r["detected_at"] == "2025-12-31" for r in payload["rows"])
+
+        by_code = {r["schema_code"]: r for r in payload["rows"]}
+        assert by_code["OPS-01"]["severity"] == "confirmed"
+        assert by_code["OPS-01"]["evidence"] is not None
+        assert by_code["MKT-01"]["severity"] == "suppressed"
+        assert by_code["MKT-01"]["suppression_reason"] == "Absorbed by MKT-03"
+        assert by_code["OPS-02"]["severity"] == "pass"  # 12 months → assessable
+        assert by_code["FIN-01"]["severity"] == "pass"  # complete calendar year
+        assert "MKT-05" not in by_code  # INACTIVE schemas omitted
+        assert payload["rows"][0]["schema_code"] == "OPS-01"
+        assert payload["rows"][-1]["severity"] == "suppressed"
+        assert payload["severity_counts"]["confirmed"] == 1
+        assert payload["severity_counts"]["suppressed"] == 1
+        assert payload["assessed_schemas"] == len(payload["rows"])
+
+    async def test_clipped_window_shares_the_metrics_coverage_note(self, monkeypatch):
+        from app.services.reports.data_builders.opportunity import build_findings
+
+        self._patch(monkeypatch, {})
+        session = _FakeSession(
+            _FakeResult(value=datetime(2025, 12, 31, 23, 0)), _FakeResult(rows=[])
+        )
+        payload = await build_findings(self._ctx(session, date(2025, 1, 1), date(2026, 8, 26)))
+
+        assert payload["evaluation_window"] == {"start": "2025-01-01", "end": "2025-12-31"}
+        assert payload["data_through"] == "2025-12-31"
+        assert payload["note"].startswith("Generation data available through 31 Dec 2025")
+        assert payload["label"] == "2025"
+
+    async def test_short_window_marks_history_schemas_not_assessable(self, monkeypatch):
+        from app.services.reports.data_builders.opportunity import build_findings
+
+        self._patch(monkeypatch, {})
+        session = _FakeSession(
+            _FakeResult(value=datetime(2025, 3, 31, 23, 0)), _FakeResult(rows=[])
+        )
+        payload = await build_findings(self._ctx(session, date(2025, 3, 1), date(2025, 3, 31)))
+
+        by_code = {r["schema_code"]: r for r in payload["rows"]}
+        assert by_code["OPS-02"]["severity"] == "suppressed"
+        assert "12 months" in by_code["OPS-02"]["suppression_reason"]
+        assert by_code["FIN-01"]["severity"] == "suppressed"
+        assert "complete calendar year" in by_code["FIN-01"]["suppression_reason"]
+        assert by_code["OPS-01"]["severity"] == "pass"
+        assert payload["months_covered"] == 1
+        assert "window_note" in payload
+
+    async def test_detector_slots_are_json_safe_before_formatting(self, monkeypatch):
+        from app.models.opportunity import SchemaCode, Severity
+        from app.services.opportunity_schemas.context import DetectorResult
+        from app.services.reports.data_builders.opportunity import build_findings
+
+        results = {
+            SchemaCode.OPS_08: DetectorResult(
+                schema_code=SchemaCode.OPS_08,
+                severity=Severity.WATCH,
+                data_slots={
+                    "review_status": "pending_review",
+                    "duration_hours": 41.3,
+                    "period_start": datetime(2025, 4, 1),
+                    "period_end": datetime(2025, 5, 28),
+                },
+            )
+        }
+        self._patch(monkeypatch, results)
+        session = _FakeSession(
+            _FakeResult(value=datetime(2025, 12, 31, 23, 0)), _FakeResult(rows=[])
+        )
+        payload = await build_findings(self._ctx(session, date(2025, 1, 1), date(2025, 12, 31)))
+
+        row = {r["schema_code"]: r for r in payload["rows"]}["OPS-08"]
+        assert row["severity"] == "watch"
+        assert "Constraint window" in [item["label"] for item in row["evidence"]]
+
+
+class TestSchemasFlaggedFromFindings:
+    """EPR-117: the key-metrics card reads the persisted findings counts."""
+
+    def _ctx(self, session):
+        from app.services.reports.context import ReportContext
+
+        return ReportContext(
+            db=session,
+            report_id=1,
+            scope_type="windfarm",
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+        )
+
+    async def test_counts_confirmed_indicative_watch(self):
+        from app.services.reports.data_builders.opportunity import _flagged_from_findings
+
+        counts = {"confirmed": 1, "indicative": 1, "watch": 3, "pass": 10, "suppressed": 2}
+        session = _FakeSession(_FakeResult(value={"severity_counts": counts}))
+        assert await _flagged_from_findings(self._ctx(session)) == 5
+
+    async def test_none_when_findings_not_generated(self):
+        from app.services.reports.data_builders.opportunity import _flagged_from_findings
+
+        ctx = self._ctx(_FakeSession(_FakeResult(value=None)))
+        assert await _flagged_from_findings(ctx) is None
+
+
+class TestSectionWaves:
+    def test_dependents_run_after_independents(self):
+        from app.services.reports.orchestrator import section_waves
+        from app.services.reports.registry import SectionSpec
+
+        findings = SectionSpec(key="findings", title="F", kind="findings_table")
+        metrics = SectionSpec(
+            key="key_metrics", title="K", kind="metric_strip", after=("findings",)
+        )
+        chart = SectionSpec(key="generation_chart", title="G", kind="chart_embed")
+        assert section_waves([metrics, findings, chart]) == [[findings, chart], [metrics]]
+        assert section_waves([findings, chart]) == [[findings, chart]]
+
+    def test_missing_prerequisite_is_loud(self):
+        from app.services.reports.orchestrator import section_waves
+        from app.services.reports.registry import SectionSpec
+
+        metrics = SectionSpec(
+            key="key_metrics", title="K", kind="metric_strip", after=("findings",)
+        )
+        with pytest.raises(ValueError):
+            section_waves([metrics])
+
+    def test_opportunity_key_metrics_waits_for_findings(self):
+        spec = get_report_type("opportunity")
+        assert spec.section("key_metrics").after == ("findings",)
+        assert spec.section("findings").after == ()

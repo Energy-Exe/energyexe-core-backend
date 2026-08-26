@@ -76,7 +76,10 @@ async def run(report_id: int) -> None:
             async with semaphore:
                 await run_section(report_id, section_spec)
 
-        await asyncio.gather(*(run_bounded(s) for s in pass1_data), return_exceptions=True)
+        # Sections that declare ``after`` read another data section's persisted
+        # payload (EPR-117) — they run once the independent wave has landed.
+        for wave in section_waves(pass1_data):
+            await asyncio.gather(*(run_bounded(s) for s in wave), return_exceptions=True)
 
         # Pass 1 narratives — consume the data sections just built.
         pass1_ai = [
@@ -105,6 +108,26 @@ async def run(report_id: int) -> None:
                 report.error = str(exc)
                 report.generation_completed_at = _utcnow()
                 await db.commit()
+
+
+def section_waves(sections: list) -> list:
+    """Split Pass-1 data sections into execution waves.
+
+    Wave 1 = sections with no ``after``; wave 2 = sections that read another
+    section's persisted output. Two waves are enough for the current specs — a
+    dependent-of-a-dependent would need a topological sort, so refuse it loudly.
+    """
+    independent = [s for s in sections if not s.after]
+    dependent = [s for s in sections if s.after]
+    independent_keys = {s.key for s in independent}
+    for s in dependent:
+        missing = [k for k in s.after if k not in independent_keys]
+        if missing:
+            raise ValueError(
+                f"section {s.key!r} declares after={s.after!r} but {missing!r} "
+                "is not an independent Pass-1 data section of this run"
+            )
+    return [w for w in (independent, dependent) if w]
 
 
 async def run_section(report_id: int, section_spec: SectionSpec) -> None:

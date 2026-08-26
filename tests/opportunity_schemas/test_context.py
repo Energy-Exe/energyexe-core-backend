@@ -5,7 +5,7 @@ All tests are DB-free: ``db`` is an AsyncMock and any query result is faked via
 (``prefetched=...``) that every downstream detector test (#92–#112) relies on.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -305,3 +305,127 @@ async def test_load_own_opex_financials_prefetched_short_circuits():
     )
     assert await ctx.load_own_opex_financials() is sentinel
     db.execute.assert_not_called()
+
+
+# ── EPR-117: loaders respect the window they claim ──────────────────────
+
+
+def test_last_complete_calendar_year():
+    from app.services.opportunity_schemas.context import last_complete_calendar_year
+
+    assert last_complete_calendar_year(datetime(2026, 1, 1)) == 2025
+    assert last_complete_calendar_year(datetime(2025, 12, 31, 23, 59, 59)) == 2025
+    assert last_complete_calendar_year(datetime(2025, 6, 30)) == 2024
+
+
+@pytest.mark.asyncio
+async def test_monthly_performance_orm_query_is_month_bounded():
+    """A Sep-2024 → Aug-2026 window must not pull Jan-2024 months (year-only filter)."""
+    db = _make_db()
+    empty_summaries = MagicMock()
+    empty_summaries.scalars.return_value.all.return_value = []
+    proxy = MagicMock()
+    proxy.fetchall.return_value = []
+    db.execute.side_effect = [empty_summaries, proxy]
+
+    ctx = DetectionContext(
+        db=db, windfarm=1, period_start=datetime(2024, 9, 4), period_end=datetime(2026, 8, 25)
+    )
+    await ctx.load_monthly_performance()
+
+    stmt = str(db.execute.await_args_list[0].args[0])
+    assert "performance_summaries.month" in stmt
+    assert "BETWEEN" in stmt
+
+
+@pytest.mark.asyncio
+async def test_norm_index_series_clipped_at_window_end():
+    db = _make_db()
+    res = MagicMock()
+    res.scalars.return_value.all.return_value = []
+    db.execute.return_value = res
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_norm_index_series() is None
+    stmt = str(db.execute.await_args.args[0])
+    assert "performance_summaries.month" in stmt
+    assert "<=" in stmt
+
+
+@pytest.mark.asyncio
+async def test_annual_generation_bound_to_last_complete_year():
+    db = _make_db()
+    res = MagicMock()
+    res.fetchall.return_value = []
+    db.execute.return_value = res
+
+    ctx = DetectionContext(
+        db=db, windfarm=1, period_start=START, period_end=datetime(2025, 6, 30)
+    )
+    assert await ctx.load_annual_generation_gwh() is None
+    stmt = str(db.execute.await_args.args[0])
+    assert "hour >= :since" in stmt and "hour < :until" in stmt
+    params = db.execute.await_args.args[1]
+    # Window ends mid-2025 → last complete year 2024; scan 2021-01-01 .. 2025-01-01.
+    assert params["since"] == datetime(2021, 1, 1, tzinfo=timezone.utc)
+    assert params["until"] == datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_structural_constraint_flags_must_overlap_window():
+    db = _make_db()
+    res = MagicMock()
+    res.scalars.return_value.all.return_value = []
+    db.execute.return_value = res
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_structural_constraint_flags() is None
+    stmt = str(db.execute.await_args.args[0])
+    assert "period_start <" in stmt
+    assert "period_end >" in stmt
+
+
+@pytest.mark.asyncio
+async def test_degradation_prefers_rows_ending_inside_window():
+    db = _make_db()
+    empty = MagicMock()
+    empty.scalars.return_value.first.return_value = None
+    db.execute.return_value = empty
+
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_degradation_result() is None
+    assert "analysis_end <=" in str(db.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+async def test_own_opex_financials_bound_to_window_end_year():
+    db = _make_db()
+    res = MagicMock()
+    res.fetchall.return_value = []
+    db.execute.return_value = res
+
+    ctx = DetectionContext(
+        db=db, windfarm=1, period_start=START, period_end=datetime(2025, 12, 31, 23, 59, 59)
+    )
+    assert await ctx.load_own_opex_financials() is None
+    assert db.execute.await_args.args[1]["end_year"] == 2025
+
+
+def test_zone_capture_cache_expires_and_is_bounded(monkeypatch):
+    from app.services.opportunity_schemas import context as c
+
+    c._ZONE_CAPTURE_CACHE.clear()
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(c._time, "monotonic", lambda: clock["t"])
+
+    c._zone_cache_put(("a",), {"x": 1})
+    assert c._zone_cache_get(("a",)) == {"x": 1}
+    clock["t"] += c._ZONE_CAPTURE_TTL_SECONDS + 1
+    assert c._zone_cache_get(("a",)) is None  # expired
+
+    for i in range(c._ZONE_CAPTURE_MAX_ENTRIES + 5):
+        clock["t"] += 1
+        c._zone_cache_put((i,), i)
+    assert len(c._ZONE_CAPTURE_CACHE) == c._ZONE_CAPTURE_MAX_ENTRIES
+    assert c._zone_cache_get((0,)) is None  # oldest evicted
+    c._ZONE_CAPTURE_CACHE.clear()
