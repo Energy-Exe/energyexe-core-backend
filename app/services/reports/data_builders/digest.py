@@ -237,18 +237,20 @@ async def _severity_snapshot(ctx: ReportContext, as_of: date) -> Optional[dict]:
 
     The engine does not persist finding identity across runs (it supersedes and
     recreates), so this is deliberately count-level: the latest row per schema
-    with ``detection_period_end`` within the recency window of ``as_of``.
+    *created* within the recency window of ``as_of``. ``created_at`` is the run
+    timestamp; ``detection_period_end`` is not — since EPR-126 it is clipped to
+    the farm's last metered day, months behind the run for lagging feeds.
     Returns None when no run had happened by then (no snapshot, not zeroes).
     """
     cutoff = as_of - timedelta(days=_SNAPSHOT_RECENCY_DAYS)
     result = await ctx.db.execute(
-        select(Opportunity.schema_code, Opportunity.severity, Opportunity.detection_period_end)
+        select(Opportunity.schema_code, Opportunity.severity, Opportunity.created_at)
         .where(
             Opportunity.windfarm_id == ctx.windfarm_id,
-            cast(Opportunity.detection_period_end, Date) <= as_of,
-            cast(Opportunity.detection_period_end, Date) > cutoff,
+            cast(Opportunity.created_at, Date) <= as_of,
+            cast(Opportunity.created_at, Date) > cutoff,
         )
-        .order_by(Opportunity.schema_code, Opportunity.detection_period_end.desc())
+        .order_by(Opportunity.schema_code, Opportunity.created_at.desc())
     )
     latest_by_schema: dict[str, str] = {}
     for schema_code, severity, _ in result.all():
@@ -283,10 +285,12 @@ async def _current_findings(ctx: ReportContext, as_of: date) -> list[dict]:
         select(Opportunity)
         .where(
             Opportunity.windfarm_id == ctx.windfarm_id,
-            cast(Opportunity.detection_period_end, Date) <= as_of,
-            cast(Opportunity.detection_period_end, Date) > cutoff,
+            # Run recency by created_at, not detection_period_end (EPR-126 clips
+            # the latter to the farm's last metered day).
+            cast(Opportunity.created_at, Date) <= as_of,
+            cast(Opportunity.created_at, Date) > cutoff,
         )
-        .order_by(Opportunity.schema_code, Opportunity.detection_period_end.desc())
+        .order_by(Opportunity.schema_code, Opportunity.created_at.desc())
     )
     findings: list[dict] = []
     seen: set[str] = set()

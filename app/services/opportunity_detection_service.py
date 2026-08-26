@@ -4,7 +4,7 @@ Runs all detection logic, calculations, and job execution in a single service.
 Static methods for severity/branch/suppression are pure functions for easy testing.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
@@ -15,6 +15,7 @@ from app.models.import_job_execution import ImportJobExecution, ImportJobStatus
 from app.models.opportunity import Opportunity, OpportunityStatus, SchemaCode, Severity
 from app.models.ppa import PPA
 from app.models.windfarm import Windfarm
+from app.services.generation_coverage import generation_data_through
 from app.services.price_analytics_service import PriceAnalyticsService
 
 logger = structlog.get_logger(__name__)
@@ -44,6 +45,11 @@ class OpportunityDetectionService:
         # by ``run_detection_job`` to decide SUCCESS vs FAILED + job_metadata.
         self._last_succeeded = 0
         self._last_failed = 0
+        # EPR-126 per-run window stats (how many windfarms had their window end
+        # clipped to their last metered day, and by how much) — folded into the
+        # job row's ``job_metadata`` by ``run_detection_job``.
+        self._last_truncated = 0
+        self._last_window_stats: dict = {}
 
     # ─── Job runner ────────────────────────────────────────────────
 
@@ -112,6 +118,10 @@ class OpportunityDetectionService:
                 **(job.job_metadata or {}),
                 "succeeded": succeeded,
                 "failed": failed,
+                # EPR-126: ``import_end_date`` is the REQUESTED end; the per-farm
+                # effective end lives on each opportunity's ``detection_period_end``.
+                # This records how many were clipped and the lag distribution.
+                **self._last_window_stats,
             }
             await self.db.commit()
 
@@ -121,11 +131,13 @@ class OpportunityDetectionService:
                 opportunities=len(opportunities),
                 succeeded=succeeded,
                 failed=failed,
+                truncated=self._last_truncated,
             )
             return {
                 "job_id": job.id,
                 "windfarms_scanned": len(windfarm_ids),
                 "windfarms_failed": failed,
+                "windfarms_truncated": self._last_truncated,
                 "opportunities_created": len(opportunities),
             }
 
@@ -151,14 +163,23 @@ class OpportunityDetectionService:
 
         ``schema_codes`` (#114) optionally restricts the run to a subset of
         schemas; ``None`` (the default) runs every registered schema unchanged.
+
+        The fleet window is ``now − period_months×30 d → now``, but each
+        windfarm's END is clipped to the last day it has a metered reading
+        (EPR-126, ``_windfarm_period_end``) — the start never moves. Point-in-time
+        schemas (OPS-07 fleet age, MKT-04 PPA expiry) still assess as of the run
+        date via ``as_of``, not the clipped end.
         """
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         period_start = now - timedelta(days=period_months * 30)
         period_end = now
+        as_of = now.date()
 
         all_opportunities: List[Opportunity] = []
         succeeded = 0
         failed = 0
+        reasons = {"clipped": 0, "current": 0, "no_data": 0, "probe_failed": 0}
+        lag_days: List[int] = []
 
         # Each windfarm is its own atomic transaction: supersede its prior ACTIVE
         # rows, detect, then commit. A failure rolls back ONLY that windfarm and
@@ -167,6 +188,24 @@ class OpportunityDetectionService:
         # windfarms (the old single-end-commit lost everything on a mid-run crash).
         for wf_id in windfarm_ids:
             try:
+                # Coverage probe FIRST — before the supersede UPDATE — so a failed
+                # probe has nothing to roll back and the farm keeps its findings.
+                wf_end, data_through, reason = await self._windfarm_period_end(
+                    wf_id, period_start, period_end
+                )
+                reasons[reason] += 1
+                lag = (period_end.date() - data_through).days if data_through else 0
+                if data_through is not None:
+                    lag_days.append(lag)
+                (logger.info if reason == "clipped" else logger.debug)(
+                    "opportunity_detection_window",
+                    windfarm_id=wf_id,
+                    requested_end=period_end.date().isoformat(),
+                    period_end=wf_end.date().isoformat(),
+                    data_through=data_through.isoformat() if data_through else None,
+                    lag_days=lag,
+                    reason=reason,
+                )
                 await self.db.execute(
                     update(Opportunity)
                     .where(
@@ -178,7 +217,7 @@ class OpportunityDetectionService:
                     .values(status=OpportunityStatus.SUPERSEDED, updated_at=now)
                 )
                 wf_opps = await self._detect_windfarm(
-                    wf_id, period_start, period_end, detection_run_id, schema_codes
+                    wf_id, period_start, wf_end, detection_run_id, schema_codes, as_of=as_of
                 )
                 await self.db.commit()
                 all_opportunities.extend(wf_opps)
@@ -191,9 +230,66 @@ class OpportunityDetectionService:
                 )
                 continue
 
+        lag_sorted = sorted(lag_days)
+        self._last_window_stats = {
+            "requested_end": period_end.date().isoformat(),
+            "truncated": reasons["clipped"],
+            "current": reasons["current"],
+            "no_data": reasons["no_data"],
+            "probe_failed": reasons["probe_failed"],
+            "lag_days_max": lag_sorted[-1] if lag_sorted else 0,
+            "lag_days_p50": lag_sorted[len(lag_sorted) // 2] if lag_sorted else 0,
+            "lag_buckets": {
+                "1-7d": sum(1 for d in lag_days if d <= 7),
+                "8-30d": sum(1 for d in lag_days if 7 < d <= 30),
+                "31-90d": sum(1 for d in lag_days if 30 < d <= 90),
+                ">90d": sum(1 for d in lag_days if d > 90),
+            },
+        }
+        self._last_truncated = reasons["clipped"]
+        logger.info(
+            "opportunity_detection_windows",
+            windfarms=len(windfarm_ids),
+            **self._last_window_stats,
+        )
+
         self._last_succeeded = succeeded
         self._last_failed = failed
         return all_opportunities
+
+    async def _windfarm_period_end(
+        self, windfarm_id: int, period_start: datetime, period_end: datetime
+    ) -> Tuple[datetime, Optional[date], str]:
+        """``(effective_end, data_through, reason)`` — the per-windfarm end clip (EPR-126).
+
+        Mirrors the Opportunity report's ``effective_window``: the start never
+        moves; the end becomes the last *instant* of the farm's last day with a
+        metered reading, never later than the requested end. The inclusive end
+        keeps ``hour < :end`` binding the day's 23:00 row and lets
+        ``last_complete_calendar_year`` see a 31 December.
+
+        Reasons: ``clipped``; ``current`` (data reaches the requested end);
+        ``no_data`` (nothing in the window — keep it whole, generation-dependent
+        schemas then find nothing while point-in-time ones still evaluate);
+        ``probe_failed`` (query error — keep it whole and warn, never fail the
+        windfarm over the probe).
+        """
+        try:
+            coverage = await generation_data_through(self.db, windfarm_id, period_start, period_end)
+        except Exception as exc:  # noqa: BLE001 — the probe must not fail the windfarm
+            # Nothing is pending yet (the probe runs before the supersede UPDATE);
+            # rolling back only clears a transaction Postgres may have aborted.
+            await self.db.rollback()
+            logger.warning(
+                "opportunity_detection_coverage_error", windfarm_id=windfarm_id, error=str(exc)
+            )
+            return period_end, None, "probe_failed"
+        if coverage is None:
+            return period_end, None, "no_data"
+        clipped = datetime.combine(coverage.last_day, time.max)  # naive UTC, like ``now``
+        if clipped >= period_end:
+            return period_end, None, "current"
+        return clipped, coverage.last_day, "clipped"
 
     async def _detect_windfarm(
         self,
@@ -202,6 +298,7 @@ class OpportunityDetectionService:
         period_end: datetime,
         detection_run_id: Optional[int],
         schema_codes: Optional[List[SchemaCode]] = None,
+        as_of: Optional[date] = None,
     ) -> List[Opportunity]:
         """Run all schemas for a single windfarm in dependency order.
 
@@ -214,7 +311,7 @@ class OpportunityDetectionService:
         the live path) so the #91 characterization harness can still drive them.
         """
         return await self._run_registry(
-            windfarm_id, period_start, period_end, detection_run_id, schema_codes
+            windfarm_id, period_start, period_end, detection_run_id, schema_codes, as_of=as_of
         )
 
     async def _run_registry(
@@ -224,6 +321,7 @@ class OpportunityDetectionService:
         period_end: datetime,
         detection_run_id: Optional[int],
         schema_codes: Optional[List[SchemaCode]] = None,
+        as_of: Optional[date] = None,
     ) -> List[Opportunity]:
         """Registry-based detection — the LIVE detection path (cut over in #93).
 
@@ -242,6 +340,7 @@ class OpportunityDetectionService:
             windfarm=windfarm_id,
             period_start=period_start,
             period_end=period_end,
+            as_of=as_of,
         )
         return await run_for_windfarm(
             ctx, detection_run_id=detection_run_id, schema_codes=schema_codes

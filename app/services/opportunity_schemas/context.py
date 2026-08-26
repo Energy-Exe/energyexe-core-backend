@@ -61,11 +61,11 @@ _logger = structlog.get_logger()
 # (``compare_capture_rates_by_bidzone``), keyed by (bidzone_id, hour-rounded
 # start, hour-rounded end). The zone average is identical for every windfarm in
 # the same zone over the same window, but the capture-rate accessor runs
-# per-windfarm — so a big zone (e.g. bidzone 81, 36 windfarms) re-ran the same
-# multi-million-row scan 36×, each risking the statement timeout and (on
-# timeout) leaving the connection in an aborted state. Computing it once per zone
-# per process collapses that to a single scan. Window is hour-rounded so the
-# per-windfarm second-level differences in ``now`` still hit the same entry.
+# per-windfarm — so a big zone (bidzone 81 is GB, 158 windfarms) re-ran the same
+# multi-million-row scan once per farm, each risking the statement timeout and
+# (on timeout) leaving the connection in an aborted state. Computing it once per
+# zone per process collapses that to a single scan. Window is hour-rounded so
+# the per-windfarm second-level differences in ``now`` still hit the same entry.
 #
 # Entries are ``(monotonic_computed_at, payload)`` with a TTL and a size cap
 # (EPR-117): the Opportunity report evaluates fixed historical windows whose
@@ -74,11 +74,16 @@ _logger = structlog.get_logger()
 # across re-imports.
 #
 # The same cache also holds the FIN-02/03 per-cohort OPEX medians (keyed
-# ``("zone_opex_median", bidzone_id, location_type, currency, as_of)``), hence
-# the larger cap: ~30 bidzones × 2 location types on top of the capture entries.
+# ``("zone_opex_median", bidzone_id, location_type, currency, as_of)``).
+#
+# Cap sizing (EPR-126): the nightly now clips each windfarm's window end to its
+# last metered day, so a zone contributes one capture entry per distinct
+# ``data_through`` day among its farms (all NVE farms share one; GB has a few).
+# ~60 zones × ≤3 capture keys + ~60 OPEX cohort keys must fit without evicting
+# mid-run, or the collapse this cache exists for silently comes undone.
 _ZONE_CAPTURE_CACHE: Dict[tuple, Any] = {}
 _ZONE_CAPTURE_TTL_SECONDS = 24 * 3600
-_ZONE_CAPTURE_MAX_ENTRIES = 128
+_ZONE_CAPTURE_MAX_ENTRIES = 512
 
 
 def _zone_cache_get(key: tuple) -> Optional[Any]:
@@ -154,6 +159,7 @@ class DetectionContext:
         period_start: datetime,
         period_end: datetime,
         prefetched: Optional[Dict[str, Any]] = None,
+        as_of: Optional[date] = None,
     ) -> None:
         """Build a context.
 
@@ -163,13 +169,19 @@ class DetectionContext:
                 ``windfarm_id`` property normalizes either form.
             period_start: detection period start (datetime, used as a bind param).
             period_end: detection period end (datetime, used as a bind param).
+                The nightly clips this per windfarm to the last day with a
+                metered reading (EPR-126); the start is never moved.
             prefetched: optional pre-seeded cache; keys present here are returned
                 by their accessor without any DB access.
+            as_of: the "as of" date for point-in-time schemas (see
+                ``as_of_date``). The nightly passes the run date; a period-scoped
+                report passes nothing and assesses as of its window end.
         """
         self.db = db
         self.windfarm = windfarm
         self.period_start = period_start
         self.period_end = period_end
+        self.as_of = as_of
         self._cache: Dict[str, Any] = dict(prefetched) if prefetched else {}
 
     @property
@@ -179,6 +191,22 @@ class DetectionContext:
         if isinstance(wf, int):
             return wf
         return wf.id
+
+    @property
+    def as_of_date(self) -> date:
+        """The date point-in-time schemas assess against (OPS-07 fleet age,
+        MKT-04 PPA expiry horizon).
+
+        Defaults to ``period_end``'s date — right for a period-scoped report
+        ("as of the end of 2025"). The nightly overrides it with the run date
+        (EPR-126): its ``period_end`` is clipped to the farm's last metered day,
+        and a fleet must not read a year younger, nor a PPA eight months
+        further from expiry, because the generation feed lags.
+        """
+        if self.as_of is not None:
+            return self.as_of
+        end = self.period_end
+        return end.date() if isinstance(end, datetime) else end
 
     # ─── Memoized accessors (query text copied from legacy _calc_*) ─────────
 

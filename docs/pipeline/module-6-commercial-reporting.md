@@ -125,7 +125,11 @@ Default scenarios: `[23.2, 26.0, 30.0, 35.0, 40.0]` EUR/MWh.
 `OpportunityDetectionService` (`app/services/opportunity_detection_service.py`) surfaces actionable findings to the client UI. Today it consumes:
 
 - **Module 3 outputs** for OPS-01 (volatile disruptions — uses ODI, availability, PPA status).
-- **`PriceAnalyticsService`** for MKT-01 (low capture rate — achieved vs market price).
+- **`PriceAnalyticsService`** for MKT-01 (low capture rate — achieved vs market price). The
+  nightly window's end is clipped per windfarm to its last day with metered generation
+  (`app/services/generation_coverage.py`, EPR-126) so a lagging generation feed (NVE) never has
+  price-only months averaged into the denominator; the report path shares the same probe via
+  `effective_window`.
 - **`GenerationConcentrationService`** for MKT-03 (cannibalisation — concentration of generation in low-price hours).
 
 **Module 6's commercial outputs (P50 gap, PPA scenarios, lost value) are NOT yet wired into opportunity detection.** Natural future extensions:

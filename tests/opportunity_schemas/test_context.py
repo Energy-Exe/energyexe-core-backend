@@ -645,3 +645,32 @@ async def test_zone_opex_median_helper_failure_returns_none(monkeypatch):
         period_end=END,
     )
     assert await ctx.compute_zone_opex_median("onshore") is None
+
+
+# ── EPR-126: as_of_date for point-in-time schemas ─────────────────────────
+
+
+def test_as_of_date_defaults_to_period_end_and_honours_the_nightly_override():
+    from datetime import date as _date
+    from datetime import datetime as _datetime
+
+    from app.services.opportunity_schemas.context import DetectionContext as _Ctx
+
+    clipped_end = _datetime(2025, 12, 31, 23, 59, 59, 999999)
+    report_ctx = _Ctx(
+        db=None, windfarm=1, period_start=_datetime(2025, 1, 1), period_end=clipped_end
+    )
+    # A period-scoped report assesses as of its window end.
+    assert report_ctx.as_of_date == _date(2025, 12, 31)
+
+    # The nightly clips period_end to the farm's last metered day but must
+    # keep assessing fleet age / PPA expiry as of the RUN date.
+    nightly_ctx = _Ctx(
+        db=None,
+        windfarm=1,
+        period_start=_datetime(2024, 9, 5),
+        period_end=clipped_end,
+        as_of=_date(2026, 8, 27),
+    )
+    assert nightly_ctx.as_of_date == _date(2026, 8, 27)
+    assert nightly_ctx.period_end == clipped_end  # the window itself is untouched
