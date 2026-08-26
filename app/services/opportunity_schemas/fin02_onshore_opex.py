@@ -8,21 +8,37 @@ and the severity thresholds live in exactly one place.
 
 Cohort & median (``DetectionContext.compute_zone_opex_median``)
 ===============================================================
-The benchmark is ``PERCENTILE_CONT(0.5)`` of peer OPEX-per-MWh over the windfarms
-that share BOTH the subject's ``location_type`` (onshore / offshore) AND its
-``bidzone_id`` (never cross-market), restricted to ``relationship_type =
-'primary_asset'`` 1:1 links. Onshore and offshore therefore form **separate
-cohorts**: an offshore farm is never benchmarked against the onshore median, and
-FIN-02 (onshore) does not even fire for an offshore farm (it gates on
+The benchmark is the median of peer OPEX-per-MWh over the windfarms that share
+BOTH the subject's ``location_type`` (onshore / offshore) AND its ``bidzone_id``
+(never cross-market), restricted to ``relationship_type = 'primary_asset'`` 1:1
+links, **excluding the subject itself**, one vote per financial entity, and only
+when at least ``OPEX_MIN_PEERS`` (3) peers qualify. Onshore and offshore form
+**separate cohorts**: an offshore farm is never benchmarked against the onshore
+median, and FIN-02 (onshore) does not even fire for an offshore farm (it gates on
 ``location_type``), nor FIN-03 for an onshore one.
 
-OPEX-per-MWh (``compute_opex_per_mwh``)
-=======================================
-    opex_per_mwh = total_opex_eur / (generation_gwh * 1000)
+OPEX-per-MWh (``app/services/financial_opex_metrics.py``)
+=========================================================
+Subject and peers use the platform's canonical definition (the one behind the
+client Financial tab, ``FinancialDataService.calculate_financial_ratios``):
 
-Note the unit conversion: generation is provided in **GWh** and converted to MWh.
-``3.18M€`` over ``100 GWh`` → ``3.18e6 / 100_000`` = ``31.8 €/MWh``. Returns
-``None`` when OPEX is missing or generation is missing / non-positive.
+    opex_per_mwh = Σ opex_EUR / Σ metered_net_MWh   over the 3 most recent usable filings
+
+* a filing is usable only after ramp-up (``period_start >= COD + 365 days``),
+  with metered ``generation_data`` covering >= 50% of its own period (else its
+  own ``reported_generation_gwh``; with neither it is dropped from BOTH sums);
+* every filing is converted to **EUR** with the ECB period-average rate — peers
+  file in NOK / GBP / DKK / EUR and the cohorts mix them;
+* synthetic (estimated) filings are excluded — a finding must rest on filed data.
+
+``compute_opex_per_mwh`` below is the pure last step: ``total_opex_eur /
+generation_mwh``, generation supplied in **GWh** by the accessor and converted to
+MWh here. ``3.18M€`` over ``100 GWh`` → ``31.8 €/MWh``. Returns ``None`` when
+OPEX is missing or generation is missing / non-positive.
+
+History: until 2026-08 the accessor divided by ``reported_generation_gwh`` and
+summed OPEX over years that had no generation figure at all — Lutelandet (prod
+report 41) showed 682 NOK/MWh, five years of OPEX over one year of output.
 
 Overrun % + severity (``classify_opex_overrun_severity``)
 =========================================================
@@ -171,7 +187,7 @@ async def run_opex_overrun_detector(
     Returns ``None`` whenever any required datum is absent — the snapshot-safety
     contract for the legacy scenarios.
     """
-    wf_location = _windfarm_location_type(ctx)
+    wf_location = await _windfarm_location_type(ctx)
     if wf_location != location_type:
         # Wrong cohort (or unknown location) — do not fire / do not benchmark.
         return None
@@ -204,6 +220,15 @@ async def run_opex_overrun_detector(
         "location_type": location_type,
         "full_years": full_years,
         "period": f"{ctx.period_start.date()} to {ctx.period_end.date()}",
+        # Provenance (additive — legacy prefetched dicts omit these; evidence
+        # rendering skips None): comparison currency, the farm's own filing
+        # currency + ratio, fiscal years pooled, denominator basis, cohort size.
+        "currency": financials.get("currency"),
+        "native_currency": financials.get("native_currency"),
+        "native_opex_per_mwh": financials.get("native_opex_per_mwh"),
+        "years_used": financials.get("years_used"),
+        "generation_source": financials.get("generation_source"),
+        "peer_count": ctx.peek(f"zone_opex_peer_count:{location_type}"),
     }
 
     return DetectorResult(
@@ -214,15 +239,18 @@ async def run_opex_overrun_detector(
     )
 
 
-def _windfarm_location_type(ctx: DetectionContext) -> Optional[str]:
-    """Read the windfarm's ``location_type``, None-safe (bare-int / detached ORM)."""
-    wf = ctx.windfarm
-    if isinstance(wf, int):
-        return None
+async def _windfarm_location_type(ctx: DetectionContext) -> Optional[str]:
+    """The windfarm's ``location_type``, None-safe.
+
+    Read off the ORM / snapshot object when present; for a bare-int windfarm
+    (the nightly runner) the context resolves it with one cached DB lookup —
+    before that fallback FIN-02/03 silently never fired in the nightly at all.
+    """
     try:
-        return getattr(wf, "location_type", None)
+        value = await ctx.windfarm_attr("location_type")
     except Exception:
         return None
+    return value if isinstance(value, str) else None
 
 
 # ─── Detector entrypoint ──────────────────────────────────────────────────────

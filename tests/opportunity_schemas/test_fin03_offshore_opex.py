@@ -122,3 +122,31 @@ async def test_consolidated_entity_excluded_v1():
     """A consolidated link → no own financials → FIN-03 does not fire."""
     ctx = _ctx(financials=None, offshore_median=60.0)
     assert await detect(ctx) is None
+
+
+# ─── 2026-08 fix: nightly bare-int gate resolves location_type from the DB ───
+
+
+@pytest.mark.asyncio
+async def test_bare_int_offshore_windfarm_fires_when_location_resolves_from_db():
+    from unittest.mock import AsyncMock, MagicMock
+
+    db = MagicMock()
+    res = MagicMock()
+    res.first.return_value = ("offshore", None, 81)
+    db.execute = AsyncMock(return_value=res)
+
+    ctx = DetectionContext(
+        db=db,
+        windfarm=WF_ID,
+        period_start=START,
+        period_end=END,
+        prefetched={
+            "own_opex_financials": _financials(opex_eur=120e6, gen_gwh=1000, full_years=2),
+            "zone_opex_median:offshore": 60.0,
+        },
+    )
+    result = await detect(ctx)
+    assert result is not None
+    assert result.schema_code is SchemaCode.FIN_03
+    assert result.data_slots["location_type"] == "offshore"

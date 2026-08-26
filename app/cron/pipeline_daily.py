@@ -137,6 +137,20 @@ async def run_pipeline_job(
         # Batch failed: skip detection (it depends on the batch's output).
         return EXIT_BATCH_FAILED
 
+    # ── Monthly generation aggregate (OPEX/MWh denominator for FIN-02/03 and
+    # the report scorecards) ───────────────────────────────────────────────
+    # Best-effort: a failed refresh leaves the previous snapshot in place and is
+    # logged + reported, but never blocks detection (which would then read
+    # yesterday's aggregate — annual filings do not care about one day).
+    from app.services.generation_monthly_view import refresh_generation_monthly_view
+
+    try:
+        refresh_summary = await refresh_generation_monthly_view()
+        logger.info("pipeline_daily_generation_monthly_refreshed", **refresh_summary)
+    except Exception as exc:
+        logger.error("pipeline_daily_generation_monthly_refresh_failed", error=str(exc))
+        capture_exception(exc)
+
     # ── Opportunity detection (runs only after a successful batch) ────────
     # Isolated from the batch result: a detection failure is logged + alerted
     # but does NOT mask the batch's success reporting. The CLI backstop

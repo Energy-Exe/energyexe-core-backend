@@ -1324,9 +1324,7 @@ class TestPeriodScopedFindings:
         det_ctx = captured["ctx"]
         assert det_ctx.period_start == datetime(2025, 1, 1, tzinfo=timezone.utc)
         # Inclusive end instant — a half-open midnight would read as 2026.
-        assert det_ctx.period_end == datetime(
-            2025, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc
-        )
+        assert det_ctx.period_end == datetime(2025, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc)
         assert det_ctx.period_end.date() == date(2025, 12, 31)
         assert det_ctx.windfarm.id == 7
         assert not isinstance(det_ctx.windfarm, Windfarm)  # detached snapshot
@@ -1468,3 +1466,219 @@ class TestSectionWaves:
         spec = get_report_type("opportunity")
         assert spec.section("key_metrics").after == ("findings",)
         assert spec.section("findings").after == ()
+
+
+class TestOpexMetricsInReports:
+    """2026-08 OPEX/MWh fix: key metric, FIN evidence currency, digest unit."""
+
+    def test_key_metric_prefers_pct_over_median(self):
+        out = _key_metric({"opex_per_mwh": 16.0, "zone_opex_median": 13.4, "pct_over_median": 19.2})
+        assert out is not None
+        assert out.startswith("% over median")
+        assert "19.2" in out
+
+    def test_fin02_evidence_shows_currency_native_and_peers(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.FIN_02,
+            {
+                "opex_per_mwh": 15.93,
+                "zone_opex_median": 13.4,
+                "pct_over_median": 18.9,
+                "location_type": "onshore",
+                "full_years": 3,
+                "currency": "EUR",
+                "native_currency": "NOK",
+                "native_opex_per_mwh": 180.9,
+                "years_used": [2023, 2024, 2025],
+                "generation_source": "metered",
+                "peer_count": 4,
+                "period": "2025-01-01 to 2025-12-31",
+            },
+        )
+        items = {i["label"]: i["value"] for i in out["items"]}
+        assert items["Opex per MWh"] == "15.9 EUR/MWh (180.9 NOK/MWh)"
+        assert items["Peer median opex/MWh"] == "13.4 EUR/MWh · 4 peers"
+        assert items["Over peer median"] == "18.9%"
+        assert items["Location type"] == "Onshore"
+        assert items["Fiscal years used"] == "2023–2025 (3 filings)"
+        assert items["Generation basis"] == "Metered"
+        assert "period" not in {i["label"].lower() for i in out["items"]}
+
+    def test_fin02_evidence_legacy_rows_without_currency_still_render(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.FIN_03,
+            {
+                "opex_per_mwh": 682.4,
+                "zone_opex_median": 132.3,
+                "pct_over_median": 415.9,
+                "full_years": 5,
+            },
+        )
+        items = {i["label"]: i["value"] for i in out["items"]}
+        assert items["Opex per MWh"] == "682.4"
+        assert items["Peer median opex/MWh"] == "132.3"
+        assert items["Fiscal years used"] == "5"
+
+    def test_fin02_evidence_same_currency_shows_no_native_twin(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.FIN_02,
+            {
+                "opex_per_mwh": 20.0,
+                "currency": "EUR",
+                "native_currency": "EUR",
+                "native_opex_per_mwh": 20.0,
+                "years_used": [2025],
+            },
+        )
+        items = {i["label"]: i["value"] for i in out["items"]}
+        assert items["Opex per MWh"] == "20 EUR/MWh"
+        assert items["Fiscal years used"] == "2025 (1 filing)"
+
+    @pytest.mark.asyncio
+    async def test_window_metrics_uses_metered_helper_and_labels_unit(self, monkeypatch):
+        from datetime import date as _date
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from app.services.financial_opex_metrics import OpexMetrics
+        from app.services.reports.data_builders import common
+
+        wf_id = 7197
+        metrics = OpexMetrics(
+            windfarm_id=wf_id,
+            financial_entity_id=38,
+            currency="NOK",
+            total_opex=21_113_793.0,
+            total_revenue=27_187_051.0,
+            ebitda=6_073_258.0,
+            generation_mwh=133_916.5,
+            opex_per_mwh=157.66,
+            ebitda_margin_pct=22.34,
+            rows_used=1,
+            years_used=[2025],
+            period_start=_date(2025, 1, 1),
+            period_end=_date(2025, 12, 31),
+            native_currency="NOK",
+            native_opex_per_mwh=157.66,
+            generation_source="metered",
+            min_coverage_pct=100.0,
+        )
+        fin_row = SimpleNamespace(
+            period_end=_date(2025, 12, 31),
+            currency="NOK",
+            ebitda=1.0,
+            total_revenue=0,
+            total_operating_expenses=21_113_793,
+            reported_generation_gwh=None,
+        )
+        monkeypatch.setattr(
+            common,
+            "generation_totals",
+            AsyncMock(
+                return_value={
+                    "generation_mwh": 133_916.5,
+                    "curtailed_mwh": 0.0,
+                    "hours_with_data": 8760,
+                }
+            ),
+        )
+        monkeypatch.setattr(
+            common,
+            "summary_stats",
+            AsyncMock(
+                return_value={
+                    "p50_attainment_pct": None,
+                    "expected_mwh": None,
+                    "lost_eur": None,
+                    "months_covered": 12,
+                }
+            ),
+        )
+        monkeypatch.setattr(common, "capture_rate_pct", AsyncMock(return_value=None))
+        monkeypatch.setattr(common, "financials_for", AsyncMock(return_value=fin_row))
+        helper = AsyncMock(return_value={wf_id: metrics})
+        monkeypatch.setattr(common, "opex_metrics_for_windfarms", helper)
+
+        ctx = SimpleNamespace(
+            db=None,
+            report_id=41,
+            windfarm_id=wf_id,
+            windfarm=SimpleNamespace(nameplate_capacity_mw=51.3),
+        )
+        out = await common.window_metrics(ctx, _date(2025, 1, 1), _date(2025, 12, 31))
+
+        assert out["opex_per_mwh"] == pytest.approx(157.66)
+        assert out["opex_unit"] == "NOK"
+        assert out["opex_fiscal_year"] == 2025
+        assert out["financials_label"] == "FY 2025, NOK"
+        assert out["ebitda_margin_pct"] == pytest.approx(22.34)  # helper wins over the row
+        call = helper.await_args
+        assert call.kwargs["display_currency"] is None
+        assert call.kwargs["max_rows"] == 1
+        assert call.kwargs["include_synthetic"] is True
+        assert call.kwargs["as_of"] == _date(2025, 12, 31)
+
+    @pytest.mark.asyncio
+    async def test_window_metrics_degrades_when_helper_fails_and_guards_zero_revenue(
+        self, monkeypatch
+    ):
+        from datetime import date as _date
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from app.services.reports.data_builders import common
+
+        fin_row = SimpleNamespace(
+            period_end=_date(2025, 12, 31), currency="GBP", ebitda=5.0, total_revenue=0
+        )
+        monkeypatch.setattr(
+            common,
+            "generation_totals",
+            AsyncMock(
+                return_value={"generation_mwh": None, "curtailed_mwh": None, "hours_with_data": 0}
+            ),
+        )
+        monkeypatch.setattr(
+            common,
+            "summary_stats",
+            AsyncMock(
+                return_value={
+                    "p50_attainment_pct": None,
+                    "expected_mwh": None,
+                    "lost_eur": None,
+                    "months_covered": 0,
+                }
+            ),
+        )
+        monkeypatch.setattr(common, "capture_rate_pct", AsyncMock(return_value=None))
+        monkeypatch.setattr(common, "financials_for", AsyncMock(return_value=fin_row))
+        monkeypatch.setattr(
+            common, "opex_metrics_for_windfarms", AsyncMock(side_effect=RuntimeError("db down"))
+        )
+
+        ctx = SimpleNamespace(db=None, report_id=41, windfarm_id=1, windfarm=None)
+        out = await common.window_metrics(ctx, _date(2025, 1, 1), _date(2025, 12, 31))
+        assert out["opex_per_mwh"] is None
+        assert out["opex_unit"] is None
+        assert out["ebitda_margin_pct"] is None  # revenue 0 → no margin, not a division
+        assert out["financials_label"] == "FY 2025, GBP"
+
+    def test_digest_opex_unit_prefers_current_column(self):
+        from app.services.reports.data_builders.digest import _opex_unit
+
+        assert (
+            _opex_unit({"current": {"opex_unit": "NOK"}, "previous": {"opex_unit": "EUR"}}) == "NOK"
+        )
+        assert (
+            _opex_unit({"current": {"opex_unit": None}, "previous": {"opex_unit": "EUR"}}) == "EUR"
+        )
+        assert _opex_unit({"current": {}}) is None
