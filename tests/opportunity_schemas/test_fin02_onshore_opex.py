@@ -159,3 +159,99 @@ async def test_consolidated_entity_excluded_v1():
     """
     ctx = _ctx(financials=None, onshore_median=30.0)
     assert await detect(ctx) is None
+
+
+# ─── 2026-08 fix: metered denominator, EUR cohort, nightly bare-int gate ──────
+
+
+@pytest.mark.asyncio
+async def test_data_slots_carry_provenance():
+    """Currency, filing-currency ratio, years pooled, basis and cohort size ride along."""
+    financials = _financials(opex_eur=39e6, gen_gwh=1000, full_years=3)
+    financials.update(
+        {
+            "currency": "EUR",
+            "native_currency": "NOK",
+            "native_opex_per_mwh": 440.0,
+            "years_used": [2023, 2024, 2025],
+            "generation_source": "metered",
+        }
+    )
+    ctx = _ctx(financials=financials, onshore_median=30.0)
+    ctx._cache["zone_opex_peer_count:onshore"] = 7
+    result = await detect(ctx)
+    assert result is not None
+    slots = result.data_slots
+    assert slots["currency"] == "EUR"
+    assert slots["native_currency"] == "NOK"
+    assert slots["native_opex_per_mwh"] == 440.0
+    assert slots["years_used"] == [2023, 2024, 2025]
+    assert slots["generation_source"] == "metered"
+    assert slots["peer_count"] == 7
+
+
+@pytest.mark.asyncio
+async def test_legacy_financials_dict_still_works_without_provenance():
+    ctx = _ctx(
+        financials=_financials(opex_eur=39e6, gen_gwh=1000, full_years=2), onshore_median=30.0
+    )
+    result = await detect(ctx)
+    assert result is not None
+    assert result.data_slots["currency"] is None
+    assert result.data_slots["peer_count"] is None
+
+
+@pytest.mark.asyncio
+async def test_lutelandet_corrected_ratio_does_not_fire():
+    """Prod report 41: 3 pooled NOK filings ≈ 6.1M€ over 380.8 GWh = 16 €/MWh vs a
+    13.4 €/MWh cohort median → +19% → below the 30% WATCH floor → no finding."""
+    ctx = _ctx(
+        financials=_financials(opex_eur=6.11e6, gen_gwh=380.76, full_years=3),
+        onshore_median=13.4,
+    )
+    assert await detect(ctx) is None
+
+
+def _db_with_meta(row):
+    from unittest.mock import AsyncMock, MagicMock
+
+    db = MagicMock()
+    res = MagicMock()
+    res.first.return_value = row
+    db.execute = AsyncMock(return_value=res)
+    return db
+
+
+@pytest.mark.asyncio
+async def test_bare_int_windfarm_fires_when_location_resolves_from_db():
+    """The nightly passes ``windfarm=<int>``; the gate now resolves location_type via the DB."""
+    ctx = DetectionContext(
+        db=_db_with_meta(("onshore", None, 69)),
+        windfarm=WF_ID,
+        period_start=START,
+        period_end=END,
+        prefetched={
+            "own_opex_financials": _financials(opex_eur=39e6, gen_gwh=1000, full_years=2),
+            "zone_opex_median:onshore": 30.0,
+        },
+    )
+    result = await detect(ctx)
+    assert result is not None
+    assert result.severity is Severity.WATCH
+    assert result.data_slots["location_type"] == "onshore"
+
+
+@pytest.mark.asyncio
+async def test_bare_int_windfarm_none_when_meta_empty():
+    """Characterization-harness contract: an empty lookup keeps the gate closed."""
+    ctx = DetectionContext(
+        db=_db_with_meta(None),
+        windfarm=WF_ID,
+        period_start=START,
+        period_end=END,
+        prefetched={
+            "own_opex_financials": _financials(opex_eur=39e6, gen_gwh=1000, full_years=2),
+            "zone_opex_median:onshore": 30.0,
+        },
+    )
+    assert await detect(ctx) is None

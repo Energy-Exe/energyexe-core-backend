@@ -164,12 +164,57 @@ def _monthrange(start_key: str, end_key: str, label: str) -> ComputedSlot:
     return compute
 
 
+def _per_mwh(value: Any, currency: Any) -> str:
+    """``13.9 EUR/MWh`` — or a bare number for legacy rows with no currency slot."""
+    text = _num(float(value))
+    return f"{text} {currency}/MWh" if currency else text
+
+
+def _fin_opex_per_mwh(slots: dict) -> Optional[tuple[str, str]]:
+    # "13.9 EUR/MWh (157.6 NOK/MWh)": the comparison currency first, the farm's
+    # own filing currency alongside when it differs (peer-summary convention).
+    value = slots.get("opex_per_mwh")
+    if value is None:
+        return None
+    currency = slots.get("currency")
+    text = _per_mwh(value, currency)
+    native_value, native_ccy = slots.get("native_opex_per_mwh"), slots.get("native_currency")
+    if native_value is not None and native_ccy and native_ccy != currency:
+        text += f" ({_per_mwh(native_value, native_ccy)})"
+    return "Opex per MWh", text
+
+
+def _fin_peer_median(slots: dict) -> Optional[tuple[str, str]]:
+    value = slots.get("zone_opex_median")
+    if value is None:
+        return None
+    text = _per_mwh(value, slots.get("currency"))
+    peers = slots.get("peer_count")
+    if peers is not None:
+        text += f" · {int(peers)} peers"
+    return "Peer median opex/MWh", text
+
+
+def _fin_years_used(slots: dict) -> Optional[tuple[str, str]]:
+    years = slots.get("years_used")
+    if isinstance(years, (list, tuple)) and years:
+        ys = sorted(int(y) for y in years)
+        span = str(ys[0]) if len(ys) == 1 else f"{ys[0]}–{ys[-1]}"
+        noun = "filing" if len(ys) == 1 else "filings"
+        return "Fiscal years used", f"{span} ({len(ys)} {noun})"
+    full_years = slots.get("full_years")
+    if full_years is None:
+        return None
+    return "Fiscal years used", _fmt_int(full_years)
+
+
 _FIN_OPEX_SLOTS: tuple = (
-    ("opex_per_mwh", "Opex per MWh", lambda v: _num(float(v))),
-    ("zone_opex_median", "Peer median opex/MWh", lambda v: _num(float(v))),
+    _fin_opex_per_mwh,
+    _fin_peer_median,
     ("pct_over_median", "Over peer median", _fmt_pct),
     ("location_type", "Location type", _fmt_str),
-    ("full_years", "Fiscal years used", _fmt_int),
+    _fin_years_used,
+    ("generation_source", "Generation basis", _fmt_str),
 )
 
 EVIDENCE_SLOTS: dict[SchemaCode, tuple] = {

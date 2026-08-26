@@ -18,6 +18,7 @@ from app.models.financial_data import FinancialData
 from app.models.generation_data import GenerationData
 from app.models.performance_summary import PerformanceSummary
 from app.models.windfarm_financial_entity import WindfarmFinancialEntity
+from app.services.financial_opex_metrics import OpexMetrics, opex_metrics_for_windfarms
 from app.services.reports.context import ReportContext
 
 logger = structlog.get_logger()
@@ -304,11 +305,44 @@ async def financials_for(ctx: ReportContext, as_of: date) -> Optional[FinancialD
     return result.scalars().first()
 
 
+async def opex_metrics_for(ctx: ReportContext, as_of: date) -> Optional[OpexMetrics]:
+    """The latest usable filing's OPEX/MWh, in the farm's own filing currency.
+
+    Single-farm views follow the Financial tab convention (filing currency,
+    metered ``generation_data`` denominator over the filing's own period, ramp-up
+    excluded) via ``app.services.financial_opex_metrics`` — the same definition
+    the FIN-02/03 detectors use, so a digest never shows a different "Opex / MWh"
+    than the finding next to it. Synthetic filings are kept, as on the Financial
+    tab. ``None`` when the farm has no usable filing or the lookup fails (logged).
+    """
+    if ctx.windfarm_id is None:
+        return None
+    try:
+        metrics = await opex_metrics_for_windfarms(
+            ctx.db,
+            windfarm_ids=[ctx.windfarm_id],
+            as_of=as_of,
+            display_currency=None,
+            max_rows=1,
+            include_synthetic=True,
+        )
+    except Exception as exc:  # financials are optional — the row degrades to n/a
+        logger.warning(
+            "report_opex_metrics_failed",
+            report_id=ctx.report_id,
+            windfarm_id=ctx.windfarm_id,
+            error=str(exc),
+        )
+        return None
+    return metrics.get(ctx.windfarm_id)
+
+
 async def window_metrics(ctx: ReportContext, start: date, end: date) -> dict:
     gen = await generation_totals(ctx, start, end)
     stats = await summary_stats(ctx, start, end)
     capture = await capture_rate_pct(ctx, start, end)
     fin = await financials_for(ctx, end)
+    opex = await opex_metrics_for(ctx, end)
 
     capacity_mw = ctx.windfarm.nameplate_capacity_mw if ctx.windfarm is not None else None
     capacity_factor = capacity_factor_pct(
@@ -317,15 +351,26 @@ async def window_metrics(ctx: ReportContext, start: date, end: date) -> dict:
 
     ebitda_margin = None
     opex_per_mwh = None
+    opex_unit = None
+    opex_fiscal_year = None
     fin_label = None
     if fin is not None:
         fin_label = f"FY {fin.period_end.year}" + (f", {fin.currency}" if fin.currency else "")
-        if fin.ebitda is not None and fin.total_revenue:
+        if (
+            fin.ebitda is not None
+            and fin.total_revenue is not None
+            and float(fin.total_revenue) > 0
+        ):
             ebitda_margin = float(fin.ebitda) / float(fin.total_revenue) * 100
-        if fin.total_operating_expenses is not None and fin.reported_generation_gwh:
-            opex_per_mwh = abs(float(fin.total_operating_expenses)) / (
-                float(fin.reported_generation_gwh) * 1000
-            )
+    if opex is not None:
+        # Metered-denominator ratio wins; the filing row above is only a fallback
+        # for the EBITDA margin when no usable OPEX filing exists.
+        opex_per_mwh = opex.opex_per_mwh
+        opex_unit = opex.currency  # the row label already says "/ MWh"
+        opex_fiscal_year = opex.period_end.year
+        fin_label = f"FY {opex.period_end.year}, {opex.currency}"
+        if opex.ebitda_margin_pct is not None:
+            ebitda_margin = opex.ebitda_margin_pct
 
     return {
         "generation_gwh": (
@@ -345,6 +390,8 @@ async def window_metrics(ctx: ReportContext, start: date, end: date) -> dict:
         "capture_rate_pct": capture,
         "ebitda_margin_pct": ebitda_margin,
         "opex_per_mwh": opex_per_mwh,
+        "opex_unit": opex_unit,
+        "opex_fiscal_year": opex_fiscal_year,
         "financials_label": fin_label,
     }
 

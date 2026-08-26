@@ -186,10 +186,13 @@ SCHEMA_STATUS[SchemaCode.MKT_07] = "INACTIVE"
 #              Module-1b flags, not the raw generation series.
 #   * MKT_04 — PPA expiry is purely a contract-date calculation.
 #   * MKT_05 / MKT_07 — INACTIVE (no rows produced anyway).
-#   * FIN_02 / FIN_03 — OPEX-per-MWh uses ``reported_generation_gwh`` from the
-#              annual ``financial_data`` rows, NOT the hourly ``generation_data``
-#              series DQ-01 monitors; a gap in the hourly feed does not invalidate
-#              the reported annual financials, so these are NOT gen-dependent.
+#   * FIN_02 / FIN_03 — OPEX-per-MWh divides each *fiscal filing's* OPEX by the
+#              metered generation over that filing's own period (see
+#              ``app/services/financial_opex_metrics.py``), with its own >= 50%
+#              coverage floor (below it the filing falls back to its reported
+#              figure or is dropped). The ratio is therefore never a function of
+#              the detection window's hourly series, so a DQ-01 gap inside the
+#              window neither invalidates nor is measured by it — NOT gen-dependent.
 GENERATION_DEPENDENT_SCHEMAS: set[SchemaCode] = {
     SchemaCode.OPS_01,
     SchemaCode.OPS_02,

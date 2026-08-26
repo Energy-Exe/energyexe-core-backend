@@ -147,3 +147,81 @@ async def test_skip_detection():
     assert exit_code == pipeline_daily.EXIT_OK
     batch_mock.assert_called_once()
     detection_mock.assert_not_called()
+
+
+# ── 2026-08: monthly generation view refresh runs between batch and detection ──
+
+
+@pytest.fixture(autouse=True)
+def _mock_generation_monthly_refresh():
+    """Keep every job test hermetic: the refresh must never reach a real engine."""
+    with patch(
+        "app.services.generation_monthly_view.refresh_generation_monthly_view",
+        AsyncMock(return_value={"view": "mv", "rows": 1, "windfarms": 1}),
+    ) as mocked:
+        yield mocked
+
+
+@pytest.mark.asyncio
+async def test_generation_monthly_refresh_runs_between_batch_and_detection(
+    _mock_generation_monthly_refresh,
+):
+    calls = []
+
+    async def fake_batch(*args, **kwargs):
+        calls.append("batch")
+        return {"windfarms_processed": 3}
+
+    async def fake_refresh(*args, **kwargs):
+        calls.append("refresh")
+        return {"view": "mv", "rows": 1, "windfarms": 1}
+
+    async def fake_detection(*args, **kwargs):
+        calls.append("detection")
+        return {"job_id": 1}
+
+    _mock_generation_monthly_refresh.side_effect = fake_refresh
+    with patch("app.core.database.get_session_factory", _fake_session_factory), patch(
+        "app.services.performance_pipeline_service.PerformancePipelineService.run_pipeline_batch",
+        AsyncMock(side_effect=fake_batch),
+    ), patch(
+        "app.services.opportunity_detection_service.OpportunityDetectionService.run_detection_job",
+        AsyncMock(side_effect=fake_detection),
+    ):
+        exit_code = await pipeline_daily.run_pipeline_job()
+
+    assert exit_code == pipeline_daily.EXIT_OK
+    assert calls == ["batch", "refresh", "detection"]
+
+
+@pytest.mark.asyncio
+async def test_generation_monthly_refresh_failure_does_not_block_detection(
+    _mock_generation_monthly_refresh,
+):
+    _mock_generation_monthly_refresh.side_effect = RuntimeError("refresh exploded")
+    detection_mock = AsyncMock(return_value={"job_id": 1})
+    with patch("app.core.database.get_session_factory", _fake_session_factory), patch(
+        "app.services.performance_pipeline_service.PerformancePipelineService.run_pipeline_batch",
+        AsyncMock(return_value={"windfarms_processed": 1}),
+    ), patch(
+        "app.services.opportunity_detection_service.OpportunityDetectionService.run_detection_job",
+        detection_mock,
+    ):
+        exit_code = await pipeline_daily.run_pipeline_job()
+
+    assert exit_code == pipeline_daily.EXIT_OK
+    detection_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_generation_monthly_refresh_skipped_when_batch_fails(
+    _mock_generation_monthly_refresh,
+):
+    with patch("app.core.database.get_session_factory", _fake_session_factory), patch(
+        "app.services.performance_pipeline_service.PerformancePipelineService.run_pipeline_batch",
+        AsyncMock(side_effect=RuntimeError("batch failed")),
+    ):
+        exit_code = await pipeline_daily.run_pipeline_job()
+
+    assert exit_code == pipeline_daily.EXIT_BATCH_FAILED
+    _mock_generation_monthly_refresh.assert_not_called()

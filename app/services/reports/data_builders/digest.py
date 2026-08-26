@@ -77,6 +77,17 @@ def _scorecard_row(
     return row
 
 
+def _opex_unit(metrics: dict[str, dict]) -> Optional[str]:
+    """Unit for the Opex / MWh row — the current column's filing currency (e.g. "NOK")."""
+    current = (metrics.get("current") or {}).get("opex_unit")
+    if current:
+        return current
+    for m in metrics.values():
+        if m.get("opex_unit"):
+            return m["opex_unit"]
+    return None
+
+
 def _is_full_calendar_year(start: date, end: date) -> bool:
     return start.month == 1 and start.day == 1 and end == date(start.year, 12, 31)
 
@@ -168,7 +179,9 @@ async def build_scorecard(ctx: ReportContext) -> dict:
         _scorecard_row("capture_rate", "Capture rate", "%", metrics, "capture_rate_pct"),
         _scorecard_row("curtailment", "Curtailment", "GWh", metrics, "curtailed_gwh", 2),
         _scorecard_row("ebitda_margin", "EBITDA margin", "%", metrics, "ebitda_margin_pct"),
-        _scorecard_row("opex_per_mwh", "Opex / MWh", None, metrics, "opex_per_mwh", 0),
+        _scorecard_row(
+            "opex_per_mwh", "Opex / MWh", _opex_unit(metrics), metrics, "opex_per_mwh", 0
+        ),
     ]
 
     # Rows with no data anywhere are noise, and curtailment that is zero
@@ -198,6 +211,12 @@ async def build_scorecard(ctx: ReportContext) -> dict:
         notes.append(
             "Financial rows reflect the most recent reported fiscal year per period "
             f"({', '.join(sorted(fin_labels))}); annual filings can span several digest periods."
+        )
+    opex_units = {m.get("opex_unit") for m in metrics.values() if m.get("opex_unit")}
+    if len(opex_units) > 1 and any(r["key"] == "opex_per_mwh" for r in rows):
+        notes.append(
+            "Opex / MWh columns are reported in different filing currencies "
+            f"({', '.join(sorted(opex_units))}) and are not directly comparable."
         )
     if len(columns) == 1:
         notes.append("No earlier generation data — comparisons unavailable for this period.")

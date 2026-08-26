@@ -72,7 +72,7 @@ _KEY_METRIC_PREFERENCE = (
     "cannibalisation_pct",
     "attainment_pct",
     "p50_attainment",
-    "opex_overrun_pct",
+    "pct_over_median",
     "negative_price_hours",
     "curtailed_mwh",
     "gap_hours",
@@ -294,7 +294,7 @@ async def build_findings(ctx: ReportContext) -> dict:
 
 
 async def _flagged_from_findings(ctx: ReportContext) -> Optional[int]:
-    """"Schemas flagged" from the persisted findings section (EPR-117).
+    """ "Schemas flagged" from the persisted findings section (EPR-117).
 
     The findings section evaluates the schemas over the report window; this
     section runs after it (``SectionSpec.after``) and reads its counts, so the

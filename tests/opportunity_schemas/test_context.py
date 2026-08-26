@@ -5,13 +5,14 @@ All tests are DB-free: ``db`` is an AsyncMock and any query result is faked via
 (``prefetched=...``) that every downstream detector test (#92–#112) relies on.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.models.opportunity import SchemaCode, Severity
+from app.services import financial_opex_metrics as fom
 from app.services.opportunity_schemas.context import DetectionContext, DetectorResult
 
 START = datetime(2024, 1, 1)
@@ -359,9 +360,7 @@ async def test_annual_generation_bound_to_last_complete_year():
     res.fetchall.return_value = []
     db.execute.return_value = res
 
-    ctx = DetectionContext(
-        db=db, windfarm=1, period_start=START, period_end=datetime(2025, 6, 30)
-    )
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=datetime(2025, 6, 30))
     assert await ctx.load_annual_generation_gwh() is None
     stmt = str(db.execute.await_args.args[0])
     assert "hour >= :since" in stmt and "hour < :until" in stmt
@@ -398,7 +397,13 @@ async def test_degradation_prefers_rows_ending_inside_window():
 
 
 @pytest.mark.asyncio
-async def test_own_opex_financials_bound_to_window_end_year():
+async def test_own_opex_financials_bound_to_window_end():
+    """Filings ending after the window end are not this window's costs (EPR-117).
+
+    The accessor now delegates to ``financial_opex_metrics``; the filings query
+    is still the FIRST statement executed, bound positionally with an ``as_of``
+    date, and consumed via ``.fetchall()`` — an empty result yields ``None``.
+    """
     db = _make_db()
     res = MagicMock()
     res.fetchall.return_value = []
@@ -408,7 +413,8 @@ async def test_own_opex_financials_bound_to_window_end_year():
         db=db, windfarm=1, period_start=START, period_end=datetime(2025, 12, 31, 23, 59, 59)
     )
     assert await ctx.load_own_opex_financials() is None
-    assert db.execute.await_args.args[1]["end_year"] == 2025
+    assert db.execute.await_args.args[1]["as_of"] == date(2025, 12, 31)
+    assert "fd.period_end <= :as_of" in str(db.execute.await_args.args[0])
 
 
 def test_zone_capture_cache_expires_and_is_bounded(monkeypatch):
@@ -429,3 +435,213 @@ def test_zone_capture_cache_expires_and_is_bounded(monkeypatch):
     assert len(c._ZONE_CAPTURE_CACHE) == c._ZONE_CAPTURE_MAX_ENTRIES
     assert c._zone_cache_get((0,)) is None  # oldest evicted
     c._ZONE_CAPTURE_CACHE.clear()
+
+
+# ── windfarm metadata fallback for bare-int windfarms (FIN-02/03 in the nightly) ──
+
+
+def _meta_result(row):
+    res = MagicMock()
+    res.first.return_value = row
+    return res
+
+
+@pytest.mark.asyncio
+async def test_load_windfarm_meta_bare_int_falls_back_to_db_once():
+    db = _make_db()
+    db.execute.return_value = _meta_result(("onshore", date(2022, 1, 17), 69))
+    ctx = DetectionContext(db=db, windfarm=7197, period_start=START, period_end=END)
+
+    assert await ctx.load_windfarm_meta() == {
+        "location_type": "onshore",
+        "commercial_operational_date": date(2022, 1, 17),
+        "bidzone_id": 69,
+    }
+    assert await ctx.windfarm_attr("location_type") == "onshore"
+    assert await ctx._resolve_bidzone_id() == 69
+    db.execute.assert_awaited_once()  # memoized under "windfarm_meta"
+
+
+@pytest.mark.asyncio
+async def test_load_windfarm_meta_none_safe_on_empty_or_failing_lookup():
+    db = _make_db()
+    db.execute.return_value = _meta_result(None)
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_windfarm_meta() is None
+    assert await ctx.windfarm_attr("location_type") is None
+
+    db2 = _make_db()
+    db2.execute.side_effect = RuntimeError("boom")
+    ctx2 = DetectionContext(db=db2, windfarm=1, period_start=START, period_end=END)
+    assert await ctx2.load_windfarm_meta() is None
+
+
+@pytest.mark.asyncio
+async def test_load_windfarm_meta_magicmock_row_resolves_none():
+    """A MagicMock row (or any non str/date/int values) must not leak through the gate."""
+    db = _make_db()
+    db.execute.return_value = _meta_result(MagicMock())
+    ctx = DetectionContext(db=db, windfarm=1, period_start=START, period_end=END)
+    assert await ctx.load_windfarm_meta() is None
+
+
+@pytest.mark.asyncio
+async def test_windfarm_attr_prefers_object_attr_without_db():
+    db = _make_db()
+    ctx = DetectionContext(
+        db=db,
+        windfarm=SimpleNamespace(id=1, location_type="offshore", bidzone_id=81),
+        period_start=START,
+        period_end=END,
+    )
+    assert await ctx.windfarm_attr("location_type") == "offshore"
+    assert await ctx.windfarm_attr("bidzone_id") == 81
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_windfarm_attr_object_missing_attr_falls_back_to_db():
+    db = _make_db()
+    db.execute.return_value = _meta_result(("onshore", None, 69))
+    ctx = DetectionContext(
+        db=db, windfarm=SimpleNamespace(id=1), period_start=START, period_end=END
+    )
+    assert await ctx.windfarm_attr("location_type") == "onshore"
+
+
+# ── FIN-02/03 accessors delegate to financial_opex_metrics ──────────────
+
+
+def _metrics(wf, ent, value, currency="EUR"):
+    return fom.OpexMetrics(
+        windfarm_id=wf,
+        financial_entity_id=ent,
+        currency=currency,
+        total_opex=value * 1000.0,
+        total_revenue=None,
+        ebitda=None,
+        generation_mwh=1000.0,
+        opex_per_mwh=value,
+        ebitda_margin_pct=None,
+        rows_used=3,
+        years_used=[2023, 2024, 2025],
+        period_start=date(2023, 1, 1),
+        period_end=date(2025, 12, 31),
+        native_currency="NOK",
+        native_opex_per_mwh=value * 11.3,
+        generation_source="metered",
+        min_coverage_pct=99.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_own_opex_financials_maps_helper_output_to_legacy_shape(monkeypatch):
+    monkeypatch.setattr(
+        fom, "opex_metrics_for_windfarms", AsyncMock(return_value={7197: _metrics(7197, 38, 16.0)})
+    )
+    ctx = DetectionContext(
+        db=_make_db(), windfarm=7197, period_start=START, period_end=datetime(2025, 12, 31)
+    )
+    out = await ctx.load_own_opex_financials()
+    assert out["total_opex_eur"] == pytest.approx(16_000.0)
+    assert out["generation_gwh"] == pytest.approx(1.0)
+    assert out["full_years"] == 3
+    assert out["relationship_type"] == "primary_asset"
+    assert out["currency"] == "EUR"
+    assert out["years_used"] == [2023, 2024, 2025]
+    assert out["native_currency"] == "NOK"
+    assert out["generation_source"] == "metered"
+    call = fom.opex_metrics_for_windfarms.await_args
+    assert call.kwargs["windfarm_ids"] == [7197]
+    assert call.kwargs["as_of"] == date(2025, 12, 31)
+    assert call.kwargs["display_currency"] == "EUR"
+    assert call.kwargs["include_synthetic"] is False
+
+
+@pytest.mark.asyncio
+async def test_own_opex_financials_helper_failure_returns_none(monkeypatch):
+    monkeypatch.setattr(
+        fom, "opex_metrics_for_windfarms", AsyncMock(side_effect=RuntimeError("db"))
+    )
+    ctx = DetectionContext(db=_make_db(), windfarm=7197, period_start=START, period_end=END)
+    assert await ctx.load_own_opex_financials() is None
+
+
+@pytest.mark.asyncio
+async def test_zone_opex_median_excludes_subject_and_needs_three_peers(monkeypatch):
+    from app.services.opportunity_schemas import context as c
+
+    c._ZONE_CAPTURE_CACHE.clear()
+    cohort = {
+        7197: _metrics(7197, 38, 16.0),  # the subject — must not vote
+        1: _metrics(1, 10, 10.0),
+        2: _metrics(2, 20, 12.0),
+        3: _metrics(3, 30, 20.0),
+    }
+    fake = AsyncMock(return_value=cohort)
+    monkeypatch.setattr(fom, "opex_metrics_for_cohort", fake)
+
+    ctx = DetectionContext(
+        db=_make_db(),
+        windfarm=SimpleNamespace(id=7197, bidzone_id=69, location_type="onshore"),
+        period_start=START,
+        period_end=datetime(2025, 12, 31),
+    )
+    assert await ctx.compute_zone_opex_median("onshore") == 12.0
+    assert ctx.peek("zone_opex_peer_count:onshore") == 3
+    assert fake.await_args.kwargs["bidzone_id"] == 69
+    assert fake.await_args.kwargs["location_type"] == "onshore"
+    assert fake.await_args.kwargs["as_of"] == date(2025, 12, 31)
+
+    # Only two true peers → no benchmark.
+    c._ZONE_CAPTURE_CACHE.clear()
+    monkeypatch.setattr(
+        fom, "opex_metrics_for_cohort", AsyncMock(return_value={k: cohort[k] for k in (7197, 1, 2)})
+    )
+    ctx2 = DetectionContext(
+        db=_make_db(),
+        windfarm=SimpleNamespace(id=7197, bidzone_id=69, location_type="onshore"),
+        period_start=START,
+        period_end=datetime(2025, 12, 31),
+    )
+    assert await ctx2.compute_zone_opex_median("onshore") is None
+    assert ctx2.peek("zone_opex_peer_count:onshore") is None
+    c._ZONE_CAPTURE_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_zone_opex_median_cohort_cached_per_bidzone_and_as_of(monkeypatch):
+    from app.services.opportunity_schemas import context as c
+
+    c._ZONE_CAPTURE_CACHE.clear()
+    cohort = {i: _metrics(i, i * 10, float(i)) for i in range(1, 6)}
+    fake = AsyncMock(return_value=cohort)
+    monkeypatch.setattr(fom, "opex_metrics_for_cohort", fake)
+
+    def _ctx(wf_id):
+        return DetectionContext(
+            db=_make_db(),
+            windfarm=SimpleNamespace(id=wf_id, bidzone_id=69, location_type="onshore"),
+            period_start=START,
+            period_end=datetime(2025, 12, 31),
+        )
+
+    assert await _ctx(1).compute_zone_opex_median("onshore") == 3.5  # median of 2,3,4,5
+    assert await _ctx(5).compute_zone_opex_median("onshore") == 2.5  # median of 1,2,3,4
+    fake.assert_awaited_once()  # one cohort scan serves every farm in it
+    c._ZONE_CAPTURE_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_zone_opex_median_helper_failure_returns_none(monkeypatch):
+    from app.services.opportunity_schemas import context as c
+
+    c._ZONE_CAPTURE_CACHE.clear()
+    monkeypatch.setattr(fom, "opex_metrics_for_cohort", AsyncMock(side_effect=RuntimeError("db")))
+    ctx = DetectionContext(
+        db=_make_db(),
+        windfarm=SimpleNamespace(id=1, bidzone_id=69),
+        period_start=START,
+        period_end=END,
+    )
+    assert await ctx.compute_zone_opex_median("onshore") is None
