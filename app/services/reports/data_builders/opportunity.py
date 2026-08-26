@@ -186,8 +186,8 @@ def _card(
 
 async def build_key_metrics(ctx: ReportContext) -> dict:
     """The six-card strip with deltas vs the previous window (EPR-88 v2):
-    P50 attainment, generation, capacity factor, lost value, capture rate vs
-    zone, schemas flagged.
+    weather-adjusted attainment, generation, capacity factor, lost value,
+    capture rate vs zone, schemas flagged.
 
     Both windows are measured over the *covered* span (EPR-111): if the farm's
     data stops mid-window, comparing what exists against a full prior period
@@ -225,8 +225,11 @@ async def build_key_metrics(ctx: ReportContext) -> dict:
     )
 
     cards = [
+        # "Weather-adjusted", not "P50": the metric is actual vs the farm's own
+        # power-curve expectation — a different denominator from the bankable
+        # P50 target that FIN-01 evidence reports.
         _card(
-            "P50 attainment",
+            "Weather-adjusted attainment",
             current["p50_attainment_pct"],
             "%",
             ".1f",

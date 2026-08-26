@@ -19,24 +19,23 @@ import structlog
 from sqlalchemy import Date, cast, select
 
 from app.models.opportunity import Opportunity, SchemaCode
+from app.services.opportunity_schemas.evidence import format_evidence
 from app.services.opportunity_schemas.registry import SCHEMA_STATUS
+from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES
 from app.services.reports.context import ReportContext
-from app.services.reports.data_builders.common import (
-    FLAT_TOLERANCE as _FLAT_TOLERANCE,  # noqa: F401  (re-exported for tests)
+from app.services.reports.data_builders.common import (  # noqa: F401  (re-exported for tests)
+    FLAT_TOLERANCE as _FLAT_TOLERANCE,
 )
-from app.services.reports.data_builders.common import (
-    build_generation_chart_data,
-    period_label,
-    previous_window,
-    yoy_window,
-)
+from app.services.reports.data_builders.common import build_generation_chart_data
 from app.services.reports.data_builders.common import delta_pct as _delta_pct
 from app.services.reports.data_builders.common import direction as _direction
 from app.services.reports.data_builders.common import fmt as _fmt
 from app.services.reports.data_builders.common import generation_totals as _generation_totals
+from app.services.reports.data_builders.common import period_label, previous_window
 from app.services.reports.data_builders.common import summary_stats as _summary_stats
 from app.services.reports.data_builders.common import utc_bounds as _utc_bounds  # noqa: F401
 from app.services.reports.data_builders.common import window_metrics as _window_metrics
+from app.services.reports.data_builders.common import yoy_window
 
 logger = structlog.get_logger()
 
@@ -78,6 +77,39 @@ def _scorecard_row(
     return row
 
 
+def _is_full_calendar_year(start: date, end: date) -> bool:
+    return start.month == 1 and start.day == 1 and end == date(start.year, 12, 31)
+
+
+async def _sourced_p50_target(ctx: ReportContext, start: date, end: date) -> Optional[float]:
+    """The sourced annual P50 target (GWh) valid for the window, or None.
+
+    No latest-row fallback here: the scorecard is client-facing, so a target
+    whose validity range does not cover the digest period is simply not shown.
+    """
+    from sqlalchemy import or_
+
+    from app.models.p50_target import P50Target
+
+    try:
+        result = await ctx.db.execute(
+            select(P50Target.p50_target_volume_gwh)
+            .where(
+                P50Target.windfarm_id == ctx.windfarm_id,
+                P50Target.p50_target_start_date <= end,
+                or_(
+                    P50Target.p50_target_end_date.is_(None),
+                    P50Target.p50_target_end_date >= start,
+                ),
+            )
+            .order_by(P50Target.p50_target_start_date.desc())
+        )
+        value = result.scalars().first()
+    except Exception:
+        return None
+    return float(value) if value else None
+
+
 async def build_scorecard(ctx: ReportContext) -> dict:
     """The period scorecard: this period vs previous vs same period last year,
     value + directional arrow only (EPR-87: no severity colour-coding)."""
@@ -105,10 +137,34 @@ async def build_scorecard(ctx: ReportContext) -> dict:
     if "yoy" in metrics:
         columns.append({"key": "yoy", "label": period_label(yoy_start, yoy_end)})
 
+    # Bankable P50 attainment (actual ÷ sourced annual target) — only meaningful
+    # when each column is a full calendar year, and deliberately labelled apart
+    # from the weather-adjusted row: the two share the word "attainment" but use
+    # different denominators, and rendering both as "P50 attainment" produced a
+    # contradictory client-facing Midtfjellet digest.
+    bankable_target = None
+    if _is_full_calendar_year(start, end):
+        bankable_target = await _sourced_p50_target(ctx, start, end)
+        if bankable_target:
+            for m in metrics.values():
+                gen = m.get("generation_gwh")
+                m["bankable_attainment_pct"] = (
+                    gen / bankable_target * 100 if gen is not None else None
+                )
+
     rows = [
         _scorecard_row("generation", "Generation", "GWh", metrics, "generation_gwh"),
         _scorecard_row("capacity_factor", "Capacity factor", "%", metrics, "capacity_factor_pct"),
-        _scorecard_row("p50_attainment", "P50 attainment", "%", metrics, "p50_attainment_pct"),
+        _scorecard_row(
+            "p50_attainment", "Weather-adjusted attainment", "%", metrics, "p50_attainment_pct"
+        ),
+        _scorecard_row(
+            "bankable_p50_attainment",
+            "Bankable P50 attainment",
+            "%",
+            metrics,
+            "bankable_attainment_pct",
+        ),
         _scorecard_row("capture_rate", "Capture rate", "%", metrics, "capture_rate_pct"),
         _scorecard_row("curtailment", "Curtailment", "GWh", metrics, "curtailed_gwh", 2),
         _scorecard_row("ebitda_margin", "EBITDA margin", "%", metrics, "ebitda_margin_pct"),
@@ -128,6 +184,15 @@ async def build_scorecard(ctx: ReportContext) -> dict:
     rows = [r for r in rows if _keep(r)]
 
     notes = []
+    if any(r["key"] == "p50_attainment" for r in rows):
+        notes.append(
+            "Weather-adjusted attainment compares actual output to the farm's own "
+            "power-curve expectation under the wind actually observed; bankable P50 "
+            "attainment compares annual output to the sourced P50 target. The two "
+            "use different baselines and are not interchangeable."
+        )
+    if bankable_target and any(r["key"] == "bankable_p50_attainment" for r in rows):
+        notes.append(f"Sourced P50 target: {_fmt(bankable_target)} GWh/yr.")
     fin_labels = {m["financials_label"] for m in metrics.values() if m["financials_label"]}
     if fin_labels and any(r["key"] in ("ebitda_margin", "opex_per_mwh") for r in rows):
         notes.append(
@@ -180,6 +245,58 @@ async def _severity_snapshot(ctx: ReportContext, as_of: date) -> Optional[dict]:
     active_schemas = [c for c in SchemaCode if SCHEMA_STATUS.get(c) == "ACTIVE"]
     counts["pass"] = sum(1 for c in active_schemas if c.value not in latest_by_schema)
     return counts
+
+
+_SEVERITY_ORDER = {"confirmed": 0, "indicative": 1, "watch": 2}
+
+
+async def _current_findings(ctx: ReportContext, as_of: date) -> list[dict]:
+    """Latest non-pass finding per schema as of ``as_of``, with a headline value.
+
+    The exec-summary LLM previously saw only severity COUNTS, so it could write
+    "the wind resource accounts for essentially all of the shortfall" while a
+    Confirmed bankable-P50 attainment finding sat in the same document. Naming
+    the findings (code, name, severity, headline evidence) makes that
+    contradiction visible to the model — and citable by the fact check.
+    """
+    cutoff = as_of - timedelta(days=_SNAPSHOT_RECENCY_DAYS)
+    result = await ctx.db.execute(
+        select(Opportunity)
+        .where(
+            Opportunity.windfarm_id == ctx.windfarm_id,
+            cast(Opportunity.detection_period_end, Date) <= as_of,
+            cast(Opportunity.detection_period_end, Date) > cutoff,
+        )
+        .order_by(Opportunity.schema_code, Opportunity.detection_period_end.desc())
+    )
+    findings: list[dict] = []
+    seen: set[str] = set()
+    for opp in result.scalars().all():
+        if opp.schema_code in seen:
+            continue
+        seen.add(opp.schema_code)
+        severity = opp.severity.lower()  # Severity is a str-enum
+        if severity not in _SEVERITY_ORDER:
+            continue
+        try:
+            code = SchemaCode(opp.schema_code)
+        except ValueError:
+            continue
+        formatted = format_evidence(code, opp.data_slots or {})
+        headline = None
+        if formatted["items"]:
+            first = formatted["items"][0]
+            headline = f"{first['label']}: {first['value']}"
+        findings.append(
+            {
+                "code": opp.schema_code.replace("_", "-"),
+                "name": SCHEMA_NAMES.get(code),
+                "severity": severity,
+                "headline": headline,
+            }
+        )
+    findings.sort(key=lambda f: _SEVERITY_ORDER.get(f["severity"], 9))
+    return findings
 
 
 async def build_finding_changes(ctx: ReportContext) -> dict:
@@ -237,7 +354,12 @@ async def build_finding_changes(ctx: ReportContext) -> dict:
                     row["direction"]["previous"] = direction
             rows.append(row)
 
-    return {"columns": columns, "rows": rows, "notes": notes}
+    return {
+        "columns": columns,
+        "rows": rows,
+        "notes": notes,
+        "current_findings": await _current_findings(ctx, end),
+    }
 
 
 # ── wind resource ───────────────────────────────────────────────────────
@@ -278,7 +400,7 @@ async def build_wind_resource(ctx: ReportContext) -> dict:
             "raw": generation_delta,
         },
         {
-            "label": "P50 attainment",
+            "label": "Weather-adjusted attainment",
             "value": _fmt(current["p50_attainment_pct"]),
             "unit": "%" if current["p50_attainment_pct"] is not None else None,
             "raw": current["p50_attainment_pct"],
@@ -288,9 +410,12 @@ async def build_wind_resource(ctx: ReportContext) -> dict:
         "cards": cards,
         "previous_p50_attainment_pct": previous["p50_attainment_pct"],
         "note": (
-            "Expected generation is the P50 model's output for the period's actual "
-            "wind conditions — the resource delta shows how much of the generation "
-            "change the wind alone explains."
+            "Expected generation is the power-curve model's output for the period's "
+            "actual wind conditions — the resource delta shows how much of the "
+            "period-on-period generation change the wind alone explains. "
+            "Weather-adjusted attainment compares actual output to that expectation; "
+            "it is a different baseline from the bankable P50 target used in "
+            "attainment findings."
         ),
     }
 

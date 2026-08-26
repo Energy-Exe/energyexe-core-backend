@@ -24,7 +24,7 @@ from app.models.opportunity import SchemaCode, Severity
 from app.services.opportunity_schemas.context import DetectionContext
 from app.services.opportunity_schemas.ops06_persistent_underperformance import (
     classify_underperformance_severity,
-    count_consecutive_months_below,
+    count_trailing_months_below,
     detect,
 )
 
@@ -44,19 +44,25 @@ def _ctx(series=None):
     )
 
 
-# ─── count_consecutive_months_below (pure) ────────────────────────────────────
+# ─── count_trailing_months_below (pure) ───────────────────────────────────────
 
 
-def test_consecutive_counter():
-    """[95,79,78,77,81,76,75,74,73,72] threshold 80 → longest below-run is 5."""
+def test_trailing_counter():
+    """[95,79,78,77,81,76,75,74,73,72] threshold 80 → trailing below-run is 5."""
     series = [95, 79, 78, 77, 81, 76, 75, 74, 73, 72]
-    assert count_consecutive_months_below(series, 80) == 5
+    assert count_trailing_months_below(series, 80) == 5
 
 
-def test_consecutive_counter_none_breaks_run():
-    """A None entry breaks a run (neither below nor extending)."""
-    assert count_consecutive_months_below([78, 78, None, 78, 78], 80) == 2
-    assert count_consecutive_months_below([95, 96, 97], 80) == 0
+def test_trailing_counter_none_breaks_run():
+    """A None entry (data gap) ends the trailing run."""
+    assert count_trailing_months_below([78, 78, None, 78, 78], 80) == 2
+    assert count_trailing_months_below([95, 96, 97], 80) == 0
+
+
+def test_trailing_counter_ignores_historical_runs():
+    """An old below-run followed by a healthy tail counts 0 — history, not state."""
+    assert count_trailing_months_below([70] * 10 + [100] * 14, 80) == 0
+    assert count_trailing_months_below([70, 70, 70, 100], 80) == 0
 
 
 # ─── classify_underperformance_severity (pure) ────────────────────────────────
@@ -106,13 +112,27 @@ async def test_detect_fires_on_six_month_run():
 
 @pytest.mark.asyncio
 async def test_detect_accepts_dict_series():
-    """The list-of-dicts shape from load_norm_index_series() is accepted."""
+    """The list-of-dicts shape from load_norm_index_series() is accepted, and the
+    trailing run's month range is reported in run_start/end_month."""
     series = [{"month": f"2024-{i:02d}", "norm_index_p50": 100.0} for i in range(1, 13)]
     series += [{"month": f"2025-{i:02d}", "norm_index_p50": 78.0} for i in range(1, 13)]
     result = await detect(_ctx(series))
     assert result is not None
-    assert result.severity is Severity.CONFIRMED  # 12-month below-80 run
+    assert result.severity is Severity.CONFIRMED  # 12-month trailing below-80 run
     assert result.data_slots["consecutive_months_below_threshold"] == 12
+    assert result.data_slots["run_start_month"] == "2025-01"
+    assert result.data_slots["run_end_month"] == "2025-12"
+
+
+@pytest.mark.asyncio
+async def test_detect_none_for_historical_run():
+    """The Midtfjellet regression: a deep commissioning-era run followed by a
+    healthy recent tail must NOT fire — persistence is about the current state."""
+    series = [{"month": f"2012-{i:02d}", "norm_index_p50": 26.0} for i in range(1, 11)]
+    series += [
+        {"month": f"{2013 + i // 12}-{i % 12 + 1:02d}", "norm_index_p50": 97.0} for i in range(30)
+    ]
+    assert await detect(_ctx(series)) is None
 
 
 @pytest.mark.asyncio

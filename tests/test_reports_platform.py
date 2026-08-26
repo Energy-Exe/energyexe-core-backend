@@ -316,6 +316,17 @@ class TestNarrativeService:
             assert version == "2"  # bumped for the EPR-88 enrichment
             assert "$windfarm_name" in body
 
+    def test_digest_summary_prompt_distinguishes_baselines(self):
+        """v2: the digest exec-summary prompt must separate weather-adjusted
+        from bankable attainment and forbid wind-explains-everything claims."""
+        from app.services.reports.narrative_service import _load_prompt
+
+        version, body = _load_prompt("digest", "executive_summary")
+        assert version == "2"
+        assert "Weather-adjusted attainment" in body
+        assert "Bankable P50 attainment" in body
+        assert "current_findings" in body
+
     def test_model_resolution_follows_tier(self):
         from app.core.config import get_settings
         from app.services.reports.narrative_service import _resolve_model
@@ -431,6 +442,37 @@ class TestDigestScorecard:
         assert row["direction"] == {"previous": "up"}
         assert row["delta_pct"]["previous"] == 9.5
         assert "yoy" not in row["delta_pct"]
+
+    def test_full_calendar_year_detection(self):
+        from datetime import date
+
+        from app.services.reports.data_builders.digest import _is_full_calendar_year
+
+        assert _is_full_calendar_year(date(2025, 1, 1), date(2025, 12, 31))
+        assert not _is_full_calendar_year(date(2025, 1, 1), date(2025, 3, 31))  # quarter
+        assert not _is_full_calendar_year(date(2025, 7, 1), date(2026, 6, 30))  # rolling yr
+
+    def test_weather_adjusted_and_bankable_rows_are_distinct(self):
+        """The two attainment rows must never share a label (the Midtfjellet
+        digest rendered both as "P50 attainment" with different denominators)."""
+        from app.services.reports.data_builders.digest import _scorecard_row
+
+        metrics = {
+            "current": {"p50_attainment_pct": 99.6, "bankable_attainment_pct": 83.0},
+            "previous": {"p50_attainment_pct": 118.7, "bankable_attainment_pct": 96.4},
+        }
+        weather = _scorecard_row(
+            "p50_attainment", "Weather-adjusted attainment", "%", metrics, "p50_attainment_pct"
+        )
+        bankable = _scorecard_row(
+            "bankable_p50_attainment",
+            "Bankable P50 attainment",
+            "%",
+            metrics,
+            "bankable_attainment_pct",
+        )
+        assert weather["label"] != bankable["label"]
+        assert bankable["values"] == {"current": "83.0", "previous": "96.4"}
 
     def test_registry_digest_spec(self):
         spec = get_report_type("digest")
@@ -632,6 +674,55 @@ class TestEvidenceFormatter:
         # period is excluded; the caveat becomes a note, not a grid item.
         assert "period" not in {i["label"].lower() for i in out["items"]}
         assert any("baseline" in n.lower() for n in out["notes"])
+
+    def test_fin01_labels_name_bankable_baseline(self):
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.FIN_01,
+            {
+                "attainment_pct": 83.04,
+                "actual_gwh": 348.778,
+                "p50_target_gwh": 420.0,
+                "prior_attainment_pct": 96.36,
+                "attainment_year": 2025,
+            },
+        )
+        by_label = {i["label"]: i["value"] for i in out["items"]}
+        assert by_label["Attainment vs bankable P50"] == "83%"
+        assert by_label["Prior year vs bankable P50"] == "96.4%"
+        assert by_label["P50 target"] == "420 GWh"
+        # The old ambiguous label must be gone.
+        assert "P50 attainment" not in by_label
+
+    def test_ops06_run_window_is_visible(self):
+        """run_start/end_month render as a month range so a stale run is
+        self-evident (the Midtfjellet 2012-13 commissioning run surfaced as a
+        current Confirmed finding with no dates shown)."""
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import format_evidence
+
+        out = format_evidence(
+            SchemaCode.OPS_06,
+            {
+                "norm_index_p50": 25.99,
+                "consecutive_months_below_threshold": 10,
+                "run_start_month": "2012-11",
+                "run_end_month": "2013-08",
+                "threshold": 80.0,
+                "months_observed": 158,
+            },
+        )
+        by_label = {i["label"]: i["value"] for i in out["items"]}
+        assert by_label["Below-threshold run"] == "Nov 2012 – Aug 2013"
+        # Old findings without the new slots still format (range row skipped).
+        legacy = format_evidence(
+            SchemaCode.OPS_06,
+            {"norm_index_p50": 25.99, "consecutive_months_below_threshold": 10},
+        )
+        legacy_labels = {i["label"] for i in legacy["items"]}
+        assert "Below-threshold run" not in legacy_labels
 
     def test_mkt01_ratios_render_as_percent(self):
         from app.models.opportunity import SchemaCode
