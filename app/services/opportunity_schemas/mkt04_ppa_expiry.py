@@ -217,9 +217,15 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
 def _as_of_date(ctx: DetectionContext) -> date:
     """Derive the ``as_of_date`` for the months-to-expiry computation.
 
-    Uses the detection period end (``ctx.period_end``) when present — the most
-    recent point the analysis covers — falling back to today's date.
+    Prefers the context's ``as_of_date`` (EPR-126: the nightly passes the run
+    date so a window clipped to stale generation data does not push the expiry
+    horizon months further out), then the detection period end
+    (``ctx.period_end``) — the most recent point a period-scoped report covers —
+    falling back to today's date.
     """
+    as_of = getattr(ctx, "as_of_date", None)
+    if isinstance(as_of, date):
+        return _as_date(as_of)
     period_end = getattr(ctx, "period_end", None)
     return _as_date(period_end) if period_end is not None else date.today()
 

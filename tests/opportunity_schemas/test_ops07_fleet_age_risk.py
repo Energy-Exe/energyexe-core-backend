@@ -164,3 +164,36 @@ async def test_detect_uses_dynamic_as_of_from_period_end():
     older = await detect(_ctx(_starts(2005), period_end=datetime(2026, 1, 1)))
     assert older is not None  # 2026 - 2005 = 21 → in the window
     assert older.data_slots["as_of_year"] == 2026
+
+
+# ─── EPR-126: as_of is the RUN date, not the clipped window end ──────────────
+
+
+@pytest.mark.asyncio
+async def test_as_of_prefers_the_run_date_over_a_clipped_period_end():
+    """The nightly clips ``period_end`` to the farm's last metered day (NVE →
+    31 Dec 2025 in an Aug-2026 run). Fleet age must still be assessed as of the
+    run date, or every lagging fleet reads a year younger."""
+    from app.services.opportunity_schemas import ops07_fleet_age_risk as ops07
+
+    clipped_end = datetime(2025, 12, 31, 23, 59, 59, 999999)
+    starts = _starts(2000, 2000, 2000, 2000)  # past design life either way
+
+    report_ctx = DetectionContext(
+        db=None,
+        windfarm=WF_ID,
+        period_start=datetime(2024, 9, 5),
+        period_end=clipped_end,
+        prefetched={"turbine_start_dates": starts},
+    )
+    nightly_ctx = DetectionContext(
+        db=None,
+        windfarm=WF_ID,
+        period_start=datetime(2024, 9, 5),
+        period_end=clipped_end,
+        prefetched={"turbine_start_dates": starts},
+        as_of=date(2026, 8, 27),
+    )
+
+    assert (await ops07.detect(report_ctx)).data_slots["as_of_year"] == 2025
+    assert (await ops07.detect(nightly_ctx)).data_slots["as_of_year"] == 2026

@@ -160,3 +160,37 @@ async def test_detect_none_when_active_long_dated_with_price():
         )
     )
     assert result is None
+
+
+# ─── EPR-126: as_of is the RUN date, not the clipped window end ──────────────
+
+
+@pytest.mark.asyncio
+async def test_as_of_prefers_the_run_date_over_a_clipped_period_end():
+    """The nightly clips ``period_end`` to the farm's last metered day (NVE →
+    31 Dec 2025 in an Aug-2026 run). Months-to-expiry must still count from the
+    run date, or every lagging farm's PPA looks eight months further out."""
+    from app.services.opportunity_schemas import mkt04_ppa_expiry as mkt04
+
+    clipped_end = datetime(2025, 12, 31, 23, 59, 59, 999999)
+    ppa = {
+        "ppa_buyer": "Statkraft",
+        "ppa_status": "active",
+        "ppa_end_date": date(2027, 3, 1),
+        "ppa_price_eur_mwh": 45.0,
+        "contract_type": "fixed_price",
+    }
+    kwargs = dict(
+        db=None,
+        windfarm=WF_ID,
+        period_start=datetime(2024, 9, 5),
+        period_end=clipped_end,
+        prefetched={"ppa_info": ppa},
+    )
+    report = await mkt04.detect(DetectionContext(**kwargs))
+    nightly = await mkt04.detect(DetectionContext(**kwargs, as_of=date(2026, 8, 27)))
+
+    assert report.data_slots["as_of_date"] == "2025-12-31"
+    assert nightly.data_slots["as_of_date"] == "2026-08-27"
+    assert nightly.data_slots["months_until_expiry"] < report.data_slots["months_until_expiry"]
+    assert nightly.data_slots["period"] == "2024-09-05 to 2025-12-31"  # window itself unchanged

@@ -5,7 +5,7 @@ these tests cover the pure logic: registry shape, metric formatting, and a
 real reportlab+matplotlib render from in-memory model instances.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -1185,7 +1185,7 @@ class TestCoverageAwareMetrics:
         from app.services.reports.context import ReportContext
         from app.services.reports.data_builders.common import effective_window
 
-        session = _FakeSession(_FakeResult(value=datetime(2025, 12, 31, 23, 0)))
+        session = _FakeSession(_FakeResult(rows=[(datetime(2025, 12, 31, 23, 0), "NVE")]))
         ctx = ReportContext(
             db=session,
             report_id=1,
@@ -1213,7 +1213,8 @@ class TestCoverageAwareMetrics:
             windfarm=Windfarm(id=1, name="F", code="F"),
         )
         covered = ReportContext(
-            db=_FakeSession(_FakeResult(value=datetime(2025, 12, 31, 23, 0))), **ctx_kwargs
+            db=_FakeSession(_FakeResult(rows=[(datetime(2025, 12, 31, 23, 0), "NVE")])),
+            **ctx_kwargs,
         )
         assert await effective_window(covered, date(2025, 1, 1), date(2025, 12, 31)) == (
             date(2025, 1, 1),
@@ -1228,6 +1229,69 @@ class TestCoverageAwareMetrics:
             date(2025, 12, 31),
             None,
         )
+
+    async def test_effective_window_monthly_source_runs_to_month_end(self):
+        """EIA / ENERGISTYRELSEN store a whole month at its first hour, so the
+        data runs THROUGH that month's end — not through the 1st (EPR-126)."""
+        from app.services.reports.context import ReportContext
+        from app.services.reports.data_builders.common import effective_window
+
+        session = _FakeSession(_FakeResult(rows=[(datetime(2025, 11, 1, 0, 0), "EIA")]))
+        ctx = ReportContext(
+            db=session,
+            report_id=1,
+            scope_type="windfarm",
+            period_start=date(2025, 1, 1),
+            period_end=date(2026, 8, 26),
+            windfarm=Windfarm(id=1, name="F", code="F"),
+        )
+        assert await effective_window(ctx, date(2025, 1, 1), date(2026, 8, 26)) == (
+            date(2025, 1, 1),
+            date(2025, 11, 30),
+            date(2025, 11, 30),
+        )
+        # The probe is the shared helper: one indexed backward scan, no MAX().
+        assert "ORDER BY generation_data.hour DESC" in session.sql(0)
+        assert "LIMIT" in session.sql(0)
+
+    async def test_digest_snapshot_keys_run_recency_on_created_at(self):
+        """EPR-126: ``detection_period_end`` is now clipped to the farm's last
+        metered day (months behind the run for NVE), so the digest's "as the
+        engine last reported" snapshot must key on ``created_at``."""
+        from app.services.reports.context import ReportContext
+        from app.services.reports.data_builders.digest import (
+            _current_findings,
+            _severity_snapshot,
+        )
+
+        run = datetime(2026, 8, 26, 3, 0, tzinfo=timezone.utc)
+        session = _FakeSession(
+            _FakeResult(
+                rows=[
+                    ("MKT_01", "WATCH", run),
+                    ("MKT_01", "CONFIRMED", run - timedelta(days=30)),  # older run, skipped
+                    ("OPS_01", "CONFIRMED", run),
+                ]
+            ),
+            _FakeResult(rows=[]),
+        )
+        ctx = ReportContext(
+            db=session,
+            report_id=1,
+            scope_type="windfarm",
+            period_start=date(2026, 8, 1),
+            period_end=date(2026, 8, 31),
+            windfarm=Windfarm(id=7213, name="Smøla", code="SMOLA"),
+        )
+        counts = await _severity_snapshot(ctx, date(2026, 8, 31))
+        assert counts["watch"] == 1 and counts["confirmed"] == 1
+        assert "CAST(opportunities.created_at AS DATE)" in session.sql(0)
+        assert "CAST(opportunities.detection_period_end AS DATE)" not in session.sql(0)
+
+        await _current_findings(ctx, date(2026, 8, 31))
+        assert "CAST(opportunities.created_at AS DATE)" in session.sql(1)
+        assert "CAST(opportunities.detection_period_end AS DATE)" not in session.sql(1)
+        assert "ORDER BY opportunities.schema_code, opportunities.created_at DESC" in session.sql(1)
 
     def test_clipped_window_compares_against_the_same_season(self):
         """A clipped window compares year-over-year, not against the span that
@@ -1316,7 +1380,7 @@ class TestPeriodScopedFindings:
         }
         captured = self._patch(monkeypatch, results)
         session = _FakeSession(
-            _FakeResult(value=datetime(2025, 12, 31, 23, 0)),  # effective_window
+            _FakeResult(rows=[(datetime(2025, 12, 31, 23, 0), "NVE")]),  # effective_window
             _FakeResult(rows=[]),  # bidzone_names
         )
         payload = await build_findings(self._ctx(session, date(2025, 1, 1), date(2025, 12, 31)))
@@ -1356,7 +1420,7 @@ class TestPeriodScopedFindings:
 
         self._patch(monkeypatch, {})
         session = _FakeSession(
-            _FakeResult(value=datetime(2025, 12, 31, 23, 0)), _FakeResult(rows=[])
+            _FakeResult(rows=[(datetime(2025, 12, 31, 23, 0), "NVE")]), _FakeResult(rows=[])
         )
         payload = await build_findings(self._ctx(session, date(2025, 1, 1), date(2026, 8, 26)))
 
@@ -1370,7 +1434,7 @@ class TestPeriodScopedFindings:
 
         self._patch(monkeypatch, {})
         session = _FakeSession(
-            _FakeResult(value=datetime(2025, 3, 31, 23, 0)), _FakeResult(rows=[])
+            _FakeResult(rows=[(datetime(2025, 3, 31, 23, 0), "NVE")]), _FakeResult(rows=[])
         )
         payload = await build_findings(self._ctx(session, date(2025, 3, 1), date(2025, 3, 31)))
 
@@ -1402,7 +1466,7 @@ class TestPeriodScopedFindings:
         }
         self._patch(monkeypatch, results)
         session = _FakeSession(
-            _FakeResult(value=datetime(2025, 12, 31, 23, 0)), _FakeResult(rows=[])
+            _FakeResult(rows=[(datetime(2025, 12, 31, 23, 0), "NVE")]), _FakeResult(rows=[])
         )
         payload = await build_findings(self._ctx(session, date(2025, 1, 1), date(2025, 12, 31)))
 

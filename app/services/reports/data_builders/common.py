@@ -6,7 +6,6 @@ per-window metrics without importing digest-specific code. Semantics are
 unchanged — the digest module re-exports these under its original names.
 """
 
-import calendar
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
@@ -19,6 +18,10 @@ from app.models.generation_data import GenerationData
 from app.models.performance_summary import PerformanceSummary
 from app.models.windfarm_financial_entity import WindfarmFinancialEntity
 from app.services.financial_opex_metrics import OpexMetrics, opex_metrics_for_windfarms
+from app.services.generation_coverage import (  # noqa: F401  (re-exported; digest imports it)
+    generation_data_through,
+    month_end,
+)
 from app.services.reports.context import ReportContext
 
 logger = structlog.get_logger()
@@ -32,10 +35,6 @@ COVERAGE_NOTE_MIN_DAYS = 7
 
 
 # ── period arithmetic ───────────────────────────────────────────────────
-
-
-def month_end(d: date) -> date:
-    return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
 
 
 def shift_months(d: date, months: int) -> date:
@@ -199,25 +198,21 @@ async def effective_window(
     one reads as a collapse that never happened (EPR-111). Returns
     ``(start, effective_end, data_through)`` where ``data_through`` is set only
     when the window was actually clipped.
+
+    The probe is the shared ``generation_data_through`` (EPR-126) — the same
+    definition the nightly detection uses to clip its own window, so the
+    report and the persisted findings agree on where the data ends. Monthly
+    sources (EIA / ENERGISTYRELSEN) clip to their last month's end.
     """
     window_start, window_end = utc_bounds(start, end)
-    result = await ctx.db.execute(
-        select(func.max(GenerationData.hour)).where(
-            GenerationData.windfarm_id == ctx.windfarm_id,
-            GenerationData.hour >= window_start,
-            GenerationData.hour < window_end,
-            func.coalesce(GenerationData.metered_mwh, GenerationData.generation_mwh).isnot(None),
-        )
-    )
-    last_hour = result.scalar_one_or_none()
-    if last_hour is None:
+    coverage = await generation_data_through(ctx.db, ctx.windfarm_id, window_start, window_end)
+    if coverage is None:
         # No data at all in the window — leave it alone; the caller's
         # empty-comparison guard renders the metrics as n/a.
         return start, end, None
-    last_day = last_hour.date()
-    if last_day >= end:
+    if coverage.last_day >= end:
         return start, end, None
-    return start, last_day, last_day
+    return start, coverage.last_day, coverage.last_day
 
 
 async def bidzone_names(ctx: ReportContext) -> dict[str, str]:

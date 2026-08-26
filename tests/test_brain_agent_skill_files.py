@@ -297,3 +297,15 @@ def test_client_surface_never_mentions_silver():
     text = Path("app/prompts/brain_agent_system_client.md").read_text(encoding="utf-8")
     assert "silver.py" not in text
     assert "scada" not in text.lower()
+
+
+def test_domain_and_schema_document_the_detection_window():
+    """EPR-126: the agent must know the window end is clipped per windfarm to
+    the last metered day, which slots follow it, and that Norway HAS prices."""
+    assert "Detection window" in SKILL_DOMAIN
+    assert "last day with metered generation" in SKILL_DOMAIN
+    assert "as_of_year" in SKILL_DOMAIN and "attainment_year" in SKILL_DOMAIN
+    assert "capture metrics are computed for them" in SKILL_DOMAIN
+    assert "price-data-absent" not in SKILL_DOMAIN
+    assert "created_at" in SKILL_SCHEMA and "detection_run_id" in SKILL_SCHEMA
+    assert "last day with metered generation" in SKILL_SCHEMA
