@@ -22,6 +22,24 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
+# Sources that report ONE generation_data row per month (the whole month's MWh
+# stored at a single hour) rather than one row per hour. Two consequences, and
+# both have bitten us:
+#
+#   * Capacity factor: their rows must be weighted by hours-in-month, or CF
+#     inflates ~720x (client-ui #27/#112: 35,727% CF on USA/Denmark charts).
+#   * Power curves: a month of energy against an hourly wind reading gives
+#     p_pu in the hundreds (measured median max 412 for EIA, 99 for
+#     ENERGISTYRELSEN, against a physical ceiling of 1.20), so every row is
+#     rejected by the plausibility filter and no curve can ever be built.
+#     These windfarms are OUT OF SCOPE for the hourly performance pipeline —
+#     see PerformancePipelineService.run_pipeline_batch.
+#
+# Verified on prod 2026-08-26: 100% of EIA rows sit on the 1st at 00:00 (one
+# distinct hour-of-day); ENERGISTYRELSEN has 2. Every genuinely hourly source
+# (ELEXON/NVE/ENTSOE/TAIPOWER) has 24 and a median max p_pu of ~1.0.
+MONTHLY_SOURCES = ("EIA", "ENERGISTYRELSEN")
+
 
 class GenerationDataRaw(Base):
     """Raw generation data from all sources."""
