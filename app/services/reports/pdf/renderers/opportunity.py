@@ -75,6 +75,19 @@ def render(report: Report, tmp_dir: Path) -> Path:
         counts = findings.data.get("severity_counts", {})
         chart_path = severity_bar_chart(counts, tmp_dir / "severity.png")
         pdf.image(chart_path, width_in=5.6)
+        # Period-scoped assessment (EPR-117): state the window once, up front.
+        # Legacy payloads (nightly snapshot) have no evaluation_window and keep
+        # their per-finding "Detected over" lines below.
+        evaluation_window = findings.data.get("evaluation_window") or {}
+        if evaluation_window.get("start") and evaluation_window.get("end"):
+            label = (
+                findings.data.get("label")
+                or f"{evaluation_window['start']} – {evaluation_window['end']}"
+            )
+            pdf.small(f"Schemas evaluated over {label}.")
+            for key in ("note", "window_note"):
+                if findings.data.get(key):
+                    pdf.small(findings.data[key])
 
         rows = findings.data.get("rows", [])
         body = []
@@ -120,7 +133,7 @@ def render(report: Report, tmp_dir: Path) -> Path:
                 for note in r.get("notes") or []:
                     pdf.small(note)
                 period = r.get("detection_period") or {}
-                if period.get("start") and period.get("end"):
+                if not evaluation_window and period.get("start") and period.get("end"):
                     pdf.small(f"Detected over {period['start']} – {period['end']}.")
 
     wind_norm = _section(report, "wind_norm_chart")

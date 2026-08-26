@@ -275,3 +275,57 @@ def test_json_safe_coerces_nested_datetimes():
     assert out["b"][0] == "2024-10-28"
     assert out["b"][1]["c"] == "2025-01-01T00:00:00"
     assert out["d"] == "untouched" and out["e"] == 42
+
+
+# ── EPR-117: write-free evaluation seam ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_evaluate_for_windfarm_returns_results_without_writes():
+    """The report-facing seam returns post-pass results and never touches the session."""
+    from app.services.opportunity_schemas.registry import evaluate_for_windfarm
+
+    ctx = _make_ctx()
+    registry = {
+        SchemaCode.OPS_01: _detector(
+            DetectorResult(schema_code=SchemaCode.OPS_01, severity=Severity.CONFIRMED)
+        ),
+        SchemaCode.MKT_01: _detector(
+            DetectorResult(schema_code=SchemaCode.MKT_01, severity=Severity.WATCH)
+        ),
+    }
+
+    results, ordered = await evaluate_for_windfarm(ctx, registry=registry, dependencies={})
+
+    assert ordered == [SchemaCode.OPS_01, SchemaCode.MKT_01]
+    assert results[SchemaCode.OPS_01].severity is Severity.CONFIRMED
+    assert results[SchemaCode.MKT_01].severity is Severity.WATCH
+    assert ctx.db.added == []
+    assert ctx.db.flush_count == 0
+
+
+@pytest.mark.asyncio
+async def test_evaluate_for_windfarm_applies_dependency_gate():
+    """A dependent schema without its prerequisite yields nothing — same as run_for_windfarm."""
+    from app.services.opportunity_schemas.registry import evaluate_for_windfarm
+
+    ctx = _make_ctx()
+    registry = {
+        SchemaCode.OPS_03: _detector(
+            DetectorResult(schema_code=SchemaCode.OPS_03, severity=Severity.WATCH)
+        ),
+    }
+    results, ordered = await evaluate_for_windfarm(
+        ctx, registry=registry, dependencies={SchemaCode.OPS_03: [SchemaCode.OPS_01]}
+    )
+    assert results == {}
+    assert ordered == []
+
+
+def test_json_safe_coerces_enums_to_values():
+    """EPR-117: a Severity in data_slots formats as its value on the write-free path."""
+    from app.services.opportunity_schemas.registry import _json_safe
+
+    out = _json_safe({"mkt01_severity": Severity.CONFIRMED, "code": SchemaCode.MKT_01})
+    assert out == {"mkt01_severity": "CONFIRMED", "code": "MKT_01"}
+    assert type(out["mkt01_severity"]) is str

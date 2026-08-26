@@ -36,7 +36,8 @@ reference its prerequisite's freshly-assigned id.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Awaitable, Callable, Dict, List, Optional
+from enum import Enum
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 import structlog
 
@@ -539,84 +540,30 @@ def mark_provisional_if_structural_constraint(
     return results
 
 
-async def run_for_windfarm(
+async def evaluate_for_windfarm(
     ctx: DetectionContext,
     *,
     registry: Dict[SchemaCode, Detector] = SCHEMA_REGISTRY,
     dependencies: Dict[SchemaCode, List[SchemaCode]] = SCHEMA_DEPENDENCIES,
     status: Dict[SchemaCode, str] = SCHEMA_STATUS,
-    detection_run_id: Optional[int] = None,
     schema_codes: Optional[List[SchemaCode]] = None,
-) -> List[Opportunity]:
-    """Run every registered detector for one windfarm and persist findings.
+) -> Tuple[Dict[SchemaCode, DetectorResult], List[SchemaCode]]:
+    """Run the detectors + cross-schema post-passes for one windfarm — no writes.
 
-    This is the SOLE place that builds ``Opportunity`` ORM rows. Detectors are
-    pure (``detect(ctx) -> Optional[DetectorResult]``); this orchestrator turns
-    each non-``None`` result into one ``ACTIVE`` row, wires ``triggered_by_id``
-    from its dependency's persisted row, and flushes parents before children.
+    Phases 1 and 2 of :func:`run_for_windfarm` (detection with status /
+    dependency gating, then the pure reclassification → overlap-downgrade →
+    DQ-01 gate passes) without Phase 3. Nothing is ``add``ed or ``flush``ed:
+    the caller receives the post-pass ``DetectorResult``s exactly as the persist
+    phase would have written them.
 
-    Behaviour (two phases — detect, then persist — with the DQ-01 gate between):
-      * **Detection phase** — iterates ``registry`` in insertion order (=
-        dependency order), collecting the non-``None`` ``DetectorResult``s into a
-        ``results_by_code: dict[SchemaCode, DetectorResult]``:
-          - **Status gating** — a schema whose ``status`` is ``"INACTIVE"`` is
-            skipped entirely (no detector call).
-          - **Dependency gating** — a schema is skipped unless EVERY prerequisite
-            in ``dependencies`` produced a result earlier in this run. (Because
-            the registry is dependency-ordered, prerequisites are evaluated
-            first.)
-          - Calls ``await detect(ctx)``; ``None`` means "no finding".
-      * **Cross-schema post-passes** (PURE functions over ``results_by_code``,
-        run AFTER detection collects all results and BEFORE any ``Opportunity`` is
-        built, in this deliberate order):
-          - **Reclassification** (#111) — :func:`reclassify_capture_to_cannibalisation`
-            and :func:`reclassify_seasonality_to_cannibalisation` mute MKT-01 /
-            OPS-02 to ``SUPPRESSED`` (with a redirect reason) and annotate MKT-03's
-            ``reclassified_from`` when cannibalisation is the dominant driver. Run
-            first, on the detectors' real severities.
-          - **Overlap downgrades** (#112) —
-            :func:`downgrade_negative_price_if_cannibalisation_confirmed` dims
-            MKT-06 by one severity tier when MKT-03 is CONFIRMED, and
-            :func:`mark_provisional_if_structural_constraint` stamps
-            ``data_slots["provisional"]`` on OPS-04 / OPS-06 when OPS-08 is
-            CONFIRMED. Run after reclassification, before the gap gate.
-          - **DQ-01 suppression gate** (#110) — :func:`apply_data_gap_gate` rewrites
-            every generation-dependent result's severity to ``SUPPRESSED`` when a
-            gap is present (no-op otherwise). Run last (a data-quality veto).
-        The rewritten severities / annotations are what get persisted.
-      * **Persist phase** — builds one ``Opportunity`` per surviving
-        ``DetectorResult`` (the only ORM-build point), copying ``severity`` /
-        ``branch`` / ``data_slots`` / ``missing_slots`` / ``suppression_reason``,
-        stamping ``status=ACTIVE`` and the detection period, then ``add`` +
-        ``flush`` so the row gets an id before any dependent row references it via
-        ``triggered_by_id``.
-
-    Args:
-        ctx: the per-windfarm ``DetectionContext`` (carries ``db`` + period).
-        registry: ordered ``SchemaCode -> detector`` map (defaults to the module
-            global; injectable so tests can pass fake detectors).
-        dependencies: ``SchemaCode -> [prerequisite SchemaCode, ...]``.
-        status: ``SchemaCode -> "ACTIVE" | "INACTIVE"``.
-        detection_run_id: optional ``import_job_executions`` id stamped onto
-            every created row.
-        schema_codes: optional whitelist of ``SchemaCode``s to run. ``None``
-            (the default) runs every registered schema — byte-identical to the
-            pre-#114 behaviour. When a list is supplied, any schema NOT in it is
-            skipped entirely (treated like an INACTIVE schema: no detector call,
-            no result, no row). Dependency gating still applies to the survivors,
-            so filtering to a dependent schema without its prerequisite simply
-            yields no result for the dependent.
+    This is the seam the Opportunity *report* uses (EPR-117) to assess a windfarm
+    over the report's own period without touching the nightly ACTIVE board —
+    the ``opportunities`` table keeps exactly one ACTIVE row per windfarm+schema,
+    so a per-period assessment cannot be persisted alongside it.
 
     Returns:
-        The list of created ``Opportunity`` rows (empty if nothing fired).
-        Supersede of prior ACTIVE rows is handled once-per-run in
-        ``OpportunityDetectionService.detect_all`` — NOT here — so this stays a
-        pure additive persist over one windfarm.
-
-    Note:
-        Given the default empty ``SCHEMA_REGISTRY`` this returns ``[]`` and
-        performs no DB writes — it is a safe no-op seam until #93 cuts the live
-        path over to it.
+        ``(results_by_code, ordered_codes)`` — the surviving results keyed by
+        schema, and the schema codes in detection (= dependency) order.
     """
     # ── Phase 1: detection ──
     # Collect the pure DetectorResults (NOT yet ORM rows) in detection order so
@@ -714,6 +661,99 @@ async def run_for_windfarm(
     gap_present = SchemaCode.DQ_01 in results_by_code
     apply_data_gap_gate(results_by_code, gap_present)
 
+    return results_by_code, ordered_codes
+
+
+async def run_for_windfarm(
+    ctx: DetectionContext,
+    *,
+    registry: Dict[SchemaCode, Detector] = SCHEMA_REGISTRY,
+    dependencies: Dict[SchemaCode, List[SchemaCode]] = SCHEMA_DEPENDENCIES,
+    status: Dict[SchemaCode, str] = SCHEMA_STATUS,
+    detection_run_id: Optional[int] = None,
+    schema_codes: Optional[List[SchemaCode]] = None,
+) -> List[Opportunity]:
+    """Run every registered detector for one windfarm and persist findings.
+
+    This is the SOLE place that builds ``Opportunity`` ORM rows. Detectors are
+    pure (``detect(ctx) -> Optional[DetectorResult]``); this orchestrator turns
+    each non-``None`` result into one ``ACTIVE`` row, wires ``triggered_by_id``
+    from its dependency's persisted row, and flushes parents before children.
+
+    Phases 1 + 2 live in :func:`evaluate_for_windfarm` (write-free; the
+    Opportunity report calls it directly, EPR-117); this function adds Phase 3.
+
+    Behaviour (two phases — detect, then persist — with the DQ-01 gate between):
+      * **Detection phase** — iterates ``registry`` in insertion order (=
+        dependency order), collecting the non-``None`` ``DetectorResult``s into a
+        ``results_by_code: dict[SchemaCode, DetectorResult]``:
+          - **Status gating** — a schema whose ``status`` is ``"INACTIVE"`` is
+            skipped entirely (no detector call).
+          - **Dependency gating** — a schema is skipped unless EVERY prerequisite
+            in ``dependencies`` produced a result earlier in this run. (Because
+            the registry is dependency-ordered, prerequisites are evaluated
+            first.)
+          - Calls ``await detect(ctx)``; ``None`` means "no finding".
+      * **Cross-schema post-passes** (PURE functions over ``results_by_code``,
+        run AFTER detection collects all results and BEFORE any ``Opportunity`` is
+        built, in this deliberate order):
+          - **Reclassification** (#111) — :func:`reclassify_capture_to_cannibalisation`
+            and :func:`reclassify_seasonality_to_cannibalisation` mute MKT-01 /
+            OPS-02 to ``SUPPRESSED`` (with a redirect reason) and annotate MKT-03's
+            ``reclassified_from`` when cannibalisation is the dominant driver. Run
+            first, on the detectors' real severities.
+          - **Overlap downgrades** (#112) —
+            :func:`downgrade_negative_price_if_cannibalisation_confirmed` dims
+            MKT-06 by one severity tier when MKT-03 is CONFIRMED, and
+            :func:`mark_provisional_if_structural_constraint` stamps
+            ``data_slots["provisional"]`` on OPS-04 / OPS-06 when OPS-08 is
+            CONFIRMED. Run after reclassification, before the gap gate.
+          - **DQ-01 suppression gate** (#110) — :func:`apply_data_gap_gate` rewrites
+            every generation-dependent result's severity to ``SUPPRESSED`` when a
+            gap is present (no-op otherwise). Run last (a data-quality veto).
+        The rewritten severities / annotations are what get persisted.
+      * **Persist phase** — builds one ``Opportunity`` per surviving
+        ``DetectorResult`` (the only ORM-build point), copying ``severity`` /
+        ``branch`` / ``data_slots`` / ``missing_slots`` / ``suppression_reason``,
+        stamping ``status=ACTIVE`` and the detection period, then ``add`` +
+        ``flush`` so the row gets an id before any dependent row references it via
+        ``triggered_by_id``.
+
+    Args:
+        ctx: the per-windfarm ``DetectionContext`` (carries ``db`` + period).
+        registry: ordered ``SchemaCode -> detector`` map (defaults to the module
+            global; injectable so tests can pass fake detectors).
+        dependencies: ``SchemaCode -> [prerequisite SchemaCode, ...]``.
+        status: ``SchemaCode -> "ACTIVE" | "INACTIVE"``.
+        detection_run_id: optional ``import_job_executions`` id stamped onto
+            every created row.
+        schema_codes: optional whitelist of ``SchemaCode``s to run. ``None``
+            (the default) runs every registered schema — byte-identical to the
+            pre-#114 behaviour. When a list is supplied, any schema NOT in it is
+            skipped entirely (treated like an INACTIVE schema: no detector call,
+            no result, no row). Dependency gating still applies to the survivors,
+            so filtering to a dependent schema without its prerequisite simply
+            yields no result for the dependent.
+
+    Returns:
+        The list of created ``Opportunity`` rows (empty if nothing fired).
+        Supersede of prior ACTIVE rows is handled once-per-run in
+        ``OpportunityDetectionService.detect_all`` — NOT here — so this stays a
+        pure additive persist over one windfarm.
+
+    Note:
+        Given the default empty ``SCHEMA_REGISTRY`` this returns ``[]`` and
+        performs no DB writes — it is a safe no-op seam until #93 cuts the live
+        path over to it.
+    """
+    results_by_code, ordered_codes = await evaluate_for_windfarm(
+        ctx,
+        registry=registry,
+        dependencies=dependencies,
+        status=status,
+        schema_codes=schema_codes,
+    )
+
     # ── Phase 3: persist ──
     # The SOLE ORM-build point. Iterate in detection order so a prerequisite's row
     # is flushed (and has an id) before its dependent row wires triggered_by_id.
@@ -761,6 +801,11 @@ def _json_safe(obj):
     passed through unchanged. A no-op for already-clean slots, so the M1
     characterization snapshot stays byte-identical.
     """
+    # str-mixin Enums (Severity, SchemaCode) serialise as their value in JSONB;
+    # coerce here too so the write-free report path (EPR-117) formats
+    # "CONFIRMED", not "Severity.CONFIRMED".
+    if isinstance(obj, Enum):
+        return _json_safe(obj.value)
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     if isinstance(obj, dict):
