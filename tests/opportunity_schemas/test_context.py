@@ -674,3 +674,61 @@ def test_as_of_date_defaults_to_period_end_and_honours_the_nightly_override():
     )
     assert nightly_ctx.as_of_date == _date(2026, 8, 27)
     assert nightly_ctx.period_end == clipped_end  # the window itself is untouched
+
+
+# ── EPR-126 Part B: shared capture payload, observed hours ────────────────
+
+
+@pytest.mark.asyncio
+async def test_capture_rate_payload_is_fetched_once_for_mkt01_and_mkt03():
+    db = MagicMock()
+    lookup = MagicMock()
+    lookup.scalar_one_or_none.return_value = None  # no bidzone → MKT-01 stops early
+    db.execute = AsyncMock(return_value=lookup)
+    ctx = DetectionContext(
+        db=db, windfarm=7213, period_start=datetime(2024, 9, 5), period_end=datetime(2026, 1, 1)
+    )
+    fake_pa = MagicMock()
+    fake_pa.calculate_capture_rate = AsyncMock(
+        return_value={
+            "overall": {"capture_rate": 0.79},
+            "periods": [
+                {"period": "2024-01-01T00:00:00", "capture_rate": 0.80},
+                {"period": "2025-01-01T00:00:00", "capture_rate": 0.84},
+            ],
+        }
+    )
+    ctx._price_analytics_svc = fake_pa
+
+    ci = await ctx.load_cannibalisation_index()
+    assert ci["ci_by_year"] == {"2024": round(1 / 0.80, 4), "2025": round(1 / 0.84, 4)}
+    assert await ctx.load_capture_rate() is None  # bidzone lookup returned None
+    assert fake_pa.calculate_capture_rate.await_count == 1  # shared payload
+
+
+@pytest.mark.asyncio
+async def test_observed_hours_and_negative_hours_share_one_exposure_query():
+    ctx = DetectionContext(
+        db=MagicMock(),
+        windfarm=1,
+        period_start=datetime(2025, 1, 1),
+        period_end=datetime(2026, 1, 1),
+    )
+    fake_pa = MagicMock()
+    fake_pa.negative_price_exposure = AsyncMock(
+        return_value={"negative_hours": 400, "observed_hours": 4380}
+    )
+    ctx._price_analytics_svc = fake_pa
+
+    assert await ctx.load_negative_price_hours() == 400
+    assert await ctx.load_observed_hours() == 4380
+    assert fake_pa.negative_price_exposure.await_count == 1
+
+    prefetched = DetectionContext(
+        db=None,
+        windfarm=1,
+        period_start=datetime(2025, 1, 1),
+        period_end=datetime(2026, 1, 1),
+        prefetched={"observed_hours": 100},
+    )
+    assert await prefetched.load_observed_hours() == 100

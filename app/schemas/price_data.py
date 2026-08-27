@@ -227,6 +227,11 @@ class CaptureRatePeriod(BaseModel):
     market_average_price: Optional[float]
     hours_in_period: int
     capture_rate: Optional[float]
+    # EPR-126: the market average is taken over the farm's observed hours
+    # (hours with a generation row), so both sides of the ratio cover the same
+    # hours. These say how many hours the bucket rests on.
+    hours_observed: Optional[int] = None
+    hours_generating: Optional[int] = None
 
 
 class CaptureRateOverall(BaseModel):
@@ -236,6 +241,10 @@ class CaptureRateOverall(BaseModel):
     achieved_price: Optional[float]
     market_average_price: Optional[float]
     capture_rate: Optional[float]
+    hours_observed: Optional[int] = None
+    hours_generating: Optional[int] = None
+    coverage_pct: Optional[float] = None
+    market_average_basis: Optional[str] = None
 
 
 class CaptureRateResponse(BaseModel):

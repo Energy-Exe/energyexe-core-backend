@@ -404,6 +404,31 @@ class DetectionContext:
         self._cache["capture_rate"] = await self._compute_capture_rate()
         return self._cache["capture_rate"]
 
+    async def _capture_rate_payload(self) -> Optional[dict]:
+        """The farm's yearly capture-rate payload, fetched once per context.
+
+        MKT-01 (``load_capture_rate``) and MKT-03 (``load_cannibalisation_index``)
+        both read ``calculate_capture_rate(aggregation="year")``; sharing the
+        payload halves the heaviest per-farm scan of the nightly (EPR-126).
+        Cache key ``"capture_rate_payload"``; ``None`` when the query failed.
+        """
+        if "capture_rate_payload" in self._cache:
+            return self._cache["capture_rate_payload"]
+        try:
+            payload = await self._price_analytics().calculate_capture_rate(
+                windfarm_id=self.windfarm_id,
+                start_date=self.period_start,
+                end_date=self.period_end,
+                aggregation="year",
+            )
+        except Exception as e:
+            _logger.warning(
+                "opportunity_capture_rate_error", windfarm_id=self.windfarm_id, error=str(e)
+            )
+            payload = None
+        self._cache["capture_rate_payload"] = payload
+        return payload
+
     async def _compute_capture_rate(self) -> Optional[dict]:
         import structlog
 
@@ -415,15 +440,8 @@ class DetectionContext:
         end = self.period_end
         price_analytics = self._price_analytics()
 
-        try:
-            cr_data = await price_analytics.calculate_capture_rate(
-                windfarm_id=windfarm_id,
-                start_date=start,
-                end_date=end,
-                aggregation="year",
-            )
-        except Exception as e:
-            logger.warning("opportunity_capture_rate_error", windfarm_id=windfarm_id, error=str(e))
+        cr_data = await self._capture_rate_payload()
+        if cr_data is None:
             return None
 
         wf_capture = cr_data.get("overall", {}).get("capture_rate")
@@ -553,14 +571,38 @@ class DetectionContext:
         return self._cache["negative_price_hours"]
 
     async def _compute_negative_price_hours(self) -> Optional[int]:
+        exposure = await self._load_negative_price_exposure()
+        return exposure["negative_hours"] if exposure else None
+
+    async def load_observed_hours(self) -> Optional[int]:
+        """Hours in the window with BOTH a generation row and a price row (EPR-126).
+
+        The days the farm was actually observed — MKT-06 annualises its
+        negative-price hours over these rather than the wall-clock window, so a
+        lagging feed or an interior gap no longer dilutes the per-year rate.
+        Cache key ``"observed_hours"`` (inject via ``prefetched``); ``None`` when
+        the query is unavailable, in which case callers fall back to wall-clock.
+        """
+        if "observed_hours" in self._cache:
+            return self._cache["observed_hours"]
+        exposure = await self._load_negative_price_exposure()
+        self._cache["observed_hours"] = exposure["observed_hours"] if exposure else None
+        return self._cache["observed_hours"]
+
+    async def _load_negative_price_exposure(self) -> Optional[dict]:
+        """One ``negative_price_exposure`` query serving both MKT-06 counts."""
+        if "negative_price_exposure" in self._cache:
+            return self._cache["negative_price_exposure"]
         try:
-            return await self._price_analytics().count_negative_price_hours(
+            exposure = await self._price_analytics().negative_price_exposure(
                 windfarm_id=self.windfarm_id,
                 start=self.period_start,
                 end=self.period_end,
             )
         except Exception:
-            return None
+            exposure = None
+        self._cache["negative_price_exposure"] = exposure
+        return exposure
 
     async def load_cannibalisation_index(self) -> Optional[dict]:
         """Cannibalisation index = 1/capture_rate per year.
@@ -581,18 +623,9 @@ class DetectionContext:
         from app.services.opportunity_detection_service import MKT03_CI_WATCH
 
         windfarm_id = self.windfarm_id
-        start = self.period_start
-        end = self.period_end
-        price_analytics = self._price_analytics()
 
-        try:
-            cr_data = await price_analytics.calculate_capture_rate(
-                windfarm_id=windfarm_id,
-                start_date=start,
-                end_date=end,
-                aggregation="year",
-            )
-        except Exception:
+        cr_data = await self._capture_rate_payload()
+        if cr_data is None:
             return None
 
         periods = cr_data.get("periods", [])
