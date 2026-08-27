@@ -130,7 +130,13 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     if not negative_hours:  # None or 0 → nothing producing at negative prices.
         return None
 
-    window_days = _window_days(ctx)
+    # EPR-126: annualise over the days the farm was actually observed (hours
+    # with both a generation row and a price row ÷ 24), not the wall-clock
+    # window — 720 window days over 480 covered days understated the rate by
+    # a third. Wall-clock remains the fallback when the context cannot say.
+    observed_hours = await _observed_hours(ctx)
+    observed_days = observed_hours / 24.0 if observed_hours else None
+    window_days = observed_days if observed_days else _window_days(ctx)
     hours_per_year = annualise_hours(negative_hours, window_days)
 
     severity = classify_negative_price_severity(hours_per_year)
@@ -140,7 +146,9 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     data_slots = {
         "negative_price_hours": int(negative_hours),
         "negative_price_hours_per_year": round(hours_per_year, 1),
+        # The denominator actually used (observed days when known).
         "window_days": round(window_days, 1) if window_days else None,
+        "observed_days": round(observed_days, 1) if observed_days else None,
         "period": f"{ctx.period_start.date()} to {ctx.period_end.date()}",
     }
 
@@ -163,8 +171,20 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
     )
 
 
+async def _observed_hours(ctx: DetectionContext) -> Optional[int]:
+    """Hours with generation AND price data in the window, or ``None`` when the
+    context cannot provide them (legacy contexts, DB-free harnesses)."""
+    loader = getattr(ctx, "load_observed_hours", None)
+    if loader is None:
+        return None
+    try:
+        return await loader()
+    except Exception:
+        return None
+
+
 def _window_days(ctx: DetectionContext) -> Optional[float]:
-    """Length of the detection window in days, or ``None`` if not computable."""
+    """Wall-clock length of the detection window in days, or ``None`` if not computable."""
     start = getattr(ctx, "period_start", None)
     end = getattr(ctx, "period_end", None)
     if start is None or end is None:

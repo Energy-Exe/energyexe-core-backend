@@ -151,3 +151,37 @@ async def test_detect_short_window_promotes_via_annualisation():
     assert result is not None
     # ~182.6-day window → 100 * 365.25/182.6 ≈ 200/yr → WATCH band.
     assert result.severity == Severity.WATCH
+
+
+# ─── EPR-126: annualise over observed days, not the wall-clock window ────────
+
+
+@pytest.mark.asyncio
+async def test_annualises_over_observed_days_when_the_context_knows_them():
+    """480 covered days inside a 720-day window: the rate must be per observed
+    year. 400 negative hours over 182.5 observed days → 800.5 h/yr (CONFIRMED),
+    where the wall-clock fallback would say ~203 h/yr (WATCH)."""
+    from app.services.opportunity_schemas import mkt06_negative_price_hours as mkt06
+
+    kwargs = dict(
+        db=None,
+        windfarm=WF_ID,
+        period_start=datetime(2024, 9, 5),
+        period_end=datetime(2026, 8, 27),
+    )
+    observed = await mkt06.detect(
+        DetectionContext(**kwargs, prefetched={"negative_price_hours": 400, "observed_hours": 4380})
+    )
+    assert observed.data_slots["observed_days"] == 182.5
+    assert observed.data_slots["window_days"] == 182.5  # the denominator actually used
+    assert observed.data_slots["negative_price_hours_per_year"] == pytest.approx(800.5, abs=0.1)
+    assert observed.severity == Severity.CONFIRMED
+
+    # No observed-hours knowledge (DB-free context) → wall-clock fallback, as before.
+    fallback = await mkt06.detect(
+        DetectionContext(**kwargs, prefetched={"negative_price_hours": 400})
+    )
+    assert fallback.data_slots["observed_days"] is None
+    assert fallback.data_slots["window_days"] == 721.0
+    assert fallback.data_slots["negative_price_hours_per_year"] == pytest.approx(202.6, abs=0.1)
+    assert fallback.severity == Severity.WATCH

@@ -331,9 +331,11 @@ concentration / C=asset-anomaly.
   via `detection_run_id`. The window START never moves.
 - Capture-rate slots (`capture_rate`, `zone_avg_capture`, `gap_pp` on Low Capture
   Rate — Contracting; the cannibalisation index) divide a generation-weighted
-  capture price by the zone time-average price over the same clipped window.
-  Never recompute the denominator over price hours past the farm's last
-  generation reading — that halves NO3 capture rates.
+  capture price by the time-average price over the SAME hours — those where the
+  farm has a generation row (`market_average_basis = 'observed_hours'` on the
+  price-analytics API, with `hours_observed` / `coverage_pct`). Never recompute
+  the denominator over every price hour in a window — price-only months past
+  the farm's last generation reading halve NO3 capture rates.
 - Not every schema spans the rolling window: P50 Generation Attainment assesses
   complete calendar years (`attainment_year`); High Cannibalisation reports per
   calendar year; Turbine Degradation uses its regression's own span; Volatile
