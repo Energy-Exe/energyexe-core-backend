@@ -51,7 +51,7 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 from sqlalchemy import or_, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.opportunity import SchemaCode, Severity
 
@@ -445,7 +445,6 @@ class DetectionContext:
         windfarm_id = self.windfarm_id
         start = self.period_start
         end = self.period_end
-        price_analytics = self._price_analytics()
 
         cr_data = await self._capture_rate_payload()
         if cr_data is None:
@@ -472,11 +471,7 @@ class DetectionContext:
         zone_data = _zone_cache_get(_zk)
         if zone_data is None:
             try:
-                zone_data = await price_analytics.compare_capture_rates_by_bidzone(
-                    bidzone_id=bidzone_id,
-                    start_date=start,
-                    end_date=end,
-                )
+                zone_data = await self._zone_capture_scan(bidzone_id, start, end)
             except Exception as e:
                 # asyncio.TimeoutError (asyncpg command_timeout) stringifies to
                 # "" — name the type so the log says what happened.
@@ -486,9 +481,9 @@ class DetectionContext:
                 )
                 # Remember the failure for the rest of this run (short TTL): a
                 # timed-out zone scan would otherwise be re-run by every other
-                # farm in the zone, each paying the full timeout — and a
-                # timed-out statement invalidates the transaction, which then
-                # fails every remaining schema for that farm (EPR-126).
+                # farm in the zone, each paying the full timeout (EPR-126). The
+                # scan runs on its own session (``_zone_capture_scan``), so the
+                # timeout costs this farm MKT-01 only, never its other schemas.
                 _zone_cache_put(
                     _zk,
                     {"zone_average_capture_rate": None, "error": reason},
@@ -1486,3 +1481,29 @@ class DetectionContext:
         if not hasattr(self, "_price_analytics_svc"):
             self._price_analytics_svc = PriceAnalyticsService(self.db)
         return self._price_analytics_svc
+
+    async def _zone_capture_scan(self, bidzone_id: int, start: datetime, end: datetime) -> dict:
+        """The zone peer scan (``compare_capture_rates_by_bidzone``) on a session of its own.
+
+        It is a pure read over the zone's price/generation history and the one
+        statement that can hit asyncpg's ``command_timeout`` (GB: 158 farms). A
+        timed-out statement invalidates its connection — on the shared session
+        that killed the farm's open transaction, so every schema after MKT-01
+        failed with "Can't reconnect until invalid transaction is rolled back"
+        (EPR-126). On a throwaway session bound to the same engine the timeout
+        costs only the zone average; the farm's transaction never sees it.
+        Contexts without a real bound session (tests, ``prefetched``) keep using
+        the shared analytics service.
+        """
+        bind = getattr(self.db, "bind", None)
+        if not isinstance(self.db, AsyncSession) or bind is None:
+            return await self._price_analytics().compare_capture_rates_by_bidzone(
+                bidzone_id=bidzone_id, start_date=start, end_date=end
+            )
+        from app.services.price_analytics_service import PriceAnalyticsService
+
+        factory = async_sessionmaker(bind, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as session:
+            return await PriceAnalyticsService(session).compare_capture_rates_by_bidzone(
+                bidzone_id=bidzone_id, start_date=start, end_date=end
+            )
