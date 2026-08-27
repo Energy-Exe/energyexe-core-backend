@@ -732,3 +732,67 @@ async def test_observed_hours_and_negative_hours_share_one_exposure_query():
         prefetched={"observed_hours": 100},
     )
     assert await prefetched.load_observed_hours() == 100
+
+
+# ── EPR-126: a failed zone scan is remembered for the run (negative cache) ──
+
+
+def test_zone_cache_honours_per_entry_ttl(monkeypatch):
+    from app.services.opportunity_schemas import context as c
+
+    c._ZONE_CAPTURE_CACHE.clear()
+    clock = {"t": 5000.0}
+    monkeypatch.setattr(c._time, "monotonic", lambda: clock["t"])
+
+    c._zone_cache_put(("neg",), {"error": "TimeoutError"}, ttl=c._ZONE_CAPTURE_NEGATIVE_TTL_SECONDS)
+    c._zone_cache_put(("pos",), {"zone_average_capture_rate": 0.9})
+    clock["t"] += c._ZONE_CAPTURE_NEGATIVE_TTL_SECONDS + 1
+    assert c._zone_cache_get(("neg",)) is None  # negative entry expired first
+    assert c._zone_cache_get(("pos",)) == {"zone_average_capture_rate": 0.9}
+    c._ZONE_CAPTURE_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_failed_zone_scan_is_not_retried_by_the_next_farm_in_the_zone(monkeypatch):
+    """GB has 158 farms and its zone scan can hit the 180 s statement timeout:
+    the first farm pays it once, the others must skip the scan (MKT-01 → no
+    finding) instead of each re-running it — and each losing every schema to
+    the invalidated transaction."""
+    from app.services.opportunity_schemas import context as c
+
+    c._ZONE_CAPTURE_CACHE.clear()
+    clock = {"t": 9000.0}
+    monkeypatch.setattr(c._time, "monotonic", lambda: clock["t"])
+
+    def _ctx(wf_id):
+        db = MagicMock()
+        lookup = MagicMock()
+        lookup.scalar_one_or_none.return_value = 81  # bidzone id
+        db.execute = AsyncMock(return_value=lookup)
+        ctx = DetectionContext(
+            db=db,
+            windfarm=wf_id,
+            period_start=datetime(2024, 9, 5),
+            period_end=datetime(2026, 1, 1),
+        )
+        fake_pa = MagicMock()
+        fake_pa.calculate_capture_rate = AsyncMock(
+            return_value={"overall": {"capture_rate": 0.8}, "periods": []}
+        )
+        fake_pa.compare_capture_rates_by_bidzone = AsyncMock(side_effect=TimeoutError())
+        ctx._price_analytics_svc = fake_pa
+        return ctx, fake_pa
+
+    first, pa1 = _ctx(1)
+    assert await first.load_capture_rate() is None
+    assert pa1.compare_capture_rates_by_bidzone.await_count == 1
+
+    second, pa2 = _ctx(2)
+    assert await second.load_capture_rate() is None
+    assert pa2.compare_capture_rates_by_bidzone.await_count == 0  # served from the negative entry
+
+    clock["t"] += c._ZONE_CAPTURE_NEGATIVE_TTL_SECONDS + 1
+    third, pa3 = _ctx(3)
+    assert await third.load_capture_rate() is None
+    assert pa3.compare_capture_rates_by_bidzone.await_count == 1  # retried after the negative TTL
+    c._ZONE_CAPTURE_CACHE.clear()

@@ -86,22 +86,29 @@ _ZONE_CAPTURE_TTL_SECONDS = 24 * 3600
 _ZONE_CAPTURE_MAX_ENTRIES = 512
 
 
+# A zone scan that FAILED (statement timeout on a big zone) is remembered for
+# this long so the other farms in the zone do not each re-run — and re-time-out
+# — the same scan (EPR-126: 158 GB farms × 180 s). Short, so a transient
+# failure does not blank MKT-01 for a zone for a whole day.
+_ZONE_CAPTURE_NEGATIVE_TTL_SECONDS = 3600
+
+
 def _zone_cache_get(key: tuple) -> Optional[Any]:
     entry = _ZONE_CAPTURE_CACHE.get(key)
     if entry is None:
         return None
-    computed_at, payload = entry
-    if _time.monotonic() - computed_at > _ZONE_CAPTURE_TTL_SECONDS:
+    computed_at, payload, ttl = entry
+    if _time.monotonic() - computed_at > ttl:
         _ZONE_CAPTURE_CACHE.pop(key, None)
         return None
     return payload
 
 
-def _zone_cache_put(key: tuple, payload: Any) -> None:
+def _zone_cache_put(key: tuple, payload: Any, ttl: float = _ZONE_CAPTURE_TTL_SECONDS) -> None:
     while len(_ZONE_CAPTURE_CACHE) >= _ZONE_CAPTURE_MAX_ENTRIES:
         oldest = min(_ZONE_CAPTURE_CACHE, key=lambda k: _ZONE_CAPTURE_CACHE[k][0])
         _ZONE_CAPTURE_CACHE.pop(oldest, None)
-    _ZONE_CAPTURE_CACHE[key] = (_time.monotonic(), payload)
+    _ZONE_CAPTURE_CACHE[key] = (_time.monotonic(), payload, ttl)
 
 
 def last_complete_calendar_year(period_end: datetime) -> int:
@@ -471,11 +478,33 @@ class DetectionContext:
                     end_date=end,
                 )
             except Exception as e:
+                # asyncio.TimeoutError (asyncpg command_timeout) stringifies to
+                # "" — name the type so the log says what happened.
+                reason = str(e) or type(e).__name__
                 logger.warning(
-                    "opportunity_zone_capture_error", bidzone_id=bidzone_id, error=str(e)
+                    "opportunity_zone_capture_error", bidzone_id=bidzone_id, error=reason
+                )
+                # Remember the failure for the rest of this run (short TTL): a
+                # timed-out zone scan would otherwise be re-run by every other
+                # farm in the zone, each paying the full timeout — and a
+                # timed-out statement invalidates the transaction, which then
+                # fails every remaining schema for that farm (EPR-126).
+                _zone_cache_put(
+                    _zk,
+                    {"zone_average_capture_rate": None, "error": reason},
+                    ttl=_ZONE_CAPTURE_NEGATIVE_TTL_SECONDS,
                 )
                 return None
             _zone_cache_put(_zk, zone_data)
+
+        if zone_data.get("error"):
+            logger.info(
+                "opportunity_zone_capture_skipped",
+                bidzone_id=bidzone_id,
+                windfarm_id=windfarm_id,
+                error=zone_data["error"],
+            )
+            return None
 
         zone_avg = zone_data.get("zone_average_capture_rate")
         if zone_avg is None:
