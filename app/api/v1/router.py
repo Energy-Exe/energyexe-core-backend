@@ -43,6 +43,7 @@ from app.api.v1.endpoints import (
     report_commentary,
     reports,
     scada,
+    scada_opportunities,
     states,
     structural_constraints,
     substations,
@@ -187,6 +188,11 @@ api_router.include_router(
 
 # SCADA portal (14-chart dashboard over gold schema `scada`; 503s until the schema exists)
 api_router.include_router(scada.router, prefix="/scada", tags=["scada"])
+
+# SCADA opportunities — Revenue-at-Risk register (503s until the findings tables are populated)
+api_router.include_router(
+    scada_opportunities.router, prefix="/scada/opportunities", tags=["scada-opportunities"]
+)
 
 # Reports platform (EPR-81/82 — generated reports store + async two-pass pipeline)
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
