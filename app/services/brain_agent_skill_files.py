@@ -39,8 +39,9 @@ SKILL_SCHEMA = """# Database Schema Reference
 **windfarm_owners**: windfarm_id, owner_id, ownership_percentage
 **owners**: id, code, name, type (energy/institutional_investor/community_investors/municipality/private_individual/supply_chain_oem/other/unknown)
 **ppas**: windfarm_id, ppa_buyer, ppa_size_mw, ppa_duration_years, ppa_start_date, ppa_end_date, ppa_notes, contract_type (fixed_price/indexed/hybrid/merchant), ppa_status (active/expired/renegotiating), ppa_price_eur_mwh, has_availability_penalties (bool)
-**opportunities**: windfarm_id, schema_code (all 19: __OPPORTUNITY_SCHEMA_CODES__), severity (CONFIRMED/INDICATIVE/WATCH/SUPPRESSED), branch (A/B/C), status (ACTIVE/ACKNOWLEDGED/RESOLVED/SUPERSEDED/INACTIVE), data_slots (JSONB), missing_slots (JSONB list), suppression_reason, triggered_by_id, detection_period_start, detection_period_end
-- LIVE findings = `status='ACTIVE' AND severity != 'SUPPRESSED'`. A SUPPRESSED severity means the finding was gated off by a DQ-01 data gap — do NOT surface it as actionable. A schema with status INACTIVE is data-blocked (e.g. MKT_05/MKT_07) and produces no real findings. Resolve schema_code → human name via the catalogue in skill_domain.md.
+**opportunities**: windfarm_id, schema_code (all 19: __OPPORTUNITY_SCHEMA_CODES__), severity (CONFIRMED/INDICATIVE/WATCH/SUPPRESSED), branch (A/B/C), status (ACTIVE/ACKNOWLEDGED/RESOLVED/SUPERSEDED/INACTIVE), data_slots (JSONB), missing_slots (JSONB list), suppression_reason, triggered_by_id, detection_period_start, detection_period_end, detection_run_id, created_at
+- `detection_period_start/end` = the window the finding was evaluated over: a rolling ~24 months (720 d) whose END is clipped per windfarm to its last day with metered generation (EPR-126) — for lagging feeds (NVE stops at 31 Dec 2025) the end sits months before the run. `created_at` is the run timestamp; the requested end is `import_job_executions.import_end_date` via `detection_run_id`. `data_slots->>'period'` repeats the effective window.
+- LIVE findings =`status='ACTIVE' AND severity != 'SUPPRESSED'`. A SUPPRESSED severity means the finding was gated off by a DQ-01 data gap — do NOT surface it as actionable. A schema with status INACTIVE is data-blocked (e.g. MKT_05/MKT_07) and produces no real findings. Resolve schema_code → human name via the catalogue in skill_domain.md.
 **power_curve_bins**: windfarm_id, year (NULL=overall_clean), curve_type (raw/capability/overall_clean), wind_bin (Numeric 2.0-25.0 in 1.0 steps), q50_pu (median P50), q90_pu (90th pct P10), mean_pu, mad_pu, sample_count. Unique: (windfarm_id, year, curve_type, wind_bin)
 **performance_anomalies**: windfarm_id, hour, anomaly_type (underperformance/overperformance), actual_p_pu, expected_p_pu, wind_speed, wind_bin, lost_mwh, lost_eur, market_price, run_id. Unique: (windfarm_id, hour)
 **performance_summaries**: windfarm_id, period_type (month/year), year, month. ODI: odi_pct_underperf, lost_mwh, expected_mwh, odi_pct_loss_mwh, lost_eur, odi_pct_loss_eur, long_run_count, max_run_hours. Norm: norm_ratio_p50, norm_index_p50, norm_ratio_p10, norm_index_p10. Commercial: constraint_proxy_mwh, lost_value_eur
@@ -261,6 +262,11 @@ ONLY available from ELEXON (UK). If data source is NVE/ENTSOE/EIA, curtailment i
 
 **Capture Rate**: (SUM(price × gen) / SUM(gen)) / avg_market_price × 100%.
 >100% = generating when prices high. <100% = generating when prices low.
+Both sides MUST cover the same hours: take avg_market_price over the period the
+generation data actually covers, never over price hours past the farm's last
+generation reading (Norwegian NVE generation lags the price feed by months —
+averaging 2026 prices under 2025 generation halves the rate). Norwegian assets
+DO have day-ahead prices (NO1–NO5 via ENTSOE, EUR); capture metrics are computed for them.
 
 **Negative Prices**: renewables > demand → negative wholesale prices. Track: COUNT(CASE WHEN price < 0).
 Exposure >2-3% is significant. Typical: 0-3%.
@@ -313,6 +319,31 @@ concentration / C=asset-anomaly.
   `severity = SUPPRESSED` are NOT active findings — exclude them from
   active-findings narratives (query `status = 'ACTIVE'` and
   `severity <> 'SUPPRESSED'`).
+
+**Detection window — read before quoting any period, rate or gap:**
+- Each nightly run evaluates a rolling ~24-month window (720 days) per windfarm.
+  The window END is clipped to the windfarm's last day with metered generation
+  (EPR-126): an NVE farm whose generation stops at 31 Dec 2025 is evaluated
+  through 31 Dec 2025 even when the run is in Aug 2026, so price-only months are
+  never averaged into a generation-weighted metric. `detection_period_start/end`
+  and `data_slots->>'period'` carry that effective window; `created_at` is the
+  run date; the requested (un-clipped) end is `import_job_executions.import_end_date`
+  via `detection_run_id`. The window START never moves.
+- Capture-rate slots (`capture_rate`, `zone_avg_capture`, `gap_pp` on Low Capture
+  Rate — Contracting; the cannibalisation index) divide a generation-weighted
+  capture price by the time-average price over the SAME hours — those where the
+  farm has a generation row (`market_average_basis = 'observed_hours'` on the
+  price-analytics API, with `hours_observed` / `coverage_pct`). Never recompute
+  the denominator over every price hour in a window — price-only months past
+  the farm's last generation reading halve NO3 capture rates.
+- Not every schema spans the rolling window: P50 Generation Attainment assesses
+  complete calendar years (`attainment_year`); High Cannibalisation reports per
+  calendar year; Turbine Degradation uses its regression's own span; Volatile
+  Disruption Periods' trailing-run logic reads history before the window;
+  Fleet-Age / End-of-Life Risk and PPA Expiry Horizon are point-in-time as of the
+  RUN date (`as_of_year`, `as_of_date`), not the clipped end; Structural Export
+  Constraint carries its own event window. Quote each schema's own period slot,
+  not the header window, for those.
 
 When `missing_slots` is populated, acknowledge the data gaps explicitly. Never present uncertain findings as definitive.
 
@@ -1094,4 +1125,3 @@ class Report:
         doc.build(self._flow)
         return filename
 '''
-

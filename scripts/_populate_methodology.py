@@ -22,7 +22,7 @@ SECTIONS = [
 - **Generation** — ENTSOE (European TSO data), Elexon (GB Balancing & Settlement Code data, including B1610 metered volumes), NVE (Norway operator returns), EIA / EIA-930 (US), Taipower (Taiwan), Energistyrelsen (Denmark). Hourly metered MWh after normalisation; multi-unit windfarms are aggregated by unit. US and Danish sources report **monthly** — sub-monthly views are unavailable for those assets.
 - **Curtailment** — Elexon BOAV (bid-offer acceptance volumes). Available for **UK assets only**; for other markets curtailment is genuinely unavailable, not zero.
 - **Weather** — ERA5 reanalysis (Copernicus CDS). 10/100 m wind speed and direction, temperature, surface pressure. Sampled at the windfarm centroid, hourly.
-- **Prices** — ENTSOE day-ahead (EUR), Elexon MID (GBP). Half-hourly settlement aggregated to hourly. Norway has no day-ahead price feed in the platform, so capture-price metrics are suppressed for Norwegian assets.
+- **Prices** — ENTSOE day-ahead (EUR), Elexon MID (GBP). Half-hourly settlement aggregated to hourly. Norwegian assets carry NO1–NO5 day-ahead prices in EUR (via ENTSOE), so capture metrics are computed for them. Where a generation feed lags the price feed (NVE publishes months behind), metrics are evaluated only through the last day with metered generation — price-only months are never averaged in.
 - **Financials** — annual (occasionally 6/9-month transition-period) entity accounts: revenue, EBITDA, EBIT, net income, reported generation. Linked to windfarms via financial entities; multi-windfarm entities are mapped explicitly.
 - **Reference** — country / region / bidzone tables; ownership shares; PPA contracts; manufacturer power curves per turbine model; turbine-unit registry (model, hub height, coordinates, commissioning dates).""",
     },
@@ -75,7 +75,7 @@ Curves are built per calendar year and as an all-years "clean" curve, with curta
 - **Generation concentration** — the platform also breaks generation into market-price *deciles*: the share of energy produced in the 10% cheapest hours (D1) up to the 10% most expensive (D10). A healthy profile has a top-decile share above 10% and a bottom-decile share below 10%. Each asset's profile is compared to its bidzone peers.
 - **Negative-price exposure** — the share of generating hours with a negative day-ahead price. Exposure above 2–3% is significant merchant downside.
 - **PPAs** are layered on top: where a windfarm has a long-term PPA, spot-market analyses (capture rate, implied revenue) are flagged as a *theoretical exercise* — they show what the asset would earn if fully spot-exposed. Implied revenue uses day-ahead prices only.
-- Currency is normalised to a user-selected display currency using period exchange rates. Norway is price-data-absent — capture metrics are suppressed for Norwegian assets.""",
+- Currency is normalised to a user-selected display currency using period exchange rates. Capture metrics are evaluated only over the period an asset has metered generation: a window that runs past the generation feed (Norwegian NVE data lags by months) is clipped to the last metered day rather than averaging price-only months into the market-price denominator.""",
     },
     {
         "section_key": "performance-pipeline",

@@ -78,9 +78,7 @@ def apply_capture_rate_conversion(
         overall["market_average_price"] = overall["market_average_price"] * float(overall_rate)
 
 
-def apply_revenue_metrics_conversion(
-    payload: Dict[str, Any], period_rates: List[Decimal]
-) -> None:
+def apply_revenue_metrics_conversion(payload: Dict[str, Any], period_rates: List[Decimal]) -> None:
     """Scale the monetary fields of a revenue-metrics payload in place."""
     for period, rate in zip(payload["periods"], period_rates):
         r = float(rate)
@@ -101,6 +99,144 @@ def apply_compare_conversion(payload: Dict[str, Any], rate: Decimal) -> None:
         if wf["market_average_price"] is not None:
             wf["market_average_price"] = wf["market_average_price"] * r
         wf["total_revenue_eur"] = round(wf["total_revenue_eur"] * r, 2)
+
+
+# ── EPR-126: same-hours-both-sides capture rate ──────────────────────────────
+
+MARKET_AVERAGE_BASIS = "observed_hours"
+
+
+def observed_hours_sql(price_column: str, exclude_ramp_up: bool, farm_ref: str) -> str:
+    """SQL for one farm's *observed* hours: every hour with a generation row
+    (units summed, ramp-up excluded on request) joined to the farm's OWN price
+    row for the chosen source and column.
+
+    A capture rate divides a generation-weighted price by a time-weighted one,
+    and both sides must be taken over the same hours. The old ``market_avg``
+    CTE averaged every ``price_data`` row in the zone, which (a) leaked
+    price-only hours into the denominator — months past a lagging generation
+    feed (Norwegian NVE data runs ~8 months behind the price feed, at 4× the
+    price), interior gaps — and (b) weighted each hour by the number of farms
+    holding a price row (``price_data`` is per ``(hour, windfarm, source)``).
+
+    ``farm_ref`` is ``':windfarm_id'`` for a single farm or ``'f.id'`` inside a
+    ``LATERAL`` over ``windfarms f``. The hour range is repeated on ``p.hour`` so
+    the planner takes one range scan on ``idx_price_windfarm_hour`` instead of
+    per-row probes. Binds used: ``start_date``, ``end_date``, ``price_source``.
+    """
+    ramp = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
+    return f"""
+        SELECT h.hour, h.net_mwh, p.{price_column} AS price
+        FROM (
+            SELECT g.hour,
+                   SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) AS net_mwh
+            FROM generation_data g
+            WHERE g.windfarm_id = {farm_ref}
+              AND g.hour >= :start_date
+              AND g.hour < :end_date
+              {ramp}
+            GROUP BY g.hour
+        ) h
+        JOIN price_data p
+          ON p.windfarm_id = {farm_ref}
+         AND p.hour = h.hour
+         AND p.source = :price_source
+         AND p.hour >= :start_date
+         AND p.hour < :end_date
+        WHERE p.{price_column} IS NOT NULL
+    """
+
+
+# Aggregates over an observed-hours relation aliased ``o`` (hour, net_mwh, price).
+# Zero/negative-output hours stay in the market average (that is what a capture
+# rate measures — the farm was there and earned nothing); only generating hours
+# carry revenue weight, exactly as the old numerator did.
+CAPTURE_AGGREGATES_SQL = """
+    COUNT(*)                                                           AS hours_observed,
+    COUNT(*) FILTER (WHERE o.net_mwh > 0)                              AS hours_generating,
+    AVG(o.price)                                                       AS market_average_price,
+    COALESCE(SUM(o.net_mwh) FILTER (WHERE o.net_mwh > 0), 0)           AS total_generation_mwh,
+    COALESCE(SUM(o.net_mwh * o.price) FILTER (WHERE o.net_mwh > 0), 0) AS revenue
+"""
+
+
+def _num(value: Any) -> Optional[float]:
+    """``float(value)`` for a numeric DB value, ``None`` otherwise (NULL or a
+    non-numeric stand-in from a test double)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        return None
+    return float(value)
+
+
+def _count(value: Any) -> int:
+    n = _num(value)
+    return int(n) if n is not None else 0
+
+
+def capture_from_totals(
+    revenue: Any, generation: Any, market_average: Any
+) -> Tuple[Optional[float], Optional[float]]:
+    """``(achieved_price, capture_rate)`` with the guards the old SQL applied:
+    no positive generation → no achieved price; no positive market average →
+    no rate."""
+    gen = _num(generation) or 0.0
+    if gen <= 0:
+        return None, None
+    achieved = (_num(revenue) or 0.0) / gen
+    market = _num(market_average)
+    if market is None or market <= 0:
+        return achieved, None
+    return achieved, achieved / market
+
+
+def rollup_capture_periods(periods: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Whole-window figures from per-period rows.
+
+    Σ revenue / Σ generation and an hour-weighted mean of the period market
+    averages reproduce exactly what aggregating the observed hours directly
+    would give, so the old second round trip (``market_avg_query``) is gone.
+    """
+    total_gen = sum(p.get("total_generation_mwh") or 0.0 for p in periods)
+    total_rev = sum(p.get("revenue_eur") or 0.0 for p in periods)
+    hours = sum(int(p.get("hours_observed") or 0) for p in periods)
+    gen_hours = sum(int(p.get("hours_generating") or 0) for p in periods)
+    weighted = sum(
+        (p["market_average_price"] or 0.0) * (p.get("hours_observed") or 0)
+        for p in periods
+        if p.get("market_average_price") is not None
+    )
+    market = weighted / hours if hours else None
+    achieved, capture = capture_from_totals(total_rev, total_gen, market)
+    return {
+        "total_generation_mwh": total_gen,
+        "total_revenue_eur": total_rev,
+        "achieved_price": achieved,
+        "market_average_price": market,
+        "capture_rate": capture,
+        "hours_observed": hours,
+        "hours_generating": gen_hours,
+    }
+
+
+def coverage_pct(hours_observed: int, start: datetime, end: datetime) -> Optional[float]:
+    """Observed hours as a % of the wall-clock window (``None`` for an empty window)."""
+    total = (end - start).total_seconds() / 3600.0
+    if total <= 0:
+        return None
+    return round(hours_observed / total * 100.0, 1)
+
+
+def month_range(start: datetime, end: datetime) -> List[date]:
+    """First-of-month dates for every calendar month touched by ``[start, end)``."""
+    last = end - timedelta(microseconds=1)
+    if last < start:
+        return []
+    months: List[date] = []
+    y, m = start.year, start.month
+    while (y, m) <= (last.year, last.month):
+        months.append(date(y, m, 1))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return months
 
 
 class PriceAnalyticsService:
@@ -124,7 +260,13 @@ class PriceAnalyticsService:
 
         Capture Rate = Achieved Price / Market Average Price
         - Achieved Price = Revenue / Total Generation (revenue-weighted average)
-        - Market Average Price = Simple time-weighted average of market prices
+        - Market Average Price = simple time-weighted average of the farm's
+          price over its OBSERVED hours — the hours it has a generation row
+          for (EPR-126, ``observed_hours_sql``). Both sides cover the same
+          hours, so price-only months past a lagging generation feed and
+          interior gaps never inflate the denominator. ``overall.hours_observed``
+          / ``coverage_pct`` say how much of the window the figures rest on and
+          ``market_average_basis`` names the convention.
 
         Args:
             windfarm_id: Windfarm ID
@@ -137,63 +279,23 @@ class PriceAnalyticsService:
                 currency; the response-level ``currency`` field is authoritative.
 
         Returns:
-            Dict with capture rate metrics by period
+            Dict with capture rate metrics by period. A period with observed
+            but no generating hours is returned with ``capture_rate: None``.
         """
         price_column = "day_ahead_price" if price_type == "day_ahead" else "intraday_price"
         price_source = await self._get_preferred_price_source(windfarm_id)
-        ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
 
-        # SQL query for capture rate calculation
         query = text(
             f"""
-            WITH windfarm_metrics AS (
-                SELECT
-                    DATE_TRUNC(:aggregation, g.hour) as period,
-                    SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation_mwh,
-                    SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.{price_column}) as revenue_eur,
-                    CASE
-                        WHEN SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
-                        THEN SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.{price_column}) / SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0))
-                        ELSE NULL
-                    END as achieved_price
-                FROM generation_data g
-                JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = :price_source
-                WHERE g.windfarm_id = :windfarm_id
-                  AND g.hour >= :start_date
-                  AND g.hour < :end_date
-                  AND p.{price_column} IS NOT NULL
-                  AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
-                  {ramp_up_clause}
-                GROUP BY DATE_TRUNC(:aggregation, g.hour)
-            ),
-            market_metrics AS (
-                SELECT
-                    DATE_TRUNC(:aggregation, p.hour) as period,
-                    AVG(p.{price_column}) as market_average_price,
-                    COUNT(*) as hours_in_period
-                FROM price_data p
-                WHERE p.bidzone_id = (SELECT bidzone_id FROM windfarms WHERE id = :windfarm_id)
-                  AND p.hour >= :start_date
-                  AND p.hour < :end_date
-                  AND p.{price_column} IS NOT NULL
-                  AND p.source = :price_source
-                GROUP BY DATE_TRUNC(:aggregation, p.hour)
+            WITH observed AS (
+                {observed_hours_sql(price_column, exclude_ramp_up, ':windfarm_id')}
             )
             SELECT
-                w.period,
-                w.total_generation_mwh,
-                w.revenue_eur,
-                w.achieved_price,
-                m.market_average_price,
-                m.hours_in_period,
-                CASE
-                    WHEN m.market_average_price > 0 AND w.achieved_price IS NOT NULL
-                    THEN w.achieved_price / m.market_average_price
-                    ELSE NULL
-                END as capture_rate
-            FROM windfarm_metrics w
-            JOIN market_metrics m ON w.period = m.period
-            ORDER BY w.period
+                DATE_TRUNC(:aggregation, o.hour) AS period,
+                {CAPTURE_AGGREGATES_SQL}
+            FROM observed o
+            GROUP BY DATE_TRUNC(:aggregation, o.hour)
+            ORDER BY period
         """
         )
 
@@ -213,68 +315,30 @@ class PriceAnalyticsService:
         windfarm = await self._get_windfarm(windfarm_id)
 
         periods = []
-        total_generation = Decimal("0")
-        total_revenue = Decimal("0")
-
         for row in rows:
-            period_data = {
-                "period": row.period.isoformat() if row.period else None,
-                "total_generation_mwh": float(row.total_generation_mwh)
-                if row.total_generation_mwh
-                else 0,
-                "revenue_eur": float(row.revenue_eur) if row.revenue_eur else 0,
-                "achieved_price": float(row.achieved_price) if row.achieved_price else None,
-                "market_average_price": float(row.market_average_price)
-                if row.market_average_price
-                else None,
-                "hours_in_period": row.hours_in_period,
-                "capture_rate": float(row.capture_rate) if row.capture_rate else None,
-            }
-            periods.append(period_data)
+            achieved, capture = capture_from_totals(
+                row.revenue, row.total_generation_mwh, row.market_average_price
+            )
+            hours_observed = _count(row.hours_observed)
+            periods.append(
+                {
+                    "period": row.period.isoformat() if row.period else None,
+                    "total_generation_mwh": _num(row.total_generation_mwh) or 0.0,
+                    "revenue_eur": _num(row.revenue) or 0.0,
+                    "achieved_price": achieved,
+                    "market_average_price": _num(row.market_average_price),
+                    # Historically the zone's price-row count for the bucket;
+                    # now the farm's observed hours (nothing renders it).
+                    "hours_in_period": hours_observed,
+                    "hours_observed": hours_observed,
+                    "hours_generating": _count(row.hours_generating),
+                    "capture_rate": capture,
+                }
+            )
 
-            if row.total_generation_mwh:
-                total_generation += Decimal(str(row.total_generation_mwh))
-            if row.revenue_eur:
-                total_revenue += Decimal(str(row.revenue_eur))
-
-        # Calculate overall metrics
-        overall_achieved_price = (
-            float(total_revenue / total_generation) if total_generation > 0 else None
-        )
-
-        # Get overall market average
-        market_avg_query = text(
-            f"""
-            SELECT AVG({price_column}) as market_average
-            FROM price_data
-            WHERE bidzone_id = (SELECT bidzone_id FROM windfarms WHERE id = :windfarm_id)
-              AND hour >= :start_date
-              AND hour < :end_date
-              AND {price_column} IS NOT NULL
-              AND source = :price_source
-        """
-        )
-        market_avg_result = await self.db.execute(
-            market_avg_query,
-            {
-                "windfarm_id": windfarm_id,
-                "start_date": start_date,
-                "end_date": end_date,
-                "price_source": price_source,
-            },
-        )
-        market_avg_row = market_avg_result.fetchone()
-        overall_market_average = (
-            float(market_avg_row.market_average)
-            if market_avg_row and market_avg_row.market_average
-            else None
-        )
-
-        overall_capture_rate = (
-            overall_achieved_price / overall_market_average
-            if overall_achieved_price and overall_market_average
-            else None
-        )
+        overall = rollup_capture_periods(periods)
+        overall["coverage_pct"] = coverage_pct(overall["hours_observed"], start_date, end_date)
+        overall["market_average_basis"] = MARKET_AVERAGE_BASIS
 
         native_currency = _SOURCE_CURRENCY.get(price_source, "EUR")
         result_payload = {
@@ -289,13 +353,7 @@ class PriceAnalyticsService:
             "currency": native_currency,
             "display_currency": display_currency,
             "exchange_rate_used": None,
-            "overall": {
-                "total_generation_mwh": float(total_generation),
-                "total_revenue_eur": float(total_revenue),
-                "achieved_price": overall_achieved_price,
-                "market_average_price": overall_market_average,
-                "capture_rate": overall_capture_rate,
-            },
+            "overall": overall,
             "periods": periods,
         }
 
@@ -758,6 +816,15 @@ class PriceAnalyticsService:
         """
         Compare capture rates across all windfarms in a bidzone.
 
+        EPR-126: one ``LATERAL`` pass per farm over its own generation × price
+        rows. Each farm's market average is taken over ITS observed hours, so
+        every peer is divided by a like-for-like denominator, and the
+        zone-wide ``DISTINCT ON (hour)`` price scan (2.7M rows for GB) is gone.
+        The fragment is the one ``calculate_capture_rate`` uses, so a farm's own
+        rate and its entry in this list agree for the same window — what the
+        MKT-01 ``gap_pp`` assumes. Farms with no generating hour in the window
+        are omitted, as before.
+
         Args:
             bidzone_id: Bidzone ID
             start_date: Start date for analysis
@@ -774,60 +841,26 @@ class PriceAnalyticsService:
         bidzone_code = bidzone.code if bidzone else None
         price_source = "ELEXON" if bidzone_code == GB_BIDZONE_CODE else "ENTSOE"
 
-        ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
-
-        # ELEXON stores one price row per (hour, windfarm) — averaging
-        # without DISTINCT ON would weight each hour by the number of
-        # windfarms in the zone (155x for GB), making the AVG slow on
-        # large zones.  ENTSOE prices already have a single row per hour
-        # so DISTINCT ON is a no-op there.
         query = text(
             f"""
-            WITH market_avg AS (
-                SELECT AVG(day_ahead_price) as market_average_price
-                FROM (
-                    SELECT DISTINCT ON (hour) day_ahead_price
-                    FROM price_data
-                    WHERE bidzone_id = :bidzone_id
-                      AND hour >= :start_date
-                      AND hour < :end_date
-                      AND day_ahead_price IS NOT NULL
-                      AND source = :price_source
-                    ORDER BY hour, day_ahead_price
-                ) x
-            )
             SELECT
-                g.windfarm_id,
-                w.name as windfarm_name,
-                w.nameplate_capacity_mw as capacity_mw,
-                SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) as total_generation_mwh,
-                SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price) as total_revenue_eur,
-                CASE
-                    WHEN SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
-                    THEN SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price)
-                         / SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0))
-                    ELSE NULL
-                END as achieved_price,
-                ma.market_average_price,
-                CASE
-                    WHEN SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0 AND ma.market_average_price > 0
-                    THEN (SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price)
-                         / SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)))
-                         / ma.market_average_price
-                    ELSE NULL
-                END as capture_rate
-            FROM generation_data g
-            JOIN price_data p ON g.windfarm_id = p.windfarm_id AND g.hour = p.hour AND p.source = :price_source
-            JOIN windfarms w ON g.windfarm_id = w.id
-            CROSS JOIN market_avg ma
-            WHERE w.bidzone_id = :bidzone_id
-              AND g.hour >= :start_date
-              AND g.hour < :end_date
-              AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
-              AND p.day_ahead_price IS NOT NULL
-              {ramp_up_clause}
-            GROUP BY g.windfarm_id, w.name, w.nameplate_capacity_mw, ma.market_average_price
-            ORDER BY capture_rate DESC NULLS LAST
+                f.id AS windfarm_id,
+                f.name AS windfarm_name,
+                f.nameplate_capacity_mw AS capacity_mw,
+                s.hours_observed,
+                s.hours_generating,
+                s.market_average_price,
+                s.total_generation_mwh,
+                s.revenue
+            FROM windfarms f
+            CROSS JOIN LATERAL (
+                SELECT
+                    {CAPTURE_AGGREGATES_SQL}
+                FROM (
+                    {observed_hours_sql('day_ahead_price', exclude_ramp_up, 'f.id')}
+                ) o
+            ) s
+            WHERE f.bidzone_id = :bidzone_id
         """
         )
 
@@ -844,24 +877,32 @@ class PriceAnalyticsService:
 
         windfarms = []
         for row in rows:
+            hours_observed = _count(row.hours_observed)
+            hours_generating = _count(row.hours_generating)
+            if hours_generating == 0:
+                # No generating hour in the window — the old inner join dropped
+                # these too, and the comparison chart draws a null as a 0 bar.
+                continue
+            achieved, capture = capture_from_totals(
+                row.revenue, row.total_generation_mwh, row.market_average_price
+            )
             windfarms.append(
                 {
                     "windfarm_id": row.windfarm_id,
                     "windfarm_name": row.windfarm_name,
-                    "capacity_mw": float(row.capacity_mw) if row.capacity_mw else None,
-                    "capture_rate": float(row.capture_rate) if row.capture_rate else None,
-                    "achieved_price": float(row.achieved_price) if row.achieved_price else None,
-                    "market_average_price": float(row.market_average_price)
-                    if row.market_average_price
-                    else None,
-                    "total_generation_mwh": float(row.total_generation_mwh)
-                    if row.total_generation_mwh
-                    else 0,
-                    "total_revenue_eur": float(row.total_revenue_eur)
-                    if row.total_revenue_eur
-                    else 0,
+                    "capacity_mw": _num(row.capacity_mw),
+                    "capture_rate": capture,
+                    "achieved_price": achieved,
+                    "market_average_price": _num(row.market_average_price),
+                    "total_generation_mwh": _num(row.total_generation_mwh) or 0.0,
+                    "total_revenue_eur": _num(row.revenue) or 0.0,
+                    "hours_observed": hours_observed,
+                    "hours_generating": hours_generating,
+                    "coverage_pct": coverage_pct(hours_observed, start_date, end_date),
                 }
             )
+        # capture_rate DESC NULLS LAST
+        windfarms.sort(key=lambda w: (w["capture_rate"] is None, -(w["capture_rate"] or 0.0)))
 
         native_currency = _SOURCE_CURRENCY.get(price_source, "EUR")
         result_payload = {
@@ -874,6 +915,7 @@ class PriceAnalyticsService:
             "currency": native_currency,
             "display_currency": display_currency,
             "exchange_rate_used": None,
+            "market_average_basis": MARKET_AVERAGE_BASIS,
             "windfarms": windfarms,
             # Issue #94 root-cause fix: this key was previously omitted, so
             # MKT-01's ``ctx.load_capture_rate()`` always read None and the
@@ -903,76 +945,38 @@ class PriceAnalyticsService:
         Aggregate the bidzone-level capture rate one bucket per calendar month
         in [start_date, end_date]. Powers the radar/spider chart on the FE (#31).
 
-        Returns a payload with 12 axes (one per month in window) — each axis is
-        the MWh-weighted capture rate across all windfarms in the zone.
+        Returns a payload with one axis per calendar month in the window — each
+        axis is the MWh-weighted capture rate across all windfarms in the zone,
+        every farm's rate taken over its own observed hours (EPR-126, same
+        fragment as ``compare_capture_rates_by_bidzone``). Months no farm was
+        observed in keep their axis with null values so the spider keeps its
+        shape.
         """
         bidzone = await self._get_bidzone(bidzone_id)
         bidzone_code = bidzone.code if bidzone else None
         price_source = "ELEXON" if bidzone_code == GB_BIDZONE_CODE else "ENTSOE"
 
-        ramp_up_clause = "AND g.is_ramp_up = false" if exclude_ramp_up else ""
-
-        # Per-month market average (DISTINCT ON hour to avoid 155x overcounting on
-        # ELEXON where price_data has one row per (hour, windfarm)).
         query = text(
             f"""
-            WITH market_avg AS (
-                SELECT
-                    date_trunc('month', hour)::date AS month,
-                    AVG(day_ahead_price) AS market_average_price
-                FROM (
-                    SELECT DISTINCT ON (hour) hour, day_ahead_price
-                    FROM price_data
-                    WHERE bidzone_id = :bidzone_id
-                      AND hour >= :start_date
-                      AND hour < :end_date
-                      AND day_ahead_price IS NOT NULL
-                      AND source = :price_source
-                    ORDER BY hour, day_ahead_price
-                ) x
-                GROUP BY date_trunc('month', hour)
-            ),
-            zone_revenue AS (
-                SELECT
-                    date_trunc('month', g.hour)::date AS month,
-                    SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) AS total_generation_mwh,
-                    SUM((g.generation_mwh - COALESCE(g.consumption_mwh, 0)) * p.day_ahead_price)
-                        AS total_revenue,
-                    COUNT(DISTINCT g.windfarm_id) AS windfarm_count
-                FROM generation_data g
-                JOIN price_data p
-                    ON g.windfarm_id = p.windfarm_id
-                   AND g.hour = p.hour
-                   AND p.source = :price_source
-                JOIN windfarms w ON g.windfarm_id = w.id
-                WHERE w.bidzone_id = :bidzone_id
-                  AND g.hour >= :start_date
-                  AND g.hour < :end_date
-                  AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
-                  AND p.day_ahead_price IS NOT NULL
-                  {ramp_up_clause}
-                GROUP BY date_trunc('month', g.hour)
-            )
             SELECT
-                ma.month,
-                ma.market_average_price,
-                COALESCE(zr.total_generation_mwh, 0) AS total_generation_mwh,
-                COALESCE(zr.total_revenue, 0) AS total_revenue,
-                COALESCE(zr.windfarm_count, 0) AS windfarm_count,
-                CASE
-                    WHEN COALESCE(zr.total_generation_mwh, 0) > 0
-                     AND ma.market_average_price > 0
-                    THEN (zr.total_revenue / zr.total_generation_mwh) / ma.market_average_price
-                    ELSE NULL
-                END AS capture_rate,
-                CASE
-                    WHEN COALESCE(zr.total_generation_mwh, 0) > 0
-                    THEN zr.total_revenue / zr.total_generation_mwh
-                    ELSE NULL
-                END AS achieved_price
-            FROM market_avg ma
-            LEFT JOIN zone_revenue zr ON zr.month = ma.month
-            ORDER BY ma.month
+                f.id AS windfarm_id,
+                s.month,
+                s.hours_observed,
+                s.hours_generating,
+                s.market_average_price,
+                s.total_generation_mwh,
+                s.revenue
+            FROM windfarms f
+            CROSS JOIN LATERAL (
+                SELECT
+                    date_trunc('month', o.hour)::date AS month,
+                    {CAPTURE_AGGREGATES_SQL}
+                FROM (
+                    {observed_hours_sql('day_ahead_price', exclude_ramp_up, 'f.id')}
+                ) o
+                GROUP BY date_trunc('month', o.hour)
+            ) s
+            WHERE f.bidzone_id = :bidzone_id
         """
         )
 
@@ -985,6 +989,13 @@ class PriceAnalyticsService:
                 "price_source": price_source,
             },
         )
+
+        by_month: Dict[date, List[Any]] = {}
+        for row in result.fetchall():
+            month = row.month
+            if isinstance(month, datetime):
+                month = month.date()
+            by_month.setdefault(month, []).append(row)
 
         month_labels = [
             "Jan",
@@ -1001,25 +1012,41 @@ class PriceAnalyticsService:
             "Dec",
         ]
         axes = []
-        for row in result.fetchall():
-            month_dt = row.month
+        for month in month_range(start_date, end_date):
+            farms = []
+            hours = 0
+            weighted_market = 0.0
+            for row in by_month.get(month, []):
+                achieved, capture = capture_from_totals(
+                    row.revenue, row.total_generation_mwh, row.market_average_price
+                )
+                farm_hours = _count(row.hours_observed)
+                market = _num(row.market_average_price)
+                if market is not None:
+                    hours += farm_hours
+                    weighted_market += market * farm_hours
+                farms.append(
+                    {
+                        "capture_rate": capture,
+                        "total_generation_mwh": _num(row.total_generation_mwh) or 0.0,
+                        "revenue": _num(row.revenue) or 0.0,
+                    }
+                )
+            total_generation = sum(f["total_generation_mwh"] for f in farms)
+            total_revenue = sum(f["revenue"] for f in farms)
             axes.append(
                 {
-                    "month": month_dt.month,
-                    "year": month_dt.year,
-                    "label": month_labels[month_dt.month - 1],
-                    "capture_rate": float(row.capture_rate)
-                    if row.capture_rate is not None
-                    else None,
-                    "achieved_price": float(row.achieved_price)
-                    if row.achieved_price is not None
-                    else None,
-                    "market_average_price": float(row.market_average_price)
-                    if row.market_average_price is not None
-                    else None,
-                    "total_generation_mwh": float(row.total_generation_mwh or 0),
-                    "total_revenue": float(row.total_revenue or 0),
-                    "windfarm_count": int(row.windfarm_count or 0),
+                    "month": month.month,
+                    "year": month.year,
+                    "label": month_labels[month.month - 1],
+                    "capture_rate": self.compute_zone_average_capture_rate(farms),
+                    "achieved_price": (
+                        total_revenue / total_generation if total_generation > 0 else None
+                    ),
+                    "market_average_price": weighted_market / hours if hours else None,
+                    "total_generation_mwh": total_generation,
+                    "total_revenue": total_revenue,
+                    "windfarm_count": sum(1 for f in farms if f["total_generation_mwh"] > 0),
                 }
             )
 
@@ -1029,7 +1056,65 @@ class PriceAnalyticsService:
             "bidzone_name": bidzone.name if bidzone else None,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
+            "market_average_basis": MARKET_AVERAGE_BASIS,
             "axes": axes,
+        }
+
+    async def negative_price_exposure(
+        self,
+        windfarm_id: int,
+        start: datetime,
+        end: datetime,
+    ) -> Dict[str, int]:
+        """``{"negative_hours", "observed_hours"}`` over ``[start, end)``, one pass.
+
+        ``negative_hours`` is the MKT-06 count — hours the farm generates
+        (``net_generation > 0``) at a negative day-ahead price. ``observed_hours``
+        is every hour with both a generation row and a price row: the days the
+        farm was actually observed, which is what a per-year rate must be
+        annualised over (EPR-126) rather than the wall-clock window.
+
+        Same join shape as the capture-rate queries — the farm's preferred price
+        source per ``(windfarm_id, hour, source)``, ``COUNT(DISTINCT g.hour)`` so
+        multi-unit farms count each clock-hour once. Counts are never ``None``.
+        """
+        price_source = await self._get_preferred_price_source(windfarm_id)
+
+        query = text(
+            """
+            SELECT
+                COUNT(DISTINCT g.hour) FILTER (
+                    WHERE p.day_ahead_price < 0
+                      AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
+                ) AS negative_hours,
+                COUNT(DISTINCT g.hour) AS observed_hours
+            FROM generation_data g
+            JOIN price_data p
+                ON g.windfarm_id = p.windfarm_id
+               AND g.hour = p.hour
+               AND p.source = :price_source
+            WHERE g.windfarm_id = :windfarm_id
+              AND g.hour >= :start
+              AND g.hour < :end
+              AND p.day_ahead_price IS NOT NULL
+        """
+        )
+
+        result = await self.db.execute(
+            query,
+            {
+                "windfarm_id": windfarm_id,
+                "start": start,
+                "end": end,
+                "price_source": price_source,
+            },
+        )
+        row = result.fetchone()
+        if row is None:
+            return {"negative_hours": 0, "observed_hours": 0}
+        return {
+            "negative_hours": _count(row.negative_hours),
+            "observed_hours": _count(row.observed_hours),
         }
 
     async def count_negative_price_hours(
@@ -1049,51 +1134,11 @@ class PriceAnalyticsService:
             COUNT(DISTINCT g.hour)
             WHERE net_generation > 0  AND  p.day_ahead_price < 0
 
-        where ``net_generation = generation_mwh - COALESCE(consumption_mwh, 0)``
-        (matching the net-of-consumption convention used by the capture-rate
-        queries, so French units with both directions are not double-counted).
-
-        The price is joined per ``(windfarm_id, hour, source)`` using the farm's
-        preferred price source (ELEXON for GB, ENTSOE otherwise) — the same join
-        shape as ``calculate_capture_rate`` — and ``COUNT(DISTINCT g.hour)`` so a
-        windfarm with multiple generation-unit rows per hour still counts each
-        clock-hour once.
-
-        Returns ``0`` (never ``None``) when no qualifying hours exist or no data
-        is reachable, so callers can treat the result as a plain count.
+        Thin wrapper over :meth:`negative_price_exposure`, which also returns
+        the observed-hours denominator. Returns ``0`` (never ``None``).
         """
-        price_source = await self._get_preferred_price_source(windfarm_id)
-
-        query = text(
-            """
-            SELECT COUNT(DISTINCT g.hour) AS negative_hours
-            FROM generation_data g
-            JOIN price_data p
-                ON g.windfarm_id = p.windfarm_id
-               AND g.hour = p.hour
-               AND p.source = :price_source
-            WHERE g.windfarm_id = :windfarm_id
-              AND g.hour >= :start
-              AND g.hour < :end
-              AND p.day_ahead_price IS NOT NULL
-              AND p.day_ahead_price < 0
-              AND (g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
-        """
-        )
-
-        result = await self.db.execute(
-            query,
-            {
-                "windfarm_id": windfarm_id,
-                "start": start,
-                "end": end,
-                "price_source": price_source,
-            },
-        )
-        row = result.fetchone()
-        if row is None or row.negative_hours is None:
-            return 0
-        return int(row.negative_hours)
+        exposure = await self.negative_price_exposure(windfarm_id, start, end)
+        return exposure["negative_hours"]
 
     async def _resolve_rates(
         self,
@@ -1128,9 +1173,7 @@ class PriceAnalyticsService:
         period_rates: List[Decimal] = []
         for period in periods:
             if period.get("period"):
-                start, end = _bucket_bounds(
-                    period["period"], aggregation, range_start, range_end
-                )
+                start, end = _bucket_bounds(period["period"], aggregation, range_start, range_end)
             else:
                 start, end = range_start, range_end
             rate = await rate_for(start, end)

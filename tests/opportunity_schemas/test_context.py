@@ -645,3 +645,154 @@ async def test_zone_opex_median_helper_failure_returns_none(monkeypatch):
         period_end=END,
     )
     assert await ctx.compute_zone_opex_median("onshore") is None
+
+
+# ── EPR-126: as_of_date for point-in-time schemas ─────────────────────────
+
+
+def test_as_of_date_defaults_to_period_end_and_honours_the_nightly_override():
+    from datetime import date as _date
+    from datetime import datetime as _datetime
+
+    from app.services.opportunity_schemas.context import DetectionContext as _Ctx
+
+    clipped_end = _datetime(2025, 12, 31, 23, 59, 59, 999999)
+    report_ctx = _Ctx(
+        db=None, windfarm=1, period_start=_datetime(2025, 1, 1), period_end=clipped_end
+    )
+    # A period-scoped report assesses as of its window end.
+    assert report_ctx.as_of_date == _date(2025, 12, 31)
+
+    # The nightly clips period_end to the farm's last metered day but must
+    # keep assessing fleet age / PPA expiry as of the RUN date.
+    nightly_ctx = _Ctx(
+        db=None,
+        windfarm=1,
+        period_start=_datetime(2024, 9, 5),
+        period_end=clipped_end,
+        as_of=_date(2026, 8, 27),
+    )
+    assert nightly_ctx.as_of_date == _date(2026, 8, 27)
+    assert nightly_ctx.period_end == clipped_end  # the window itself is untouched
+
+
+# ── EPR-126 Part B: shared capture payload, observed hours ────────────────
+
+
+@pytest.mark.asyncio
+async def test_capture_rate_payload_is_fetched_once_for_mkt01_and_mkt03():
+    db = MagicMock()
+    lookup = MagicMock()
+    lookup.scalar_one_or_none.return_value = None  # no bidzone → MKT-01 stops early
+    db.execute = AsyncMock(return_value=lookup)
+    ctx = DetectionContext(
+        db=db, windfarm=7213, period_start=datetime(2024, 9, 5), period_end=datetime(2026, 1, 1)
+    )
+    fake_pa = MagicMock()
+    fake_pa.calculate_capture_rate = AsyncMock(
+        return_value={
+            "overall": {"capture_rate": 0.79},
+            "periods": [
+                {"period": "2024-01-01T00:00:00", "capture_rate": 0.80},
+                {"period": "2025-01-01T00:00:00", "capture_rate": 0.84},
+            ],
+        }
+    )
+    ctx._price_analytics_svc = fake_pa
+
+    ci = await ctx.load_cannibalisation_index()
+    assert ci["ci_by_year"] == {"2024": round(1 / 0.80, 4), "2025": round(1 / 0.84, 4)}
+    assert await ctx.load_capture_rate() is None  # bidzone lookup returned None
+    assert fake_pa.calculate_capture_rate.await_count == 1  # shared payload
+
+
+@pytest.mark.asyncio
+async def test_observed_hours_and_negative_hours_share_one_exposure_query():
+    ctx = DetectionContext(
+        db=MagicMock(),
+        windfarm=1,
+        period_start=datetime(2025, 1, 1),
+        period_end=datetime(2026, 1, 1),
+    )
+    fake_pa = MagicMock()
+    fake_pa.negative_price_exposure = AsyncMock(
+        return_value={"negative_hours": 400, "observed_hours": 4380}
+    )
+    ctx._price_analytics_svc = fake_pa
+
+    assert await ctx.load_negative_price_hours() == 400
+    assert await ctx.load_observed_hours() == 4380
+    assert fake_pa.negative_price_exposure.await_count == 1
+
+    prefetched = DetectionContext(
+        db=None,
+        windfarm=1,
+        period_start=datetime(2025, 1, 1),
+        period_end=datetime(2026, 1, 1),
+        prefetched={"observed_hours": 100},
+    )
+    assert await prefetched.load_observed_hours() == 100
+
+
+# ── EPR-126: a failed zone scan is remembered for the run (negative cache) ──
+
+
+def test_zone_cache_honours_per_entry_ttl(monkeypatch):
+    from app.services.opportunity_schemas import context as c
+
+    c._ZONE_CAPTURE_CACHE.clear()
+    clock = {"t": 5000.0}
+    monkeypatch.setattr(c._time, "monotonic", lambda: clock["t"])
+
+    c._zone_cache_put(("neg",), {"error": "TimeoutError"}, ttl=c._ZONE_CAPTURE_NEGATIVE_TTL_SECONDS)
+    c._zone_cache_put(("pos",), {"zone_average_capture_rate": 0.9})
+    clock["t"] += c._ZONE_CAPTURE_NEGATIVE_TTL_SECONDS + 1
+    assert c._zone_cache_get(("neg",)) is None  # negative entry expired first
+    assert c._zone_cache_get(("pos",)) == {"zone_average_capture_rate": 0.9}
+    c._ZONE_CAPTURE_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_failed_zone_scan_is_not_retried_by_the_next_farm_in_the_zone(monkeypatch):
+    """GB has 158 farms and its zone scan can hit the 180 s statement timeout:
+    the first farm pays it once, the others must skip the scan (MKT-01 → no
+    finding) instead of each re-running it — and each losing every schema to
+    the invalidated transaction."""
+    from app.services.opportunity_schemas import context as c
+
+    c._ZONE_CAPTURE_CACHE.clear()
+    clock = {"t": 9000.0}
+    monkeypatch.setattr(c._time, "monotonic", lambda: clock["t"])
+
+    def _ctx(wf_id):
+        db = MagicMock()
+        lookup = MagicMock()
+        lookup.scalar_one_or_none.return_value = 81  # bidzone id
+        db.execute = AsyncMock(return_value=lookup)
+        ctx = DetectionContext(
+            db=db,
+            windfarm=wf_id,
+            period_start=datetime(2024, 9, 5),
+            period_end=datetime(2026, 1, 1),
+        )
+        fake_pa = MagicMock()
+        fake_pa.calculate_capture_rate = AsyncMock(
+            return_value={"overall": {"capture_rate": 0.8}, "periods": []}
+        )
+        fake_pa.compare_capture_rates_by_bidzone = AsyncMock(side_effect=TimeoutError())
+        ctx._price_analytics_svc = fake_pa
+        return ctx, fake_pa
+
+    first, pa1 = _ctx(1)
+    assert await first.load_capture_rate() is None
+    assert pa1.compare_capture_rates_by_bidzone.await_count == 1
+
+    second, pa2 = _ctx(2)
+    assert await second.load_capture_rate() is None
+    assert pa2.compare_capture_rates_by_bidzone.await_count == 0  # served from the negative entry
+
+    clock["t"] += c._ZONE_CAPTURE_NEGATIVE_TTL_SECONDS + 1
+    third, pa3 = _ctx(3)
+    assert await third.load_capture_rate() is None
+    assert pa3.compare_capture_rates_by_bidzone.await_count == 1  # retried after the negative TTL
+    c._ZONE_CAPTURE_CACHE.clear()

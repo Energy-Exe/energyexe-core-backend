@@ -182,10 +182,16 @@ async def detect(ctx: DetectionContext) -> Optional[DetectorResult]:
 def _as_of_date(ctx: DetectionContext) -> date:
     """Derive the dynamic ``as_of_date`` for age computation.
 
-    Uses the detection period end (``ctx.period_end``) when present — the most
-    recent point the analysis covers — falling back to today's date. NEVER a
-    hardcoded year: the 20-year boundary derives entirely from this value's year.
+    Prefers the context's ``as_of_date`` (EPR-126: the nightly passes the run
+    date so a window clipped to stale generation data does not age the fleet
+    a year younger), then the detection period end (``ctx.period_end``) — the
+    most recent point a period-scoped report covers — falling back to today's
+    date. NEVER a hardcoded year: the 20-year boundary derives entirely from
+    this value's year.
     """
+    as_of = getattr(ctx, "as_of_date", None)
+    if isinstance(as_of, date):
+        return as_of
     period_end = getattr(ctx, "period_end", None)
     if isinstance(period_end, datetime):
         return period_end.date()

@@ -61,11 +61,11 @@ _logger = structlog.get_logger()
 # (``compare_capture_rates_by_bidzone``), keyed by (bidzone_id, hour-rounded
 # start, hour-rounded end). The zone average is identical for every windfarm in
 # the same zone over the same window, but the capture-rate accessor runs
-# per-windfarm — so a big zone (e.g. bidzone 81, 36 windfarms) re-ran the same
-# multi-million-row scan 36×, each risking the statement timeout and (on
-# timeout) leaving the connection in an aborted state. Computing it once per zone
-# per process collapses that to a single scan. Window is hour-rounded so the
-# per-windfarm second-level differences in ``now`` still hit the same entry.
+# per-windfarm — so a big zone (bidzone 81 is GB, 158 windfarms) re-ran the same
+# multi-million-row scan once per farm, each risking the statement timeout and
+# (on timeout) leaving the connection in an aborted state. Computing it once per
+# zone per process collapses that to a single scan. Window is hour-rounded so
+# the per-windfarm second-level differences in ``now`` still hit the same entry.
 #
 # Entries are ``(monotonic_computed_at, payload)`` with a TTL and a size cap
 # (EPR-117): the Opportunity report evaluates fixed historical windows whose
@@ -74,29 +74,41 @@ _logger = structlog.get_logger()
 # across re-imports.
 #
 # The same cache also holds the FIN-02/03 per-cohort OPEX medians (keyed
-# ``("zone_opex_median", bidzone_id, location_type, currency, as_of)``), hence
-# the larger cap: ~30 bidzones × 2 location types on top of the capture entries.
+# ``("zone_opex_median", bidzone_id, location_type, currency, as_of)``).
+#
+# Cap sizing (EPR-126): the nightly now clips each windfarm's window end to its
+# last metered day, so a zone contributes one capture entry per distinct
+# ``data_through`` day among its farms (all NVE farms share one; GB has a few).
+# ~60 zones × ≤3 capture keys + ~60 OPEX cohort keys must fit without evicting
+# mid-run, or the collapse this cache exists for silently comes undone.
 _ZONE_CAPTURE_CACHE: Dict[tuple, Any] = {}
 _ZONE_CAPTURE_TTL_SECONDS = 24 * 3600
-_ZONE_CAPTURE_MAX_ENTRIES = 128
+_ZONE_CAPTURE_MAX_ENTRIES = 512
+
+
+# A zone scan that FAILED (statement timeout on a big zone) is remembered for
+# this long so the other farms in the zone do not each re-run — and re-time-out
+# — the same scan (EPR-126: 158 GB farms × 180 s). Short, so a transient
+# failure does not blank MKT-01 for a zone for a whole day.
+_ZONE_CAPTURE_NEGATIVE_TTL_SECONDS = 3600
 
 
 def _zone_cache_get(key: tuple) -> Optional[Any]:
     entry = _ZONE_CAPTURE_CACHE.get(key)
     if entry is None:
         return None
-    computed_at, payload = entry
-    if _time.monotonic() - computed_at > _ZONE_CAPTURE_TTL_SECONDS:
+    computed_at, payload, ttl = entry
+    if _time.monotonic() - computed_at > ttl:
         _ZONE_CAPTURE_CACHE.pop(key, None)
         return None
     return payload
 
 
-def _zone_cache_put(key: tuple, payload: Any) -> None:
+def _zone_cache_put(key: tuple, payload: Any, ttl: float = _ZONE_CAPTURE_TTL_SECONDS) -> None:
     while len(_ZONE_CAPTURE_CACHE) >= _ZONE_CAPTURE_MAX_ENTRIES:
         oldest = min(_ZONE_CAPTURE_CACHE, key=lambda k: _ZONE_CAPTURE_CACHE[k][0])
         _ZONE_CAPTURE_CACHE.pop(oldest, None)
-    _ZONE_CAPTURE_CACHE[key] = (_time.monotonic(), payload)
+    _ZONE_CAPTURE_CACHE[key] = (_time.monotonic(), payload, ttl)
 
 
 def last_complete_calendar_year(period_end: datetime) -> int:
@@ -154,6 +166,7 @@ class DetectionContext:
         period_start: datetime,
         period_end: datetime,
         prefetched: Optional[Dict[str, Any]] = None,
+        as_of: Optional[date] = None,
     ) -> None:
         """Build a context.
 
@@ -163,13 +176,19 @@ class DetectionContext:
                 ``windfarm_id`` property normalizes either form.
             period_start: detection period start (datetime, used as a bind param).
             period_end: detection period end (datetime, used as a bind param).
+                The nightly clips this per windfarm to the last day with a
+                metered reading (EPR-126); the start is never moved.
             prefetched: optional pre-seeded cache; keys present here are returned
                 by their accessor without any DB access.
+            as_of: the "as of" date for point-in-time schemas (see
+                ``as_of_date``). The nightly passes the run date; a period-scoped
+                report passes nothing and assesses as of its window end.
         """
         self.db = db
         self.windfarm = windfarm
         self.period_start = period_start
         self.period_end = period_end
+        self.as_of = as_of
         self._cache: Dict[str, Any] = dict(prefetched) if prefetched else {}
 
     @property
@@ -179,6 +198,22 @@ class DetectionContext:
         if isinstance(wf, int):
             return wf
         return wf.id
+
+    @property
+    def as_of_date(self) -> date:
+        """The date point-in-time schemas assess against (OPS-07 fleet age,
+        MKT-04 PPA expiry horizon).
+
+        Defaults to ``period_end``'s date — right for a period-scoped report
+        ("as of the end of 2025"). The nightly overrides it with the run date
+        (EPR-126): its ``period_end`` is clipped to the farm's last metered day,
+        and a fleet must not read a year younger, nor a PPA eight months
+        further from expiry, because the generation feed lags.
+        """
+        if self.as_of is not None:
+            return self.as_of
+        end = self.period_end
+        return end.date() if isinstance(end, datetime) else end
 
     # ─── Memoized accessors (query text copied from legacy _calc_*) ─────────
 
@@ -376,6 +411,31 @@ class DetectionContext:
         self._cache["capture_rate"] = await self._compute_capture_rate()
         return self._cache["capture_rate"]
 
+    async def _capture_rate_payload(self) -> Optional[dict]:
+        """The farm's yearly capture-rate payload, fetched once per context.
+
+        MKT-01 (``load_capture_rate``) and MKT-03 (``load_cannibalisation_index``)
+        both read ``calculate_capture_rate(aggregation="year")``; sharing the
+        payload halves the heaviest per-farm scan of the nightly (EPR-126).
+        Cache key ``"capture_rate_payload"``; ``None`` when the query failed.
+        """
+        if "capture_rate_payload" in self._cache:
+            return self._cache["capture_rate_payload"]
+        try:
+            payload = await self._price_analytics().calculate_capture_rate(
+                windfarm_id=self.windfarm_id,
+                start_date=self.period_start,
+                end_date=self.period_end,
+                aggregation="year",
+            )
+        except Exception as e:
+            _logger.warning(
+                "opportunity_capture_rate_error", windfarm_id=self.windfarm_id, error=str(e)
+            )
+            payload = None
+        self._cache["capture_rate_payload"] = payload
+        return payload
+
     async def _compute_capture_rate(self) -> Optional[dict]:
         import structlog
 
@@ -387,15 +447,8 @@ class DetectionContext:
         end = self.period_end
         price_analytics = self._price_analytics()
 
-        try:
-            cr_data = await price_analytics.calculate_capture_rate(
-                windfarm_id=windfarm_id,
-                start_date=start,
-                end_date=end,
-                aggregation="year",
-            )
-        except Exception as e:
-            logger.warning("opportunity_capture_rate_error", windfarm_id=windfarm_id, error=str(e))
+        cr_data = await self._capture_rate_payload()
+        if cr_data is None:
             return None
 
         wf_capture = cr_data.get("overall", {}).get("capture_rate")
@@ -425,11 +478,33 @@ class DetectionContext:
                     end_date=end,
                 )
             except Exception as e:
+                # asyncio.TimeoutError (asyncpg command_timeout) stringifies to
+                # "" — name the type so the log says what happened.
+                reason = str(e) or type(e).__name__
                 logger.warning(
-                    "opportunity_zone_capture_error", bidzone_id=bidzone_id, error=str(e)
+                    "opportunity_zone_capture_error", bidzone_id=bidzone_id, error=reason
+                )
+                # Remember the failure for the rest of this run (short TTL): a
+                # timed-out zone scan would otherwise be re-run by every other
+                # farm in the zone, each paying the full timeout — and a
+                # timed-out statement invalidates the transaction, which then
+                # fails every remaining schema for that farm (EPR-126).
+                _zone_cache_put(
+                    _zk,
+                    {"zone_average_capture_rate": None, "error": reason},
+                    ttl=_ZONE_CAPTURE_NEGATIVE_TTL_SECONDS,
                 )
                 return None
             _zone_cache_put(_zk, zone_data)
+
+        if zone_data.get("error"):
+            logger.info(
+                "opportunity_zone_capture_skipped",
+                bidzone_id=bidzone_id,
+                windfarm_id=windfarm_id,
+                error=zone_data["error"],
+            )
+            return None
 
         zone_avg = zone_data.get("zone_average_capture_rate")
         if zone_avg is None:
@@ -525,14 +600,38 @@ class DetectionContext:
         return self._cache["negative_price_hours"]
 
     async def _compute_negative_price_hours(self) -> Optional[int]:
+        exposure = await self._load_negative_price_exposure()
+        return exposure["negative_hours"] if exposure else None
+
+    async def load_observed_hours(self) -> Optional[int]:
+        """Hours in the window with BOTH a generation row and a price row (EPR-126).
+
+        The days the farm was actually observed — MKT-06 annualises its
+        negative-price hours over these rather than the wall-clock window, so a
+        lagging feed or an interior gap no longer dilutes the per-year rate.
+        Cache key ``"observed_hours"`` (inject via ``prefetched``); ``None`` when
+        the query is unavailable, in which case callers fall back to wall-clock.
+        """
+        if "observed_hours" in self._cache:
+            return self._cache["observed_hours"]
+        exposure = await self._load_negative_price_exposure()
+        self._cache["observed_hours"] = exposure["observed_hours"] if exposure else None
+        return self._cache["observed_hours"]
+
+    async def _load_negative_price_exposure(self) -> Optional[dict]:
+        """One ``negative_price_exposure`` query serving both MKT-06 counts."""
+        if "negative_price_exposure" in self._cache:
+            return self._cache["negative_price_exposure"]
         try:
-            return await self._price_analytics().count_negative_price_hours(
+            exposure = await self._price_analytics().negative_price_exposure(
                 windfarm_id=self.windfarm_id,
                 start=self.period_start,
                 end=self.period_end,
             )
         except Exception:
-            return None
+            exposure = None
+        self._cache["negative_price_exposure"] = exposure
+        return exposure
 
     async def load_cannibalisation_index(self) -> Optional[dict]:
         """Cannibalisation index = 1/capture_rate per year.
@@ -553,18 +652,9 @@ class DetectionContext:
         from app.services.opportunity_detection_service import MKT03_CI_WATCH
 
         windfarm_id = self.windfarm_id
-        start = self.period_start
-        end = self.period_end
-        price_analytics = self._price_analytics()
 
-        try:
-            cr_data = await price_analytics.calculate_capture_rate(
-                windfarm_id=windfarm_id,
-                start_date=start,
-                end_date=end,
-                aggregation="year",
-            )
-        except Exception:
+        cr_data = await self._capture_rate_payload()
+        if cr_data is None:
             return None
 
         periods = cr_data.get("periods", [])
