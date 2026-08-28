@@ -180,13 +180,28 @@ class FinancialRatioPeriod(BaseModel):
     period_coverage_pct: Optional[Decimal] = None
 
 
+class LinkedWindfarmRef(BaseModel):
+    """A windfarm whose figures are part of the same financial entity's accounts."""
+
+    id: int
+    name: str
+
+
 class FinancialRatiosResponse(BaseModel):
     windfarm_id: int
     windfarm_name: str
     financial_entity_id: int
     financial_entity_name: str
     entity_type: str
+    # EPR-123/122 — how this windfarm relates to the entity (primary_asset /
+    # consolidated) so the client can say where the reported figures come from.
+    relationship_type: Optional[str] = None
     cod: Optional[date] = None
+    # Every windfarm the entity's accounts cover (deleted ones included) — the
+    # generation denominator for the per-MWh ratios.
     linked_windfarm_ids: List[int]
+    # The same set restricted to windfarms visible in the platform, with names,
+    # including the requested one. The client derives "also covers: …" from it.
+    linked_windfarms: List[LinkedWindfarmRef] = []
     display_currency: Optional[str] = None
     periods: List[FinancialRatioPeriod]

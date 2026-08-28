@@ -118,6 +118,11 @@ class TestFinancialRatiosAPI:
         assert "entity_type" in entity_resp
         assert "cod" in entity_resp
         assert "linked_windfarm_ids" in entity_resp
+        # EPR-123/122 — provenance fields for the client's "Reported by" strip
+        assert entity_resp["relationship_type"] in ("primary_asset", "consolidated", None)
+        assert isinstance(entity_resp["linked_windfarms"], list)
+        for ref in entity_resp["linked_windfarms"]:
+            assert set(ref) == {"id", "name"}
         assert "periods" in entity_resp
 
         if entity_resp["periods"]:
