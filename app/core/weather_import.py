@@ -1,6 +1,6 @@
 """Core weather import functionality for ERA5 data fetching and processing."""
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import structlog
@@ -32,6 +32,7 @@ class WeatherImportCore:
         end_date: date,
         job_id: Optional[int] = None,
         force_refresh: bool = False,
+        windfarm_ids: Optional[List[int]] = None,
     ) -> Dict[str, any]:
         """
         Fetch and process ERA5 data for a date range.
@@ -45,6 +46,9 @@ class WeatherImportCore:
             end_date: End date for import
             job_id: Optional job ID for progress tracking
             force_refresh: If True, re-fetch data even for days that already have complete data
+            windfarm_ids: Optional subset of windfarm ids. Scopes the farm set, the CDS
+                bounding box AND the completeness check, so a newly added farm's history
+                can be filled without re-downloading the whole fleet (EPR-121).
 
         Returns:
             Dict with statistics:
@@ -85,14 +89,17 @@ class WeatherImportCore:
             start_date=str(start_date),
             end_date=str(end_date),
             job_id=job_id,
-            force_refresh=force_refresh
+            force_refresh=force_refresh,
+            windfarm_ids=windfarm_ids,
         )
 
         # Process each date in range
         current_date = start_date
         while current_date <= end_date:
             try:
-                date_stats = await self._process_single_date(current_date, job_id, force_refresh)
+                date_stats = await self._process_single_date(
+                    current_date, job_id, force_refresh, windfarm_ids=windfarm_ids
+                )
 
                 # Aggregate stats
                 stats['records'] += date_stats.get('records', 0)
@@ -126,7 +133,8 @@ class WeatherImportCore:
         self,
         target_date: date,
         job_id: Optional[int] = None,
-        force_refresh: bool = False
+        force_refresh: bool = False,
+        windfarm_ids: Optional[List[int]] = None,
     ) -> Dict[str, int]:
         """
         Process a single date: fetch GRIB, extract data, insert to DB, cleanup.
@@ -135,6 +143,7 @@ class WeatherImportCore:
             target_date: Date to process
             job_id: Optional job ID for progress tracking
             force_refresh: If True, re-fetch data even if date already has complete data
+            windfarm_ids: Optional subset of windfarm ids (see fetch_and_process_date_range)
 
         Returns:
             Dict with date statistics including 'skipped' flag
@@ -156,33 +165,41 @@ class WeatherImportCore:
             'skipped': False
         }
 
-        # Get all windfarms
+        # Get the windfarms in scope: every farm with coordinates, or the subset asked for
         AsyncSessionLocal = get_session_factory()
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Windfarm).where(
-                    Windfarm.lat.isnot(None),
-                    Windfarm.lng.isnot(None)
-                )
+            query = select(Windfarm).where(
+                Windfarm.lat.isnot(None),
+                Windfarm.lng.isnot(None)
             )
+            if windfarm_ids:
+                query = query.where(Windfarm.id.in_(windfarm_ids))
+            result = await db.execute(query.order_by(Windfarm.id))
             windfarms = list(result.scalars().all())
 
         if not windfarms:
-            logger.warning("No active windfarms found")
+            logger.warning("No active windfarms found", windfarm_ids=windfarm_ids)
             return stats
 
-        logger.info(f"Processing date {target_date} for {len(windfarms)} windfarms")
+        logger.info(
+            f"Processing date {target_date} for {len(windfarms)} windfarms",
+            scoped=bool(windfarm_ids),
+        )
 
         # Check if date already complete (skip if complete and not forcing refresh)
-        if not force_refresh and await self._is_date_complete(target_date, len(windfarms)):
+        if not force_refresh and await self._is_date_complete(target_date, windfarms):
             logger.info(f"Date {target_date} already complete, skipping (use force_refresh=True to re-fetch)")
             stats['skipped'] = True
             return stats
 
-        # Setup GRIB directory
+        # Setup GRIB directory. The file name carries the scope: a scoped run's
+        # small-bbox GRIB must never be picked up by a fleet run (every farm
+        # outside it would interpolate to NaN and be silently skipped).
         grib_dir = Path("/tmp/grib_files") / "daily"
         grib_dir.mkdir(parents=True, exist_ok=True)
-        grib_file = grib_dir / f"era5_{target_date.strftime('%Y%m%d')}.grib"
+        grib_file = grib_dir / (
+            f"era5_{target_date.strftime('%Y%m%d')}_{self._scope_tag(windfarm_ids)}.grib"
+        )
 
         # Check if GRIB already exists
         if grib_file.exists():
@@ -190,7 +207,7 @@ class WeatherImportCore:
         else:
             # Download from CDS API
             logger.info(f"Downloading ERA5 data for {target_date}")
-            await self._download_era5_grib(target_date, grib_file)
+            await self._download_era5_grib(target_date, grib_file, windfarm_ids=windfarm_ids)
             stats['files_downloaded'] = 1
             stats['api_calls'] = 1
 
@@ -220,12 +237,25 @@ class WeatherImportCore:
 
         return stats
 
-    async def _compute_windfarm_bbox(self, buffer_deg: float = 0.5) -> List[float]:
-        """Return [N, W, S, E] bbox covering all windfarms with coords + buffer.
+    @staticmethod
+    def _scope_tag(windfarm_ids: Optional[List[int]]) -> str:
+        """Short, stable name for a farm subset — used to keep GRIB files apart."""
+        if not windfarm_ids:
+            return "fleet"
+        import hashlib
+
+        digest = hashlib.sha1(",".join(str(i) for i in sorted(windfarm_ids)).encode()).hexdigest()
+        return f"wf{len(windfarm_ids)}-{digest[:8]}"
+
+    async def _compute_windfarm_bbox(
+        self, buffer_deg: float = 0.5, windfarm_ids: Optional[List[int]] = None
+    ) -> List[float]:
+        """Return [N, W, S, E] bbox covering the windfarms with coords + buffer.
 
         Replaces the previous hardcoded Europe bbox (which silently produced NaN
         wind speeds for any windfarm outside it via xarray.interp). If no windfarms
-        have coordinates, returns a global default rather than crashing.
+        have coordinates, returns a global default rather than crashing. With
+        `windfarm_ids` the box covers only those farms (a scoped backfill).
         """
         from sqlalchemy import select
 
@@ -234,12 +264,13 @@ class WeatherImportCore:
 
         AsyncSessionLocal = get_session_factory()
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Windfarm.lat, Windfarm.lng).where(
-                    Windfarm.lat.isnot(None),
-                    Windfarm.lng.isnot(None),
-                )
+            query = select(Windfarm.lat, Windfarm.lng).where(
+                Windfarm.lat.isnot(None),
+                Windfarm.lng.isnot(None),
             )
+            if windfarm_ids:
+                query = query.where(Windfarm.id.in_(windfarm_ids))
+            result = await db.execute(query)
             coords = result.fetchall()
 
         if not coords:
@@ -254,7 +285,12 @@ class WeatherImportCore:
             max(lngs) + buffer_deg,
         ]
 
-    async def _download_era5_grib(self, target_date: date, output_path: Path):
+    async def _download_era5_grib(
+        self,
+        target_date: date,
+        output_path: Path,
+        windfarm_ids: Optional[List[int]] = None,
+    ):
         """Download ERA5 GRIB file from CDS API."""
         import cdsapi
 
@@ -264,7 +300,7 @@ class WeatherImportCore:
 
         # Compute bbox dynamically from windfarm coordinates so we cover non-EU
         # assets (USA, Taiwan, etc.). Previously hardcoded Europe-only.
-        bbox = await self._compute_windfarm_bbox()
+        bbox = await self._compute_windfarm_bbox(windfarm_ids=windfarm_ids)
 
         # ERA5 request parameters
         # Using 100m wind components and 2m temperature (standard single-levels)
@@ -287,7 +323,7 @@ class WeatherImportCore:
             'area': bbox,  # N, W, S, E covering all active windfarms
         }
 
-        logger.info("Submitting CDS API request", date=str(target_date))
+        logger.info("Submitting CDS API request", date=str(target_date), area=bbox)
 
         # Download (this will block until download completes)
         c.retrieve('reanalysis-era5-single-levels', request_params, str(output_path))
@@ -428,24 +464,35 @@ class WeatherImportCore:
 
         logger.info(f"Bulk insert complete: {len(records)} records in {total_batches} batches")
 
-    async def _is_date_complete(self, target_date: date, expected_windfarms: int) -> bool:
-        """Check if date already has complete data."""
+    async def _is_date_complete(self, target_date: date, windfarms: List) -> bool:
+        """True when every windfarm in scope already has its 24 rows for the day.
+
+        The predicate is a half-open range on `hour` (index-friendly on the
+        ~270M-row table — `date(hour) = :d` was a full scan) and, for a scoped
+        run, restricted to those farms so a new farm's empty history is seen as
+        incomplete even though the fleet's rows for that day already exist.
+        """
         from sqlalchemy import select, func
         from app.core.database import get_session_factory
         from app.models.weather_data import WeatherData
 
+        day_start = datetime.combine(target_date, time.min, tzinfo=timezone.utc)
+        day_end = day_start + timedelta(days=1)
+        farm_ids = [wf.id for wf in windfarms]
+
         AsyncSessionLocal = get_session_factory()
         async with AsyncSessionLocal() as db:
-            # Count records for this date
             query = select(func.count(WeatherData.id)).where(
-                func.date(WeatherData.hour) == target_date,
-                WeatherData.source == 'ERA5'
+                WeatherData.hour >= day_start,
+                WeatherData.hour < day_end,
+                WeatherData.source == 'ERA5',
+                WeatherData.windfarm_id.in_(farm_ids),
             )
             result = await db.execute(query)
-            count = result.scalar()
+            count = result.scalar() or 0
 
             # Complete if we have 24 hours * windfarm count
-            expected = expected_windfarms * 24
+            expected = len(windfarms) * 24
             return count >= expected
 
     async def _update_job_progress(self, job_id: int, completed_date: date, records_count: int):

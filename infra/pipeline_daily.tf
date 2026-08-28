@@ -110,8 +110,9 @@ resource "aws_ecs_task_definition" "pipeline" {
 
 # --- Schedule ---------------------------------------------------------------
 #
-# 03:00 UTC, unchanged from the APScheduler default — after the weather and
-# generation imports settle (~02:30) and finishing before the 06:00 import.
+# 03:00 UTC, unchanged from the APScheduler default — after the 01:30 daily
+# weather task (infra/weather_daily.tf, EPR-121) has landed its day and before
+# the 06:00 generation imports start.
 resource "aws_cloudwatch_event_rule" "pipeline_daily" {
   count               = local.pipeline_enabled
   name                = "${local.name}-pipeline-daily"

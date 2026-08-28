@@ -107,6 +107,9 @@ class OpportunityDetectionService:
             )
             succeeded = self._last_succeeded
             failed = self._last_failed
+            # Any windfarm failure (or failed coverage probe) rolled the shared
+            # session back, which expires ``job`` — reload it before touching it.
+            await self._reload_job(job)
 
             # Don't report SUCCESS when every windfarm errored — that masked a
             # total failure as "ran, found nothing". Mark FAILED instead.
@@ -145,10 +148,24 @@ class OpportunityDetectionService:
             # Clear any failed transaction before touching the (already-committed)
             # job row, then mark it FAILED so the polled row never hangs.
             await self.db.rollback()
+            await self._reload_job(job)
             job.mark_failed(str(e))
             await self.db.commit()
             logger.error("opportunity_detection_failed", error=str(e))
             raise
+
+    async def _reload_job(self, job: ImportJobExecution) -> None:
+        """Refresh the job row after any rollback in the run — one cheap SELECT.
+
+        ``Session.rollback()`` expires every instance in the session regardless
+        of ``expire_on_commit``, and ``detect_all`` rolls back once per failed
+        windfarm (``_windfarm_period_end`` once per failed probe). ``mark_success``
+        / ``mark_failed`` then read ``started_at``: loading an expired attribute
+        from async code raises ``MissingGreenlet``, the ``except`` path hit the
+        same wall, and the row stayed RUNNING forever — 77 such rows on staging
+        and 47 on prod, every run in which at least one windfarm failed.
+        """
+        await self.db.refresh(job)
 
     # ─── Orchestrator ──────────────────────────────────────────────
 

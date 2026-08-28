@@ -17,6 +17,7 @@ Covers:
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import select, text
 
 from app.models.import_job_execution import ImportJobExecution, ImportJobStatus
 from app.services import opportunity_detection_service as svc_module
@@ -41,8 +42,12 @@ class _FakeSession:
     def __init__(self, job=None):
         self.committed = 0
         self.rolled_back = 0
+        self.refreshed = 0
         self.added: list = []
         self._job = job
+
+    async def refresh(self, obj, *a, **k):
+        self.refreshed += 1
 
     async def execute(self, *a, **k):
         return _EmptyResult()
@@ -296,3 +301,89 @@ async def test_run_detection_job_records_truncation_in_job_metadata():
     assert job.job_metadata["truncated"] == 2
     assert job.job_metadata["lag_days_max"] == 239
     assert result["windfarms_truncated"] == 2
+
+
+def _sqlite_job_engine():
+    """A real async engine with just ``import_job_executions`` — the rollback
+    expiry these tests exercise only happens on a real ``AsyncSession``."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    return create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_detection_job_finalizes_after_a_windfarm_rollback():
+    """Regression: a failed windfarm rolls the shared session back, which expires
+    the ORM ``job`` row; finalising it then lazy-loaded ``started_at`` from async
+    code → ``MissingGreenlet`` → the row stayed RUNNING forever (77 rows on
+    staging, 47 on prod). Real session, so the expiry is real."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    engine = _sqlite_job_engine()
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(ImportJobExecution.__table__.create)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        async with factory() as db:
+            svc = OpportunityDetectionService(db)
+
+            async def fake_detect_all(windfarm_ids, *a, **k):
+                # A statement first: SQLAlchemy 2.0 autobegins on it, and only a
+                # rollback of a BEGUN transaction expires the session's instances
+                # (a rollback with nothing begun is a no-op). The real run always
+                # has the coverage probe / supersede UPDATE before the rollback.
+                await svc.db.execute(text("SELECT 1"))
+                await svc.db.rollback()  # exactly what a failed windfarm does
+                svc._last_succeeded, svc._last_failed = 1, 1
+                return []
+
+            svc.detect_all = fake_detect_all
+            result = await svc.run_detection_job(windfarm_ids=[1, 2])
+
+        async with factory() as db:
+            job = await db.get(ImportJobExecution, result["job_id"])
+            assert job.status == ImportJobStatus.SUCCESS
+            assert job.job_metadata["failed"] == 1
+            assert job.completed_at is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_detection_job_marks_failed_after_rollback_then_raise():
+    """Same expiry on the ``except`` path: a run that rolls back and then raises
+    must still land the row on FAILED with the error, not strand it RUNNING."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    engine = _sqlite_job_engine()
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(ImportJobExecution.__table__.create)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        async with factory() as db:
+            svc = OpportunityDetectionService(db)
+
+            async def fake_detect_all(windfarm_ids, *a, **k):
+                await svc.db.execute(text("SELECT 1"))  # autobegin, see above
+                await svc.db.rollback()
+                raise RuntimeError("zone scan timed out")
+
+            svc.detect_all = fake_detect_all
+            with pytest.raises(RuntimeError):
+                await svc.run_detection_job(windfarm_ids=[1])
+            job_id = svc.db.added[0].id if hasattr(svc.db, "added") else None
+
+        async with factory() as db:
+            rows = (await db.execute(select(ImportJobExecution))).scalars().all()
+            assert len(rows) == 1 and (job_id is None or rows[0].id == job_id)
+            assert rows[0].status == ImportJobStatus.FAILED
+            assert "zone scan timed out" in rows[0].error_message
+    finally:
+        await engine.dispose()

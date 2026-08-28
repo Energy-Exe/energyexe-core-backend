@@ -82,6 +82,42 @@ variable "pipeline_task_memory" {
   default     = 8192
 }
 
+variable "weather_daily_hour" {
+  description = "UTC hour the daily ERA5 weather task runs (EPR-121). Drives the EventBridge rule and the WEATHER_DAILY_HOUR the container reports to GlitchTip. Must finish before pipeline_daily_hour."
+  type        = string
+  default     = "1"
+}
+
+variable "weather_daily_minute" {
+  description = "UTC minute of the daily ERA5 weather task."
+  type        = string
+  default     = "30"
+}
+
+variable "weather_schedule_enabled" {
+  description = "Enables the daily weather EventBridge rule. Default false so the task definition can be smoke-tested by hand (and the 2026 backfill run) before anything fires on a schedule."
+  type        = bool
+  default     = false
+}
+
+variable "weather_lag_days" {
+  description = "The scheduled run imports today minus this many days — ERA5T is published ~5-6 days behind real time (CDS catalogue end lagged 6 days on 2026-08-28)."
+  type        = number
+  default     = 6
+}
+
+variable "weather_task_cpu" {
+  description = "Fargate CPU units for the weather task. One CDS GRIB per day; decoding + interpolating ~1,600 farms is a few CPU-minutes."
+  type        = number
+  default     = 1024
+}
+
+variable "weather_task_memory" {
+  description = "Fargate memory (MiB) for the weather task. xarray holds the whole-fleet bbox (~4M cells x 24h x 6 variables) in memory while interpolating — 8 GB is headroom, not a measurement."
+  type        = number
+  default     = 8192
+}
+
 variable "cors_origins" {
   description = "Optional BACKEND_CORS_ORIGINS override as a JSON array string, e.g. '[\"https://app.energyexe.com\"]'. Empty = use the app's built-in default list (already includes prod + dev origins)."
   type        = string

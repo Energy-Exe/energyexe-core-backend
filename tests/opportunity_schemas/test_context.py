@@ -796,3 +796,96 @@ async def test_failed_zone_scan_is_not_retried_by_the_next_farm_in_the_zone(monk
     assert await third.load_capture_rate() is None
     assert pa3.compare_capture_rates_by_bidzone.await_count == 1  # retried after the negative TTL
     c._ZONE_CAPTURE_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_zone_scan_runs_on_its_own_session(monkeypatch):
+    """EPR-126: the zone peer scan is the one statement that can hit the
+    command timeout; on the shared session that invalidated the farm's whole
+    transaction. With a real bound session the scan must run on a throwaway
+    session from the same engine — and that session must be closed after."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    import app.services.price_analytics_service as pas
+    from app.services.opportunity_schemas import context as c
+
+    c._ZONE_CAPTURE_CACHE.clear()
+    db = MagicMock(spec=AsyncSession)
+    db.bind = object()  # the engine the session is bound to
+    lookup = MagicMock()
+    lookup.scalar_one_or_none.return_value = 68  # bidzone id, then bidzone code
+    db.execute = AsyncMock(return_value=lookup)
+    ctx = DetectionContext(
+        db=db,
+        windfarm=1,
+        period_start=datetime(2024, 9, 5),
+        period_end=datetime(2026, 1, 1),
+    )
+    own_pa = MagicMock()
+    own_pa.calculate_capture_rate = AsyncMock(
+        return_value={"overall": {"capture_rate": 0.8}, "periods": []}
+    )
+    own_pa.compare_capture_rates_by_bidzone = AsyncMock()
+    ctx._price_analytics_svc = own_pa
+
+    scratch = MagicMock(name="scratch-session")
+    seen = {}
+
+    class _SessionCM:
+        async def __aenter__(self):
+            return scratch
+
+        async def __aexit__(self, *exc):
+            seen["closed"] = True
+            return False
+
+    def fake_sessionmaker(bind, **kw):
+        seen["bind"] = bind
+        return lambda: _SessionCM()
+
+    class _FakePA:
+        def __init__(self, session):
+            seen["session"] = session
+
+        async def compare_capture_rates_by_bidzone(self, **kw):
+            return {"zone_average_capture_rate": 0.9, "windfarms": []}
+
+    monkeypatch.setattr(c, "async_sessionmaker", fake_sessionmaker)
+    monkeypatch.setattr(pas, "PriceAnalyticsService", _FakePA)
+
+    result = await ctx.load_capture_rate()
+
+    assert seen == {"bind": db.bind, "session": scratch, "closed": True}
+    own_pa.compare_capture_rates_by_bidzone.assert_not_awaited()
+    assert result["zone_avg"] == 0.9 and result["gap_pp"] == 10.0
+    c._ZONE_CAPTURE_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_zone_scan_stays_in_session_without_a_bound_session():
+    """Test doubles / prefetched contexts have no real session: the scan keeps
+    using the context's own analytics service."""
+    from app.services.opportunity_schemas import context as c
+
+    c._ZONE_CAPTURE_CACHE.clear()
+    db = MagicMock()
+    lookup = MagicMock()
+    lookup.scalar_one_or_none.return_value = 68
+    db.execute = AsyncMock(return_value=lookup)
+    ctx = DetectionContext(
+        db=db, windfarm=1, period_start=datetime(2024, 9, 5), period_end=datetime(2026, 1, 1)
+    )
+    fake_pa = MagicMock()
+    fake_pa.calculate_capture_rate = AsyncMock(
+        return_value={"overall": {"capture_rate": 0.8}, "periods": []}
+    )
+    fake_pa.compare_capture_rates_by_bidzone = AsyncMock(
+        return_value={"zone_average_capture_rate": 0.85, "windfarms": []}
+    )
+    ctx._price_analytics_svc = fake_pa
+
+    result = await ctx.load_capture_rate()
+
+    assert fake_pa.compare_capture_rates_by_bidzone.await_count == 1
+    assert result["zone_avg"] == 0.85
+    c._ZONE_CAPTURE_CACHE.clear()
