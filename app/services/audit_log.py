@@ -1,13 +1,29 @@
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
+import structlog
 from sqlalchemy import and_, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from app.core.database import get_session_factory
 from app.models.audit_log import AuditAction, AuditLog
-from app.models.user import User
 from app.schemas.audit_log import AuditLogCreate, AuditLogFilter, AuditLogSummary
+
+logger = structlog.get_logger(__name__)
+
+# Session factory used by ``log_action_detached``. ``None`` means "the application
+# engine"; tests point it at their own engine so audit rows land in the test DB.
+_detached_session_factory: Optional[Callable[[], AsyncSession]] = None
+
+
+def set_audit_session_factory(factory: Optional[Callable[[], AsyncSession]]) -> None:
+    """Override (or reset with ``None``) the session factory used for detached audit writes."""
+    global _detached_session_factory
+    _detached_session_factory = factory
+
+
+def _audit_session_factory() -> Callable[[], AsyncSession]:
+    return _detached_session_factory or get_session_factory()
 
 
 class AuditLogService:
@@ -62,6 +78,29 @@ class AuditLogService:
             extra_metadata=extra_metadata,
         )
         return await AuditLogService.create_audit_log(db, audit_data, commit=commit)
+
+    @staticmethod
+    async def log_action_detached(**kwargs: Any) -> Optional[AuditLog]:
+        """Persist an audit row in its own short-lived session and transaction.
+
+        The request session never commits on teardown (``get_db`` only rolls back),
+        so anything added to it after the endpoint body has already committed is
+        discarded at ``close()`` — that is how every ``@audit_action`` row was lost
+        (EPR-124). Writing through a dedicated session keeps the audit trail
+        independent of the request transaction: it survives endpoint rollbacks and
+        never commits unrelated pending work. Failures are logged, never raised.
+        """
+        try:
+            async with _audit_session_factory()() as session:
+                return await AuditLogService.log_action(session, commit=True, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - auditing must never break the request
+            logger.warning(
+                "audit_log_write_failed",
+                action=str(kwargs.get("action")),
+                resource_type=kwargs.get("resource_type"),
+                error=str(exc),
+            )
+            return None
 
     @staticmethod
     async def get_audit_logs(
@@ -176,42 +215,43 @@ class AuditLogService:
         db: AsyncSession,
         filters: Optional[AuditLogFilter] = None,
     ) -> AuditLogSummary:
-        """Get summary statistics for audit logs."""
-        base_query = select(AuditLog)
+        """Get summary statistics for audit logs.
 
+        Each aggregate applies the date filter directly to ``audit_logs``. The
+        previous ``select(AuditLog.x).select_from(base_query.subquery())`` shape
+        pulled ``audit_logs`` in a second time as an implicit FROM, i.e. a cross
+        join — prod reported 5.9 M actions for 2.4 k rows (EPR-124).
+        """
+        conditions = []
         if filters:
-            conditions = []
-
             if filters.date_from:
                 conditions.append(AuditLog.created_at >= filters.date_from)
-
             if filters.date_to:
                 conditions.append(AuditLog.created_at <= filters.date_to)
 
-            if conditions:
-                base_query = base_query.where(and_(*conditions))
+        def filtered(stmt):
+            return stmt.where(*conditions) if conditions else stmt
 
-        # Total actions
-        total_result = await db.execute(
-            select(func.count(AuditLog.id)).select_from(base_query.subquery())
+        total_actions = (await db.execute(filtered(select(func.count(AuditLog.id))))).scalar() or 0
+
+        actions_by_type = dict(
+            (
+                await db.execute(
+                    filtered(select(AuditLog.action, func.count(AuditLog.id))).group_by(
+                        AuditLog.action
+                    )
+                )
+            ).all()
         )
-        total_actions = total_result.scalar() or 0
 
-        # Actions by type
-        actions_by_type_result = await db.execute(
-            select(AuditLog.action, func.count(AuditLog.id))
-            .select_from(base_query.subquery())
-            .group_by(AuditLog.action)
-        )
-        actions_by_type = dict(actions_by_type_result.all())
-
-        # Actions by user (top 10)
         actions_by_user_result = await db.execute(
-            select(
-                AuditLog.user_email, AuditLog.user_id, func.count(AuditLog.id).label("action_count")
+            filtered(
+                select(
+                    AuditLog.user_email,
+                    AuditLog.user_id,
+                    func.count(AuditLog.id).label("action_count"),
+                ).where(AuditLog.user_email.isnot(None))
             )
-            .select_from(base_query.subquery())
-            .where(AuditLog.user_email.isnot(None))
             .group_by(AuditLog.user_email, AuditLog.user_id)
             .order_by(desc(func.count(AuditLog.id)))
             .limit(10)
@@ -225,22 +265,26 @@ class AuditLogService:
             for row in actions_by_user_result.all()
         ]
 
-        # Actions by resource type
-        actions_by_resource_result = await db.execute(
-            select(AuditLog.resource_type, func.count(AuditLog.id))
-            .select_from(base_query.subquery())
-            .group_by(AuditLog.resource_type)
+        actions_by_resource = dict(
+            (
+                await db.execute(
+                    filtered(select(AuditLog.resource_type, func.count(AuditLog.id))).group_by(
+                        AuditLog.resource_type
+                    )
+                )
+            ).all()
         )
-        actions_by_resource = dict(actions_by_resource_result.all())
 
-        # Date range
-        date_range_result = await db.execute(
-            select(
-                func.min(AuditLog.created_at).label("earliest"),
-                func.max(AuditLog.created_at).label("latest"),
-            ).select_from(base_query.subquery())
-        )
-        date_range_row = date_range_result.first()
+        date_range_row = (
+            await db.execute(
+                filtered(
+                    select(
+                        func.min(AuditLog.created_at).label("earliest"),
+                        func.max(AuditLog.created_at).label("latest"),
+                    )
+                )
+            )
+        ).first()
         date_range = {
             "earliest": date_range_row.earliest if date_range_row else None,
             "latest": date_range_row.latest if date_range_row else None,

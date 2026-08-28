@@ -9,16 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
+from app.core.database import get_db as database_get_db
 from app.core.deps import get_db
 from app.main import create_application
+from app.models.audit_log import AuditLog
+from app.models.invitation import Invitation
 
 # Import only auth-related models to avoid JSONB issues with SQLite
 # These models don't use JSONB columns and are safe for SQLite testing
 from app.models.user import User
-from app.models.audit_log import AuditLog
-from app.models.invitation import Invitation
-from app.models.user_feature import UserFeature
 from app.models.user_consent import UserConsent
+from app.models.user_feature import UserFeature
+from app.services.audit_log import set_audit_session_factory
 
 # Force testing environment
 os.environ["TESTING"] = "true"
@@ -60,7 +62,15 @@ async def test_engine():
         for table in AUTH_TEST_TABLES:
             await connection.run_sync(table.create, checkfirst=True)
 
+    # Audit rows are written through their own session (EPR-124); point that
+    # writer at the test engine so they land in (and are visible from) the test DB.
+    set_audit_session_factory(
+        async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    )
+
     yield engine
+
+    set_audit_session_factory(None)
 
     # Drop only the tables we created
     async with engine.begin() as connection:
@@ -89,7 +99,10 @@ def client(test_session, event_loop):
     async def override_get_db():
         yield test_session
 
+    # Two identical get_db functions exist (app.core.deps and app.core.database) and
+    # endpoints import either one; override both or those routes hit the real engine.
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[database_get_db] = override_get_db
 
     with TestClient(app) as test_client:
         yield test_client

@@ -9,6 +9,8 @@ import structlog
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.core.request_utils import get_client_ip
+
 logger = structlog.get_logger()
 
 
@@ -33,7 +35,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             request_id=request_id,
             method=request.method,
             url=str(request.url),
-            client_ip=request.client.host if request.client else None,
+            client_ip=get_client_ip(request),
         )
 
         try:

@@ -4,7 +4,6 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.audit import audit_action
 from app.core.database import get_db
 from app.core.deps import get_current_superuser, get_current_user
 from app.models.audit_log import AuditAction
@@ -14,9 +13,11 @@ from app.services.audit_log import AuditLogService
 
 router = APIRouter()
 
+# Reading the audit log is deliberately NOT audited: every admin page view would
+# otherwise add "viewed audit log" rows and inflate the counts being viewed.
+
 
 @router.get("/", response_model=List[AuditLog])
-@audit_action(AuditAction.ACCESS, "audit_log", description="Listed audit logs")
 async def get_audit_logs(
     skip: int = Query(0, ge=0),
     limit: int = Query(1000, ge=1, le=1000),
@@ -49,7 +50,6 @@ async def get_audit_logs(
 
 
 @router.get("/count", response_model=int)
-@audit_action(AuditAction.ACCESS, "audit_log", description="Counted audit logs")
 async def count_audit_logs(
     user_id: Optional[int] = Query(None),
     user_email: Optional[str] = Query(None),
@@ -80,7 +80,6 @@ async def count_audit_logs(
 
 
 @router.get("/summary", response_model=AuditLogSummary)
-@audit_action(AuditAction.ACCESS, "audit_log", description="Viewed audit log summary")
 async def get_audit_summary(
     date_from: Optional[datetime] = Query(None),
     date_to: Optional[datetime] = Query(None),
@@ -94,12 +93,6 @@ async def get_audit_summary(
 
 
 @router.get("/{log_id}", response_model=AuditLog)
-@audit_action(
-    AuditAction.ACCESS,
-    "audit_log",
-    lambda result, *args, **kwargs: str(kwargs.get("log_id", "unknown")),
-    description="Viewed audit log",
-)
 async def get_audit_log(
     log_id: int,
     db: AsyncSession = Depends(get_db),
@@ -114,7 +107,6 @@ async def get_audit_log(
 
 
 @router.get("/resource/{resource_type}/{resource_id}", response_model=List[AuditLog])
-@audit_action(AuditAction.ACCESS, "audit_log", description="Viewed resource audit history")
 async def get_resource_audit_history(
     resource_type: str,
     resource_id: str,
@@ -131,7 +123,6 @@ async def get_resource_audit_history(
 
 
 @router.get("/user/{user_id}/history", response_model=List[AuditLog])
-@audit_action(AuditAction.ACCESS, "audit_log", description="Viewed user audit history")
 async def get_user_audit_history(
     user_id: int,
     skip: int = Query(0, ge=0),
@@ -140,7 +131,10 @@ async def get_user_audit_history(
     request: Request = None,
     current_user: User = Depends(get_current_user),
 ):
-    """Get audit history for a specific user. Users can only view their own history unless they're superusers."""
+    """Get audit history for a specific user.
+
+    Users can only view their own history unless they're superusers.
+    """
     # Users can only view their own audit history unless they're superusers
     if not current_user.is_superuser and current_user.id != user_id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
@@ -149,7 +143,6 @@ async def get_user_audit_history(
 
 
 @router.get("/my/history", response_model=List[AuditLog])
-@audit_action(AuditAction.ACCESS, "audit_log", description="Viewed own audit history")
 async def get_my_audit_history(
     skip: int = Query(0, ge=0),
     limit: int = Query(1000, ge=1, le=1000),
