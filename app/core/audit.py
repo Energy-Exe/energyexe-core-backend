@@ -1,30 +1,15 @@
-import json
 from functools import wraps
 from typing import Any, Callable, Dict, Optional
 
+import structlog
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.request_utils import get_client_ip, get_user_agent  # noqa: F401 - re-exported
 from app.models.audit_log import AuditAction
 from app.services.audit_log import AuditLogService
 
-
-def get_client_ip(request: Request) -> Optional[str]:
-    """Extract client IP address from request."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
-
-    return request.client.host if request.client else None
-
-
-def get_user_agent(request: Request) -> Optional[str]:
-    """Extract user agent from request."""
-    return request.headers.get("User-Agent")
+logger = structlog.get_logger(__name__)
 
 
 def serialize_for_audit(obj: Any) -> Dict[str, Any]:
@@ -49,10 +34,10 @@ def serialize_for_audit(obj: Any) -> Dict[str, Any]:
 
         return result
 
-    elif isinstance(value, (list, tuple)):
+    elif isinstance(obj, (list, tuple)):
         return [serialize_for_audit(item) for item in obj]
 
-    elif isinstance(value, dict):
+    elif isinstance(obj, dict):
         return {k: serialize_for_audit(v) for k, v in obj.items()}
 
     elif hasattr(obj, "isoformat"):  # datetime objects
@@ -88,18 +73,25 @@ def audit_action(
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Extract common dependencies from function signature
-            db: Optional[AsyncSession] = None
-            request: Optional[Request] = None
-            current_user = None
+            # Extract common dependencies from function signature: by name first
+            # (FastAPI always passes dependencies as keyword arguments), then by type.
+            db: Optional[AsyncSession] = kwargs.get("db")
+            request: Optional[Request] = kwargs.get("request")
+            current_user = kwargs.get("current_user")
 
-            # Find dependencies in kwargs
             for key, value in kwargs.items():
-                if isinstance(value, AsyncSession):
+                if key in ("db", "request", "current_user"):
+                    continue
+                if db is None and isinstance(value, AsyncSession):
                     db = value
-                elif isinstance(value, Request):
+                elif request is None and isinstance(value, Request):
                     request = value
-                elif hasattr(value, "email") and hasattr(value, "id"):
+                elif (
+                    current_user is None
+                    and hasattr(value, "email")
+                    and hasattr(value, "id")
+                    and not isinstance(value, Request)
+                ):
                     current_user = value
 
             # If db not in kwargs, check args (for positional arguments)
@@ -193,10 +185,10 @@ def audit_action(
                 user_id = getattr(current_user, "id", None)
                 user_email = getattr(current_user, "email", None)
 
-            # Create audit log
+            # Persist in a dedicated session: the request session never commits on
+            # teardown, so rows added here used to be discarded (EPR-124).
             try:
-                await AuditLogService.log_action(
-                    db=db,
+                await AuditLogService.log_action_detached(
                     action=action,
                     resource_type=resource_type,
                     user_id=user_id,
@@ -210,11 +202,9 @@ def audit_action(
                     endpoint=endpoint,
                     method=method,
                     description=description,
-                    commit=False,  # Don't commit separately, let the main transaction handle it
                 )
-            except Exception as e:
-                # Log the error but don't fail the main operation
-                print(f"Failed to create audit log: {e}")
+            except Exception as exc:  # noqa: BLE001 - never fail the main operation
+                logger.warning("audit_log_write_failed", action=str(action), error=str(exc))
 
             return result
 
@@ -224,11 +214,16 @@ def audit_action(
 
 
 class AuditContext:
-    """Context manager for manual audit logging."""
+    """Context manager for manual audit logging.
+
+    ``db`` is accepted for backwards compatibility only; the row is written through
+    ``AuditLogService.log_action_detached`` so it is committed regardless of what the
+    caller does with its own session.
+    """
 
     def __init__(
         self,
-        db: AsyncSession,
+        db: Optional[AsyncSession],
         action: AuditAction,
         resource_type: str,
         user_id: Optional[int] = None,
@@ -267,8 +262,7 @@ class AuditContext:
                 method = self.request.method
 
             try:
-                await AuditLogService.log_action(
-                    db=self.db,
+                await AuditLogService.log_action_detached(
                     action=self.action,
                     resource_type=self.resource_type,
                     user_id=self.user_id,
@@ -282,10 +276,9 @@ class AuditContext:
                     endpoint=endpoint,
                     method=method,
                     description=self.description,
-                    commit=False,
                 )
-            except Exception as e:
-                print(f"Failed to create audit log: {e}")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("audit_log_write_failed", action=str(self.action), error=str(exc))
 
     def set_old_values(self, values: Any):
         """Set the old values for update operations."""
