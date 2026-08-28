@@ -39,8 +39,9 @@ writer at the test engine via `set_audit_session_factory(...)` (see `tests/conft
 ### Client IP behind the ALB
 
 `request.client.host` is always the load balancer's private address (`100.64.x` / `172.31.x`).
-Use `app.core.request_utils.get_client_ip(request)` — first hop of `X-Forwarded-For`, then
-`X-Real-IP`, then the socket peer. Only the ALB can reach the task, so the header is trustworthy.
+Use `app.core.request_utils.get_client_ip(request)` — the **last** hop of `X-Forwarded-For`
+(the one our ALB appended; earlier hops are client-supplied and spoofable), then `X-Real-IP`,
+then the socket peer. Only the ALB can reach the task, so that last hop is trustworthy.
 
 ## Architecture
 
