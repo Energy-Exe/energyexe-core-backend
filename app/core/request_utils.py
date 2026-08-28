@@ -1,8 +1,11 @@
 """Small helpers for reading request metadata behind the ALB.
 
-The API only ever sees the load balancer's private address in ``request.client``;
-the real client is the first hop of ``X-Forwarded-For`` (the ALB appends itself,
-and only the ALB can reach the task, so the header is trustworthy).
+The API only ever sees the load balancer's private address in ``request.client``.
+The ALB *appends* the connecting client's address to ``X-Forwarded-For`` (creating
+the header when absent), and it is the only thing that can reach the task, so the
+**last** entry is the trustworthy one — anything before it was supplied by the
+client and can be spoofed (a curl with ``X-Forwarded-For: 1.2.3.4`` must not be
+able to forge the audit trail).
 """
 
 from typing import Optional
@@ -11,13 +14,15 @@ from fastapi import Request
 
 
 def get_client_ip(request: Optional[Request]) -> Optional[str]:
-    """Return the originating client IP for a request (proxy-aware)."""
+    """Return the originating client IP for a request (proxy-aware, last hop)."""
     if request is None:
         return None
 
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+        if hops:
+            return hops[-1]
 
     real_ip = request.headers.get("X-Real-IP")
     if real_ip:

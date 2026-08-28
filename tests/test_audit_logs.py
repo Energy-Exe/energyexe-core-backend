@@ -413,11 +413,15 @@ class TestAuditContext:
 
 
 class TestClientIp:
-    """get_client_ip must see through the ALB (EPR-124: every row carried a 172.31.x address)."""
+    """get_client_ip must see through the ALB (EPR-124: every row carried a 172.31.x address)
+    without letting the caller forge the address: the ALB appends the connecting client
+    as the LAST X-Forwarded-For hop, earlier hops are client-supplied."""
 
-    def test_first_forwarded_hop_wins(self):
-        req = _make_request({"X-Forwarded-For": "203.0.113.9, 10.0.0.1"})
+    def test_last_forwarded_hop_wins(self):
+        req = _make_request({"X-Forwarded-For": "1.2.3.4, 203.0.113.9"})
         assert get_client_ip(req) == "203.0.113.9"
+        assert get_client_ip(_make_request({"X-Forwarded-For": "203.0.113.9"})) == "203.0.113.9"
+        assert get_client_ip(_make_request({"X-Forwarded-For": " , "})) == "172.31.5.25"
 
     def test_real_ip_header_fallback(self):
         assert get_client_ip(_make_request({"X-Real-IP": "198.51.100.4"})) == "198.51.100.4"
@@ -518,7 +522,7 @@ class TestAuditLogsAPI:
         register = client.post(
             "/api/v1/auth/register",
             json=user_data,
-            headers={"X-Forwarded-For": "203.0.113.9, 10.0.0.1"},
+            headers={"X-Forwarded-For": "10.0.0.1, 203.0.113.9"},
         )
         assert register.status_code == 201
 
