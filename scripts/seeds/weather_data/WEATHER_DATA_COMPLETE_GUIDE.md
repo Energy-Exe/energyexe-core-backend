@@ -617,10 +617,39 @@ rm grib_files/daily/era5_YYYYMMDD.grib
 
 ---
 
+## Daily job and backfills (EPR-121, 2026-08-28)
+
+Weather is now kept current by an EventBridge-scheduled ECS task, `infra/weather_daily.tf`
+→ `scripts/jobs/run_weather_daily.py`, 01:30 UTC daily, importing `today − WEATHER_LAG_DAYS`
+(6; ERA5T is published ~5–6 days behind real time). Each run is a `weather_import_jobs` row.
+Before this nothing scheduled weather and the fleet's data stopped at 2025-12-31.
+
+The job wraps `WeatherImportCore`, which now takes `windfarm_ids`: the farm set, the CDS
+bounding box **and** the day-complete check are scoped to those farms, so a newly added
+farm's history can be filled without re-downloading the whole fleet (the legacy
+`fetch_daily_all_windfarms.py` compares against a hard-coded 38,184 rows/day and can never
+see a new farm's gap — prefer the job).
+
+```bash
+# one-off runs on prod (in-VPC, same task definition as the schedule):
+cd infra && terraform output -raw weather_run_task_command
+# ... append a command override:
+#   --overrides '{"containerOverrides":[{"name":"weather","command":
+#     ["python","scripts/jobs/run_weather_daily.py","--start","2026-01-01","--end","2026-03-01"]}]}'
+#   --overrides '{"containerOverrides":[{"name":"weather","command":
+#     ["python","scripts/jobs/run_weather_daily.py","--windfarm-ids","8806","--start","2025-05-01","--end","2025-12-31"]}]}'
+# locally against the (public) staging DB:
+poetry run python scripts/jobs/run_weather_daily.py --date 2026-01-02 --windfarm-ids 8806
+```
+
+Fleet-wide a day costs ~5 min (global bbox); a scoped UK run ~1 min/day. CDS queues
+requests per account — run at most ~4 range slices in parallel. `--force` re-fetches days
+that are already complete (ERA5T → final ERA5 is not automated yet).
+
 ## Future Enhancements
 
 1. **Real-time Updates**
-   - Automated daily imports via cron job
+   - ~~Automated daily imports via cron job~~ — done: `infra/weather_daily.tf` (EPR-121)
    - Webhook notifications for data gaps
 
 2. **Additional Variables**

@@ -40,15 +40,16 @@ def _patch_session_factory(monkeypatch, fetchall_return):
         "app.core.database.get_session_factory",
         lambda: lambda: _AsyncSessionCtx(fake_session),
     )
+    return fake_session
 
 
 @pytest.mark.asyncio
 async def test_bbox_includes_us_taiwan_and_europe(monkeypatch):
     """USA, Taiwan, and Denmark coords all fall inside the returned bbox."""
     rows = [
-        MagicMock(lat=41.0, lng=-71.5),   # Block Island (USA)
-        MagicMock(lat=23.7, lng=120.4),   # Formosa (Taiwan)
-        MagicMock(lat=55.5, lng=8.0),     # Danish coast
+        MagicMock(lat=41.0, lng=-71.5),  # Block Island (USA)
+        MagicMock(lat=23.7, lng=120.4),  # Formosa (Taiwan)
+        MagicMock(lat=55.5, lng=8.0),  # Danish coast
     ]
     _patch_session_factory(monkeypatch, rows)
 
@@ -82,3 +83,34 @@ async def test_bbox_buffer_applied(monkeypatch):
 
     # Single point with 1° buffer: N=51, W=9, S=49, E=11
     assert bbox == [51.0, 9.0, 49.0, 11.0]
+
+
+def _compiled_sql(fake_session) -> tuple[str, dict]:
+    stmt = fake_session.execute.await_args.args[0]
+    compiled = stmt.compile()
+    return str(compiled), compiled.params
+
+
+@pytest.mark.asyncio
+async def test_bbox_fleet_query_is_unscoped(monkeypatch):
+    """No windfarm_ids → every farm with coordinates, no IN filter."""
+    fake_session = _patch_session_factory(monkeypatch, [MagicMock(lat=50.0, lng=10.0)])
+
+    await WeatherImportCore()._compute_windfarm_bbox()
+
+    sql, _ = _compiled_sql(fake_session)
+    assert "windfarms.id IN" not in sql
+
+
+@pytest.mark.asyncio
+async def test_bbox_scoped_to_windfarm_ids(monkeypatch):
+    """EPR-121: a scoped backfill boxes only the requested farms (Deeping St Nicholas here)."""
+    fake_session = _patch_session_factory(monkeypatch, [MagicMock(lat=52.7381, lng=-0.22778)])
+
+    bbox = await WeatherImportCore()._compute_windfarm_bbox(windfarm_ids=[8806])
+
+    sql, params = _compiled_sql(fake_session)
+    assert "windfarms.id IN" in sql
+    assert params["id_1"] == [8806]
+    n, w, s, e = bbox
+    assert (round(n, 3), round(w, 3), round(s, 3), round(e, 3)) == (53.238, -0.728, 52.238, 0.272)

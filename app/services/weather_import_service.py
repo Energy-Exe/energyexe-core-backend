@@ -26,6 +26,7 @@ class WeatherImportService:
         end_date: date,
         user_id: Optional[int] = None,
         force_refresh: bool = False,
+        windfarm_ids: Optional[List[int]] = None,
     ) -> WeatherImportJob:
         """
         Create a new weather import job.
@@ -35,15 +36,17 @@ class WeatherImportService:
             end_date: End date for import
             user_id: User creating the job
             force_refresh: If True, re-fetch data even for days that already have complete data
+            windfarm_ids: Optional subset of windfarms (scoped backfill, EPR-121); None = fleet
 
         Returns:
             Created WeatherImportJob
         """
         # Calculate total dates
         total_dates = (end_date - start_date).days + 1
+        scope = f" ({len(windfarm_ids)} windfarms)" if windfarm_ids else ""
 
         job = WeatherImportJob(
-            job_name=f"Weather Import {start_date} to {end_date}",
+            job_name=f"Weather Import {start_date} to {end_date}{scope}",
             source="ERA5",
             import_start_date=datetime.combine(start_date, datetime.min.time()),
             import_end_date=datetime.combine(end_date, datetime.min.time()),
@@ -54,6 +57,7 @@ class WeatherImportService:
                 'dates_completed': 0,
                 'current_phase': 'pending',
                 'force_refresh': force_refresh,
+                'windfarm_ids': list(windfarm_ids) if windfarm_ids else None,
             },
             created_at=datetime.now(timezone.utc).replace(tzinfo=None),
             updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
@@ -67,7 +71,8 @@ class WeatherImportService:
             f"Created weather import job",
             job_id=job.id,
             date_range=f"{start_date} to {end_date}",
-            total_dates=total_dates
+            total_dates=total_dates,
+            windfarm_ids=windfarm_ids,
         )
         return job
 
@@ -122,13 +127,15 @@ class WeatherImportService:
             start_date = job.import_start_date.date()
             end_date = job.import_end_date.date()
             force_refresh = job.job_metadata.get('force_refresh', False) if job.job_metadata else False
+            windfarm_ids = job.job_metadata.get('windfarm_ids') if job.job_metadata else None
 
         logger.info(
             f"Executing weather import job",
             job_id=job_id,
             start_date=start_date,
             end_date=end_date,
-            force_refresh=force_refresh
+            force_refresh=force_refresh,
+            windfarm_ids=windfarm_ids,
         )
 
         try:
@@ -138,7 +145,8 @@ class WeatherImportService:
                 start_date=start_date,
                 end_date=end_date,
                 job_id=job_id,
-                force_refresh=force_refresh
+                force_refresh=force_refresh,
+                windfarm_ids=windfarm_ids,
             )
 
             # Create new session to update results
