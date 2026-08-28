@@ -1,28 +1,48 @@
 """Tests for audit logging functionality."""
 
-import asyncio
 from datetime import datetime
 from unittest.mock import Mock, patch
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.audit import AuditContext, audit_action, serialize_for_audit
-from app.models.audit_log import AuditAction, AuditLog
+from app.core.deps import get_current_user
+from app.core.request_utils import get_client_ip
+from app.models.audit_log import AuditAction
 from app.models.user import User
+from app.schemas.audit_log import AuditLogFilter
 from app.services.audit_log import AuditLogService
 
 
 @pytest.fixture
 def mock_request():
-    """Create a mock request object."""
-    request = Mock()
+    """Create a mock request object (spec'd so it is recognised as a Request)."""
+    request = Mock(spec=Request)
     request.client.host = "192.168.1.100"
     request.headers = {"User-Agent": "TestAgent/1.0"}
     request.url.path = "/api/v1/test"
     request.method = "POST"
     return request
+
+
+def _make_request(headers: dict, client=("172.31.5.25", 4242)) -> Request:
+    """Build a real starlette Request from a minimal ASGI scope."""
+    raw = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+    return Request({"type": "http", "headers": raw, "client": client, "method": "GET", "path": "/"})
+
+
+def _fake_user(is_superuser: bool) -> User:
+    return User(
+        id=999,
+        email="fake@example.com",
+        username="fake",
+        hashed_password="x",
+        is_active=True,
+        is_superuser=is_superuser,
+    )
 
 
 @pytest.fixture
@@ -219,6 +239,34 @@ class TestAuditLogService:
         assert len(logs) == 2
         assert all(log.user_id == user_id for log in logs)
 
+    @pytest.mark.asyncio
+    async def test_summary_counts_each_row_once(self, test_session: AsyncSession):
+        """Regression (EPR-124): the summary used to cross-join audit_logs with itself
+        (2,439 rows reported as 5.9 M actions)."""
+        for action, email in (
+            (AuditAction.LOGIN, "a@example.com"),
+            (AuditAction.LOGIN, "b@example.com"),
+            (AuditAction.CREATE, "a@example.com"),
+        ):
+            await AuditLogService.log_action(
+                test_session, action=action, resource_type="user", user_email=email, user_id=1
+            )
+
+        summary = await AuditLogService.get_audit_summary(test_session)
+
+        assert summary.total_actions == 3
+        assert summary.actions_by_type == {"LOGIN": 2, "CREATE": 1}
+        assert summary.actions_by_resource == {"user": 3}
+        assert sorted(u["action_count"] for u in summary.actions_by_user) == [1, 2]
+        assert summary.total_actions == await AuditLogService.count_audit_logs(test_session)
+
+        # Date filters apply to every aggregate the same way.
+        filters = AuditLogFilter(date_from=datetime(2100, 1, 1))
+        empty = await AuditLogService.get_audit_summary(test_session, filters)
+        assert empty.total_actions == 0
+        assert empty.actions_by_type == {}
+        assert empty.date_range["earliest"] is None
+
 
 class TestAuditDecorator:
     """Test the audit_action decorator."""
@@ -265,7 +313,7 @@ class TestAuditDecorator:
         async def test_function(db: AsyncSession, request):
             return {"data": "test"}
 
-        result = await test_function(db=test_session, request=mock_request)
+        await test_function(db=test_session, request=mock_request)
 
         # Check audit log was created without user info
         logs = await AuditLogService.get_audit_logs(test_session)
@@ -277,6 +325,27 @@ class TestAuditDecorator:
         assert log.user_id is None
         assert log.user_email is None
         assert log.description == "Anonymous access"
+
+    @pytest.mark.asyncio
+    async def test_audit_rows_survive_the_request_session(
+        self, test_engine, test_session: AsyncSession, mock_request
+    ):
+        """Regression (EPR-124): rows were added to the request session with
+        commit=False and discarded when get_db() closed it. They must be visible
+        from a *different* session even after the request session is thrown away."""
+
+        @audit_action(AuditAction.DELETE, "owner", description="Deleted owner")
+        async def endpoint(owner_id: int, db: AsyncSession, request, current_user=None):
+            return None
+
+        await endpoint(owner_id=7, db=test_session, request=mock_request)
+        await test_session.rollback()  # what get_db() does on the way out
+        await test_session.close()
+
+        other = async_sessionmaker(bind=test_engine, class_=AsyncSession, expire_on_commit=False)
+        async with other() as fresh:
+            logs = await AuditLogService.get_audit_logs(fresh)
+        assert [(log.action, log.resource_type) for log in logs] == [("DELETE", "owner")]
 
     @pytest.mark.asyncio
     async def test_audit_decorator_error_handling(self, test_session: AsyncSession):
@@ -343,6 +412,26 @@ class TestAuditContext:
         assert len(logs) == 0
 
 
+class TestClientIp:
+    """get_client_ip must see through the ALB (EPR-124: every row carried a 172.31.x address)
+    without letting the caller forge the address: the ALB appends the connecting client
+    as the LAST X-Forwarded-For hop, earlier hops are client-supplied."""
+
+    def test_last_forwarded_hop_wins(self):
+        req = _make_request({"X-Forwarded-For": "1.2.3.4, 203.0.113.9"})
+        assert get_client_ip(req) == "203.0.113.9"
+        assert get_client_ip(_make_request({"X-Forwarded-For": "203.0.113.9"})) == "203.0.113.9"
+        assert get_client_ip(_make_request({"X-Forwarded-For": " , "})) == "172.31.5.25"
+
+    def test_real_ip_header_fallback(self):
+        assert get_client_ip(_make_request({"X-Real-IP": "198.51.100.4"})) == "198.51.100.4"
+
+    def test_socket_peer_fallback_and_none(self):
+        assert get_client_ip(_make_request({})) == "172.31.5.25"
+        assert get_client_ip(_make_request({}, client=None)) is None
+        assert get_client_ip(None) is None
+
+
 class TestSerializeForAudit:
     """Test the serialize_for_audit function."""
 
@@ -405,50 +494,53 @@ class TestSerializeForAudit:
 
 
 class TestAuditLogsAPI:
-    """Test the audit logs API endpoints."""
+    """Test the audit logs API endpoints.
+
+    Auth is exercised through dependency overrides: a registered user is a
+    ``client``-role account that cannot log in until verified + approved, so the
+    register→login dance used here previously always ended in 403.
+    """
 
     def test_get_audit_logs_unauthorized(self, client: TestClient):
         """Test that audit logs require authentication."""
-        response = client.get("/api/v1/audit-logs")
-        assert response.status_code == 401
+        response = client.get("/api/v1/audit-logs/")
+        # HTTPBearer answers a missing credential with 403; a bad token gets 401.
+        assert response.status_code in (401, 403)
 
-    def test_get_audit_logs_non_superuser(self, client: TestClient, user_data):
+    def test_get_audit_logs_non_superuser(self, client: TestClient):
         """Test that audit logs require superuser access."""
-        # Register and login as regular user
-        register_response = client.post("/api/v1/auth/register", json=user_data)
-        assert register_response.status_code == 201
-
-        login_response = client.post(
-            "/api/v1/auth/login",
-            json={"username": user_data["username"], "password": user_data["password"]},
-        )
-        assert login_response.status_code == 200
-        token = login_response.json()["access_token"]
-
-        # Try to access audit logs
-        response = client.get("/api/v1/audit-logs", headers={"Authorization": f"Bearer {token}"})
+        client.app.dependency_overrides[get_current_user] = lambda: _fake_user(is_superuser=False)
+        response = client.get("/api/v1/audit-logs/")
         assert response.status_code == 403
 
-    def test_get_audit_logs_superuser(self, client: TestClient, user_data):
-        """Test that superusers can access audit logs."""
-        # Make user a superuser
-        user_data["is_superuser"] = True
-
-        # Register and login as superuser
-        register_response = client.post("/api/v1/auth/register", json=user_data)
-        assert register_response.status_code == 201
-
-        login_response = client.post(
-            "/api/v1/auth/login",
-            json={"username": user_data["username"], "password": user_data["password"]},
+    def test_registration_is_audited_and_visible_from_a_later_request(
+        self, client: TestClient, user_data
+    ):
+        """End-to-end EPR-124 check: a decorated endpoint's row is committed and can be
+        read by a later, unrelated request; it carries the forwarded client IP; and
+        reading the audit log does not itself add rows."""
+        register = client.post(
+            "/api/v1/auth/register",
+            json=user_data,
+            headers={"X-Forwarded-For": "10.0.0.1, 203.0.113.9"},
         )
-        assert login_response.status_code == 200
-        token = login_response.json()["access_token"]
+        assert register.status_code == 201
 
-        # Access audit logs should work
-        response = client.get("/api/v1/audit-logs", headers={"Authorization": f"Bearer {token}"})
-        assert response.status_code == 200
+        client.app.dependency_overrides[get_current_user] = lambda: _fake_user(is_superuser=True)
+        first = client.get("/api/v1/audit-logs/")
+        assert first.status_code == 200
+        rows = first.json()
+        created = [r for r in rows if r["action"] == "CREATE" and r["resource_type"] == "user"]
+        assert len(created) == 1
+        assert created[0]["ip_address"] == "203.0.113.9"
+        assert created[0]["endpoint"] == "/api/v1/auth/register"
+        assert created[0]["method"] == "POST"
 
-        # Should return list of audit logs (including registration and login)
-        data = response.json()
-        assert isinstance(data, list)
+        second = client.get("/api/v1/audit-logs/")
+        assert len(second.json()) == len(rows), "listing the audit log must not self-log"
+        assert not [r for r in second.json() if r["resource_type"] == "audit_log"]
+
+        count = client.get("/api/v1/audit-logs/count").json()
+        summary = client.get("/api/v1/audit-logs/summary").json()
+        assert count == len(rows)
+        assert summary["total_actions"] == count

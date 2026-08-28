@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import audit_action
 from app.core.deps import get_db
 from app.core.exceptions import AuthenticationException, NotFoundException, ValidationException
+from app.core.request_utils import get_client_ip
 from app.core.security import create_access_token
 from app.models.audit_log import AuditAction
 from app.schemas.invitation import InvitationAccept, InvitationValidation
@@ -72,7 +73,7 @@ async def login(
             resource_type="user",
             user_email=login_data.username,
             description="Failed login attempt",
-            ip_address=request.client.host if request and request.client else None,
+            ip_address=get_client_ip(request),
             user_agent=request.headers.get("User-Agent") if request else None,
             endpoint=str(request.url.path) if request else None,
             method=request.method if request else None,
@@ -97,7 +98,7 @@ async def login(
         resource_id=str(user.id),
         resource_name=user.username,
         description="Successful login",
-        ip_address=request.client.host if request and request.client else None,
+        ip_address=get_client_ip(request),
         user_agent=request.headers.get("User-Agent") if request else None,
         endpoint=str(request.url.path) if request else None,
         method=request.method if request else None,
@@ -130,7 +131,7 @@ async def login_for_access_token(
             resource_type="user",
             user_email=form_data.username,
             description="Failed OAuth2 login attempt",
-            ip_address=request.client.host if request and request.client else None,
+            ip_address=get_client_ip(request),
             user_agent=request.headers.get("User-Agent") if request else None,
             endpoint=str(request.url.path) if request else None,
             method=request.method if request else None,
@@ -159,7 +160,7 @@ async def login_for_access_token(
         resource_id=str(user.id),
         resource_name=user.username,
         description="Successful OAuth2 login",
-        ip_address=request.client.host if request and request.client else None,
+        ip_address=get_client_ip(request),
         user_agent=request.headers.get("User-Agent") if request else None,
         endpoint=str(request.url.path) if request else None,
         method=request.method if request else None,

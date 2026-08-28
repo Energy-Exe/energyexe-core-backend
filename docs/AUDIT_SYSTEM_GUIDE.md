@@ -4,13 +4,44 @@ This guide provides comprehensive documentation for the audit logging system imp
 
 ## Overview
 
-The audit system automatically tracks all user actions and system events for compliance, security, and debugging purposes. It captures:
+The audit system records user actions in the `audit_logs` table for compliance, security and
+"who is using the platform" questions. It captures the actor (user id/email), the action, the
+resource, the originating client IP (proxy-aware — see below), user agent, endpoint/method and
+optional before/after values.
 
-- **User Actions**: CRUD operations on all resources
-- **Authentication Events**: Login/logout attempts and outcomes
-- **System Access**: Resource access and API endpoint usage
-- **Context Information**: IP addresses, user agents, timestamps
-- **Data Changes**: Before/after values for update operations
+### What is audited today (2026-08-28, EPR-124)
+
+| Event | Where | Rows |
+|---|---|---|
+| Login success / failure (`/auth/login`, `/auth/token`) | `app/api/v1/endpoints/auth.py` — direct `AuditLogService.log_action` calls | `LOGIN` (failed attempts have `extra_metadata.success = false`; `user_email` is the *typed* username) |
+| Registration (`/auth/register`) | `@audit_action(AuditAction.CREATE, "user")` | `CREATE` |
+| Owners list / search / get / get-by-code | `@audit_action(AuditAction.ACCESS, "owner")` in `owners.py` | `ACCESS` |
+| Owners create / update / delete | `@audit_action` in `owners.py` | `CREATE` / `UPDATE` / `DELETE` |
+
+Everything else (users CRUD, wind farms, reports, portfolios, the brain agent, …) is **not**
+audited — 3 of the ~50 endpoint modules carry the decorator. Reading the audit log itself is
+deliberately not audited (it used to be: every admin page view would add "viewed audit log"
+rows and inflate the counts being viewed). There is no `/auth/logout` endpoint, so `LOGOUT`
+is never emitted, and there is no `users.last_login_at` column — "active clients" is currently
+inferred from `LOGIN` rows only. Extending coverage is one decorator per endpoint (see Usage).
+
+### How rows are persisted (read this before touching the decorator)
+
+`get_db()` **never commits on teardown** — it only rolls back on exception and closes. Until
+EPR-124 the decorator added its row to the request session with `commit=False`, "so the main
+transaction commits it"; nothing ever did, so every decorated endpoint's row was discarded and
+production held nothing but `LOGIN` rows (the four direct calls in `auth.py` commit
+themselves). Audit rows are now written through `AuditLogService.log_action_detached(...)`,
+which opens its own short-lived session and commits — independent of the request transaction,
+so it survives endpoint rollbacks and never commits unrelated pending work. Tests point that
+writer at the test engine via `set_audit_session_factory(...)` (see `tests/conftest.py`).
+
+### Client IP behind the ALB
+
+`request.client.host` is always the load balancer's private address (`100.64.x` / `172.31.x`).
+Use `app.core.request_utils.get_client_ip(request)` — the **last** hop of `X-Forwarded-For`
+(the one our ALB appended; earlier hops are client-supplied and spoofable), then `X-Real-IP`,
+then the socket peer. Only the ALB can reach the task, so that last hop is trustworthy.
 
 ## Architecture
 
@@ -116,7 +147,9 @@ async def complex_operation(db: AsyncSession, user: User):
 
 ### Direct Service Usage
 
-For full control, use the service directly:
+For full control, use the service directly. `log_action(db, ...)` commits the session you pass
+(the login endpoints do this); `log_action_detached(...)` writes through its own session and is
+what the decorator and `AuditContext` use:
 
 ```python
 from app.services.audit_log import AuditLogService
@@ -141,7 +174,7 @@ await AuditLogService.log_action(
 | `UPDATE` | Resource modification | Profile updates, data changes |
 | `DELETE` | Resource deletion | Record removal |
 | `LOGIN` | Authentication success/failure | User login attempts |
-| `LOGOUT` | Session termination | User logout |
+| `LOGOUT` | Session termination | Defined but never emitted — there is no logout endpoint |
 | `ACCESS` | Resource access | Viewing lists, individual records |
 
 ## API Endpoints
@@ -256,9 +289,12 @@ curl -H "Authorization: Bearer $TOKEN" \
 ### Common Issues
 
 **1. Audit logs not being created**
-- Check if decorator is applied correctly
-- Verify database session is available
-- Check for exceptions in logs
+- Check if decorator is applied correctly (`db` must be a keyword argument of the endpoint —
+  FastAPI passes dependencies by name; without a session the decorator runs the endpoint un-audited)
+- Look for `audit_log_write_failed` warnings in the logs — the detached writer never raises
+- Do NOT reintroduce `commit=False` on the request session: `get_db()` never commits (EPR-124)
+- `GET /audit-logs/summary` reporting a number that is roughly `count²` means the summary
+  query cross-joined `audit_logs` again (fixed in EPR-124 — each aggregate filters directly)
 
 **2. Missing context information**
 - Ensure `Request` object is passed to decorated functions
