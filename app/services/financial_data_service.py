@@ -25,6 +25,7 @@ from app.schemas.financial_data import (
     FinancialDataUpdate,
     FinancialRatioPeriod,
     FinancialRatiosResponse,
+    LinkedWindfarmRef,
 )
 
 logger = structlog.get_logger()
@@ -355,14 +356,25 @@ class FinancialDataService:
             )
             linked_wf_ids = [row[0] for row in all_links_result.all()]
 
-            # 2c. Get COD from each linked windfarm → effective COD = max(all CODs)
-            cod_result = await self.db.execute(
-                select(Windfarm.commercial_operational_date).where(
-                    Windfarm.id.in_(linked_wf_ids)
-                )
+            # 2c. One pass over the linked windfarms: COD (effective COD =
+            # max of all CODs) and, for EPR-123/122, the names of the ones
+            # visible in the platform so the client can say whose accounts
+            # these are and which other farms they also cover.
+            linked_rows_result = await self.db.execute(
+                select(
+                    Windfarm.id,
+                    Windfarm.name,
+                    Windfarm.is_deleted,
+                    Windfarm.commercial_operational_date,
+                ).where(Windfarm.id.in_(linked_wf_ids))
             )
-            cod_dates = [row[0] for row in cod_result.all() if row[0] is not None]
+            linked_rows = linked_rows_result.all()
+            cod_dates = [row[3] for row in linked_rows if row[3] is not None]
             effective_cod = max(cod_dates) if cod_dates else None
+            linked_windfarms = sorted(
+                (LinkedWindfarmRef(id=row[0], name=row[1]) for row in linked_rows if not row[2]),
+                key=lambda ref: ref.name,
+            )
 
             # Ramp-up cutoff
             ramp_up_cutoff = None
@@ -496,8 +508,10 @@ class FinancialDataService:
                     financial_entity_id=entity.id,
                     financial_entity_name=entity.name,
                     entity_type=entity.entity_type,
+                    relationship_type=link.relationship_type,
                     cod=effective_cod,
                     linked_windfarm_ids=linked_wf_ids,
+                    linked_windfarms=linked_windfarms,
                     display_currency=display_currency,
                     periods=periods,
                 )
