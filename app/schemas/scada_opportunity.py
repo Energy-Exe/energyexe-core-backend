@@ -48,6 +48,15 @@ class ScadaOpportunity(BaseModel):
     now_confounded: Optional[bool] = None
     rank_gbp: float
 
+    # Phase 7b finding lifecycle — LEFT-joined from scada_finding_action by the stable natural key
+    # (farm, trigger, scope, cls). Null on an unworked finding (implicit status NEW).
+    lifecycle_status: Optional[str] = None
+    lifecycle_notes: Optional[str] = None
+    acknowledged_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+    lifecycle_updated_at: Optional[datetime] = None
+    lifecycle_actor: Optional[str] = None
+
 
 class ScadaClassSummary(BaseModel):
     count: int
@@ -92,3 +101,34 @@ class ScadaTrigger(BaseModel):
     confidence: Optional[str] = None
     lead_time: Optional[str] = None
     schema_status: Optional[str] = None
+
+
+class ScadaFindingActionUpdate(BaseModel):
+    """Request to set a finding's lifecycle state, keyed by its stable natural key.
+
+    The client passes the finding's natural key (already on every register row) rather than the
+    volatile register ``id`` — the pipeline reassigns ``id`` on every persist. ``status`` must be one
+    of ACKNOWLEDGED / CONFIRMED / DISMISSED / RESOLVED (validated in the endpoint).
+    """
+
+    farm: str
+    trigger: Optional[str] = None
+    scope: str
+    cls: str
+    status: str
+    notes: Optional[str] = None
+
+
+class ScadaFindingActionResult(BaseModel):
+    """The persisted lifecycle state returned after a write."""
+
+    farm: str
+    trigger: str
+    scope: str
+    cls: str
+    status: str
+    notes: Optional[str] = None
+    acknowledged_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    actor: Optional[str] = None
