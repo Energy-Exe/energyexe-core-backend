@@ -27,7 +27,20 @@ _REGISTER_SELECT = """
     r.gbp_year, r.cond_mean_lo, r.cond_mean_hi, r.cond_worst_hi, r.cond_worst_month,
     r.value_of_acting_early, r.additive, r.confidence, r.note, r.now_costing_gbp, r.now_floor_gbp,
     r.now_basis, r.now_available, r.now_confounded, r.rank_gbp,
-    t.name AS trigger_name, t.domain, t.action_type, t.persona_primary, t.commercial_upside, t.lead_time
+    t.name AS trigger_name, t.domain, t.action_type, t.persona_primary, t.commercial_upside, t.lead_time,
+    fa.status AS lifecycle_status, fa.notes AS lifecycle_notes, fa.acknowledged_at, fa.resolved_at,
+    fa.updated_at AS lifecycle_updated_at,
+    COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username, u.email) AS lifecycle_actor
+"""
+
+# Phase 7b: attach the human lifecycle state (scada_finding_action, a public core table) to each
+# register row by the stable natural key. LEFT joins → null lifecycle on an unworked finding. The
+# register's nullable trigger is COALESCE(...,'')-d to match the '' the action table normalises to.
+_LIFECYCLE_JOIN = """
+    LEFT JOIN scada_finding_action fa
+      ON fa.farm = r.farm AND fa.trigger = COALESCE(r.trigger, '')
+      AND fa.scope = r.scope AND fa.cls = r.cls
+    LEFT JOIN users u ON u.id = fa.updated_by
 """
 
 # Once the findings tables are seen they never disappear mid-process; absence is rechecked per call
@@ -67,7 +80,9 @@ class ScadaOpportunityService:
         )
         return [row.farm for row in result.fetchall()]
 
-    def _filters(self, farm: str, cls, domain, trigger, additive_only, min_gbp) -> tuple[str, Dict[str, Any]]:
+    def _filters(
+        self, farm: str, cls, domain, trigger, additive_only, min_gbp
+    ) -> tuple[str, Dict[str, Any]]:
         clauses = ["r.farm = :farm"]
         params: Dict[str, Any] = {"farm": farm}
         if cls:
@@ -102,12 +117,13 @@ class ScadaOpportunityService:
         join = "scada.opportunity_register r LEFT JOIN scada.dim_opportunity_trigger t ON t.code = r.trigger"
         rows = await self.db.execute(
             text(
-                f"SELECT {_REGISTER_SELECT} FROM {join} WHERE {where} "
+                f"SELECT {_REGISTER_SELECT} FROM {join} {_LIFECYCLE_JOIN} WHERE {where} "
                 "ORDER BY r.rank_gbp DESC, r.id ASC LIMIT :limit OFFSET :offset"
             ),
             {**params, "limit": limit, "offset": offset},
         )
         items = [dict(row._mapping) for row in rows.fetchall()]
+        # COUNT stays on the base join — the lifecycle LEFT JOIN is 1:1 so it can't change the count.
         total = (
             await self.db.execute(text(f"SELECT COUNT(*) FROM {join} WHERE {where}"), params)
         ).scalar() or 0
@@ -137,7 +153,10 @@ class ScadaOpportunityService:
             {"farm": farm},
         )
         by_class = {
-            row.cls: {"count": int(row.n), "gbp_year": float(row.gbp) if row.gbp is not None else 0.0}
+            row.cls: {
+                "count": int(row.n),
+                "gbp_year": float(row.gbp) if row.gbp is not None else 0.0,
+            }
             for row in by_class_rows.fetchall()
         }
         out = dict(run._mapping)
@@ -149,6 +168,7 @@ class ScadaOpportunityService:
             text(
                 f"SELECT {_REGISTER_SELECT} FROM scada.opportunity_register r "
                 "LEFT JOIN scada.dim_opportunity_trigger t ON t.code = r.trigger "
+                f"{_LIFECYCLE_JOIN} "
                 "WHERE r.farm = :farm AND r.id = :id"
             ),
             {"farm": farm, "id": id},

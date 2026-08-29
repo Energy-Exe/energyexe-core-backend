@@ -40,14 +40,19 @@ from .peer_group_aggregate import PeerGroupAggregate
 from .performance_anomaly import PerformanceAnomaly
 from .performance_summary import PerformanceSummary
 from .platform_update import PlatformUpdate
-from .report import Report, ReportScope, ReportSection, ReportStatus, ReportType, SectionStatus
 from .portfolio import Portfolio, PortfolioItem, PortfolioType, UserFavorite
 from .power_curve_bin import PowerCurveBin
 from .ppa import PPA
 from .price_data import PriceData, PriceDataRaw
 from .project import Project
 from .region import Region
+from .report import Report, ReportScope, ReportSection, ReportStatus, ReportType, SectionStatus
 from .report_commentary import ReportCommentary
+from .scada_finding_action import (
+    SCADA_FINDING_WRITABLE_STATUSES,
+    ScadaFindingAction,
+    ScadaFindingStatus,
+)
 from .state import State
 from .substation import Substation
 from .substation_owner import SubstationOwner
@@ -88,6 +93,9 @@ __all__ = [
     "Project",
     "Region",
     "ReportCommentary",
+    "ScadaFindingAction",
+    "ScadaFindingStatus",
+    "SCADA_FINDING_WRITABLE_STATUSES",
     "State",
     "Substation",
     "SubstationOwner",
