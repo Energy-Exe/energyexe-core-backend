@@ -13,49 +13,51 @@ cannot delete, TLS enforced, bucket versioned + encrypted (AES256), no public ac
 
 ## Upload instructions (email-ready)
 
-You'll receive four values from us (via a secure channel, separate from this email):
+Your upload destination is a secure Amazon S3 storage bucket hosted in the AWS
+Stockholm region (**Sweden**):
 
 | Field | Value |
 |---|---|
-| Storage type | Amazon S3 |
-| Server / region | `s3.eu-north-1.amazonaws.com` — AWS Stockholm, **Sweden** |
 | Bucket | `energyexe-partner-inbound` |
 | Upload folder | `sfe/` |
-| Access Key ID | *(sent separately)* |
-| Secret Access Key | *(sent separately)* |
+| Region | `eu-north-1` (AWS Stockholm, Sweden) |
+| Access Key ID | *(sent separately, via a secure channel)* |
+| Secret Access Key | *(sent separately, via a secure channel)* |
 
 The credentials can **only add files** to the `sfe/` folder — they cannot delete
 anything or see any other data. All transfers are TLS-encrypted, and files are
 encrypted and versioned at rest in the Stockholm region.
 
-Pick whichever upload method suits you:
+Pick whichever upload method suits you. **Please follow the connection settings
+exactly** — in particular the folder/server fields marked in bold, since the
+credentials are scoped to just your folder and generic settings will show a
+"not authorized" error.
 
-### Option A — Cyberduck (macOS / Windows, drag & drop)
-
-1. Download Cyberduck (free): https://cyberduck.io
-2. **Open Connection** → choose **Amazon S3** from the dropdown
-3. Fill in:
-   - Server: `energyexe-partner-inbound.s3.eu-north-1.amazonaws.com` (Port 443)
-     — **the bucket name must be part of the server address**, exactly as above
-   - Access Key ID / Secret Access Key: as provided
-4. Connect → you land inside the bucket → open the `sfe` folder
-5. Drag your files in. That's it — large files upload in resumable parts automatically.
-
-> If you see *"not authorized to perform: s3:ListAllMyBuckets … Connection failed"*,
-> the server field is set to the generic `s3.eu-north-1.amazonaws.com` — the client
-> is then trying to browse the whole AWS account, which these credentials
-> deliberately can't do. Use the bucket address from step 3 instead.
-
-### Option B — WinSCP (Windows)
+### Option A — WinSCP (Windows, drag & drop) ✔ tested
 
 1. Download WinSCP (free): https://winscp.net
 2. New Session → **File protocol: Amazon S3**
 3. Host name: `s3.eu-north-1.amazonaws.com`, Port: 443
 4. Access key ID / Secret access key: as provided
-5. **Advanced… → Environment → Directories → Remote directory:**
-   `/energyexe-partner-inbound/sfe/` (needed because the credentials can't list
-   the account's buckets, only this one)
-6. Login → you land in the `sfe` folder → drag files in
+5. **Important:** click **Advanced… → Environment → Directories** and set
+   **Remote directory** to `/energyexe-partner-inbound/sfe/`
+6. Login → you land directly in the `sfe` folder → drag your files in.
+   Large files upload in resumable parts automatically.
+
+### Option B — Cyberduck (macOS / Windows, drag & drop)
+
+1. Download Cyberduck (free): https://cyberduck.io
+2. **Open Connection** → choose **Amazon S3** from the dropdown
+3. Server: **`energyexe-partner-inbound.s3.eu-north-1.amazonaws.com`** (Port 443)
+   — the bucket name must be part of the server address, exactly as above
+4. Access Key ID / Secret Access Key: as provided
+5. Connect → you land inside the bucket → open the `sfe` folder → drag files in
+
+> **If you see** *"not authorized to perform: s3:ListAllMyBuckets … Connection
+> failed"*: the client is connected to the generic S3 endpoint and is trying to
+> browse the whole account, which these credentials deliberately can't do. In
+> WinSCP, set the Remote directory as in step 5; in Cyberduck, use the full
+> server address from step 3.
 
 ### Option C — AWS CLI (scriptable, best for many files)
 
