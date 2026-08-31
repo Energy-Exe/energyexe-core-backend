@@ -35,10 +35,16 @@ Pick whichever upload method suits you:
 1. Download Cyberduck (free): https://cyberduck.io
 2. **Open Connection** → choose **Amazon S3** from the dropdown
 3. Fill in:
-   - Server: `s3.eu-north-1.amazonaws.com` (Port 443)
+   - Server: `energyexe-partner-inbound.s3.eu-north-1.amazonaws.com` (Port 443)
+     — **the bucket name must be part of the server address**, exactly as above
    - Access Key ID / Secret Access Key: as provided
-4. Connect → open the `energyexe-partner-inbound` bucket → open the `sfe` folder
+4. Connect → you land inside the bucket → open the `sfe` folder
 5. Drag your files in. That's it — large files upload in resumable parts automatically.
+
+> If you see *"not authorized to perform: s3:ListAllMyBuckets … Connection failed"*,
+> the server field is set to the generic `s3.eu-north-1.amazonaws.com` — the client
+> is then trying to browse the whole AWS account, which these credentials
+> deliberately can't do. Use the bucket address from step 3 instead.
 
 ### Option B — WinSCP (Windows)
 
@@ -46,7 +52,10 @@ Pick whichever upload method suits you:
 2. New Session → **File protocol: Amazon S3**
 3. Host name: `s3.eu-north-1.amazonaws.com`, Port: 443
 4. Access key ID / Secret access key: as provided
-5. Login → navigate to `energyexe-partner-inbound/sfe/` → drag files in
+5. **Advanced… → Environment → Directories → Remote directory:**
+   `/energyexe-partner-inbound/sfe/` (needed because the credentials can't list
+   the account's buckets, only this one)
+6. Login → you land in the `sfe` folder → drag files in
 
 ### Option C — AWS CLI (scriptable, best for many files)
 

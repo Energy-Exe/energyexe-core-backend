@@ -135,8 +135,34 @@ resource "aws_iam_user_policy" "sfe_upload" {
         ]
         Resource = aws_s3_bucket.partner_inbound.arn
         Condition = {
-          # "" lets GUI clients open the bucket root and see the sfe/ folder.
-          StringLike = { "s3:prefix" = ["", "sfe/", "sfe/*"] }
+          StringLike = { "s3:prefix" = ["sfe/", "sfe/*"] }
+        }
+      },
+      # GUI clients (Cyberduck/WinSCP) open the bucket root on connect; these two
+      # statements let that root view work — folder names only (delimiter "/"
+      # required, so a recursive no-delimiter dump of the bucket stays denied).
+      # Two statements because clients variously send prefix="" or omit it, and
+      # StringLike/StringEquals don't match an ABSENT context key.
+      {
+        Sid      = "ListRootFoldersEmptyPrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          StringEquals = {
+            "s3:prefix"    = ""
+            "s3:delimiter" = "/"
+          }
+        }
+      },
+      {
+        Sid      = "ListRootFoldersNoPrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          Null         = { "s3:prefix" = "true" }
+          StringEquals = { "s3:delimiter" = "/" }
         }
       },
       {
