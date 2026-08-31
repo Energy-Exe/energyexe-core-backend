@@ -94,6 +94,10 @@ timestamps — UTC or local).
 - **Before SFE starts**: clear mimic-run test objects with the admin profile
   (`aws s3 rm s3://energyexe-partner-inbound/sfe/ --recursive --profile energyexe`).
   The uploader key itself cannot delete.
+  ⚠️ A recursive delete also removes the zero-byte `sfe/` **folder marker** — without
+  it the "folder" doesn't exist in S3 and WinSCP fails with *"File or folder
+  '/energyexe-partner-inbound/sfe/' does not exist"*. Recreate it after any cleanup:
+  `aws s3api put-object --bucket energyexe-partner-inbound --key sfe/ --profile energyexe`
 - **Watch arrivals**: `aws s3 ls s3://energyexe-partner-inbound/sfe/ --profile energyexe`
 - **Next step after delivery**: verified files get copied into the lake at
   `s3://energyexe-scada-data/bronze/landing/sfe/` and wired into the scada pipeline
