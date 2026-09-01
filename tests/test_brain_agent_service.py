@@ -423,9 +423,16 @@ def test_finish_orphaned_run_persists_and_clears_busy(monkeypatch):
 
     persisted = {}
 
-    async def _fake_persist(self, user_id, session_id, result_message, model=None):
-        persisted.update(user_id=user_id, session_id=session_id, result=result_message)
-        return [{"type": "user", "content": "long analysis"}]
+    async def _fake_persist(
+        self, user_id, session_id, result_message, model=None, session=None, detached=False
+    ):
+        persisted.update(
+            user_id=user_id, session_id=session_id, result=result_message, detached=detached
+        )
+        return PersistOutcome(
+            messages=[{"type": "user", "content": "long analysis"}],
+            terminal_info=derive_terminal_info(result_message),
+        )
 
     monkeypatch.setattr(BrainAgentService, "_persist_completed_run", _fake_persist)
     monkeypatch.setattr(BrainAgentService, "_scan_for_new_files", lambda self, s: [])
@@ -463,7 +470,7 @@ def test_finish_orphaned_run_survives_persist_failure(monkeypatch):
 # classified and never masquerade as clean completions.
 # ---------------------------------------------------------------------------
 
-from app.services.brain_agent_service import derive_terminal_info
+from app.services.brain_agent_service import PersistOutcome, derive_terminal_info
 
 
 def test_terminal_info_budget_kill():
@@ -562,8 +569,13 @@ def test_chat_result_event_carries_terminal_fields(monkeypatch, _isolated_sessio
         BrainAgentService._sessions[session_id] = session
         return session, False
 
-    async def _fake_persist(self, user_id, session_id, result_message, model=None):
-        return [{"type": "assistant", "content": "partial"}]
+    async def _fake_persist(
+        self, user_id, session_id, result_message, model=None, session=None, detached=False
+    ):
+        return PersistOutcome(
+            messages=[{"type": "assistant", "content": "partial"}],
+            terminal_info=derive_terminal_info(result_message),
+        )
 
     async def _fake_set_streaming(self, session_id, value):
         return None
@@ -599,3 +611,151 @@ def test_chat_result_event_carries_terminal_fields(monkeypatch, _isolated_sessio
     assert result.data["session_id"] == "s-term"
     assert result.data["cost_usd"] == 2.04
     assert result.data["messages"] == [{"type": "assistant", "content": "partial"}]
+
+
+# ---------------------------------------------------------------------------
+# Honest persistence on error terminals (_persist_completed_run)
+# ---------------------------------------------------------------------------
+
+import app.services.brain_agent_service as _svc_mod
+
+
+def _budget_kill_result():
+    return _result_message(
+        subtype="error_max_budget_usd",
+        is_error=True,
+        terminal_reason="budget_exhausted",
+        errors=["Reached maximum budget ($2)"],
+        total_cost_usd=2.04,
+    )
+
+
+def _persist_harness(monkeypatch, transcript_messages, sleeps):
+    """Wire _persist_completed_run's collaborators to fakes; return saved dict."""
+    saved = {}
+
+    def _fake_get_session_messages(session_id, directory):
+        return list(transcript_messages)
+
+    async def _fake_save(self, session_id, user_id, messages, model=None, cost_usd=None, num_turns=0):
+        saved.update(session_id=session_id, messages=messages, cost_usd=cost_usd)
+
+    async def _fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(_svc_mod, "get_session_messages", _fake_get_session_messages)
+    monkeypatch.setattr(BrainAgentService, "_save_thread_to_db", _fake_save)
+    monkeypatch.setattr(_svc_mod.asyncio, "sleep", _fake_sleep)
+    return saved
+
+
+def test_persist_error_terminal_appends_marker_without_waiting(monkeypatch):
+    # Transcript legitimately ends on a user-type entry (tool_result) after a
+    # budget kill — the persist must not spin waiting for an assistant tail.
+    sleeps = []
+    saved = _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", "deep question"), _sm("assistant", "a1", "working on it")],
+        sleeps,
+    )
+    # Make the converted list end on a user turn:
+    transcript = [_sm("assistant", "a1", "working on it"), _sm("user", "u2", "tool output")]
+    monkeypatch.setattr(_svc_mod, "get_session_messages", lambda session_id, directory: transcript)
+
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="s-err", result_message=_budget_kill_result()
+        )
+    )
+
+    assert sleeps == []  # zero retry sleeps on an error terminal
+    assert outcome.terminal_info["kind"] == "budget_exhausted"
+    tail = outcome.messages[-1]
+    assert tail["type"] == "assistant"
+    assert tail["terminal"]["kind"] == "budget_exhausted"
+    assert "spending limit" in tail["content"]
+    assert saved["messages"][-1] is tail  # marker was persisted
+
+
+def test_persist_success_with_tail_present_appends_no_marker(monkeypatch):
+    sleeps = []
+    saved = _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", "question"), _sm("assistant", "a1", "the answer")],
+        sleeps,
+    )
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="s-ok", result_message=_result_message()
+        )
+    )
+    assert sleeps == []
+    assert outcome.terminal_info["kind"] == "success"
+    assert all("terminal" not in m for m in outcome.messages)
+    assert saved["messages"] == outcome.messages
+
+
+def test_persist_success_missing_tail_still_retries(monkeypatch):
+    sleeps = []
+    _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", "question")],  # no assistant tail, ever
+        sleeps,
+    )
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="s-lag", result_message=_result_message()
+        )
+    )
+    assert len(sleeps) == 3  # 4 attempts, sleeps between them
+    assert outcome.terminal_info["kind"] == "success"
+
+
+def test_persist_error_terminal_with_failed_transcript_appends_to_stored(monkeypatch):
+    # get_session_messages raises → never wipe the thread; append the marker
+    # to what's already stored in the DB.
+    sleeps = []
+    saved = _persist_harness(monkeypatch, [], sleeps)
+
+    def _boom(session_id, directory):
+        raise RuntimeError("transcript gone")
+
+    monkeypatch.setattr(_svc_mod, "get_session_messages", _boom)
+
+    stored = [{"type": "user", "content": "original question"}]
+
+    async def _fake_load(self, session_id):
+        return list(stored)
+
+    monkeypatch.setattr(BrainAgentService, "_load_thread_messages", _fake_load)
+
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="s-gone", result_message=_budget_kill_result()
+        )
+    )
+    assert outcome.messages[0] == stored[0]  # existing messages preserved
+    assert outcome.messages[-1]["terminal"]["kind"] == "budget_exhausted"
+    assert saved["messages"] == outcome.messages
+
+
+def test_persist_stopped_marker_is_not_an_error(monkeypatch):
+    sleeps = []
+    _persist_harness(
+        monkeypatch,
+        [_sm("assistant", "a1", "partial"), _sm("user", "u2", "tool output")],
+        sleeps,
+    )
+    service = BrainAgentService(db=None)
+    rm = _result_message(is_error=False, terminal_reason="aborted_streaming")
+    outcome = asyncio.run(
+        service._persist_completed_run(user_id=1, session_id="s-stop", result_message=rm)
+    )
+    tail = outcome.messages[-1]
+    assert tail["terminal"]["kind"] == "stopped"
+    assert tail["terminal"]["is_error"] is False
+    assert tail["content"] == "You stopped this response."

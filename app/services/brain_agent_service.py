@@ -230,6 +230,17 @@ class AgentSession:
     detach_task: Optional["asyncio.Task"] = None  # background consumer of an orphaned run
 
 
+@dataclass
+class PersistOutcome:
+    """What _persist_completed_run saved, for the caller's result event."""
+
+    messages: List[Dict[str, Any]]
+    terminal_info: Dict[str, Any]
+    # Populated once delta accounting lands (PR B3); None until then.
+    cost_delta_usd: Optional[float] = None
+    thread_total_cost_usd: Optional[float] = None
+
+
 class BrainAgentService:
     """Manages ClaudeSDKClient sessions and streams responses as SSE events."""
 
@@ -469,29 +480,16 @@ class BrainAgentService:
                         break
 
                 if got_result and result_message:
-                    terminal_info = derive_terminal_info(result_message)
-                    logger.info(
-                        "brain_agent_run_finished",
-                        session_id=session_id,
-                        user_id=user_id,
-                        source=source,
-                        detached=False,
-                        subtype=terminal_info["subtype"],
-                        is_error=terminal_info["is_error"],
-                        terminal_reason=terminal_info["terminal_reason"],
-                        api_error_status=terminal_info["api_error_status"],
-                        kind=terminal_info["kind"],
-                        num_turns=getattr(result_message, "num_turns", 0),
-                        duration_ms=getattr(result_message, "duration_ms", 0),
-                        process_total_cost_usd=getattr(result_message, "total_cost_usd", None),
-                    )
-
-                    final_messages = await self._persist_completed_run(
+                    outcome = await self._persist_completed_run(
                         user_id=user_id,
                         session_id=session_id,
                         result_message=result_message,
                         model=model,
+                        session=session,
+                        detached=False,
                     )
+                    terminal_info = outcome.terminal_info
+                    final_messages = outcome.messages
 
                     # Yield result with authoritative messages. The legacy keys
                     # (num_turns/duration_ms/cost_usd/session_id/messages) are
@@ -822,12 +820,32 @@ class BrainAgentService:
         session_id: str,
         result_message: Any,
         model: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        session: Optional[AgentSession] = None,
+        detached: bool = False,
+    ) -> PersistOutcome:
         """Read the authoritative SDK transcript for a finished run and save it.
 
         Shared by the live chat() path and the detached (client-disconnected)
-        path. Returns the converted messages ([] if the transcript read failed).
+        path. On a non-success terminal (budget kill, turn cap, API failure,
+        interrupt) a terminal marker message is appended so a reloaded thread
+        explains why the run ended instead of trailing off after a tool call.
         """
+        terminal_info = derive_terminal_info(result_message)
+        logger.info(
+            "brain_agent_run_finished",
+            session_id=session_id,
+            user_id=user_id,
+            detached=detached,
+            subtype=terminal_info["subtype"],
+            is_error=terminal_info["is_error"],
+            terminal_reason=terminal_info["terminal_reason"],
+            api_error_status=terminal_info["api_error_status"],
+            kind=terminal_info["kind"],
+            num_turns=getattr(result_message, "num_turns", 0),
+            duration_ms=getattr(result_message, "duration_ms", 0),
+            process_total_cost_usd=getattr(result_message, "total_cost_usd", None),
+        )
+
         # Use the SDK's internal session_id (from ResultMessage), NOT our
         # session_id — they are different.
         sdk_session_id = (
@@ -837,12 +855,14 @@ class BrainAgentService:
         )
         work_dir = Path(f"/tmp/brain-agent/{user_id}/{session_id}")
         final_messages: List[Dict[str, Any]] = []
-        # The CLI flushes the turn's assistant entry to the transcript file
-        # slightly AFTER emitting the ResultMessage, so an immediate read can
-        # miss the reply we just streamed (verified on staging: the detached
-        # save persisted only the user turn). Retry briefly until the
-        # transcript ends with an assistant message.
-        for attempt in range(8):
+        # The CLI awaits the final transcript append (assistant tail included)
+        # BEFORE emitting the ResultMessage, so on a clean success the tail is
+        # normally already there — the short retry below only covers filesystem
+        # lag. On an error terminal the transcript legitimately ends on a
+        # tool_result (user-type) entry, so waiting for an assistant tail would
+        # spin for nothing: read once and move on.
+        attempts = 4 if terminal_info["kind"] == "success" else 1
+        for attempt in range(attempts):
             try:
                 sdk_messages = get_session_messages(
                     session_id=sdk_session_id,
@@ -854,13 +874,29 @@ class BrainAgentService:
                 final_messages = []
             if final_messages and final_messages[-1].get("type") == "assistant":
                 break
-            await asyncio.sleep(0.75)
+            if attempt < attempts - 1:
+                await asyncio.sleep(0.5)
         else:
-            logger.warning(
-                "brain_agent_transcript_missing_assistant_tail",
-                session_id=session_id,
-                message_count=len(final_messages),
-            )
+            if terminal_info["kind"] == "success":
+                logger.warning(
+                    "brain_agent_transcript_missing_assistant_tail",
+                    session_id=session_id,
+                    message_count=len(final_messages),
+                    kind=terminal_info["kind"],
+                    terminal_reason=terminal_info["terminal_reason"],
+                )
+
+        if terminal_info["kind"] != "success":
+            marker = self._terminal_marker(result_message, terminal_info)
+            if final_messages:
+                final_messages.append(marker)
+            else:
+                # Transcript read failed on an error terminal. Never replace
+                # the thread's stored messages with a lone marker — append the
+                # marker to whatever is already saved (or create the thread
+                # with just the marker on a failed very first turn). Saving
+                # also clears the advisory is_streaming flag.
+                final_messages = [*await self._load_thread_messages(session_id), marker]
 
         if final_messages:
             await self._save_thread_to_db(
@@ -871,7 +907,60 @@ class BrainAgentService:
                 cost_usd=result_message.total_cost_usd if hasattr(result_message, "total_cost_usd") else None,
                 num_turns=result_message.num_turns if hasattr(result_message, "num_turns") else 0,
             )
-        return final_messages
+        return PersistOutcome(messages=final_messages, terminal_info=terminal_info)
+
+    async def _load_thread_messages(self, session_id: str) -> List[Dict[str, Any]]:
+        """Best-effort read of a thread's stored messages (empty on any error)."""
+        try:
+            from app.models.agent_thread import AgentThread
+
+            result = await self.db.execute(
+                select(AgentThread.messages).where(AgentThread.id == session_id)
+            )
+            msgs = result.scalar_one_or_none()
+            return list(msgs) if msgs else []
+        except Exception as e:
+            logger.warning(
+                "brain_agent_thread_messages_read_failed",
+                session_id=session_id,
+                error=str(e),
+            )
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            return []
+
+    @staticmethod
+    def _terminal_marker(
+        result_message: Any, terminal_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Build the terminal marker appended as a thread's final message.
+
+        Shape notes (coordinated with both frontend twins):
+        - non-empty ``content`` is load-bearing: it adds assistant text so the
+          client's authText>=localText adoption logic takes the authoritative
+          list over its partial local copy;
+        - no ``toolCalls`` key, so the dedup and tool-result passes in
+          _convert_sdk_messages never touch it (it is appended after
+          conversion anyway);
+        - the marker survives only while it is the thread's tail — the next
+          successful turn rebuilds messages from the SDK transcript, which
+          never contained it. That is exactly the window where it matters.
+        """
+        return {
+            "id": f"terminal-{getattr(result_message, 'uuid', None) or uuid.uuid4()}",
+            "type": "assistant",
+            "content": terminal_info["reason_message"] or "The agent stopped unexpectedly.",
+            "timestamp": int(time.time() * 1000),
+            "terminal": {
+                "kind": terminal_info["kind"],
+                "subtype": terminal_info["subtype"],
+                "is_error": terminal_info["is_error"],
+                "terminal_reason": terminal_info["terminal_reason"],
+                "api_error_status": terminal_info["api_error_status"],
+            },
+        }
 
     async def _finish_orphaned_run(self, session: AgentSession, model: Optional[str] = None) -> None:
         """Consume a disconnected turn to completion and persist the result.
@@ -913,6 +1002,8 @@ class BrainAgentService:
                     session_id=session_id,
                     result_message=result_message,
                     model=model,
+                    session=session,
+                    detached=True,
                 )
 
             # Push any files the run produced to S3. There is no SSE consumer
