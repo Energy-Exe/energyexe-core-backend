@@ -371,8 +371,8 @@ from claude_agent_sdk import ResultMessage
 from app.services.brain_agent_service import AgentSession
 
 
-def _result_message(session_id="sdk-abc"):
-    return ResultMessage(
+def _result_message(session_id="sdk-abc", **overrides):
+    kwargs = dict(
         subtype="success",
         duration_ms=1200,
         duration_api_ms=1000,
@@ -380,6 +380,8 @@ def _result_message(session_id="sdk-abc"):
         num_turns=1,
         session_id=session_id,
     )
+    kwargs.update(overrides)
+    return ResultMessage(**kwargs)
 
 
 class _FakeClient:
@@ -421,9 +423,16 @@ def test_finish_orphaned_run_persists_and_clears_busy(monkeypatch):
 
     persisted = {}
 
-    async def _fake_persist(self, user_id, session_id, result_message, model=None):
-        persisted.update(user_id=user_id, session_id=session_id, result=result_message)
-        return [{"type": "user", "content": "long analysis"}]
+    async def _fake_persist(
+        self, user_id, session_id, result_message, model=None, session=None, detached=False
+    ):
+        persisted.update(
+            user_id=user_id, session_id=session_id, result=result_message, detached=detached
+        )
+        return PersistOutcome(
+            messages=[{"type": "user", "content": "long analysis"}],
+            terminal_info=derive_terminal_info(result_message),
+        )
 
     monkeypatch.setattr(BrainAgentService, "_persist_completed_run", _fake_persist)
     monkeypatch.setattr(BrainAgentService, "_scan_for_new_files", lambda self, s: [])
@@ -454,3 +463,434 @@ def test_finish_orphaned_run_survives_persist_failure(monkeypatch):
     # Must not raise, and must still clear busy state.
     asyncio.run(service._finish_orphaned_run(session))
     assert session.is_busy is False
+
+
+# ---------------------------------------------------------------------------
+# Terminal-info derivation (silent-kill fix): budget/turn/API kills must be
+# classified and never masquerade as clean completions.
+# ---------------------------------------------------------------------------
+
+from app.services.brain_agent_service import PersistOutcome, derive_terminal_info
+
+
+def test_terminal_info_budget_kill():
+    # Verified prod shape: budget kill carries no `result` text, only errors[].
+    rm = _result_message(
+        subtype="error_max_budget_usd",
+        is_error=True,
+        terminal_reason="budget_exhausted",
+        errors=["Reached maximum budget ($2)"],
+        total_cost_usd=2.04,
+    )
+    info = derive_terminal_info(rm)
+    assert info["kind"] == "budget_exhausted"
+    assert info["is_error"] is True
+    assert info["reason_message"]
+    assert "spending limit" in info["reason_message"]
+
+
+def test_terminal_info_max_turns():
+    rm = _result_message(
+        subtype="error_max_turns",
+        is_error=True,
+        terminal_reason="max_turns",
+        errors=["Reached maximum number of turns (25)"],
+    )
+    info = derive_terminal_info(rm)
+    assert info["kind"] == "max_turns"
+    assert "follow-up" in info["reason_message"]
+
+
+def test_terminal_info_api_error_masquerades_as_success():
+    # Regression trap: a post-retry 529 arrives as subtype="success" with
+    # is_error=True + api_error_status — classification must NOT branch on
+    # subtype alone.
+    rm = _result_message(subtype="success", is_error=True, api_error_status=529)
+    info = derive_terminal_info(rm)
+    assert info["kind"] == "api_error"
+    assert "overloaded" in info["reason_message"]
+
+    rm500 = _result_message(subtype="success", is_error=True, api_error_status=500)
+    assert derive_terminal_info(rm500)["kind"] == "api_error"
+    assert "500" in derive_terminal_info(rm500)["reason_message"]
+
+
+def test_terminal_info_interrupt_is_quiet_stopped():
+    rm = _result_message(is_error=False, terminal_reason="aborted_streaming")
+    info = derive_terminal_info(rm)
+    assert info["kind"] == "stopped"
+    assert info["is_error"] is False
+
+    rm_tools = _result_message(is_error=False, terminal_reason="aborted_tools")
+    assert derive_terminal_info(rm_tools)["kind"] == "stopped"
+
+
+def test_terminal_info_unknown_error_carries_first_error():
+    rm = _result_message(subtype="error_during_execution", is_error=True, errors=["boom"])
+    info = derive_terminal_info(rm)
+    assert info["kind"] == "unknown_error"
+    assert "boom" in info["reason_message"]
+
+
+def test_terminal_info_clean_success():
+    info = derive_terminal_info(_result_message(terminal_reason="completed"))
+    assert info["kind"] == "success"
+    assert info["reason_message"] is None
+    assert info["is_error"] is False
+
+
+def test_terminal_info_defensive_on_minimal_object():
+    # Lightweight fakes (and older SDKs) may lack the optional fields entirely.
+    info = derive_terminal_info(SimpleNamespace(subtype="success"))
+    assert info["kind"] == "success"
+    assert info["terminal_reason"] is None
+    assert info["errors"] is None
+
+
+def test_chat_result_event_carries_terminal_fields(monkeypatch, _isolated_sessions):
+    """A budget-killed run's `result` SSE event must explain itself."""
+    kill = _result_message(
+        subtype="error_max_budget_usd",
+        is_error=True,
+        terminal_reason="budget_exhausted",
+        errors=["Reached maximum budget ($2)"],
+        total_cost_usd=2.04,
+    )
+    fake_client = _FakeClient([kill])
+    session = AgentSession(
+        session_id="s-term",
+        user_id=1,
+        client=fake_client,
+        created_at=_time.time(),
+        last_activity=_time.time(),
+    )
+
+    async def _fake_get_or_create(self, user_id, session_id, *a, **kw):
+        BrainAgentService._sessions[session_id] = session
+        return session, False
+
+    async def _fake_persist(
+        self, user_id, session_id, result_message, model=None, session=None, detached=False
+    ):
+        return PersistOutcome(
+            messages=[{"type": "assistant", "content": "partial"}],
+            terminal_info=derive_terminal_info(result_message),
+        )
+
+    async def _fake_set_streaming(self, session_id, value):
+        return None
+
+    async def _fake_query(prompt):
+        return None
+
+    fake_client.query = _fake_query
+    monkeypatch.setattr(BrainAgentService, "_get_or_create_session", _fake_get_or_create)
+    monkeypatch.setattr(BrainAgentService, "_persist_completed_run", _fake_persist)
+    monkeypatch.setattr(BrainAgentService, "_set_thread_streaming", _fake_set_streaming)
+    monkeypatch.setattr(BrainAgentService, "_cleanup_stale_sessions", lambda self: None)
+
+    class _NoBudgetDB:
+        async def execute(self, *_a, **_kw):
+            return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+    async def _run():
+        service = BrainAgentService(db=_NoBudgetDB())
+        events = []
+        async for ev in service.chat(user_id=1, session_id="s-term", prompt="deep dive"):
+            events.append(ev)
+        return events
+
+    events = asyncio.run(_run())
+    result = next(e for e in events if e.event_type == "result")
+    # New terminal fields present…
+    assert result.data["kind"] == "budget_exhausted"
+    assert result.data["is_error"] is True
+    assert result.data["reason_message"]
+    assert result.data["terminal_reason"] == "budget_exhausted"
+    # …and the legacy keys unchanged.
+    assert result.data["session_id"] == "s-term"
+    assert result.data["cost_usd"] == 2.04
+    assert result.data["messages"] == [{"type": "assistant", "content": "partial"}]
+
+
+# ---------------------------------------------------------------------------
+# Honest persistence on error terminals (_persist_completed_run)
+# ---------------------------------------------------------------------------
+
+import app.services.brain_agent_service as _svc_mod
+
+
+def _budget_kill_result():
+    return _result_message(
+        subtype="error_max_budget_usd",
+        is_error=True,
+        terminal_reason="budget_exhausted",
+        errors=["Reached maximum budget ($2)"],
+        total_cost_usd=2.04,
+    )
+
+
+def _persist_harness(monkeypatch, transcript_messages, sleeps):
+    """Wire _persist_completed_run's collaborators to fakes; return saved dict."""
+    saved = {}
+
+    def _fake_get_session_messages(session_id, directory):
+        return list(transcript_messages)
+
+    async def _fake_save(
+        self, session_id, user_id, messages, model=None, cost_delta_usd=None, num_turns=0
+    ):
+        saved.update(session_id=session_id, messages=messages, cost_delta_usd=cost_delta_usd)
+        return None
+
+    async def _fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(_svc_mod, "get_session_messages", _fake_get_session_messages)
+    monkeypatch.setattr(BrainAgentService, "_save_thread_to_db", _fake_save)
+    monkeypatch.setattr(_svc_mod.asyncio, "sleep", _fake_sleep)
+    return saved
+
+
+def test_persist_error_terminal_appends_marker_without_waiting(monkeypatch):
+    # Transcript legitimately ends on a user-type entry (tool_result) after a
+    # budget kill — the persist must not spin waiting for an assistant tail.
+    sleeps = []
+    saved = _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", "deep question"), _sm("assistant", "a1", "working on it")],
+        sleeps,
+    )
+    # Make the converted list end on a user turn:
+    transcript = [_sm("assistant", "a1", "working on it"), _sm("user", "u2", "tool output")]
+    monkeypatch.setattr(_svc_mod, "get_session_messages", lambda session_id, directory: transcript)
+
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="s-err", result_message=_budget_kill_result()
+        )
+    )
+
+    assert sleeps == []  # zero retry sleeps on an error terminal
+    assert outcome.terminal_info["kind"] == "budget_exhausted"
+    tail = outcome.messages[-1]
+    assert tail["type"] == "assistant"
+    assert tail["terminal"]["kind"] == "budget_exhausted"
+    assert "spending limit" in tail["content"]
+    assert saved["messages"][-1] is tail  # marker was persisted
+
+
+def test_persist_success_with_tail_present_appends_no_marker(monkeypatch):
+    sleeps = []
+    saved = _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", "question"), _sm("assistant", "a1", "the answer")],
+        sleeps,
+    )
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="s-ok", result_message=_result_message()
+        )
+    )
+    assert sleeps == []
+    assert outcome.terminal_info["kind"] == "success"
+    assert all("terminal" not in m for m in outcome.messages)
+    assert saved["messages"] == outcome.messages
+
+
+def test_persist_success_missing_tail_still_retries(monkeypatch):
+    sleeps = []
+    _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", "question")],  # no assistant tail, ever
+        sleeps,
+    )
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="s-lag", result_message=_result_message()
+        )
+    )
+    assert len(sleeps) == 3  # 4 attempts, sleeps between them
+    assert outcome.terminal_info["kind"] == "success"
+
+
+def test_persist_error_terminal_with_failed_transcript_appends_to_stored(monkeypatch):
+    # get_session_messages raises → never wipe the thread; append the marker
+    # to what's already stored in the DB.
+    sleeps = []
+    saved = _persist_harness(monkeypatch, [], sleeps)
+
+    def _boom(session_id, directory):
+        raise RuntimeError("transcript gone")
+
+    monkeypatch.setattr(_svc_mod, "get_session_messages", _boom)
+
+    stored = [{"type": "user", "content": "original question"}]
+
+    async def _fake_load(self, session_id):
+        return list(stored)
+
+    monkeypatch.setattr(BrainAgentService, "_load_thread_messages", _fake_load)
+
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="s-gone", result_message=_budget_kill_result()
+        )
+    )
+    assert outcome.messages[0] == stored[0]  # existing messages preserved
+    assert outcome.messages[-1]["terminal"]["kind"] == "budget_exhausted"
+    assert saved["messages"] == outcome.messages
+
+
+def test_persist_stopped_marker_is_not_an_error(monkeypatch):
+    sleeps = []
+    _persist_harness(
+        monkeypatch,
+        [_sm("assistant", "a1", "partial"), _sm("user", "u2", "tool output")],
+        sleeps,
+    )
+    service = BrainAgentService(db=None)
+    rm = _result_message(is_error=False, terminal_reason="aborted_streaming")
+    outcome = asyncio.run(
+        service._persist_completed_run(user_id=1, session_id="s-stop", result_message=rm)
+    )
+    tail = outcome.messages[-1]
+    assert tail["terminal"]["kind"] == "stopped"
+    assert tail["terminal"]["is_error"] is False
+    assert tail["content"] == "You stopped this response."
+
+
+# ---------------------------------------------------------------------------
+# Budget semantics: dynamic SDK cap + per-run delta accounting
+# ---------------------------------------------------------------------------
+
+from app.services.brain_agent_service import PROFILES, compute_session_budget
+
+
+def test_no_profile_declares_a_static_sdk_budget():
+    # Regression trap: the SDK's max_budget_usd is process-cumulative, so a
+    # static per-profile value silently caps the whole conversation (the $2
+    # client bug). The SDK cap must only ever be computed at session creation.
+    for name, profile in PROFILES.items():
+        assert "max_budget_usd" not in profile, name
+        assert profile["max_thread_budget_usd"] > 0, name
+        assert profile["min_session_budget_usd"] > 0, name
+    assert PROFILES["client"]["max_thread_budget_usd"] <= PROFILES["admin"]["max_thread_budget_usd"]
+    assert PROFILES["client"]["min_session_budget_usd"] <= PROFILES["admin"]["min_session_budget_usd"]
+
+
+def test_compute_session_budget_table():
+    client = PROFILES["client"]  # cap 10, floor 1
+    assert compute_session_budget(client, None) == 10.0
+    assert compute_session_budget(client, 0) == 10.0
+    assert compute_session_budget(client, 4.5) == 5.5
+    assert compute_session_budget(client, 9.5) == 1.0  # floored
+    assert compute_session_budget(client, 12.0) == 1.0  # already over — floor, guard refuses anyway
+    from decimal import Decimal
+
+    assert compute_session_budget(client, Decimal("2.5")) == 7.5
+
+
+def _session_for_delta():
+    return AgentSession(
+        session_id="s-cost",
+        user_id=1,
+        client=None,
+        created_at=_time.time(),
+        last_activity=_time.time(),
+    )
+
+
+def test_take_cost_delta_chain_and_recreation():
+    session = _session_for_delta()
+    take = BrainAgentService._take_cost_delta
+    assert take(session, _result_message(total_cost_usd=1.0)) == 1.0
+    assert take(session, _result_message(total_cost_usd=1.6)) == pytest.approx(0.6)
+    # Recreation: fresh AgentSession = fresh CLI counter — delta restarts.
+    fresh = _session_for_delta()
+    assert take(fresh, _result_message(total_cost_usd=0.4)) == pytest.approx(0.4)
+    # No cost reported → no delta.
+    assert take(fresh, _result_message()) is None
+    # Impossible negative (should never happen) clamps to 0.
+    assert take(fresh, _result_message(total_cost_usd=0.1)) == 0.0
+
+
+def test_save_thread_accumulates_cost_delta():
+    from decimal import Decimal
+
+    thread = SimpleNamespace(
+        messages=[], message_count=0, is_streaming=True, title="t",
+        total_cost_usd=Decimal("2.0"), total_turns=3,
+    )
+
+    class _ThreadDB:
+        def __init__(self):
+            self.committed = False
+
+        async def execute(self, *_a, **_kw):
+            return SimpleNamespace(scalar_one_or_none=lambda: thread)
+
+        async def commit(self):
+            self.committed = True
+
+        async def rollback(self):
+            pass
+
+    service = BrainAgentService(db=_ThreadDB())
+    total = asyncio.run(
+        service._save_thread_to_db(
+            session_id="s", user_id=1,
+            messages=[{"type": "user", "content": "q"}],
+            cost_delta_usd=0.6, num_turns=2,
+        )
+    )
+    assert thread.total_cost_usd == Decimal("2.6")
+    assert total == pytest.approx(2.6)
+    assert thread.total_turns == 5
+    assert thread.is_streaming is False
+
+
+def test_persist_across_recreation_accumulates_not_overwrites(monkeypatch):
+    """The exact prod undercount bug: two session processes, one thread."""
+    sleeps = []
+    _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", "q"), _sm("assistant", "a1", "answer")],
+        sleeps,
+    )
+
+    totals = {"value": 0.0}
+
+    async def _accumulating_save(
+        self, session_id, user_id, messages, model=None, cost_delta_usd=None, num_turns=0
+    ):
+        if cost_delta_usd is not None:
+            totals["value"] += cost_delta_usd
+        return totals["value"]
+
+    monkeypatch.setattr(BrainAgentService, "_save_thread_to_db", _accumulating_save)
+
+    service = BrainAgentService(db=None)
+    # Process 1: one turn costing 1.0.
+    s1 = _session_for_delta()
+    out1 = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="thread-x",
+            result_message=_result_message(total_cost_usd=1.0), session=s1,
+        )
+    )
+    # Process 2 (recreation): its cumulative counter restarts at 0.7.
+    s2 = _session_for_delta()
+    out2 = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="thread-x",
+            result_message=_result_message(total_cost_usd=0.7), session=s2,
+        )
+    )
+    assert out1.cost_delta_usd == 1.0
+    assert out2.cost_delta_usd == pytest.approx(0.7)
+    assert out2.thread_total_cost_usd == pytest.approx(1.7)  # not 0.7

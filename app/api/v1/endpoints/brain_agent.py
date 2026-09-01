@@ -233,10 +233,20 @@ async def end_session(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """End an agent session and clean up resources."""
+    """End an agent session and clean up resources.
+
+    A session with a live (or detached, still-draining) run is NOT destroyed —
+    the response carries busy=true and the TTL cleanup reclaims it later. Kept
+    HTTP 200 (not 409): both frontends fire-and-forget this DELETE on thread
+    switches, and a non-OK status would surface spurious error toasts.
+    """
     service = BrainAgentService(db)
-    success = await service.end_session(session_id, current_user.id)
-    return {"success": success, "session_id": session_id}
+    outcome = await service.end_session(session_id, current_user.id)
+    return {
+        "success": outcome["ended"],
+        "session_id": session_id,
+        "busy": outcome["busy"],
+    }
 
 
 def _validated_session_id(session_id: str) -> str:
@@ -484,7 +494,13 @@ async def upsert_thread(
         thread.model = body.model
         thread.messages = body.messages
         thread.message_count = body.message_count
-        thread.total_cost_usd = body.total_cost_usd
+        # Never-decrease: the server accumulates per-run cost deltas onto this
+        # column, while the frontends PUT the SDK's process-cumulative figure
+        # (which resets on session recreation) — letting that assignment win
+        # would clobber the accumulated truth. Frontends should stop sending
+        # it once both twins read thread_total_cost_usd from the result event.
+        if body.total_cost_usd is not None:
+            thread.total_cost_usd = max(thread.total_cost_usd or 0, body.total_cost_usd)
         thread.total_turns = body.total_turns
     else:
         thread = AgentThread(

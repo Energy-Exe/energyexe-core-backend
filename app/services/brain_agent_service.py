@@ -70,20 +70,38 @@ DETACH_MAX_SECONDS = 20 * 60
 #   - admin: existing behavior (unrestricted, model picks honored)
 #   - client: same capability envelope as admin; uses a client-flavoured system
 #     prompt with portfolio-as-anchor framing.
+#
+# Budget semantics (verified against the bundled CLI, SDK 0.2.128): the SDK's
+# max_budget_usd is compared against a PROCESS-GLOBAL cumulative spend counter
+# that never resets across query() calls — it is a whole-conversation cap on
+# the live CLI process, NOT a per-turn ceiling. (max_turns, by contrast, IS
+# per-query: each user message gets a fresh allowance.) A static per-profile
+# max_budget_usd therefore silently caps the whole thread — that bug shipped:
+# the old "per-turn" $2 client value killed every deep investigation at ~$2
+# total. The profile now declares only the thread ceiling; _create_session
+# hands the SDK the REMAINING amount (ceiling − spent so far) so the SDK cap
+# and the app-side chat() guard express one consistent ceiling.
 PROFILES: Dict[str, Dict[str, Any]] = {
     "admin": {
         "system_prompt_file": "brain_agent_system.md",
         "model_default": None,  # falls back to settings.BRAIN_MODEL
         "model_locked": False,
+        # Per query() — a single user message needing more than 25 tool
+        # round-trips ends with kind="max_turns" (recoverable via a follow-up).
         "max_turns": 25,
-        # Per-turn ceiling enforced by the SDK (stops a single runaway turn).
-        "max_budget_usd": 5.0,
-        # Cumulative per-thread ceiling enforced app-side in chat() — refuses a
-        # new turn once a long conversation has spent this much.
+        # Cumulative per-thread ceiling. Enforced app-side in chat() (refuses a
+        # new turn once the thread has spent this much) AND handed to the SDK
+        # at session creation as the remaining amount (see above).
         "max_thread_budget_usd": 50.0,
-        # API-side token budget. Unlike max_budget_usd (a client-side hard stop
-        # that can cut an answer off mid-sentence), this is passed to the model
-        # so it knows how much room is left and wraps up on its own.
+        # Floor for the SDK cap handed to a nearly-exhausted thread's fresh CLI
+        # process, so a recreated session can still finish a wrap-up turn. The
+        # thread can overshoot its ceiling by at most this much per recreated
+        # session; unbounded stacking is impossible because the chat() guard
+        # stops spawning processes once spent >= ceiling.
+        "min_session_budget_usd": 5.0,
+        # API-side token budget. Unlike the SDK's dollar cap (a client-side
+        # hard stop that can cut an answer off mid-sentence), this is passed to
+        # the model so it knows how much room is left and wraps up on its own.
         "task_budget_tokens": 500_000,
         # Stream the model's reasoning to the UI. Admin only: thinking is
         # model-authored prose that can name internal tables, which the client
@@ -96,13 +114,28 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "model_default": None,
         "model_locked": False,
         "max_turns": 25,
-        "max_budget_usd": 2.0,
-        "max_thread_budget_usd": 20.0,
+        # $10 per conversation (2026-09-01 decision) — ~5x the old effective
+        # cap; revisit with brain_agent_run_finished cost telemetry.
+        "max_thread_budget_usd": 10.0,
+        "min_session_budget_usd": 1.0,
         "task_budget_tokens": 250_000,
         "stream_thinking": False,
         "wrap_user_input": False,
     },
 }
+
+
+def compute_session_budget(profile: Dict[str, Any], spent: Any) -> float:
+    """SDK max_budget_usd for a fresh CLI process: remaining thread budget.
+
+    Sessions map 1:1 to threads, so thread_total = spent_at_creation +
+    process_total and the SDK kills when the thread crosses the ceiling.
+    Floored at min_session_budget_usd so a nearly-exhausted thread's recreated
+    session can still finish a wrap-up turn (bounded overshoot; the chat()
+    guard refuses turns once spent >= ceiling, so no doomed process spawns).
+    """
+    remaining = profile["max_thread_budget_usd"] - float(spent or 0)
+    return max(remaining, profile["min_session_budget_usd"])
 
 
 def _get_profile(source: Optional[str]) -> Dict[str, Any]:
@@ -117,6 +150,75 @@ class SSEEvent:
     # text_delta, thinking_delta, tool_use, tool_result, system, result, error, image, file
     event_type: str
     data: Dict[str, Any]
+
+
+def derive_terminal_info(result_message: Any) -> Dict[str, Any]:
+    """Classify how a run ended, from the SDK's ResultMessage.
+
+    The SDK's terminal shapes are asymmetric (verified against the bundled CLI):
+    a budget kill is ``subtype="error_max_budget_usd"`` but an unrecoverable API
+    failure (e.g. 529 after the CLI's own retries) arrives as
+    ``subtype="success"`` with ``is_error=True`` and ``api_error_status`` set —
+    so classification MUST branch on ``is_error``/``terminal_reason`` first and
+    never on ``subtype`` alone.
+
+    Returns the verbatim SDK fields plus two derived ones:
+    - ``kind``: the ONE discriminator frontends branch on —
+      success | stopped | budget_exhausted | max_turns | api_error | unknown_error
+    - ``reason_message``: server-derived human copy (None for success)
+    """
+    subtype = getattr(result_message, "subtype", None)
+    is_error = bool(getattr(result_message, "is_error", False))
+    terminal_reason = getattr(result_message, "terminal_reason", None)
+    api_error_status = getattr(result_message, "api_error_status", None)
+    errors = getattr(result_message, "errors", None)
+
+    if terminal_reason in ("aborted_streaming", "aborted_tools"):
+        kind = "stopped"
+        reason_message = "You stopped this response."
+    elif subtype == "error_max_budget_usd" or terminal_reason == "budget_exhausted":
+        kind = "budget_exhausted"
+        reason_message = (
+            "This response stopped because the conversation reached its "
+            "spending limit. Start a new chat to continue."
+        )
+    elif subtype == "error_max_turns" or terminal_reason == "max_turns":
+        kind = "max_turns"
+        reason_message = (
+            "The agent reached the maximum number of steps for a single "
+            "message. Everything so far is saved — send a follow-up message "
+            "to continue."
+        )
+    elif is_error and api_error_status:
+        kind = "api_error"
+        if api_error_status == 529:
+            reason_message = (
+                "The AI service is temporarily overloaded. Please try again "
+                "in a moment."
+            )
+        else:
+            reason_message = (
+                f"The AI service is temporarily unavailable "
+                f"(HTTP {api_error_status}). Please try again in a moment."
+            )
+    elif is_error:
+        kind = "unknown_error"
+        reason_message = "The agent stopped unexpectedly."
+        if errors:
+            reason_message = f"{reason_message} ({errors[0]})"
+    else:
+        kind = "success"
+        reason_message = None
+
+    return {
+        "subtype": subtype,
+        "is_error": is_error,
+        "terminal_reason": terminal_reason,
+        "api_error_status": api_error_status,
+        "errors": list(errors) if errors else None,
+        "kind": kind,
+        "reason_message": reason_message,
+    }
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
@@ -159,6 +261,22 @@ class AgentSession:
     current_prompt: Optional[str] = None  # raw prompt of the live run (old-client dedup)
     run_started_at: float = 0.0  # staleness TTL for the busy guard
     detach_task: Optional["asyncio.Task"] = None  # background consumer of an orphaned run
+    # ResultMessage.total_cost_usd is cumulative per CLI process — per-turn cost
+    # is the diff between consecutive results. Fresh per AgentSession, so the
+    # chain resets exactly when the CLI's own counter does (session recreation).
+    last_result_total_cost_usd: Optional[float] = None
+
+
+@dataclass
+class PersistOutcome:
+    """What _persist_completed_run saved, for the caller's result event."""
+
+    messages: List[Dict[str, Any]]
+    terminal_info: Dict[str, Any]
+    # This run's spend (diff of cumulative ResultMessage costs) and the
+    # thread's accumulated total after saving; None when unknown.
+    cost_delta_usd: Optional[float] = None
+    thread_total_cost_usd: Optional[float] = None
 
 
 class BrainAgentService:
@@ -244,10 +362,12 @@ class BrainAgentService:
             )
 
         try:
-            # Cumulative per-thread budget guard (complements the SDK's per-turn
-            # max_budget_usd). Refuse a new turn once the thread's accumulated
-            # cost crosses the ceiling, so a long conversation can't rack up
-            # unbounded spend. Best-effort — never block a turn on a read error.
+            # Cumulative per-thread budget guard — the same ceiling the SDK
+            # enforces mid-turn (its cap is set to the remaining amount at
+            # session creation; see compute_session_budget). This pre-turn
+            # check is the UX-friendly gate: it refuses with a clear message
+            # BEFORE spawning a doomed CLI process. Best-effort — never block
+            # a turn on a read error.
             thread_budget = profile.get("max_thread_budget_usd")
             if thread_budget is not None and session_id:
                 try:
@@ -276,6 +396,7 @@ class BrainAgentService:
                                     f"(${thread_budget:.2f}). Start a new chat to continue."
                                 ),
                                 "code": "thread_budget_exceeded",
+                                "kind": "budget_exhausted",
                             },
                         )
                         return
@@ -399,14 +520,20 @@ class BrainAgentService:
                         break
 
                 if got_result and result_message:
-                    final_messages = await self._persist_completed_run(
+                    outcome = await self._persist_completed_run(
                         user_id=user_id,
                         session_id=session_id,
                         result_message=result_message,
                         model=model,
+                        session=session,
+                        detached=False,
                     )
+                    terminal_info = outcome.terminal_info
+                    final_messages = outcome.messages
 
-                    # Yield result with authoritative messages
+                    # Yield result with authoritative messages. The legacy keys
+                    # (num_turns/duration_ms/cost_usd/session_id/messages) are
+                    # load-bearing for both frontend twins — additive only.
                     yield SSEEvent(
                         event_type="result",
                         data={
@@ -415,6 +542,15 @@ class BrainAgentService:
                             "cost_usd": result_message.total_cost_usd if hasattr(result_message, "total_cost_usd") else None,
                             "session_id": session_id,
                             "messages": final_messages,
+                            "subtype": terminal_info["subtype"],
+                            "is_error": terminal_info["is_error"],
+                            "terminal_reason": terminal_info["terminal_reason"],
+                            "api_error_status": terminal_info["api_error_status"],
+                            "errors": terminal_info["errors"],
+                            "kind": terminal_info["kind"],
+                            "reason_message": terminal_info["reason_message"],
+                            "cost_delta_usd": outcome.cost_delta_usd,
+                            "thread_total_cost_usd": outcome.thread_total_cost_usd,
                         },
                     )
                 else:
@@ -422,6 +558,21 @@ class BrainAgentService:
                     logger.warning(
                         "brain_agent_stream_ended_without_result",
                         session_id=session_id,
+                    )
+                    logger.info(
+                        "brain_agent_run_finished",
+                        session_id=session_id,
+                        user_id=user_id,
+                        source=source,
+                        detached=False,
+                        subtype="incomplete",
+                        is_error=True,
+                        terminal_reason="stream_ended_without_result",
+                        api_error_status=None,
+                        kind="unknown_error",
+                        num_turns=0,
+                        duration_ms=0,
+                        process_total_cost_usd=None,
                     )
                     await self._set_thread_streaming(session_id, False)
                     yield SSEEvent(
@@ -432,6 +583,16 @@ class BrainAgentService:
                             "cost_usd": None,
                             "session_id": session_id,
                             "incomplete": True,
+                            "subtype": "incomplete",
+                            "is_error": True,
+                            "terminal_reason": "stream_ended_without_result",
+                            "api_error_status": None,
+                            "errors": None,
+                            "kind": "unknown_error",
+                            "reason_message": (
+                                "The connection to the agent ended before it "
+                                "finished. The conversation so far has been saved."
+                            ),
                         },
                     )
 
@@ -464,7 +625,7 @@ class BrainAgentService:
                 await self._set_thread_streaming(session_id, False)
             yield SSEEvent(
                 event_type="error",
-                data={"message": str(e), "code": "agent_error"},
+                data={"message": str(e), "code": "agent_error", "kind": "unknown_error"},
             )
         else:
             if source == "client":
@@ -640,10 +801,19 @@ class BrainAgentService:
         user_id: int,
         messages: List[Dict[str, Any]],
         model: Optional[str] = None,
-        cost_usd: Any = None,
+        cost_delta_usd: Optional[float] = None,
         num_turns: int = 0,
-    ):
-        """Save authoritative messages to the agent thread in DB (create or update)."""
+    ) -> Optional[float]:
+        """Save authoritative messages to the agent thread in DB (create or update).
+
+        ``cost_delta_usd`` is this run's spend (the diff of consecutive
+        cumulative ResultMessage costs) and is ACCUMULATED onto the thread —
+        assigning the SDK's cumulative figure here is the bug that undercounted
+        every thread across session recreations. Returns the thread's new
+        total cost (None if unknown or the save failed).
+        """
+        from decimal import Decimal
+
         from app.models.agent_thread import AgentThread
 
         try:
@@ -658,14 +828,20 @@ class BrainAgentService:
             if first_user:
                 title = first_user.get("content", "")[:80]
 
+            delta = (
+                Decimal(str(round(cost_delta_usd, 4)))
+                if cost_delta_usd is not None
+                else None
+            )
+
             if thread:
                 thread.messages = messages
                 thread.message_count = len(messages)
                 thread.is_streaming = False
                 if not thread.title and title:
                     thread.title = title
-                if cost_usd is not None:
-                    thread.total_cost_usd = cost_usd
+                if delta is not None:
+                    thread.total_cost_usd = (thread.total_cost_usd or Decimal("0")) + delta
                 if num_turns:
                     thread.total_turns = (thread.total_turns or 0) + num_turns
             else:
@@ -677,7 +853,7 @@ class BrainAgentService:
                     messages=messages,
                     message_count=len(messages),
                     is_streaming=False,
-                    total_cost_usd=cost_usd,
+                    total_cost_usd=delta,
                     total_turns=num_turns or 0,
                 )
                 self.db.add(thread)
@@ -688,12 +864,14 @@ class BrainAgentService:
                 thread_id=session_id,
                 message_count=len(messages),
             )
+            return float(thread.total_cost_usd) if thread.total_cost_usd is not None else None
         except Exception as e:
             logger.error("brain_agent_save_thread_error", error=str(e), thread_id=session_id)
             try:
                 await self.db.rollback()
             except Exception:
                 pass
+            return None
 
     async def _persist_completed_run(
         self,
@@ -701,12 +879,32 @@ class BrainAgentService:
         session_id: str,
         result_message: Any,
         model: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        session: Optional[AgentSession] = None,
+        detached: bool = False,
+    ) -> PersistOutcome:
         """Read the authoritative SDK transcript for a finished run and save it.
 
         Shared by the live chat() path and the detached (client-disconnected)
-        path. Returns the converted messages ([] if the transcript read failed).
+        path. On a non-success terminal (budget kill, turn cap, API failure,
+        interrupt) a terminal marker message is appended so a reloaded thread
+        explains why the run ended instead of trailing off after a tool call.
         """
+        terminal_info = derive_terminal_info(result_message)
+        logger.info(
+            "brain_agent_run_finished",
+            session_id=session_id,
+            user_id=user_id,
+            detached=detached,
+            subtype=terminal_info["subtype"],
+            is_error=terminal_info["is_error"],
+            terminal_reason=terminal_info["terminal_reason"],
+            api_error_status=terminal_info["api_error_status"],
+            kind=terminal_info["kind"],
+            num_turns=getattr(result_message, "num_turns", 0),
+            duration_ms=getattr(result_message, "duration_ms", 0),
+            process_total_cost_usd=getattr(result_message, "total_cost_usd", None),
+        )
+
         # Use the SDK's internal session_id (from ResultMessage), NOT our
         # session_id — they are different.
         sdk_session_id = (
@@ -716,12 +914,14 @@ class BrainAgentService:
         )
         work_dir = Path(f"/tmp/brain-agent/{user_id}/{session_id}")
         final_messages: List[Dict[str, Any]] = []
-        # The CLI flushes the turn's assistant entry to the transcript file
-        # slightly AFTER emitting the ResultMessage, so an immediate read can
-        # miss the reply we just streamed (verified on staging: the detached
-        # save persisted only the user turn). Retry briefly until the
-        # transcript ends with an assistant message.
-        for attempt in range(8):
+        # The CLI awaits the final transcript append (assistant tail included)
+        # BEFORE emitting the ResultMessage, so on a clean success the tail is
+        # normally already there — the short retry below only covers filesystem
+        # lag. On an error terminal the transcript legitimately ends on a
+        # tool_result (user-type) entry, so waiting for an assistant tail would
+        # spin for nothing: read once and move on.
+        attempts = 4 if terminal_info["kind"] == "success" else 1
+        for attempt in range(attempts):
             try:
                 sdk_messages = get_session_messages(
                     session_id=sdk_session_id,
@@ -733,24 +933,120 @@ class BrainAgentService:
                 final_messages = []
             if final_messages and final_messages[-1].get("type") == "assistant":
                 break
-            await asyncio.sleep(0.75)
+            if attempt < attempts - 1:
+                await asyncio.sleep(0.5)
         else:
-            logger.warning(
-                "brain_agent_transcript_missing_assistant_tail",
-                session_id=session_id,
-                message_count=len(final_messages),
-            )
+            if terminal_info["kind"] == "success":
+                logger.warning(
+                    "brain_agent_transcript_missing_assistant_tail",
+                    session_id=session_id,
+                    message_count=len(final_messages),
+                    kind=terminal_info["kind"],
+                    terminal_reason=terminal_info["terminal_reason"],
+                )
 
+        if terminal_info["kind"] != "success":
+            marker = self._terminal_marker(result_message, terminal_info)
+            if final_messages:
+                final_messages.append(marker)
+            else:
+                # Transcript read failed on an error terminal. Never replace
+                # the thread's stored messages with a lone marker — append the
+                # marker to whatever is already saved (or create the thread
+                # with just the marker on a failed very first turn). Saving
+                # also clears the advisory is_streaming flag.
+                final_messages = [*await self._load_thread_messages(session_id), marker]
+
+        cost_delta = self._take_cost_delta(session, result_message)
+        thread_total: Optional[float] = None
         if final_messages:
-            await self._save_thread_to_db(
+            thread_total = await self._save_thread_to_db(
                 session_id=session_id,
                 user_id=user_id,
                 messages=final_messages,
                 model=model,
-                cost_usd=result_message.total_cost_usd if hasattr(result_message, "total_cost_usd") else None,
+                cost_delta_usd=cost_delta,
                 num_turns=result_message.num_turns if hasattr(result_message, "num_turns") else 0,
             )
-        return final_messages
+        return PersistOutcome(
+            messages=final_messages,
+            terminal_info=terminal_info,
+            cost_delta_usd=cost_delta,
+            thread_total_cost_usd=thread_total,
+        )
+
+    @staticmethod
+    def _take_cost_delta(session: Optional[AgentSession], result_message: Any) -> Optional[float]:
+        """This run's spend: diff of consecutive cumulative ResultMessage costs.
+
+        Advances the session's marker. The clamp guards impossible negatives.
+        NOTE: _interrupt_and_drain deliberately does NOT advance the marker
+        when it swallows a superseded run's ResultMessage — that run's spend
+        stays in the CLI's counter and folds into the next persisted turn's
+        delta, so it is still attributed to the thread (the one loss case is a
+        drained run followed by session destruction with no further turn).
+        """
+        cur = getattr(result_message, "total_cost_usd", None)
+        if cur is None:
+            return None
+        if session is None:
+            return float(cur)
+        delta = max(float(cur) - (session.last_result_total_cost_usd or 0.0), 0.0)
+        session.last_result_total_cost_usd = float(cur)
+        return delta
+
+    async def _load_thread_messages(self, session_id: str) -> List[Dict[str, Any]]:
+        """Best-effort read of a thread's stored messages (empty on any error)."""
+        try:
+            from app.models.agent_thread import AgentThread
+
+            result = await self.db.execute(
+                select(AgentThread.messages).where(AgentThread.id == session_id)
+            )
+            msgs = result.scalar_one_or_none()
+            return list(msgs) if msgs else []
+        except Exception as e:
+            logger.warning(
+                "brain_agent_thread_messages_read_failed",
+                session_id=session_id,
+                error=str(e),
+            )
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            return []
+
+    @staticmethod
+    def _terminal_marker(
+        result_message: Any, terminal_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Build the terminal marker appended as a thread's final message.
+
+        Shape notes (coordinated with both frontend twins):
+        - non-empty ``content`` is load-bearing: it adds assistant text so the
+          client's authText>=localText adoption logic takes the authoritative
+          list over its partial local copy;
+        - no ``toolCalls`` key, so the dedup and tool-result passes in
+          _convert_sdk_messages never touch it (it is appended after
+          conversion anyway);
+        - the marker survives only while it is the thread's tail — the next
+          successful turn rebuilds messages from the SDK transcript, which
+          never contained it. That is exactly the window where it matters.
+        """
+        return {
+            "id": f"terminal-{getattr(result_message, 'uuid', None) or uuid.uuid4()}",
+            "type": "assistant",
+            "content": terminal_info["reason_message"] or "The agent stopped unexpectedly.",
+            "timestamp": int(time.time() * 1000),
+            "terminal": {
+                "kind": terminal_info["kind"],
+                "subtype": terminal_info["subtype"],
+                "is_error": terminal_info["is_error"],
+                "terminal_reason": terminal_info["terminal_reason"],
+                "api_error_status": terminal_info["api_error_status"],
+            },
+        }
 
     async def _finish_orphaned_run(self, session: AgentSession, model: Optional[str] = None) -> None:
         """Consume a disconnected turn to completion and persist the result.
@@ -792,6 +1088,8 @@ class BrainAgentService:
                     session_id=session_id,
                     result_message=result_message,
                     model=model,
+                    session=session,
+                    detached=True,
                 )
 
             # Push any files the run produced to S3. There is no SSE consumer
@@ -865,14 +1163,27 @@ class BrainAgentService:
                 logger.error("brain_agent_interrupt_error", error=str(e))
         return False
 
-    async def end_session(self, session_id: str, user_id: int) -> bool:
-        """End and clean up a session. Validates session ownership."""
+    async def end_session(self, session_id: str, user_id: int) -> Dict[str, bool]:
+        """End and clean up a session. Validates session ownership.
+
+        A busy session (live run, or a detached run still draining) is left
+        alone: the DELETE from a thread switch is resource cleanup, not intent
+        to kill the answer, and _destroy_session rmtree's the sandbox the
+        run's CLI subprocess, transcript read and output files still need.
+        The TTL cleanup reclaims the session once the run finishes and goes
+        idle — no leak.
+        """
         session = self._sessions.get(session_id)
-        if session and session.user_id == user_id:
-            self._sessions.pop(session_id, None)
-            await self._destroy_session(session)
-            return True
-        return False
+        if not session or session.user_id != user_id:
+            return {"ended": False, "busy": False}
+        if session.is_busy or (
+            session.detach_task is not None and not session.detach_task.done()
+        ):
+            logger.info("brain_agent_end_session_deferred_busy", session_id=session_id)
+            return {"ended": False, "busy": True}
+        self._sessions.pop(session_id, None)
+        await self._destroy_session(session)
+        return {"ended": True, "busy": False}
 
     def list_sessions(self, user_id: int) -> list:
         """List active sessions for a user."""
@@ -995,6 +1306,34 @@ class BrainAgentService:
 
         settings = get_settings()
         profile = _get_profile(source)
+
+        # Dynamic SDK budget: the CLI compares max_budget_usd against a
+        # process-global cumulative spend, so hand this fresh process only
+        # what the thread has left (fail-open to the full ceiling — the
+        # chat() guard already refused truly exhausted threads).
+        spent = None
+        try:
+            from app.models.agent_thread import AgentThread
+
+            spent = (
+                await self.db.execute(
+                    select(AgentThread.total_cost_usd).where(AgentThread.id == session_id)
+                )
+            ).scalar_one_or_none()
+        except Exception as exc:
+            logger.warning(
+                "brain_agent_session_budget_read_failed",
+                session_id=session_id,
+                error=str(exc),
+            )
+        session_budget = compute_session_budget(profile, spent)
+        logger.info(
+            "brain_agent_session_budget",
+            session_id=session_id,
+            spent=float(spent) if spent is not None else 0.0,
+            thread_cap=profile["max_thread_budget_usd"],
+            session_budget=session_budget,
+        )
 
         # Resolve source code repo paths (for read-only code access).
         # EPR-59: the client surface gets NO codebase access — clients must not
@@ -1156,7 +1495,7 @@ class BrainAgentService:
             cwd=work_dir,
             add_dirs=repo_dirs_str,
             max_turns=profile["max_turns"],
-            max_budget_usd=profile["max_budget_usd"],
+            max_budget_usd=session_budget,
             task_budget={"total": profile["task_budget_tokens"]},
             permission_mode="bypassPermissions",
             model=resolved_model,
@@ -1195,6 +1534,11 @@ class BrainAgentService:
                 # the helper isn't seeded then either).
                 "SCADA_SILVER_URI": settings.SCADA_SILVER_URI if scada_enabled else "",
                 "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "1200000",  # 20 min (was 10)
+                # Raise the CLI's API retry count (default ~10, hard clamp 15).
+                # A 529-overload storm then costs extra in-outage latency
+                # instead of killing the run; the terminal kind="api_error"
+                # mapping covers the truly unrecoverable case.
+                "CLAUDE_CODE_MAX_RETRIES": "15",
                 "CLAUDECODE": "",  # Unset to prevent nested session detection
             },
         )
