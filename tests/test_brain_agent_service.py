@@ -637,8 +637,11 @@ def _persist_harness(monkeypatch, transcript_messages, sleeps):
     def _fake_get_session_messages(session_id, directory):
         return list(transcript_messages)
 
-    async def _fake_save(self, session_id, user_id, messages, model=None, cost_usd=None, num_turns=0):
-        saved.update(session_id=session_id, messages=messages, cost_usd=cost_usd)
+    async def _fake_save(
+        self, session_id, user_id, messages, model=None, cost_delta_usd=None, num_turns=0
+    ):
+        saved.update(session_id=session_id, messages=messages, cost_delta_usd=cost_delta_usd)
+        return None
 
     async def _fake_sleep(seconds):
         sleeps.append(seconds)
@@ -759,3 +762,135 @@ def test_persist_stopped_marker_is_not_an_error(monkeypatch):
     assert tail["terminal"]["kind"] == "stopped"
     assert tail["terminal"]["is_error"] is False
     assert tail["content"] == "You stopped this response."
+
+
+# ---------------------------------------------------------------------------
+# Budget semantics: dynamic SDK cap + per-run delta accounting
+# ---------------------------------------------------------------------------
+
+from app.services.brain_agent_service import PROFILES, compute_session_budget
+
+
+def test_no_profile_declares_a_static_sdk_budget():
+    # Regression trap: the SDK's max_budget_usd is process-cumulative, so a
+    # static per-profile value silently caps the whole conversation (the $2
+    # client bug). The SDK cap must only ever be computed at session creation.
+    for name, profile in PROFILES.items():
+        assert "max_budget_usd" not in profile, name
+        assert profile["max_thread_budget_usd"] > 0, name
+        assert profile["min_session_budget_usd"] > 0, name
+    assert PROFILES["client"]["max_thread_budget_usd"] <= PROFILES["admin"]["max_thread_budget_usd"]
+    assert PROFILES["client"]["min_session_budget_usd"] <= PROFILES["admin"]["min_session_budget_usd"]
+
+
+def test_compute_session_budget_table():
+    client = PROFILES["client"]  # cap 10, floor 1
+    assert compute_session_budget(client, None) == 10.0
+    assert compute_session_budget(client, 0) == 10.0
+    assert compute_session_budget(client, 4.5) == 5.5
+    assert compute_session_budget(client, 9.5) == 1.0  # floored
+    assert compute_session_budget(client, 12.0) == 1.0  # already over — floor, guard refuses anyway
+    from decimal import Decimal
+
+    assert compute_session_budget(client, Decimal("2.5")) == 7.5
+
+
+def _session_for_delta():
+    return AgentSession(
+        session_id="s-cost",
+        user_id=1,
+        client=None,
+        created_at=_time.time(),
+        last_activity=_time.time(),
+    )
+
+
+def test_take_cost_delta_chain_and_recreation():
+    session = _session_for_delta()
+    take = BrainAgentService._take_cost_delta
+    assert take(session, _result_message(total_cost_usd=1.0)) == 1.0
+    assert take(session, _result_message(total_cost_usd=1.6)) == pytest.approx(0.6)
+    # Recreation: fresh AgentSession = fresh CLI counter — delta restarts.
+    fresh = _session_for_delta()
+    assert take(fresh, _result_message(total_cost_usd=0.4)) == pytest.approx(0.4)
+    # No cost reported → no delta.
+    assert take(fresh, _result_message()) is None
+    # Impossible negative (should never happen) clamps to 0.
+    assert take(fresh, _result_message(total_cost_usd=0.1)) == 0.0
+
+
+def test_save_thread_accumulates_cost_delta():
+    from decimal import Decimal
+
+    thread = SimpleNamespace(
+        messages=[], message_count=0, is_streaming=True, title="t",
+        total_cost_usd=Decimal("2.0"), total_turns=3,
+    )
+
+    class _ThreadDB:
+        def __init__(self):
+            self.committed = False
+
+        async def execute(self, *_a, **_kw):
+            return SimpleNamespace(scalar_one_or_none=lambda: thread)
+
+        async def commit(self):
+            self.committed = True
+
+        async def rollback(self):
+            pass
+
+    service = BrainAgentService(db=_ThreadDB())
+    total = asyncio.run(
+        service._save_thread_to_db(
+            session_id="s", user_id=1,
+            messages=[{"type": "user", "content": "q"}],
+            cost_delta_usd=0.6, num_turns=2,
+        )
+    )
+    assert thread.total_cost_usd == Decimal("2.6")
+    assert total == pytest.approx(2.6)
+    assert thread.total_turns == 5
+    assert thread.is_streaming is False
+
+
+def test_persist_across_recreation_accumulates_not_overwrites(monkeypatch):
+    """The exact prod undercount bug: two session processes, one thread."""
+    sleeps = []
+    _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", "q"), _sm("assistant", "a1", "answer")],
+        sleeps,
+    )
+
+    totals = {"value": 0.0}
+
+    async def _accumulating_save(
+        self, session_id, user_id, messages, model=None, cost_delta_usd=None, num_turns=0
+    ):
+        if cost_delta_usd is not None:
+            totals["value"] += cost_delta_usd
+        return totals["value"]
+
+    monkeypatch.setattr(BrainAgentService, "_save_thread_to_db", _accumulating_save)
+
+    service = BrainAgentService(db=None)
+    # Process 1: one turn costing 1.0.
+    s1 = _session_for_delta()
+    out1 = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="thread-x",
+            result_message=_result_message(total_cost_usd=1.0), session=s1,
+        )
+    )
+    # Process 2 (recreation): its cumulative counter restarts at 0.7.
+    s2 = _session_for_delta()
+    out2 = asyncio.run(
+        service._persist_completed_run(
+            user_id=1, session_id="thread-x",
+            result_message=_result_message(total_cost_usd=0.7), session=s2,
+        )
+    )
+    assert out1.cost_delta_usd == 1.0
+    assert out2.cost_delta_usd == pytest.approx(0.7)
+    assert out2.thread_total_cost_usd == pytest.approx(1.7)  # not 0.7

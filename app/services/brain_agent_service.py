@@ -70,20 +70,38 @@ DETACH_MAX_SECONDS = 20 * 60
 #   - admin: existing behavior (unrestricted, model picks honored)
 #   - client: same capability envelope as admin; uses a client-flavoured system
 #     prompt with portfolio-as-anchor framing.
+#
+# Budget semantics (verified against the bundled CLI, SDK 0.2.128): the SDK's
+# max_budget_usd is compared against a PROCESS-GLOBAL cumulative spend counter
+# that never resets across query() calls — it is a whole-conversation cap on
+# the live CLI process, NOT a per-turn ceiling. (max_turns, by contrast, IS
+# per-query: each user message gets a fresh allowance.) A static per-profile
+# max_budget_usd therefore silently caps the whole thread — that bug shipped:
+# the old "per-turn" $2 client value killed every deep investigation at ~$2
+# total. The profile now declares only the thread ceiling; _create_session
+# hands the SDK the REMAINING amount (ceiling − spent so far) so the SDK cap
+# and the app-side chat() guard express one consistent ceiling.
 PROFILES: Dict[str, Dict[str, Any]] = {
     "admin": {
         "system_prompt_file": "brain_agent_system.md",
         "model_default": None,  # falls back to settings.BRAIN_MODEL
         "model_locked": False,
+        # Per query() — a single user message needing more than 25 tool
+        # round-trips ends with kind="max_turns" (recoverable via a follow-up).
         "max_turns": 25,
-        # Per-turn ceiling enforced by the SDK (stops a single runaway turn).
-        "max_budget_usd": 5.0,
-        # Cumulative per-thread ceiling enforced app-side in chat() — refuses a
-        # new turn once a long conversation has spent this much.
+        # Cumulative per-thread ceiling. Enforced app-side in chat() (refuses a
+        # new turn once the thread has spent this much) AND handed to the SDK
+        # at session creation as the remaining amount (see above).
         "max_thread_budget_usd": 50.0,
-        # API-side token budget. Unlike max_budget_usd (a client-side hard stop
-        # that can cut an answer off mid-sentence), this is passed to the model
-        # so it knows how much room is left and wraps up on its own.
+        # Floor for the SDK cap handed to a nearly-exhausted thread's fresh CLI
+        # process, so a recreated session can still finish a wrap-up turn. The
+        # thread can overshoot its ceiling by at most this much per recreated
+        # session; unbounded stacking is impossible because the chat() guard
+        # stops spawning processes once spent >= ceiling.
+        "min_session_budget_usd": 5.0,
+        # API-side token budget. Unlike the SDK's dollar cap (a client-side
+        # hard stop that can cut an answer off mid-sentence), this is passed to
+        # the model so it knows how much room is left and wraps up on its own.
         "task_budget_tokens": 500_000,
         # Stream the model's reasoning to the UI. Admin only: thinking is
         # model-authored prose that can name internal tables, which the client
@@ -96,13 +114,28 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "model_default": None,
         "model_locked": False,
         "max_turns": 25,
-        "max_budget_usd": 2.0,
-        "max_thread_budget_usd": 20.0,
+        # $10 per conversation (2026-09-01 decision) — ~5x the old effective
+        # cap; revisit with brain_agent_run_finished cost telemetry.
+        "max_thread_budget_usd": 10.0,
+        "min_session_budget_usd": 1.0,
         "task_budget_tokens": 250_000,
         "stream_thinking": False,
         "wrap_user_input": False,
     },
 }
+
+
+def compute_session_budget(profile: Dict[str, Any], spent: Any) -> float:
+    """SDK max_budget_usd for a fresh CLI process: remaining thread budget.
+
+    Sessions map 1:1 to threads, so thread_total = spent_at_creation +
+    process_total and the SDK kills when the thread crosses the ceiling.
+    Floored at min_session_budget_usd so a nearly-exhausted thread's recreated
+    session can still finish a wrap-up turn (bounded overshoot; the chat()
+    guard refuses turns once spent >= ceiling, so no doomed process spawns).
+    """
+    remaining = profile["max_thread_budget_usd"] - float(spent or 0)
+    return max(remaining, profile["min_session_budget_usd"])
 
 
 def _get_profile(source: Optional[str]) -> Dict[str, Any]:
@@ -228,6 +261,10 @@ class AgentSession:
     current_prompt: Optional[str] = None  # raw prompt of the live run (old-client dedup)
     run_started_at: float = 0.0  # staleness TTL for the busy guard
     detach_task: Optional["asyncio.Task"] = None  # background consumer of an orphaned run
+    # ResultMessage.total_cost_usd is cumulative per CLI process — per-turn cost
+    # is the diff between consecutive results. Fresh per AgentSession, so the
+    # chain resets exactly when the CLI's own counter does (session recreation).
+    last_result_total_cost_usd: Optional[float] = None
 
 
 @dataclass
@@ -236,7 +273,8 @@ class PersistOutcome:
 
     messages: List[Dict[str, Any]]
     terminal_info: Dict[str, Any]
-    # Populated once delta accounting lands (PR B3); None until then.
+    # This run's spend (diff of cumulative ResultMessage costs) and the
+    # thread's accumulated total after saving; None when unknown.
     cost_delta_usd: Optional[float] = None
     thread_total_cost_usd: Optional[float] = None
 
@@ -324,10 +362,12 @@ class BrainAgentService:
             )
 
         try:
-            # Cumulative per-thread budget guard (complements the SDK's per-turn
-            # max_budget_usd). Refuse a new turn once the thread's accumulated
-            # cost crosses the ceiling, so a long conversation can't rack up
-            # unbounded spend. Best-effort — never block a turn on a read error.
+            # Cumulative per-thread budget guard — the same ceiling the SDK
+            # enforces mid-turn (its cap is set to the remaining amount at
+            # session creation; see compute_session_budget). This pre-turn
+            # check is the UX-friendly gate: it refuses with a clear message
+            # BEFORE spawning a doomed CLI process. Best-effort — never block
+            # a turn on a read error.
             thread_budget = profile.get("max_thread_budget_usd")
             if thread_budget is not None and session_id:
                 try:
@@ -509,6 +549,8 @@ class BrainAgentService:
                             "errors": terminal_info["errors"],
                             "kind": terminal_info["kind"],
                             "reason_message": terminal_info["reason_message"],
+                            "cost_delta_usd": outcome.cost_delta_usd,
+                            "thread_total_cost_usd": outcome.thread_total_cost_usd,
                         },
                     )
                 else:
@@ -759,10 +801,19 @@ class BrainAgentService:
         user_id: int,
         messages: List[Dict[str, Any]],
         model: Optional[str] = None,
-        cost_usd: Any = None,
+        cost_delta_usd: Optional[float] = None,
         num_turns: int = 0,
-    ):
-        """Save authoritative messages to the agent thread in DB (create or update)."""
+    ) -> Optional[float]:
+        """Save authoritative messages to the agent thread in DB (create or update).
+
+        ``cost_delta_usd`` is this run's spend (the diff of consecutive
+        cumulative ResultMessage costs) and is ACCUMULATED onto the thread —
+        assigning the SDK's cumulative figure here is the bug that undercounted
+        every thread across session recreations. Returns the thread's new
+        total cost (None if unknown or the save failed).
+        """
+        from decimal import Decimal
+
         from app.models.agent_thread import AgentThread
 
         try:
@@ -777,14 +828,20 @@ class BrainAgentService:
             if first_user:
                 title = first_user.get("content", "")[:80]
 
+            delta = (
+                Decimal(str(round(cost_delta_usd, 4)))
+                if cost_delta_usd is not None
+                else None
+            )
+
             if thread:
                 thread.messages = messages
                 thread.message_count = len(messages)
                 thread.is_streaming = False
                 if not thread.title and title:
                     thread.title = title
-                if cost_usd is not None:
-                    thread.total_cost_usd = cost_usd
+                if delta is not None:
+                    thread.total_cost_usd = (thread.total_cost_usd or Decimal("0")) + delta
                 if num_turns:
                     thread.total_turns = (thread.total_turns or 0) + num_turns
             else:
@@ -796,7 +853,7 @@ class BrainAgentService:
                     messages=messages,
                     message_count=len(messages),
                     is_streaming=False,
-                    total_cost_usd=cost_usd,
+                    total_cost_usd=delta,
                     total_turns=num_turns or 0,
                 )
                 self.db.add(thread)
@@ -807,12 +864,14 @@ class BrainAgentService:
                 thread_id=session_id,
                 message_count=len(messages),
             )
+            return float(thread.total_cost_usd) if thread.total_cost_usd is not None else None
         except Exception as e:
             logger.error("brain_agent_save_thread_error", error=str(e), thread_id=session_id)
             try:
                 await self.db.rollback()
             except Exception:
                 pass
+            return None
 
     async def _persist_completed_run(
         self,
@@ -898,16 +957,43 @@ class BrainAgentService:
                 # also clears the advisory is_streaming flag.
                 final_messages = [*await self._load_thread_messages(session_id), marker]
 
+        cost_delta = self._take_cost_delta(session, result_message)
+        thread_total: Optional[float] = None
         if final_messages:
-            await self._save_thread_to_db(
+            thread_total = await self._save_thread_to_db(
                 session_id=session_id,
                 user_id=user_id,
                 messages=final_messages,
                 model=model,
-                cost_usd=result_message.total_cost_usd if hasattr(result_message, "total_cost_usd") else None,
+                cost_delta_usd=cost_delta,
                 num_turns=result_message.num_turns if hasattr(result_message, "num_turns") else 0,
             )
-        return PersistOutcome(messages=final_messages, terminal_info=terminal_info)
+        return PersistOutcome(
+            messages=final_messages,
+            terminal_info=terminal_info,
+            cost_delta_usd=cost_delta,
+            thread_total_cost_usd=thread_total,
+        )
+
+    @staticmethod
+    def _take_cost_delta(session: Optional[AgentSession], result_message: Any) -> Optional[float]:
+        """This run's spend: diff of consecutive cumulative ResultMessage costs.
+
+        Advances the session's marker. The clamp guards impossible negatives.
+        NOTE: _interrupt_and_drain deliberately does NOT advance the marker
+        when it swallows a superseded run's ResultMessage — that run's spend
+        stays in the CLI's counter and folds into the next persisted turn's
+        delta, so it is still attributed to the thread (the one loss case is a
+        drained run followed by session destruction with no further turn).
+        """
+        cur = getattr(result_message, "total_cost_usd", None)
+        if cur is None:
+            return None
+        if session is None:
+            return float(cur)
+        delta = max(float(cur) - (session.last_result_total_cost_usd or 0.0), 0.0)
+        session.last_result_total_cost_usd = float(cur)
+        return delta
 
     async def _load_thread_messages(self, session_id: str) -> List[Dict[str, Any]]:
         """Best-effort read of a thread's stored messages (empty on any error)."""
@@ -1208,6 +1294,34 @@ class BrainAgentService:
         settings = get_settings()
         profile = _get_profile(source)
 
+        # Dynamic SDK budget: the CLI compares max_budget_usd against a
+        # process-global cumulative spend, so hand this fresh process only
+        # what the thread has left (fail-open to the full ceiling — the
+        # chat() guard already refused truly exhausted threads).
+        spent = None
+        try:
+            from app.models.agent_thread import AgentThread
+
+            spent = (
+                await self.db.execute(
+                    select(AgentThread.total_cost_usd).where(AgentThread.id == session_id)
+                )
+            ).scalar_one_or_none()
+        except Exception as exc:
+            logger.warning(
+                "brain_agent_session_budget_read_failed",
+                session_id=session_id,
+                error=str(exc),
+            )
+        session_budget = compute_session_budget(profile, spent)
+        logger.info(
+            "brain_agent_session_budget",
+            session_id=session_id,
+            spent=float(spent) if spent is not None else 0.0,
+            thread_cap=profile["max_thread_budget_usd"],
+            session_budget=session_budget,
+        )
+
         # Resolve source code repo paths (for read-only code access).
         # EPR-59: the client surface gets NO codebase access — clients must not
         # be able to read source and thereby reconstruct DB schema / internals.
@@ -1368,7 +1482,7 @@ class BrainAgentService:
             cwd=work_dir,
             add_dirs=repo_dirs_str,
             max_turns=profile["max_turns"],
-            max_budget_usd=profile["max_budget_usd"],
+            max_budget_usd=session_budget,
             task_budget={"total": profile["task_budget_tokens"]},
             permission_mode="bypassPermissions",
             model=resolved_model,

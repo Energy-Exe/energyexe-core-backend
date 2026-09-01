@@ -484,7 +484,13 @@ async def upsert_thread(
         thread.model = body.model
         thread.messages = body.messages
         thread.message_count = body.message_count
-        thread.total_cost_usd = body.total_cost_usd
+        # Never-decrease: the server accumulates per-run cost deltas onto this
+        # column, while the frontends PUT the SDK's process-cumulative figure
+        # (which resets on session recreation) — letting that assignment win
+        # would clobber the accumulated truth. Frontends should stop sending
+        # it once both twins read thread_total_cost_usd from the result event.
+        if body.total_cost_usd is not None:
+            thread.total_cost_usd = max(thread.total_cost_usd or 0, body.total_cost_usd)
         thread.total_turns = body.total_turns
     else:
         thread = AgentThread(
