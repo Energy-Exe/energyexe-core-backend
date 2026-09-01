@@ -119,6 +119,75 @@ class SSEEvent:
     data: Dict[str, Any]
 
 
+def derive_terminal_info(result_message: Any) -> Dict[str, Any]:
+    """Classify how a run ended, from the SDK's ResultMessage.
+
+    The SDK's terminal shapes are asymmetric (verified against the bundled CLI):
+    a budget kill is ``subtype="error_max_budget_usd"`` but an unrecoverable API
+    failure (e.g. 529 after the CLI's own retries) arrives as
+    ``subtype="success"`` with ``is_error=True`` and ``api_error_status`` set —
+    so classification MUST branch on ``is_error``/``terminal_reason`` first and
+    never on ``subtype`` alone.
+
+    Returns the verbatim SDK fields plus two derived ones:
+    - ``kind``: the ONE discriminator frontends branch on —
+      success | stopped | budget_exhausted | max_turns | api_error | unknown_error
+    - ``reason_message``: server-derived human copy (None for success)
+    """
+    subtype = getattr(result_message, "subtype", None)
+    is_error = bool(getattr(result_message, "is_error", False))
+    terminal_reason = getattr(result_message, "terminal_reason", None)
+    api_error_status = getattr(result_message, "api_error_status", None)
+    errors = getattr(result_message, "errors", None)
+
+    if terminal_reason in ("aborted_streaming", "aborted_tools"):
+        kind = "stopped"
+        reason_message = "You stopped this response."
+    elif subtype == "error_max_budget_usd" or terminal_reason == "budget_exhausted":
+        kind = "budget_exhausted"
+        reason_message = (
+            "This response stopped because the conversation reached its "
+            "spending limit. Start a new chat to continue."
+        )
+    elif subtype == "error_max_turns" or terminal_reason == "max_turns":
+        kind = "max_turns"
+        reason_message = (
+            "The agent reached the maximum number of steps for a single "
+            "message. Everything so far is saved — send a follow-up message "
+            "to continue."
+        )
+    elif is_error and api_error_status:
+        kind = "api_error"
+        if api_error_status == 529:
+            reason_message = (
+                "The AI service is temporarily overloaded. Please try again "
+                "in a moment."
+            )
+        else:
+            reason_message = (
+                f"The AI service is temporarily unavailable "
+                f"(HTTP {api_error_status}). Please try again in a moment."
+            )
+    elif is_error:
+        kind = "unknown_error"
+        reason_message = "The agent stopped unexpectedly."
+        if errors:
+            reason_message = f"{reason_message} ({errors[0]})"
+    else:
+        kind = "success"
+        reason_message = None
+
+    return {
+        "subtype": subtype,
+        "is_error": is_error,
+        "terminal_reason": terminal_reason,
+        "api_error_status": api_error_status,
+        "errors": list(errors) if errors else None,
+        "kind": kind,
+        "reason_message": reason_message,
+    }
+
+
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
 
 # Files placed in the sandbox at session creation — skip when scanning for agent output
@@ -276,6 +345,7 @@ class BrainAgentService:
                                     f"(${thread_budget:.2f}). Start a new chat to continue."
                                 ),
                                 "code": "thread_budget_exceeded",
+                                "kind": "budget_exhausted",
                             },
                         )
                         return
@@ -399,6 +469,23 @@ class BrainAgentService:
                         break
 
                 if got_result and result_message:
+                    terminal_info = derive_terminal_info(result_message)
+                    logger.info(
+                        "brain_agent_run_finished",
+                        session_id=session_id,
+                        user_id=user_id,
+                        source=source,
+                        detached=False,
+                        subtype=terminal_info["subtype"],
+                        is_error=terminal_info["is_error"],
+                        terminal_reason=terminal_info["terminal_reason"],
+                        api_error_status=terminal_info["api_error_status"],
+                        kind=terminal_info["kind"],
+                        num_turns=getattr(result_message, "num_turns", 0),
+                        duration_ms=getattr(result_message, "duration_ms", 0),
+                        process_total_cost_usd=getattr(result_message, "total_cost_usd", None),
+                    )
+
                     final_messages = await self._persist_completed_run(
                         user_id=user_id,
                         session_id=session_id,
@@ -406,7 +493,9 @@ class BrainAgentService:
                         model=model,
                     )
 
-                    # Yield result with authoritative messages
+                    # Yield result with authoritative messages. The legacy keys
+                    # (num_turns/duration_ms/cost_usd/session_id/messages) are
+                    # load-bearing for both frontend twins — additive only.
                     yield SSEEvent(
                         event_type="result",
                         data={
@@ -415,6 +504,13 @@ class BrainAgentService:
                             "cost_usd": result_message.total_cost_usd if hasattr(result_message, "total_cost_usd") else None,
                             "session_id": session_id,
                             "messages": final_messages,
+                            "subtype": terminal_info["subtype"],
+                            "is_error": terminal_info["is_error"],
+                            "terminal_reason": terminal_info["terminal_reason"],
+                            "api_error_status": terminal_info["api_error_status"],
+                            "errors": terminal_info["errors"],
+                            "kind": terminal_info["kind"],
+                            "reason_message": terminal_info["reason_message"],
                         },
                     )
                 else:
@@ -422,6 +518,21 @@ class BrainAgentService:
                     logger.warning(
                         "brain_agent_stream_ended_without_result",
                         session_id=session_id,
+                    )
+                    logger.info(
+                        "brain_agent_run_finished",
+                        session_id=session_id,
+                        user_id=user_id,
+                        source=source,
+                        detached=False,
+                        subtype="incomplete",
+                        is_error=True,
+                        terminal_reason="stream_ended_without_result",
+                        api_error_status=None,
+                        kind="unknown_error",
+                        num_turns=0,
+                        duration_ms=0,
+                        process_total_cost_usd=None,
                     )
                     await self._set_thread_streaming(session_id, False)
                     yield SSEEvent(
@@ -432,6 +543,16 @@ class BrainAgentService:
                             "cost_usd": None,
                             "session_id": session_id,
                             "incomplete": True,
+                            "subtype": "incomplete",
+                            "is_error": True,
+                            "terminal_reason": "stream_ended_without_result",
+                            "api_error_status": None,
+                            "errors": None,
+                            "kind": "unknown_error",
+                            "reason_message": (
+                                "The connection to the agent ended before it "
+                                "finished. The conversation so far has been saved."
+                            ),
                         },
                     )
 
@@ -464,7 +585,7 @@ class BrainAgentService:
                 await self._set_thread_streaming(session_id, False)
             yield SSEEvent(
                 event_type="error",
-                data={"message": str(e), "code": "agent_error"},
+                data={"message": str(e), "code": "agent_error", "kind": "unknown_error"},
             )
         else:
             if source == "client":
@@ -1195,6 +1316,11 @@ class BrainAgentService:
                 # the helper isn't seeded then either).
                 "SCADA_SILVER_URI": settings.SCADA_SILVER_URI if scada_enabled else "",
                 "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "1200000",  # 20 min (was 10)
+                # Raise the CLI's API retry count (default ~10, hard clamp 15).
+                # A 529-overload storm then costs extra in-outage latency
+                # instead of killing the run; the terminal kind="api_error"
+                # mapping covers the truly unrecoverable case.
+                "CLAUDE_CODE_MAX_RETRIES": "15",
                 "CLAUDECODE": "",  # Unset to prevent nested session detection
             },
         )

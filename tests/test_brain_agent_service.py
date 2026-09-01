@@ -371,8 +371,8 @@ from claude_agent_sdk import ResultMessage
 from app.services.brain_agent_service import AgentSession
 
 
-def _result_message(session_id="sdk-abc"):
-    return ResultMessage(
+def _result_message(session_id="sdk-abc", **overrides):
+    kwargs = dict(
         subtype="success",
         duration_ms=1200,
         duration_api_ms=1000,
@@ -380,6 +380,8 @@ def _result_message(session_id="sdk-abc"):
         num_turns=1,
         session_id=session_id,
     )
+    kwargs.update(overrides)
+    return ResultMessage(**kwargs)
 
 
 class _FakeClient:
@@ -454,3 +456,146 @@ def test_finish_orphaned_run_survives_persist_failure(monkeypatch):
     # Must not raise, and must still clear busy state.
     asyncio.run(service._finish_orphaned_run(session))
     assert session.is_busy is False
+
+
+# ---------------------------------------------------------------------------
+# Terminal-info derivation (silent-kill fix): budget/turn/API kills must be
+# classified and never masquerade as clean completions.
+# ---------------------------------------------------------------------------
+
+from app.services.brain_agent_service import derive_terminal_info
+
+
+def test_terminal_info_budget_kill():
+    # Verified prod shape: budget kill carries no `result` text, only errors[].
+    rm = _result_message(
+        subtype="error_max_budget_usd",
+        is_error=True,
+        terminal_reason="budget_exhausted",
+        errors=["Reached maximum budget ($2)"],
+        total_cost_usd=2.04,
+    )
+    info = derive_terminal_info(rm)
+    assert info["kind"] == "budget_exhausted"
+    assert info["is_error"] is True
+    assert info["reason_message"]
+    assert "spending limit" in info["reason_message"]
+
+
+def test_terminal_info_max_turns():
+    rm = _result_message(
+        subtype="error_max_turns",
+        is_error=True,
+        terminal_reason="max_turns",
+        errors=["Reached maximum number of turns (25)"],
+    )
+    info = derive_terminal_info(rm)
+    assert info["kind"] == "max_turns"
+    assert "follow-up" in info["reason_message"]
+
+
+def test_terminal_info_api_error_masquerades_as_success():
+    # Regression trap: a post-retry 529 arrives as subtype="success" with
+    # is_error=True + api_error_status — classification must NOT branch on
+    # subtype alone.
+    rm = _result_message(subtype="success", is_error=True, api_error_status=529)
+    info = derive_terminal_info(rm)
+    assert info["kind"] == "api_error"
+    assert "overloaded" in info["reason_message"]
+
+    rm500 = _result_message(subtype="success", is_error=True, api_error_status=500)
+    assert derive_terminal_info(rm500)["kind"] == "api_error"
+    assert "500" in derive_terminal_info(rm500)["reason_message"]
+
+
+def test_terminal_info_interrupt_is_quiet_stopped():
+    rm = _result_message(is_error=False, terminal_reason="aborted_streaming")
+    info = derive_terminal_info(rm)
+    assert info["kind"] == "stopped"
+    assert info["is_error"] is False
+
+    rm_tools = _result_message(is_error=False, terminal_reason="aborted_tools")
+    assert derive_terminal_info(rm_tools)["kind"] == "stopped"
+
+
+def test_terminal_info_unknown_error_carries_first_error():
+    rm = _result_message(subtype="error_during_execution", is_error=True, errors=["boom"])
+    info = derive_terminal_info(rm)
+    assert info["kind"] == "unknown_error"
+    assert "boom" in info["reason_message"]
+
+
+def test_terminal_info_clean_success():
+    info = derive_terminal_info(_result_message(terminal_reason="completed"))
+    assert info["kind"] == "success"
+    assert info["reason_message"] is None
+    assert info["is_error"] is False
+
+
+def test_terminal_info_defensive_on_minimal_object():
+    # Lightweight fakes (and older SDKs) may lack the optional fields entirely.
+    info = derive_terminal_info(SimpleNamespace(subtype="success"))
+    assert info["kind"] == "success"
+    assert info["terminal_reason"] is None
+    assert info["errors"] is None
+
+
+def test_chat_result_event_carries_terminal_fields(monkeypatch, _isolated_sessions):
+    """A budget-killed run's `result` SSE event must explain itself."""
+    kill = _result_message(
+        subtype="error_max_budget_usd",
+        is_error=True,
+        terminal_reason="budget_exhausted",
+        errors=["Reached maximum budget ($2)"],
+        total_cost_usd=2.04,
+    )
+    fake_client = _FakeClient([kill])
+    session = AgentSession(
+        session_id="s-term",
+        user_id=1,
+        client=fake_client,
+        created_at=_time.time(),
+        last_activity=_time.time(),
+    )
+
+    async def _fake_get_or_create(self, user_id, session_id, *a, **kw):
+        BrainAgentService._sessions[session_id] = session
+        return session, False
+
+    async def _fake_persist(self, user_id, session_id, result_message, model=None):
+        return [{"type": "assistant", "content": "partial"}]
+
+    async def _fake_set_streaming(self, session_id, value):
+        return None
+
+    async def _fake_query(prompt):
+        return None
+
+    fake_client.query = _fake_query
+    monkeypatch.setattr(BrainAgentService, "_get_or_create_session", _fake_get_or_create)
+    monkeypatch.setattr(BrainAgentService, "_persist_completed_run", _fake_persist)
+    monkeypatch.setattr(BrainAgentService, "_set_thread_streaming", _fake_set_streaming)
+    monkeypatch.setattr(BrainAgentService, "_cleanup_stale_sessions", lambda self: None)
+
+    class _NoBudgetDB:
+        async def execute(self, *_a, **_kw):
+            return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+    async def _run():
+        service = BrainAgentService(db=_NoBudgetDB())
+        events = []
+        async for ev in service.chat(user_id=1, session_id="s-term", prompt="deep dive"):
+            events.append(ev)
+        return events
+
+    events = asyncio.run(_run())
+    result = next(e for e in events if e.event_type == "result")
+    # New terminal fields present…
+    assert result.data["kind"] == "budget_exhausted"
+    assert result.data["is_error"] is True
+    assert result.data["reason_message"]
+    assert result.data["terminal_reason"] == "budget_exhausted"
+    # …and the legacy keys unchanged.
+    assert result.data["session_id"] == "s-term"
+    assert result.data["cost_usd"] == 2.04
+    assert result.data["messages"] == [{"type": "assistant", "content": "partial"}]
