@@ -713,8 +713,115 @@ def test_persist_success_missing_tail_still_retries(monkeypatch):
             user_id=1, session_id="s-lag", result_message=_result_message()
         )
     )
-    assert len(sleeps) == 3  # 4 attempts, sleeps between them
+    assert len(sleeps) == 5  # 6 attempts, sleeps between them
     assert outcome.terminal_info["kind"] == "success"
+    # No result text to synthesize from → messages persist as-is, no synthetic.
+    assert outcome.messages[-1]["type"] == "user"
+
+
+def test_persist_success_tool_call_tail_synthesizes_answer(monkeypatch):
+    # The prod repro: the CLI flushes the final assistant TEXT after the
+    # ResultMessage, so the transcript still ends on the assistant tool-call
+    # entry (type "assistant" but empty content). The old type-only tail check
+    # accepted it and silently dropped the answer; now the answer is
+    # synthesized from ResultMessage.result.
+    sleeps = []
+    saved = _persist_harness(
+        monkeypatch,
+        [
+            _sm("user", "u1", [{"type": "text", "text": "how many turbines?"}]),
+            _sm(
+                "assistant",
+                "a1",
+                [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "q"}}],
+            ),
+            _sm(
+                "user",
+                "u2",
+                [{"type": "tool_result", "tool_use_id": "t1", "content": "95899", "is_error": False}],
+            ),
+        ],
+        sleeps,
+    )
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1,
+            session_id="s-toolcall-tail",
+            result_message=_result_message(result="There are 95,899 turbine units."),
+        )
+    )
+    assert len(sleeps) == 5  # retried the full window before synthesizing
+    tail = outcome.messages[-1]
+    assert tail["type"] == "assistant"
+    assert tail["content"] == "There are 95,899 turbine units."
+    assert "terminal" not in tail  # a synthesized answer is a normal message
+    assert "toolCalls" not in tail
+    # The tool-call message before it is preserved from the transcript.
+    assert outcome.messages[-2].get("toolCalls")
+    assert saved["messages"] == outcome.messages
+
+
+def test_persist_success_answer_tail_breaks_immediately_on_text(monkeypatch):
+    # A transcript whose tail already carries the answer text must not spin
+    # or synthesize — first read wins.
+    sleeps = []
+    saved = _persist_harness(
+        monkeypatch,
+        [
+            _sm("user", "u1", "question"),
+            _sm(
+                "assistant",
+                "a1",
+                [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}],
+            ),
+            _sm("assistant", "a2", "the flushed answer"),
+        ],
+        sleeps,
+    )
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1,
+            session_id="s-flushed",
+            result_message=_result_message(result="the flushed answer"),
+        )
+    )
+    assert sleeps == []
+    assert outcome.messages[-1]["content"] == "the flushed answer"
+    assert len(saved["messages"]) == len(outcome.messages)
+
+
+def test_persist_success_failed_transcript_synthesizes_onto_stored(monkeypatch):
+    # get_session_messages raises on a success terminal → never wipe the
+    # thread: the synthesized answer is appended to what's already stored.
+    sleeps = []
+    saved = _persist_harness(monkeypatch, [], sleeps)
+
+    def _boom(session_id, directory):
+        raise RuntimeError("transcript gone")
+
+    monkeypatch.setattr(_svc_mod, "get_session_messages", _boom)
+
+    stored = [{"type": "user", "content": "original question"}]
+
+    async def _fake_load(self, session_id):
+        return list(stored)
+
+    monkeypatch.setattr(BrainAgentService, "_load_thread_messages", _fake_load)
+
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1,
+            session_id="s-gone-ok",
+            result_message=_result_message(result="the answer"),
+        )
+    )
+    assert outcome.messages[0] == stored[0]
+    assert outcome.messages[-1]["content"] == "the answer"
+    assert "terminal" not in outcome.messages[-1]
+    assert saved["messages"] == outcome.messages
 
 
 def test_persist_error_terminal_with_failed_transcript_appends_to_stored(monkeypatch):
