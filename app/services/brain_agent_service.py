@@ -914,13 +914,25 @@ class BrainAgentService:
         )
         work_dir = Path(f"/tmp/brain-agent/{user_id}/{session_id}")
         final_messages: List[Dict[str, Any]] = []
-        # The CLI awaits the final transcript append (assistant tail included)
-        # BEFORE emitting the ResultMessage, so on a clean success the tail is
-        # normally already there — the short retry below only covers filesystem
-        # lag. On an error terminal the transcript legitimately ends on a
-        # tool_result (user-type) entry, so waiting for an assistant tail would
-        # spin for nothing: read once and move on.
-        attempts = 4 if terminal_info["kind"] == "success" else 1
+
+        def _tail_has_answer(messages: List[Dict[str, Any]]) -> bool:
+            # The run's closing answer, not just any assistant entry: after
+            # _convert_sdk_messages a tool call is itself an assistant-typed
+            # message with empty content, so type alone cannot distinguish
+            # "answer flushed" from "transcript still ends on the tool call".
+            if not messages or messages[-1].get("type") != "assistant":
+                return False
+            return bool((messages[-1].get("content") or "").strip())
+
+        # The CLI can flush the run's FINAL assistant text to the transcript
+        # only after emitting the ResultMessage (EPR-98), so right after a
+        # success the transcript often still ends on the assistant tool-call
+        # entry. Retry briefly for the flushed text; if it never lands, the
+        # ResultMessage's own `result` field carries the answer verbatim and
+        # is persisted as a synthetic tail below. On an error terminal the
+        # transcript legitimately ends on a tool_result entry and a marker is
+        # appended instead: read once and move on.
+        attempts = 6 if terminal_info["kind"] == "success" else 1
         for attempt in range(attempts):
             try:
                 sdk_messages = get_session_messages(
@@ -931,19 +943,44 @@ class BrainAgentService:
             except Exception as e:
                 logger.error("brain_agent_get_session_messages_error", error=str(e), session_id=session_id)
                 final_messages = []
-            if final_messages and final_messages[-1].get("type") == "assistant":
+            if _tail_has_answer(final_messages):
                 break
             if attempt < attempts - 1:
                 await asyncio.sleep(0.5)
         else:
             if terminal_info["kind"] == "success":
-                logger.warning(
-                    "brain_agent_transcript_missing_assistant_tail",
-                    session_id=session_id,
-                    message_count=len(final_messages),
-                    kind=terminal_info["kind"],
-                    terminal_reason=terminal_info["terminal_reason"],
-                )
+                result_text = (getattr(result_message, "result", None) or "").strip()
+                if result_text:
+                    synthetic = {
+                        "id": f"result-{uuid.uuid4()}",
+                        "type": "assistant",
+                        "content": result_text,
+                        "timestamp": int(time.time() * 1000),
+                    }
+                    if final_messages:
+                        final_messages.append(synthetic)
+                    else:
+                        # Transcript read failed outright — same wipe hazard
+                        # as the error-terminal path below: append to what is
+                        # already saved, never replace the thread with a lone
+                        # synthetic answer.
+                        final_messages = [
+                            *await self._load_thread_messages(session_id),
+                            synthetic,
+                        ]
+                    logger.info(
+                        "brain_agent_tail_synthesized_from_result",
+                        session_id=session_id,
+                        message_count=len(final_messages),
+                    )
+                else:
+                    logger.warning(
+                        "brain_agent_transcript_missing_assistant_tail",
+                        session_id=session_id,
+                        message_count=len(final_messages),
+                        kind=terminal_info["kind"],
+                        terminal_reason=terminal_info["terminal_reason"],
+                    )
 
         if terminal_info["kind"] != "success":
             marker = self._terminal_marker(result_message, terminal_info)
