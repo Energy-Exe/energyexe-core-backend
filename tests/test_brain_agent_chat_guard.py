@@ -118,3 +118,52 @@ def test_new_session_is_allowed(client):
         json={"prompt": "hello", "session_id": str(uuid.uuid4()), "message_id": "m9"},
     )
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# DELETE /sessions/{id} busy guard: a live (or detached, still-draining) run's
+# session must never be destroyed out from under it — its sandbox holds the
+# CLI subprocess cwd, transcript, and output files.
+# ---------------------------------------------------------------------------
+
+
+def test_end_session_while_busy_is_deferred(client, busy_session):
+    resp = client.delete(f"/brain-agent/sessions/{busy_session}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert body["busy"] is True
+    # The session survives for the TTL cleanup to reclaim later.
+    assert busy_session in BrainAgentService._sessions
+
+
+def test_end_session_while_detach_draining_is_deferred(client, busy_session, monkeypatch):
+    session = BrainAgentService._sessions[busy_session]
+    session.is_busy = False
+    session.detach_task = SimpleNamespace(done=lambda: False)
+    resp = client.delete(f"/brain-agent/sessions/{busy_session}")
+    assert resp.json() == {"success": False, "session_id": busy_session, "busy": True}
+    assert busy_session in BrainAgentService._sessions
+
+
+def test_end_session_idle_is_destroyed(client, busy_session, monkeypatch):
+    session = BrainAgentService._sessions[busy_session]
+    session.is_busy = False
+    session.detach_task = None
+
+    destroyed = []
+
+    async def _fake_destroy(s):
+        destroyed.append(s.session_id)
+
+    monkeypatch.setattr(BrainAgentService, "_destroy_session", staticmethod(_fake_destroy))
+    resp = client.delete(f"/brain-agent/sessions/{busy_session}")
+    assert resp.json() == {"success": True, "session_id": busy_session, "busy": False}
+    assert busy_session not in BrainAgentService._sessions
+    assert destroyed == [busy_session]
+
+
+def test_end_session_unknown_or_foreign_is_a_noop(client):
+    resp = client.delete(f"/brain-agent/sessions/{uuid.uuid4()}")
+    assert resp.json()["success"] is False
+    assert resp.json()["busy"] is False

@@ -233,10 +233,20 @@ async def end_session(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """End an agent session and clean up resources."""
+    """End an agent session and clean up resources.
+
+    A session with a live (or detached, still-draining) run is NOT destroyed —
+    the response carries busy=true and the TTL cleanup reclaims it later. Kept
+    HTTP 200 (not 409): both frontends fire-and-forget this DELETE on thread
+    switches, and a non-OK status would surface spurious error toasts.
+    """
     service = BrainAgentService(db)
-    success = await service.end_session(session_id, current_user.id)
-    return {"success": success, "session_id": session_id}
+    outcome = await service.end_session(session_id, current_user.id)
+    return {
+        "success": outcome["ended"],
+        "session_id": session_id,
+        "busy": outcome["busy"],
+    }
 
 
 def _validated_session_id(session_id: str) -> str:

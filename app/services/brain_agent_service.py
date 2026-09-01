@@ -1163,14 +1163,27 @@ class BrainAgentService:
                 logger.error("brain_agent_interrupt_error", error=str(e))
         return False
 
-    async def end_session(self, session_id: str, user_id: int) -> bool:
-        """End and clean up a session. Validates session ownership."""
+    async def end_session(self, session_id: str, user_id: int) -> Dict[str, bool]:
+        """End and clean up a session. Validates session ownership.
+
+        A busy session (live run, or a detached run still draining) is left
+        alone: the DELETE from a thread switch is resource cleanup, not intent
+        to kill the answer, and _destroy_session rmtree's the sandbox the
+        run's CLI subprocess, transcript read and output files still need.
+        The TTL cleanup reclaims the session once the run finishes and goes
+        idle — no leak.
+        """
         session = self._sessions.get(session_id)
-        if session and session.user_id == user_id:
-            self._sessions.pop(session_id, None)
-            await self._destroy_session(session)
-            return True
-        return False
+        if not session or session.user_id != user_id:
+            return {"ended": False, "busy": False}
+        if session.is_busy or (
+            session.detach_task is not None and not session.detach_task.done()
+        ):
+            logger.info("brain_agent_end_session_deferred_busy", session_id=session_id)
+            return {"ended": False, "busy": True}
+        self._sessions.pop(session_id, None)
+        await self._destroy_session(session)
+        return {"ended": True, "busy": False}
 
     def list_sessions(self, user_id: int) -> list:
         """List active sessions for a user."""
