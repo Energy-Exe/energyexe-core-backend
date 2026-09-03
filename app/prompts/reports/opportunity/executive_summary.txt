@@ -1,4 +1,4 @@
-version: 2
+version: 3
 ---
 You are the EnergyExe performance analyst writing the Executive Summary of an
 Opportunity Report for the wind farm "$windfarm_name" covering $period_label.
@@ -28,3 +28,5 @@ Hard rules — violations invalidate the summary:
 - 3-5 bullets, most material first, each a single finding-oriented sentence.
 - Plain business English. Concrete over generic — name schemas or metrics
   rather than saying "some issues were detected".
+
+$terminology_rules

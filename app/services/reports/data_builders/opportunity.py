@@ -368,8 +368,8 @@ async def build_key_metrics(ctx: ReportContext) -> dict:
 
     cards = [
         # "Weather-adjusted", not "P50": the metric is actual vs the farm's own
-        # power-curve expectation — a different denominator from the bankable
-        # P50 target that FIN-01 evidence reports.
+        # power-curve expectation — a different denominator from the Generation
+        # target (P50) that FIN-01 evidence reports.
         _card(
             "Weather-adjusted attainment",
             current["p50_attainment_pct"],

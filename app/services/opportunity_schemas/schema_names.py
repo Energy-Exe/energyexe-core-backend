@@ -63,7 +63,7 @@ SCHEMA_ONE_LINERS: dict[SchemaCode, str] = {
     SchemaCode.MKT_06: "Hours of negative wholesale price while generating — direct merchant downside exposure.",
     SchemaCode.MKT_07: "Forecast vs actual deviation. INACTIVE — no forecast data ingested yet (emits no findings).",
     # Financial
-    SchemaCode.FIN_01: "Actual generation below the P50 target for consecutive years — yield shortfall vs the bankable case.",
+    SchemaCode.FIN_01: "Actual generation below the Generation target (P50) for consecutive years.",
     SchemaCode.FIN_02: "Onshore OPEX per MWh above the onshore zone median — cost overrun vs peers.",
     SchemaCode.FIN_03: "Offshore OPEX per MWh above the offshore zone median — cost overrun vs peers.",
     # Data Quality

@@ -14,14 +14,14 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from string import Template
-from typing import List, Literal, Optional, Tuple
+from typing import Callable, List, Literal, Optional, Tuple
 
 import structlog
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.config import get_settings
 from app.models.report import Report, ReportSection, SectionStatus
-from app.services.reports import fact_check
+from app.services.reports import fact_check, terminology
 from app.services.reports.registry import ReportTypeSpec, SectionSpec
 
 logger = structlog.get_logger()
@@ -187,7 +187,10 @@ def _scope_name(report: Report) -> str:
 def _render_system_prompt(report: Report, spec: ReportTypeSpec, section_spec: SectionSpec) -> str:
     _, template = _load_prompt(spec.code, section_spec.narrative.prompt_key)
     return Template(template).safe_substitute(
-        windfarm_name=_scope_name(report), period_label=_period_label(report)
+        windfarm_name=_scope_name(report),
+        period_label=_period_label(report),
+        # House vocabulary (EPR-117 comment 2) — one rules block, every prompt.
+        terminology_rules=terminology.PROMPT_RULES,
     )
 
 
@@ -255,6 +258,8 @@ async def _generate_action_plan(
         tool_description="Record the three-tier action plan for this report.",
         input_schema=schema,
         max_tokens=section_spec.narrative.max_tokens,
+        lint=_lint_action_plan,
+        log_context={"report_id": report.id, "section": section_spec.key},
     )
 
     # Linked schemas must exist in the findings — silently drop hallucinated codes.
@@ -328,6 +333,8 @@ async def _generate_summary(
         tool_description="Record the executive summary synthesised from the sections.",
         input_schema=schema,
         max_tokens=section_spec.narrative.max_tokens,
+        lint=_lint_summary,
+        log_context={"report_id": report.id, "section": section_spec.key},
     )
 
     # "No new claims" layer 3 — numeric fact-check against the cited sections.
@@ -367,6 +374,16 @@ async def _generate_summary(
     )
 
 
+def _lint_summary(out: ExecutiveSummaryOutput) -> List[str]:
+    return terminology.find_violations_in([out.overall_assessment, *(b.text for b in out.bullets)])
+
+
+def _lint_action_plan(out: ActionPlanOutput) -> List[str]:
+    return terminology.find_violations_in(
+        [*(a.title for t in out.tiers for a in t.actions), *(t.context for t in out.tiers)]
+    )
+
+
 async def _call_with_validation(
     output_model,
     *,
@@ -377,10 +394,19 @@ async def _call_with_validation(
     tool_description: str,
     input_schema: dict,
     max_tokens: int,
+    lint: Optional[Callable[[object], List[str]]] = None,
+    log_context: Optional[dict] = None,
 ):
-    """Call + Pydantic-validate, retrying once with the validation error."""
+    """Call + Pydantic-validate, retrying once with the validation error.
+
+    ``lint`` maps the validated output to the banned phrases it contains
+    (:mod:`terminology`). A hit is treated like a validation error while a retry
+    remains; on the final attempt the output is accepted and the violation
+    logged — a wording slip must not fail the section (EPR-117 comment 2).
+    """
     total_in = total_out = 0
     last_error: Optional[str] = None
+    context = log_context or {}
     for attempt in range(_MAX_ATTEMPTS):
         attempt_system = system
         if last_error:
@@ -399,7 +425,7 @@ async def _call_with_validation(
         total_in += tokens_in
         total_out += tokens_out
         try:
-            return output_model.model_validate(payload), total_in, total_out
+            result = output_model.model_validate(payload)
         except ValidationError as exc:
             last_error = str(exc)[:800]
             logger.warning(
@@ -408,4 +434,25 @@ async def _call_with_validation(
                 attempt=attempt + 1,
                 error=last_error,
             )
+            continue
+        violations = lint(result) if lint else []
+        if not violations:
+            return result, total_in, total_out
+        if attempt + 1 < _MAX_ATTEMPTS:
+            last_error = terminology.correction_message(violations)
+            logger.warning(
+                "report_narrative_terminology_retry",
+                tool=tool_name,
+                attempt=attempt + 1,
+                terms=violations,
+                **context,
+            )
+            continue
+        logger.warning(
+            "report_narrative_terminology_violation",
+            tool=tool_name,
+            terms=violations,
+            **context,
+        )
+        return result, total_in, total_out
     raise NarrativeError(f"Model output failed schema validation: {last_error}")

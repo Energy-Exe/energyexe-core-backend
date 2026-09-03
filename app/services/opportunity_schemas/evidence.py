@@ -300,15 +300,17 @@ EVIDENCE_SLOTS: dict[SchemaCode, tuple] = {
         ("negative_price_hours_per_year", "Hours per year", lambda v: _num(float(v))),
         ("window_days", "Window analysed", lambda v: f"{int(v):,} days"),
     ),
-    # FIN-01 labels name the bankable baseline explicitly: the digest scorecard's
-    # "Weather-adjusted attainment" uses a different denominator (the farm's own
-    # power curve), and the two rendered side-by-side as "P50 attainment" is what
-    # confused a client-facing Midtfjellet digest.
+    # FIN-01 labels name the baseline explicitly, using the house term for the
+    # sourced P50 target — "Generation target" (EPR-117 comment 2; the word
+    # "bankable" here is what the exec-summary LLM turned into "bankable P50
+    # case"). The digest scorecard's "Weather-adjusted attainment" uses a
+    # different denominator (the farm's own power curve), and the two rendered
+    # side-by-side as "P50 attainment" is what confused a Midtfjellet digest.
     SchemaCode.FIN_01: (
-        ("attainment_pct", "Attainment vs bankable P50", _fmt_pct),
+        ("attainment_pct", "Attainment vs Generation target", _fmt_pct),
         ("actual_gwh", "Actual generation", _fmt_gwh),
-        ("p50_target_gwh", "P50 target", _fmt_gwh),
-        ("prior_attainment_pct", "Prior year vs bankable P50", _fmt_pct),
+        ("p50_target_gwh", "Generation target (P50)", _fmt_gwh),
+        ("prior_attainment_pct", "Prior year vs Generation target", _fmt_pct),
         ("attainment_year", "Assessment year", _fmt_year),
     ),
     SchemaCode.FIN_02: _FIN_OPEX_SLOTS,
