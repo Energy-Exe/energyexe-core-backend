@@ -1,4 +1,4 @@
-version: 2
+version: 3
 ---
 You are the EnergyExe performance analyst writing the Action Plan section of an
 Opportunity Report for the wind farm "$windfarm_name" covering $period_label.
@@ -34,3 +34,5 @@ Hard rules:
 - Severity "pass" means the schema is healthy — do not create actions for it.
 - Suppressed findings were muted by an analyst; only reference one if its
   suppression reason itself warrants follow-up.
+
+$terminology_rules

@@ -313,8 +313,9 @@ class TestNarrativeService:
 
         for key in ("action_plan", "executive_summary"):
             version, body = _load_prompt("opportunity", key)
-            assert version == "2"  # bumped for the EPR-88 enrichment
+            assert version == "3"  # v3: EPR-117 terminology rules
             assert "$windfarm_name" in body
+            assert "$terminology_rules" in body
 
     def test_digest_summary_prompt_distinguishes_baselines(self):
         """v2: the digest exec-summary prompt must separate weather-adjusted
@@ -322,10 +323,12 @@ class TestNarrativeService:
         from app.services.reports.narrative_service import _load_prompt
 
         version, body = _load_prompt("digest", "executive_summary")
-        assert version == "2"
+        assert version == "3"
         assert "Weather-adjusted attainment" in body
-        assert "Bankable P50 attainment" in body
+        assert "Generation target attainment" in body
+        assert "bankable" not in body.lower()  # EPR-117 comment 2
         assert "current_findings" in body
+        assert "$terminology_rules" in body
 
     def test_model_resolution_follows_tier(self):
         from app.core.config import get_settings
@@ -452,27 +455,27 @@ class TestDigestScorecard:
         assert not _is_full_calendar_year(date(2025, 1, 1), date(2025, 3, 31))  # quarter
         assert not _is_full_calendar_year(date(2025, 7, 1), date(2026, 6, 30))  # rolling yr
 
-    def test_weather_adjusted_and_bankable_rows_are_distinct(self):
+    def test_weather_adjusted_and_generation_target_rows_are_distinct(self):
         """The two attainment rows must never share a label (the Midtfjellet
         digest rendered both as "P50 attainment" with different denominators)."""
         from app.services.reports.data_builders.digest import _scorecard_row
 
         metrics = {
-            "current": {"p50_attainment_pct": 99.6, "bankable_attainment_pct": 83.0},
-            "previous": {"p50_attainment_pct": 118.7, "bankable_attainment_pct": 96.4},
+            "current": {"p50_attainment_pct": 99.6, "generation_target_attainment_pct": 83.0},
+            "previous": {"p50_attainment_pct": 118.7, "generation_target_attainment_pct": 96.4},
         }
         weather = _scorecard_row(
             "p50_attainment", "Weather-adjusted attainment", "%", metrics, "p50_attainment_pct"
         )
-        bankable = _scorecard_row(
-            "bankable_p50_attainment",
-            "Bankable P50 attainment",
+        target = _scorecard_row(
+            "generation_target_attainment",
+            "Generation target attainment",
             "%",
             metrics,
-            "bankable_attainment_pct",
+            "generation_target_attainment_pct",
         )
-        assert weather["label"] != bankable["label"]
-        assert bankable["values"] == {"current": "83.0", "previous": "96.4"}
+        assert weather["label"] != target["label"]
+        assert target["values"] == {"current": "83.0", "previous": "96.4"}
 
     def test_registry_digest_spec(self):
         spec = get_report_type("digest")
@@ -675,7 +678,7 @@ class TestEvidenceFormatter:
         assert "period" not in {i["label"].lower() for i in out["items"]}
         assert any("baseline" in n.lower() for n in out["notes"])
 
-    def test_fin01_labels_name_bankable_baseline(self):
+    def test_fin01_labels_name_generation_target(self):
         from app.models.opportunity import SchemaCode
         from app.services.opportunity_schemas.evidence import format_evidence
 
@@ -690,11 +693,12 @@ class TestEvidenceFormatter:
             },
         )
         by_label = {i["label"]: i["value"] for i in out["items"]}
-        assert by_label["Attainment vs bankable P50"] == "83%"
-        assert by_label["Prior year vs bankable P50"] == "96.4%"
-        assert by_label["P50 target"] == "420 GWh"
-        # The old ambiguous label must be gone.
+        assert by_label["Attainment vs Generation target"] == "83%"
+        assert by_label["Prior year vs Generation target"] == "96.4%"
+        assert by_label["Generation target (P50)"] == "420 GWh"
+        # The old ambiguous label must be gone, and so must "bankable" (EPR-117).
         assert "P50 attainment" not in by_label
+        assert not any("bankable" in label.lower() for label in by_label)
 
     def test_ops06_run_window_is_visible(self):
         """run_start/end_month render as a month range so a stale run is
@@ -1259,10 +1263,7 @@ class TestCoverageAwareMetrics:
         metered day (months behind the run for NVE), so the digest's "as the
         engine last reported" snapshot must key on ``created_at``."""
         from app.services.reports.context import ReportContext
-        from app.services.reports.data_builders.digest import (
-            _current_findings,
-            _severity_snapshot,
-        )
+        from app.services.reports.data_builders.digest import _current_findings, _severity_snapshot
 
         run = datetime(2026, 8, 26, 3, 0, tzinfo=timezone.utc)
         session = _FakeSession(
@@ -1746,3 +1747,217 @@ class TestOpexMetricsInReports:
             _opex_unit({"current": {"opex_unit": None}, "previous": {"opex_unit": "EUR"}}) == "EUR"
         )
         assert _opex_unit({"current": {}}) is None
+
+
+# ── EPR-117 comment 2 — house terminology for narratives ────────────────
+
+
+class TestTerminology:
+    """Kasper: the exec summary called the P50 target the "bankable P50 case".
+    The fix is one vocabulary module feeding both the prompts and a lint."""
+
+    def test_lint_catches_invented_p50_names(self):
+        from app.services.reports.terminology import find_violations
+
+        text = (
+            "Compounded by a second consecutive year below the bankable P50 case; "
+            "the yield shortfall against the base case has now repeated."
+        )
+        found = [t.lower() for t in find_violations(text)]
+        assert "bankable" in found
+        assert "p50 case" in found
+        assert "base case" in found
+        assert find_violations("Generation is 8% below the generation budget")
+        assert find_violations("performance sits under the P50 baseline")
+
+    def test_lint_accepts_house_wording(self):
+        from app.services.reports.terminology import find_violations, find_violations_in
+
+        assert (
+            find_violations(
+                "Attainment vs the Generation target (P50) fell to 74.8% (410.1 GWh "
+                "against a 548 GWh Generation target), down from 85.2% the prior year."
+            )
+            == []
+        )
+        # Bare "budget" is legitimate in an action plan (budget approval).
+        assert find_violations("Secure budget approval for a gearbox inspection") == []
+        assert find_violations(None) == []
+        assert find_violations_in(["Weather-adjusted attainment 107.8%", None]) == []
+
+    def test_rules_block_is_rendered_into_every_narrative_prompt(self):
+        from app.services.reports.narrative_service import _render_system_prompt
+        from app.services.reports.terminology import PROMPT_RULES, find_violations
+
+        report = Report(
+            report_type="opportunity",
+            scope_type="windfarm",
+            windfarm_id=1,
+            period_start=date(2024, 12, 1),
+            period_end=date(2025, 12, 31),
+            version=1,
+            status=ReportStatus.GENERATING,
+            title="t",
+            requested_by_id=1,
+        )
+        report.windfarm = Windfarm(name="Geitfjellet", code="GEIT")
+        rendered = 0
+        for report_type in ("opportunity", "digest"):
+            spec = get_report_type(report_type)
+            for section in spec.sections:
+                if section.narrative is None:
+                    continue
+                report.report_type = report_type
+                system = _render_system_prompt(report, spec, section)
+                assert PROMPT_RULES in system, (report_type, section.key)
+                assert "$terminology_rules" not in system
+                assert "Geitfjellet" in system
+                # The prompt names the banned words only inside the rules block;
+                # outside it the prompt itself must not model them.
+                assert find_violations(system.replace(PROMPT_RULES, "")) == []
+                rendered += 1
+        assert rendered == 3  # opportunity exec summary + action plan, digest exec summary
+
+    def test_static_labels_fed_to_the_model_are_clean(self):
+        """The one-liners and evidence labels are copied verbatim into the LLM
+        input — "bankable" in them is how the phrase got into the summary."""
+        from app.models.opportunity import SchemaCode
+        from app.services.opportunity_schemas.evidence import EVIDENCE_SLOTS
+        from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES, SCHEMA_ONE_LINERS
+        from app.services.reports.terminology import find_violations
+
+        offenders = []
+        for code, text in {**SCHEMA_NAMES, **SCHEMA_ONE_LINERS}.items():
+            if find_violations(text):
+                offenders.append((code, text))
+        for code, slots in EVIDENCE_SLOTS.items():
+            for slot in slots:
+                if callable(slot):  # ComputedSlot — label built at runtime
+                    continue
+                if find_violations(slot[1]):
+                    offenders.append((code, slot[1]))
+        assert offenders == []
+        assert "Generation target (P50)" in SCHEMA_ONE_LINERS[SchemaCode.FIN_01]
+
+    def _fake_calls(self, monkeypatch, payloads):
+        """Stub the Anthropic call: pop one payload per attempt, record prompts."""
+        from app.services.reports import narrative_service as ns
+
+        seen_systems = []
+
+        async def fake_call(model, system, user, tool_name, tool_description, schema, max_tokens):
+            seen_systems.append(system)
+            return payloads.pop(0), 100, 50
+
+        monkeypatch.setattr(ns, "_call_structured", fake_call)
+        events = []
+
+        class _Logger:
+            def warning(self, event, **kw):
+                events.append((event, kw))
+
+            info = debug = error = warning
+
+        monkeypatch.setattr(ns, "logger", _Logger())
+        return seen_systems, events
+
+    def test_lint_hit_retries_once_with_correction_then_accepts_clean_output(self, monkeypatch):
+        import asyncio
+
+        from app.services.reports import narrative_service as ns
+
+        bad = {
+            "overall_assessment": "A second year below the bankable P50 case.",
+            "bullets": [{"text": "Attainment 74.8%", "source_sections": ["findings"]}],
+        }
+        good = {
+            "overall_assessment": "A second year below the Generation target (P50).",
+            "bullets": [{"text": "Attainment 74.8%", "source_sections": ["findings"]}],
+        }
+        systems, events = self._fake_calls(monkeypatch, [bad, good])
+        out, tokens_in, tokens_out = asyncio.run(
+            ns._call_with_validation(
+                ns.ExecutiveSummaryOutput,
+                model="m",
+                system="SYSTEM",
+                user_content="u",
+                tool_name="emit_executive_summary",
+                tool_description="d",
+                input_schema={},
+                max_tokens=10,
+                lint=ns._lint_summary,
+                log_context={"report_id": 7, "section": "executive_summary"},
+            )
+        )
+        assert "Generation target" in out.overall_assessment
+        assert len(systems) == 2
+        assert systems[0] == "SYSTEM"
+        assert "Banned terminology used" in systems[1] and "bankable" in systems[1]
+        assert (tokens_in, tokens_out) == (200, 100)  # both attempts are paid for
+        assert [e for e, _ in events] == ["report_narrative_terminology_retry"]
+        assert events[0][1]["report_id"] == 7
+
+    def test_lint_hit_on_final_attempt_is_accepted_and_logged(self, monkeypatch):
+        import asyncio
+
+        from app.services.reports import narrative_service as ns
+
+        bad = {
+            "overall_assessment": "Still below the bankable case.",
+            "bullets": [{"text": "x", "source_sections": ["findings"]}],
+        }
+        systems, events = self._fake_calls(monkeypatch, [dict(bad), dict(bad)])
+        out, _, _ = asyncio.run(
+            ns._call_with_validation(
+                ns.ExecutiveSummaryOutput,
+                model="m",
+                system="SYSTEM",
+                user_content="u",
+                tool_name="emit_executive_summary",
+                tool_description="d",
+                input_schema={},
+                max_tokens=10,
+                lint=ns._lint_summary,
+                log_context={"report_id": 7, "section": "executive_summary"},
+            )
+        )
+        assert out.overall_assessment == "Still below the bankable case."  # accepted, not failed
+        assert len(systems) == 2
+        assert [e for e, _ in events] == [
+            "report_narrative_terminology_retry",
+            "report_narrative_terminology_violation",
+        ]
+        assert events[1][1]["terms"] == ["bankable"]
+
+    def test_schema_error_then_lint_pass(self, monkeypatch):
+        import asyncio
+
+        from app.services.reports import narrative_service as ns
+
+        invalid = {"tiers": "not-a-list"}
+        plan = {
+            "tiers": [
+                {
+                    "tier": "P1",
+                    "label": "Strategic",
+                    "actions": [{"title": "Close the gap to the Generation target"}],
+                    "context": None,
+                }
+            ]
+        }
+        systems, events = self._fake_calls(monkeypatch, [invalid, plan])
+        out, _, _ = asyncio.run(
+            ns._call_with_validation(
+                ns.ActionPlanOutput,
+                model="m",
+                system="SYSTEM",
+                user_content="u",
+                tool_name="emit_action_plan",
+                tool_description="d",
+                input_schema={},
+                max_tokens=10,
+                lint=ns._lint_action_plan,
+            )
+        )
+        assert out.tiers[0].actions[0].title.endswith("Generation target")
+        assert [e for e, _ in events] == ["report_narrative_invalid_output"]

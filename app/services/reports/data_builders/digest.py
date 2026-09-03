@@ -148,19 +148,21 @@ async def build_scorecard(ctx: ReportContext) -> dict:
     if "yoy" in metrics:
         columns.append({"key": "yoy", "label": period_label(yoy_start, yoy_end)})
 
-    # Bankable P50 attainment (actual ÷ sourced annual target) — only meaningful
-    # when each column is a full calendar year, and deliberately labelled apart
-    # from the weather-adjusted row: the two share the word "attainment" but use
-    # different denominators, and rendering both as "P50 attainment" produced a
-    # contradictory client-facing Midtfjellet digest.
-    bankable_target = None
+    # Generation target attainment (actual ÷ sourced annual P50 target) — only
+    # meaningful when each column is a full calendar year, and deliberately
+    # labelled apart from the weather-adjusted row: the two share the word
+    # "attainment" but use different denominators, and rendering both as "P50
+    # attainment" produced a contradictory client-facing Midtfjellet digest.
+    # "Generation target" is the house term for the sourced P50 target
+    # (EPR-117 comment 2) — never "bankable".
+    generation_target = None
     if _is_full_calendar_year(start, end):
-        bankable_target = await _sourced_p50_target(ctx, start, end)
-        if bankable_target:
+        generation_target = await _sourced_p50_target(ctx, start, end)
+        if generation_target:
             for m in metrics.values():
                 gen = m.get("generation_gwh")
-                m["bankable_attainment_pct"] = (
-                    gen / bankable_target * 100 if gen is not None else None
+                m["generation_target_attainment_pct"] = (
+                    gen / generation_target * 100 if gen is not None else None
                 )
 
     rows = [
@@ -170,11 +172,11 @@ async def build_scorecard(ctx: ReportContext) -> dict:
             "p50_attainment", "Weather-adjusted attainment", "%", metrics, "p50_attainment_pct"
         ),
         _scorecard_row(
-            "bankable_p50_attainment",
-            "Bankable P50 attainment",
+            "generation_target_attainment",
+            "Generation target attainment",
             "%",
             metrics,
-            "bankable_attainment_pct",
+            "generation_target_attainment_pct",
         ),
         _scorecard_row("capture_rate", "Capture rate", "%", metrics, "capture_rate_pct"),
         _scorecard_row("curtailment", "Curtailment", "GWh", metrics, "curtailed_gwh", 2),
@@ -200,12 +202,12 @@ async def build_scorecard(ctx: ReportContext) -> dict:
     if any(r["key"] == "p50_attainment" for r in rows):
         notes.append(
             "Weather-adjusted attainment compares actual output to the farm's own "
-            "power-curve expectation under the wind actually observed; bankable P50 "
-            "attainment compares annual output to the sourced P50 target. The two "
-            "use different baselines and are not interchangeable."
+            "power-curve expectation under the wind actually observed; Generation "
+            "target attainment compares annual output to the sourced Generation "
+            "target (P50). The two use different baselines and are not interchangeable."
         )
-    if bankable_target and any(r["key"] == "bankable_p50_attainment" for r in rows):
-        notes.append(f"Sourced P50 target: {_fmt(bankable_target)} GWh/yr.")
+    if generation_target and any(r["key"] == "generation_target_attainment" for r in rows):
+        notes.append(f"Generation target (P50): {_fmt(generation_target)} GWh/yr.")
     fin_labels = {m["financials_label"] for m in metrics.values() if m["financials_label"]}
     if fin_labels and any(r["key"] in ("ebitda_margin", "opex_per_mwh") for r in rows):
         notes.append(
@@ -276,7 +278,7 @@ async def _current_findings(ctx: ReportContext, as_of: date) -> list[dict]:
 
     The exec-summary LLM previously saw only severity COUNTS, so it could write
     "the wind resource accounts for essentially all of the shortfall" while a
-    Confirmed bankable-P50 attainment finding sat in the same document. Naming
+    Confirmed Generation-target attainment finding sat in the same document. Naming
     the findings (code, name, severity, headline evidence) makes that
     contradiction visible to the model — and citable by the fact check.
     """
@@ -437,7 +439,7 @@ async def build_wind_resource(ctx: ReportContext) -> dict:
             "actual wind conditions — the resource delta shows how much of the "
             "period-on-period generation change the wind alone explains. "
             "Weather-adjusted attainment compares actual output to that expectation; "
-            "it is a different baseline from the bankable P50 target used in "
+            "it is a different baseline from the Generation target (P50) used in "
             "attainment findings."
         ),
     }
