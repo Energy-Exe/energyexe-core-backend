@@ -10,14 +10,15 @@
 # Why not AWS Transfer Family (SFTP): ~$216/mo for the endpoint alone vs $0 for
 # plain S3 access — revisit only if a partner's IT mandates SFTP.
 #
-# Layout: one top-level prefix per partner (sfe/, ...). One IAM user per
-# partner, allowed to Put/Get/List ONLY under its own prefix; no delete, so
-# uploads are immutable from the uploader's side (versioning covers overwrite).
+# Layout: one top-level prefix per partner (sfe/, varanger-kraft/, ...). One
+# IAM user per partner, allowed to Put/Get/List ONLY under its own prefix; no
+# delete, so uploads are immutable from the uploader's side (versioning covers
+# overwrite).
 #
 # ⚠️ Access keys are created OUT-OF-BAND, never in Terraform (keys would land in
-# state): aws iam create-access-key --user-name sfe-upload --profile energyexe
+# state): aws iam create-access-key --user-name <partner>-upload --profile energyexe
 # Handover to the partner = rotate the key (delete + create), not a new user.
-# Uploader instructions live in docs/partner-upload-sfe.md.
+# Uploader instructions live in docs/partner-upload-<partner>.md.
 
 resource "aws_s3_bucket" "partner_inbound" {
   bucket = "energyexe-partner-inbound"
@@ -136,6 +137,79 @@ resource "aws_iam_user_policy" "sfe_upload" {
         Resource = aws_s3_bucket.partner_inbound.arn
         Condition = {
           StringLike = { "s3:prefix" = ["sfe/", "sfe/*"] }
+        }
+      },
+      # GUI clients (Cyberduck/WinSCP) open the bucket root on connect; these two
+      # statements let that root view work — folder names only (delimiter "/"
+      # required, so a recursive no-delimiter dump of the bucket stays denied).
+      # Two statements because clients variously send prefix="" or omit it, and
+      # StringLike/StringEquals don't match an ABSENT context key.
+      {
+        Sid      = "ListRootFoldersEmptyPrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          StringEquals = {
+            "s3:prefix"    = ""
+            "s3:delimiter" = "/"
+          }
+        }
+      },
+      {
+        Sid      = "ListRootFoldersNoPrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          Null         = { "s3:prefix" = "true" }
+          StringEquals = { "s3:delimiter" = "/" }
+        }
+      },
+      {
+        Sid      = "BucketLocation" # Cyberduck/WinSCP resolve the region with this
+        Effect   = "Allow"
+        Action   = "s3:GetBucketLocation"
+        Resource = aws_s3_bucket.partner_inbound.arn
+      },
+    ]
+  })
+}
+
+# --- Varanger Kraft uploader: Put/Get/List under varanger-kraft/ only, no delete ---
+
+resource "aws_iam_user" "varanger_kraft_upload" {
+  name = "varanger-kraft-upload"
+}
+
+resource "aws_iam_user_policy" "varanger_kraft_upload" {
+  name = "partner-inbound-varanger-kraft-upload"
+  user = aws_iam_user.varanger_kraft_upload.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "UploadToVarangerKraftPrefix"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts",
+        ]
+        Resource = "${aws_s3_bucket.partner_inbound.arn}/varanger-kraft/*"
+      },
+      {
+        Sid    = "ListVarangerKraftPrefix"
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads",
+        ]
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          StringLike = { "s3:prefix" = ["varanger-kraft/", "varanger-kraft/*"] }
         }
       },
       # GUI clients (Cyberduck/WinSCP) open the bucket root on connect; these two
