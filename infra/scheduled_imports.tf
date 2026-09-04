@@ -9,12 +9,24 @@
 # serves only the CURRENT snapshot (no historical endpoint), stamped on the hour,
 # so a missed run is an hour of Taiwan generation lost permanently. The dated
 # imports do catch up on the next run, but they were still landing 21-80 MINUTES
-# late on every single run (measured 2026-08-14..08-16), and the 06/07/08/09
-# spacing is not cosmetic — the backend runs one task with one worker and
-# execute_job blocks on subprocess.run, so an hour of separation is what stops
-# two imports stalling each other. Under GitHub that separation was luck; here it
-# is guaranteed. So all of them now live in this file and nothing schedules work
+# late on every single run (measured 2026-08-14..08-16), and the spacing between
+# them is not cosmetic — the backend runs one task with one worker and
+# execute_job blocks on subprocess.run, so separation is what stops two imports
+# stalling each other. Under GitHub that separation was luck; here it is
+# guaranteed. So all of them now live in this file and nothing schedules work
 # from outside AWS.
+#
+# WHY THE DAILY BATCH RUNS AT ~MIDNIGHT NORWAY (2026-09-05): while an import
+# runs, the single worker's event loop is frozen — /health times out, the ALB
+# marks the target unhealthy after 150s and ECS restarts the task. At the old
+# 06:00/08:00 UTC slots (08:00/10:00 Oslo) that took the API down for 1-3 min in
+# the middle of the working day, twice a day, and dropped every live Brain-agent
+# stream. The batch now runs 22:10-22:55 UTC = 00:10-00:55 Oslo in summer and
+# 23:10-23:55 in winter (EventBridge cron is UTC-only; the 1h DST drift is
+# irrelevant at night). Every job's date window is derived from the UTC date
+# (import_jobs.py), so staying inside the same UTC day imports exactly the same
+# data as before. The batch sits between two hourly Taipower runs (:05), and the
+# nightly ECS tasks (weather 01:30, pipeline 03:00) run after it, unchanged.
 #
 # WHY A LAMBDA SHIM AND NOT AN API DESTINATION: this was first built as
 # EventBridge -> API Destination -> the trigger endpoint, and that fails.
@@ -42,8 +54,9 @@ locals {
   # Adding a job here is the whole change: rule, target and permission all fan
   # out from this map.
   #
-  # Times match app/services/import_job_service.py::_calculate_next_run, so the
-  # admin /import-jobs "next run" column stays truthful. Keep them in sync.
+  # Times are mirrored in app/services/import_job_service.py::IMPORT_SCHEDULES,
+  # which drives the admin /import-jobs "next run" column;
+  # tests/test_import_schedules.py parses this file and fails when they drift.
   #
   # EventBridge cron is 6 fields (min hour day-of-month month day-of-week year)
   # and exactly one of day-of-month / day-of-week must be "?".
@@ -52,29 +65,32 @@ locals {
       expression  = "cron(5 * * * ? *)"
       description = "Hourly Taipower snapshot — current-snapshot API, a missed hour is unrecoverable."
     }
+    # Night batch (~midnight Oslo, see header): 22:10-22:55 UTC, inside one UTC
+    # day, spaced 10 min apart (ENTSOE runs take up to ~4 min while execute_job
+    # still blocks the worker), and clear of the :05 Taipower run either side.
     "entsoe-daily" = {
-      expression  = "cron(0 6 * * ? *)"
-      description = "Daily ENTSOE generation import (06:00 UTC)."
+      expression  = "cron(10 22 * * ? *)"
+      description = "Daily ENTSOE generation import (22:10 UTC ≈ midnight Oslo)."
     }
     "elexon-daily" = {
-      expression  = "cron(0 7 * * ? *)"
-      description = "Daily Elexon generation import (07:00 UTC)."
+      expression  = "cron(20 22 * * ? *)"
+      description = "Daily Elexon generation import (22:20 UTC, after the ENTSOE generation run)."
     }
     "entsoe-prices-daily" = {
-      expression  = "cron(0 8 * * ? *)"
-      description = "Daily ENTSOE day-ahead price import (08:00 UTC, after the 06:00 generation run)."
+      expression  = "cron(30 22 * * ? *)"
+      description = "Daily ENTSOE day-ahead price import (22:30 UTC, after the generation runs)."
     }
     "elexon-prices-daily" = {
-      expression  = "cron(0 9 * * ? *)"
-      description = "Daily Elexon market index price import (09:00 UTC, after the 07:00 generation run)."
-    }
-    "eia-monthly" = {
-      expression  = "cron(0 2 1 * ? *)"
-      description = "Monthly EIA import (02:00 UTC on the 1st)."
+      expression  = "cron(40 22 * * ? *)"
+      description = "Daily Elexon market index price import (22:40 UTC, after the ENTSOE price run)."
     }
     "ecb-rates-daily" = {
-      expression  = "cron(0 15 ? * MON-FRI *)"
-      description = "ECB exchange rates on weekdays (15:00 UTC, after the 14:15 CET publication)."
+      expression  = "cron(50 22 ? * MON-FRI *)"
+      description = "ECB exchange rates on weekdays (22:50 UTC — same-day rate, published ~16:00 CET)."
+    }
+    "eia-monthly" = {
+      expression  = "cron(55 22 1 * ? *)"
+      description = "Monthly EIA import (22:55 UTC on the 1st, tail of the night batch)."
     }
   }
 }
@@ -133,8 +149,8 @@ resource "aws_lambda_function_event_invoke_config" "trigger_import" {
 
 # --- Schedules --------------------------------------------------------------
 #
-# Taipower runs at :05 rather than :00 to keep the top of the hour clear of the
-# 06/07/08/09 daily imports, for the single-worker reason described above.
+# Taipower runs at :05 every hour; the daily batch is placed at :10-:55 of the
+# 22:00 UTC hour so nothing overlaps it, for the single-worker reason above.
 resource "aws_cloudwatch_event_rule" "import" {
   for_each            = local.import_schedules
   name                = "${local.name}-${each.key}"

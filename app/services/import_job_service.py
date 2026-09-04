@@ -1,8 +1,9 @@
 """Service for managing scheduled import job executions."""
 
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
 import structlog
@@ -24,6 +25,85 @@ from app.schemas.import_job import (
 )
 
 logger = structlog.get_logger()
+
+
+@dataclass(frozen=True)
+class ImportSchedule:
+    """One EventBridge cron from infra/scheduled_imports.tf, expressed in UTC.
+
+    ``hour=None`` means hourly; ``day_of_month`` set means monthly;
+    ``weekdays_only`` maps to the ``MON-FRI`` day-of-week field.
+    """
+
+    minute: int
+    hour: Optional[int] = None
+    day_of_month: Optional[int] = None
+    weekdays_only: bool = False
+
+    def to_cron(self) -> str:
+        """The exact EventBridge expression, so a test can diff it against the .tf."""
+        if self.hour is None:
+            return f"cron({self.minute} * * * ? *)"
+        if self.day_of_month is not None:
+            return f"cron({self.minute} {self.hour} {self.day_of_month} * ? *)"
+        if self.weekdays_only:
+            return f"cron({self.minute} {self.hour} ? * MON-FRI *)"
+        return f"cron({self.minute} {self.hour} * * ? *)"
+
+    def next_run(self, now: Optional[datetime] = None) -> datetime:
+        """First firing strictly after ``now`` (tz-aware UTC)."""
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now = now.astimezone(timezone.utc)
+
+        if self.hour is None:
+            candidate = now.replace(minute=self.minute, second=0, microsecond=0)
+            if candidate <= now:
+                candidate += timedelta(hours=1)
+            return candidate
+
+        if self.day_of_month is not None:
+            candidate = now.replace(
+                day=self.day_of_month, hour=self.hour, minute=self.minute,
+                second=0, microsecond=0,
+            )
+            if candidate <= now:
+                year, month = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+                candidate = candidate.replace(year=year, month=month)
+            return candidate
+
+        candidate = now.replace(hour=self.hour, minute=self.minute, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += timedelta(days=1)
+        if self.weekdays_only:
+            while candidate.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
+                candidate += timedelta(days=1)
+        return candidate
+
+
+# Mirror of local.import_schedules in infra/scheduled_imports.tf, keyed by the
+# EventBridge job name (== job_metadata["job_config"] on the execution row).
+# The daily batch runs ~midnight Oslo (22:10-22:55 UTC) so the worker-blocking
+# imports never coincide with Norwegian working hours; see the .tf header.
+# tests/test_import_schedules.py fails when this table and the .tf drift.
+IMPORT_SCHEDULES: Dict[str, ImportSchedule] = {
+    "taipower-hourly": ImportSchedule(minute=5),
+    "entsoe-daily": ImportSchedule(minute=10, hour=22),
+    "elexon-daily": ImportSchedule(minute=20, hour=22),
+    "entsoe-prices-daily": ImportSchedule(minute=30, hour=22),
+    "elexon-prices-daily": ImportSchedule(minute=40, hour=22),
+    "ecb-rates-daily": ImportSchedule(minute=50, hour=22, weekdays_only=True),
+    "eia-monthly": ImportSchedule(minute=55, hour=22, day_of_month=1),
+}
+
+
+def next_scheduled_run(
+    job_config: Optional[str], now: Optional[datetime] = None
+) -> Optional[datetime]:
+    """Next EventBridge firing for a scheduled job key, or None for unscheduled jobs."""
+    schedule = IMPORT_SCHEDULES.get(job_config or "")
+    return schedule.next_run(now) if schedule else None
 
 
 class ImportJobService:
@@ -352,8 +432,11 @@ class ImportJobService:
                 (recent_success / recent_total * 100) if recent_total and recent_total > 0 else 0
             )
 
-            # Calculate next scheduled run (based on job name pattern)
-            next_run = self._calculate_next_run(job_name, latest.completed_at or latest.created_at)
+            # Next scheduled run — keyed by the EventBridge job name stored on the
+            # row by the trigger endpoint (the DB job_name is "<source>-scheduled"
+            # and carries no schedule information).
+            metadata = latest.job_metadata if isinstance(latest.job_metadata, dict) else {}
+            next_run = next_scheduled_run(metadata.get("job_config"))
 
             summary = ImportJobSummary(
                 job_name=job_name,
@@ -515,49 +598,6 @@ class ImportJobService:
                     pass
 
         return records_imported, records_updated, api_calls
-
-    def _calculate_next_run(self, job_name: str, last_run: datetime) -> Optional[datetime]:
-        """Calculate next scheduled run time based on job name."""
-        now = datetime.now(timezone.utc)
-
-        if "daily" in job_name:
-            # Daily jobs run at specific hours
-            if "elexon-prices" in job_name:
-                next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
-            elif "entsoe-prices" in job_name:
-                next_run = now.replace(hour=8, minute=0, second=0, microsecond=0)
-            elif "entsoe" in job_name:
-                next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
-            elif "elexon" in job_name:
-                next_run = now.replace(hour=7, minute=0, second=0, microsecond=0)
-            else:
-                next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
-
-            # If today's time has passed, schedule for tomorrow
-            if next_run <= now:
-                next_run += timedelta(days=1)
-
-        elif "hourly" in job_name:
-            # Hourly jobs run at :05 minutes
-            next_run = now.replace(minute=5, second=0, microsecond=0)
-            if next_run <= now:
-                next_run += timedelta(hours=1)
-
-        elif "monthly" in job_name:
-            # Monthly jobs run on 1st at 2 AM
-            next_run = now.replace(day=1, hour=2, minute=0, second=0, microsecond=0)
-            # Next month
-            if next_run <= now:
-                if now.month == 12:
-                    next_run = next_run.replace(year=now.year + 1, month=1)
-                else:
-                    next_run = next_run.replace(month=now.month + 1)
-
-        else:
-            # Manual jobs don't have next run
-            return None
-
-        return next_run
 
     async def get_job_by_id(self, job_id: int) -> Optional[ImportJobExecution]:
         """Get job by ID."""
