@@ -111,7 +111,9 @@ class TestNextRun:
 
 class TestNextScheduledRun:
     def test_known_key(self):
-        assert next_scheduled_run("entsoe-daily", _utc(2026, 9, 4, 9, 0)) == _utc(2026, 9, 4, 22, 10)
+        assert next_scheduled_run("entsoe-daily", _utc(2026, 9, 4, 9, 0)) == _utc(
+            2026, 9, 4, 22, 10
+        )
 
     @pytest.mark.parametrize("key", [None, "", "entsoe-scheduled", "opportunity-detection"])
     def test_unscheduled_keys_have_no_next_run(self, key):

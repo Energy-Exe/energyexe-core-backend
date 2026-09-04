@@ -1,7 +1,8 @@
 """API endpoints for scheduled import job management."""
 
+import asyncio
 from datetime import date, datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -24,6 +25,17 @@ from app.services.import_job_service import ImportJobService
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+# One lock per job key serialises the "is one already in flight?" check with
+# the row creation, so two concurrent triggers (a Lambda retry landing while
+# the first request is still running) cannot both start an import. Process-
+# local is enough: the API runs one task with one worker. Only the check +
+# create happen under the lock; the import itself runs outside it.
+_trigger_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _trigger_lock(job_name: str) -> asyncio.Lock:
+    return _trigger_locks.setdefault(job_name, asyncio.Lock())
 
 
 @router.post("/", response_model=ImportJobResponse)
@@ -326,11 +338,34 @@ async def trigger_scheduled_job(
             job_metadata=metadata,
         )
 
-        job = await service.create_job(
-            job_request,
-            user_id=None,
-            job_type=ImportJobType.SCHEDULED,
-        )
+        async with _trigger_lock(job_name):
+            inflight = await service.find_inflight_scheduled(job_name)
+            if inflight is not None:
+                if start is not None:
+                    # A backfill must not silently reuse a scheduled run's window.
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"{job_name} is already running (job {inflight.id}, "
+                            f"status {inflight.status}); retry when it has finished"
+                        ),
+                    )
+                # Scheduled re-trigger (Lambda retry after a read timeout, or a
+                # double fire): hand back the live row. 200 rather than 409 so
+                # the Lambda/workflow do not count a healthy import as failed.
+                logger.info(
+                    "import_trigger_dedup",
+                    job_name=job_name,
+                    job_id=inflight.id,
+                    status=inflight.status,
+                )
+                return ImportJobResponse.model_validate(inflight)
+
+            job = await service.create_job(
+                job_request,
+                user_id=None,
+                job_type=ImportJobType.SCHEDULED,
+            )
 
         logger.info(
             f"Triggered scheduled job via public endpoint",
@@ -338,11 +373,15 @@ async def trigger_scheduled_job(
             job_id=job.id,
         )
 
-        # Execute immediately
+        # Execute now; the response is the terminal row (the Lambda and the
+        # manual workflow both key on it). execute_job waits for the import on a
+        # worker thread, so the event loop keeps serving meanwhile.
         result = await service.execute_job(job.id)
 
         return ImportJobResponse.model_validate(result)
 
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

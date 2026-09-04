@@ -49,6 +49,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("report_sweeper_failed", error=str(e))
 
+    # Same for import jobs (run in-process on a worker thread) and Brain-agent
+    # threads left is_streaming=true: a task kill or deploy mid-run strands
+    # both forever otherwise (2026-09-05). Each sweeper is standalone and
+    # best-effort; startup never fails on them.
+    try:
+        from app.services.import_job_service import sweep_stuck_import_jobs
+
+        await sweep_stuck_import_jobs()
+    except Exception as e:
+        logger.warning("import_job_sweeper_failed", error=str(e))
+
+    try:
+        from app.services.brain_agent_service import sweep_stuck_agent_threads
+
+        await sweep_stuck_agent_threads()
+    except Exception as e:
+        logger.warning("agent_thread_sweeper_failed", error=str(e))
+
     # No in-process scheduler here. The nightly performance pipeline runs as its
     # own EventBridge-scheduled ECS task (infra/pipeline_daily.tf →
     # scripts/jobs/run_pipeline_daily.py); the data imports run on EventBridge

@@ -59,11 +59,12 @@ jobs:
           echo "HTTP Status: $http_code"
           echo "Response: $body"
 
-          # A 504 here is the known ALB-idle-timeout false alarm: the import
-          # keeps running server-side and updates its own job row. Check
-          # /import-jobs before assuming it failed, and never blindly retry —
-          # the backend runs a single worker and a retry stacks a second
-          # blocking subprocess on it.
+          # A 504 here is the known ALB-idle-timeout false alarm (imports
+          # longer than 300s, i.e. large backfills): the import keeps running
+          # server-side and updates its own job row. Check /import-jobs before
+          # assuming it failed. Re-triggering while it runs is safe: the
+          # endpoint dedups by job key (200 with the live row for the scheduled
+          # window, 409 for a backfill with explicit dates).
           if [ "$http_code" -ne 200 ]; then
             echo "❌ Trigger returned $http_code"
             exit 1

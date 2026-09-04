@@ -1,5 +1,6 @@
 """Service for managing scheduled import job executions."""
 
+import asyncio
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -7,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
 import structlog
-from sqlalchemy import and_, desc, func, select, Integer
+from sqlalchemy import and_, desc, func, or_, select, update, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session_factory
@@ -25,6 +26,20 @@ from app.schemas.import_job import (
 )
 
 logger = structlog.get_logger()
+
+# A trigger for a job key that already has a PENDING/RUNNING row younger than
+# this is a duplicate (Lambda retry, double click) and reuses that row instead
+# of starting a second import. Covers the longest import (~4 min) plus the
+# Lambda's async-retry spread (<= 30 min). Anything older is treated as wedged:
+# the 1 h subprocess timeout or the boot sweeper will fail it.
+INFLIGHT_GUARD_WINDOW = timedelta(minutes=30)
+SUBPROCESS_TIMEOUT_SECONDS = 3600
+_INFLIGHT_STATUSES = (ImportJobStatus.PENDING, ImportJobStatus.RUNNING)
+
+
+def _utcnow() -> datetime:
+    """Naive UTC, matching the DateTime columns on import_job_executions."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass(frozen=True)
@@ -197,14 +212,13 @@ class ImportJobService:
                 command=command,
             )
 
-            # Run command (this can take minutes)
-            process_result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=3600,  # 1 hour timeout
-            )
+            # Run the command (minutes) on a worker thread. subprocess.run is a
+            # blocking C call; awaited inline it froze the single uvicorn
+            # worker's event loop for the whole import, so /health timed out,
+            # the ALB marked the task unhealthy after 150 s and ECS killed it
+            # (prod, twice a day, until 2026-09-05). Off the loop, the API and
+            # the Brain-agent SSE streams keep serving while the import runs.
+            process_result = await asyncio.to_thread(self._run_import_command, command)
 
             # Parse results from output
             records_imported, records_updated, api_calls = self._parse_import_output(
@@ -274,6 +288,40 @@ class ImportJobService:
 
             logger.error("Job execution error", job_id=job_id, error=str(e))
             return job
+
+    @staticmethod
+    def _run_import_command(command: str) -> subprocess.CompletedProcess:
+        """Blocking; only ever called via asyncio.to_thread from execute_job."""
+        return subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        )
+
+    async def find_inflight_scheduled(
+        self, job_config: str, window: timedelta = INFLIGHT_GUARD_WINDOW
+    ) -> Optional[ImportJobExecution]:
+        """Newest PENDING/RUNNING row for an EventBridge job key created inside ``window``.
+
+        PENDING is included so the create -> mark_running gap cannot be raced by
+        a concurrent trigger. Keyed on job_metadata["job_config"] because the DB
+        job_name ("entsoe-scheduled") is shared by manual and scheduled runs.
+        """
+        cutoff = _utcnow() - window
+        stmt = (
+            select(ImportJobExecution)
+            .where(
+                ImportJobExecution.status.in_(_INFLIGHT_STATUSES),
+                ImportJobExecution.job_metadata["job_config"].as_string() == job_config,
+                ImportJobExecution.created_at >= cutoff,
+            )
+            .order_by(desc(ImportJobExecution.created_at))
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def retry_job(self, job_id: int, reset_retry_count: bool = False) -> ImportJobExecution:
         """
@@ -605,3 +653,51 @@ class ImportJobService:
             select(ImportJobExecution).where(ImportJobExecution.id == job_id)
         )
         return result.scalar_one_or_none()
+
+
+async def sweep_stuck_import_jobs() -> int:
+    """Startup sweeper: fail import rows orphaned by a task death.
+
+    Mirrors app.services.reports.orchestrator.sweep_stuck_reports. Imports run
+    inside the API process (execute_job -> subprocess on a worker thread), so
+    a task kill or deploy mid-import leaves the row PENDING/RUNNING forever:
+    the in-flight guard then keeps returning it and the health status counts
+    it as running. No time cutoff: the service deploys with min-healthy 0% /
+    max 100%, so the previous process is dead before this one boots and every
+    in-process row is an orphan. Only rows this process would own are touched:
+    external triggers (job_metadata.trigger == "external") and the in-process
+    opportunity-detection job. The nightly performance pipeline writes RUNNING
+    rows into the same table from its own ECS task and is left alone.
+
+    Multi-task caveat: with >1 API task (or a >100% rolling deploy) this would
+    fail another task's live import; that needs a task-identity/heartbeat
+    column, not a cutoff.
+    """
+    factory = get_session_factory()
+    now = _utcnow()
+    async with factory() as db:
+        result = await db.execute(
+            update(ImportJobExecution)
+            .where(
+                ImportJobExecution.status.in_(_INFLIGHT_STATUSES),
+                or_(
+                    ImportJobExecution.job_metadata["trigger"].as_string() == "external",
+                    ImportJobExecution.job_name == "opportunity-detection",
+                ),
+            )
+            .values(
+                status=ImportJobStatus.FAILED,
+                error_message="Orphaned by service restart",
+                completed_at=now,
+            )
+            .returning(ImportJobExecution.id, ImportJobExecution.job_name)
+        )
+        rows = result.all()
+        await db.commit()
+    if rows:
+        logger.warning(
+            "import_job_sweeper_failed_orphans",
+            count=len(rows),
+            jobs=[(row[0], row[1]) for row in rows],
+        )
+    return len(rows)

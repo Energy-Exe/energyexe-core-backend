@@ -32,6 +32,7 @@ from claude_agent_sdk.types import StreamEvent
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
+from app.services.brain_agent_files import attach_run_files, merge_images_by_turn
 from app.services.brain_agent_silver_script import SILVER_HELPER_SCRIPT
 from app.services.brain_agent_hooks import make_pre_tool_use_hook
 from app.services.brain_agent_uploads import (
@@ -265,6 +266,11 @@ class AgentSession:
     # is the diff between consecutive results. Fresh per AgentSession, so the
     # chain resets exactly when the CLI's own counter does (session recreation).
     last_result_total_cost_usd: Optional[float] = None
+    # Files (charts, CSVs) the LIVE run has produced so far, as the same
+    # {url, filename} dicts the SSE image/file events carry. Reset per run;
+    # _persist_completed_run attaches them to the run's answer bubble so they
+    # survive the transcript rebuild (the transcript knows nothing about them).
+    run_files: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -485,6 +491,7 @@ class BrainAgentService:
                     session.last_message_id = message_id
                 session.current_prompt = raw_prompt
                 session.run_started_at = time.time()
+                session.run_files = []
 
                 # Advisory only (never read as a server-side guard): lets the
                 # UI poll GET /threads/{id} to see a run is live after its
@@ -932,7 +939,19 @@ class BrainAgentService:
         # is persisted as a synthetic tail below. On an error terminal the
         # transcript legitimately ends on a tool_result entry and a marker is
         # appended instead: read once and move on.
+        now_ms = int(time.time() * 1000)
+        run_files = list(session.run_files) if session is not None else []
+        stored_cache: Optional[List[Dict[str, Any]]] = None
+
+        async def _stored() -> List[Dict[str, Any]]:
+            # At most one DB read per persist; a fresh copy per caller.
+            nonlocal stored_cache
+            if stored_cache is None:
+                stored_cache = await self._load_thread_messages(session_id)
+            return list(stored_cache)
+
         attempts = 6 if terminal_info["kind"] == "success" else 1
+        tail_ok = False
         for attempt in range(attempts):
             try:
                 sdk_messages = get_session_messages(
@@ -944,10 +963,17 @@ class BrainAgentService:
                 logger.error("brain_agent_get_session_messages_error", error=str(e), session_id=session_id)
                 final_messages = []
             if _tail_has_answer(final_messages):
+                tail_ok = True
                 break
             if attempt < attempts - 1:
                 await asyncio.sleep(0.5)
-        else:
+
+        # The transcript never carried images: earlier turns get theirs back
+        # from the stored thread (paired per turn), this run's files go on its
+        # answer bubble below. Decided before any synthetic tail is added.
+        from_transcript = bool(final_messages)
+
+        if not tail_ok:
             if terminal_info["kind"] == "success":
                 result_text = (getattr(result_message, "result", None) or "").strip()
                 if result_text:
@@ -964,10 +990,7 @@ class BrainAgentService:
                         # as the error-terminal path below: append to what is
                         # already saved, never replace the thread with a lone
                         # synthetic answer.
-                        final_messages = [
-                            *await self._load_thread_messages(session_id),
-                            synthetic,
-                        ]
+                        final_messages = [*await _stored(), synthetic]
                     logger.info(
                         "brain_agent_tail_synthesized_from_result",
                         session_id=session_id,
@@ -982,9 +1005,16 @@ class BrainAgentService:
                         terminal_reason=terminal_info["terminal_reason"],
                     )
 
+        if from_transcript:
+            stored = await _stored()
+            if stored:
+                final_messages = merge_images_by_turn(stored, final_messages, now_ms=now_ms)
+
         if terminal_info["kind"] != "success":
             marker = self._terminal_marker(result_message, terminal_info)
             if final_messages:
+                # Files first, marker last: the marker never carries images.
+                final_messages = attach_run_files(final_messages, run_files, now_ms=now_ms)
                 final_messages.append(marker)
             else:
                 # Transcript read failed on an error terminal. Never replace
@@ -992,7 +1022,10 @@ class BrainAgentService:
                 # marker to whatever is already saved (or create the thread
                 # with just the marker on a failed very first turn). Saving
                 # also clears the advisory is_streaming flag.
-                final_messages = [*await self._load_thread_messages(session_id), marker]
+                carrier = attach_run_files([{"type": "assistant", "content": "", "id": f"files-{uuid.uuid4()}", "timestamp": now_ms}], run_files, now_ms=now_ms) if run_files else []
+                final_messages = [*await _stored(), *carrier, marker]
+        else:
+            final_messages = attach_run_files(final_messages, run_files, now_ms=now_ms)
 
         cost_delta = self._take_cost_delta(session, result_message)
         thread_total: Optional[float] = None
@@ -1114,6 +1147,19 @@ class BrainAgentService:
             if result_message is None:
                 return
 
+            # Push any files the run produced to S3 and record them BEFORE
+            # persisting: there is no SSE consumer to announce them, so the
+            # persisted answer bubble is the only place they can surface.
+            for fname in self._scan_for_new_files(session):
+                file_path = Path(f"/tmp/brain-agent/{session.user_id}/{session_id}") / fname
+                await self._upload_file_to_s3(session.user_id, session_id, fname, file_path)
+                session.run_files.append(
+                    {
+                        "url": f"/brain-agent/files/{session.user_id}/{session_id}/{fname}",
+                        "filename": fname,
+                    }
+                )
+
             # The request-scoped DB session that started this run is gone —
             # persist through a fresh one.
             from app.core.database import get_session_factory
@@ -1128,12 +1174,6 @@ class BrainAgentService:
                     session=session,
                     detached=True,
                 )
-
-            # Push any files the run produced to S3. There is no SSE consumer
-            # to announce them; they surface via the thread's file URLs.
-            for fname in self._scan_for_new_files(session):
-                file_path = Path(f"/tmp/brain-agent/{session.user_id}/{session_id}") / fname
-                await self._upload_file_to_s3(session.user_id, session_id, fname, file_path)
 
             logger.info("brain_agent_detached_run_saved", session_id=session_id)
         except asyncio.CancelledError:
@@ -1847,13 +1887,12 @@ class BrainAgentService:
                             # Emit as "image" for image files, "file" for others
                             ext = Path(fname).suffix.lower()
                             event_type = "image" if ext in IMAGE_EXTENSIONS else "file"
-                            yield SSEEvent(
-                                event_type=event_type,
-                                data={
-                                    "url": f"/brain-agent/files/{session.user_id}/{session.session_id}/{fname}",
-                                    "filename": fname,
-                                },
-                            )
+                            file_ref = {
+                                "url": f"/brain-agent/files/{session.user_id}/{session.session_id}/{fname}",
+                                "filename": fname,
+                            }
+                            session.run_files.append(dict(file_ref))
+                            yield SSEEvent(event_type=event_type, data=file_ref)
 
         elif isinstance(message, SystemMessage):
             yield SSEEvent(
@@ -2072,3 +2111,64 @@ class BrainAgentService:
 
         prompt = prompt.replace("{{REPO_PATHS}}", repo_block)
         return prompt
+
+
+# Terminal info for a run the API process died under (ECS kill, deploy). Kind
+# stays "unknown_error" — the only error kinds both UI twins render; the
+# subtype/reason identify the cause in the persisted marker.
+RESTART_TERMINAL_INFO: Dict[str, Any] = {
+    "kind": "unknown_error",
+    "subtype": "service_restart",
+    "is_error": True,
+    "terminal_reason": "service_restart",
+    "api_error_status": None,
+    "reason_message": (
+        "The server restarted while the agent was working on this reply, so it "
+        "was not saved. Please send your question again."
+    ),
+}
+
+
+async def sweep_stuck_agent_threads() -> int:
+    """Startup sweeper: clear ``is_streaming`` stranded True by a task death.
+
+    ``_set_thread_streaming(True)`` is cleared only by a thread save or by
+    chat()'s own error paths, so a process killed mid-run leaves the flag set
+    forever: the UI's re-attach poll runs its full 3 minutes and then shows
+    "This run may have failed" on every reopen, with no terminal marker to say
+    what happened. Live runs are in-process state (``_sessions``) and a fresh
+    boot has none, so at boot every flagged thread is an orphan — no cutoff.
+    Each gets the flag cleared and a restart marker appended (idempotent: a
+    tail that already carries a terminal is left alone).
+
+    Multi-task caveat (same as ``AgentSession``'s in-process note): with more
+    than one API task a boot here would mark another task's live run as
+    failed; that needs a heartbeat/owner column, not a cutoff.
+    """
+    from app.core.database import get_session_factory
+    from app.models.agent_thread import AgentThread
+
+    factory = get_session_factory()
+    async with factory() as db:
+        result = await db.execute(
+            select(AgentThread).where(AgentThread.is_streaming.is_(True))
+        )
+        threads = list(result.scalars().all())
+        for thread in threads:
+            # JSONB without MutableList: build a NEW list and reassign, an
+            # in-place append is invisible to SQLAlchemy.
+            messages = list(thread.messages or [])
+            tail = messages[-1] if messages else None
+            if not (isinstance(tail, dict) and tail.get("terminal")):
+                messages.append(BrainAgentService._terminal_marker(None, RESTART_TERMINAL_INFO))
+            thread.messages = messages
+            thread.message_count = len(messages)
+            thread.is_streaming = False
+        await db.commit()
+    if threads:
+        logger.warning(
+            "agent_thread_sweeper_cleared",
+            count=len(threads),
+            thread_ids=[thread.id for thread in threads],
+        )
+    return len(threads)

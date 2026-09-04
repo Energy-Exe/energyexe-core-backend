@@ -113,14 +113,18 @@ resource "aws_lambda_function" "trigger_import" {
   filename         = data.archive_file.trigger_import[0].output_path
   source_code_hash = data.archive_file.trigger_import[0].output_base64sha256
 
-  # Must comfortably exceed the slowest import this fires plus its in-invocation
-  # retries. Taipower is ~7s; the headroom is for the retry backoff.
+  # The endpoint answers when the import has finished: 40-110s Taipower,
+  # up to ~4 min for the ENTSOE jobs. One attempt may wait READ_TIMEOUT_SECONDS
+  # (kept under the ALB's 300s idle timeout); the handler sizes any further
+  # attempt to the time left, so the function timeout is never the thing that
+  # cuts an answer off.
   timeout     = 300
   memory_size = 128
 
   environment {
     variables = {
-      API_URL = "https://${var.api_domain}"
+      API_URL              = "https://${var.api_domain}"
+      READ_TIMEOUT_SECONDS = "270"
     }
   }
 }
