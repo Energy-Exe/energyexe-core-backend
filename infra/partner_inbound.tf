@@ -249,6 +249,89 @@ resource "aws_iam_user_policy" "varanger_kraft_upload" {
   })
 }
 
+# --- Aje (internal, methodology owner): Put/Get/List across ALL partner
+# prefixes, no delete. His own named user so mimic runs and data pulls never
+# borrow a partner's key (the SFE mimic forced a rotation for exactly that).
+
+resource "aws_iam_user" "aje_partner" {
+  name = "aje-partner-access"
+}
+
+resource "aws_iam_user_policy" "aje_partner" {
+  name = "partner-inbound-aje-access"
+  user = aws_iam_user.aje_partner.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AccessPartnerPrefixes"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts",
+        ]
+        Resource = [
+          "${aws_s3_bucket.partner_inbound.arn}/sfe/*",
+          "${aws_s3_bucket.partner_inbound.arn}/varanger-kraft/*",
+        ]
+      },
+      {
+        Sid    = "ListPartnerPrefixes"
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads",
+        ]
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              "sfe/", "sfe/*",
+              "varanger-kraft/", "varanger-kraft/*",
+            ]
+          }
+        }
+      },
+      # GUI clients (Cyberduck/WinSCP) open the bucket root on connect; these two
+      # statements let that root view work — folder names only (delimiter "/"
+      # required, so a recursive no-delimiter dump of the bucket stays denied).
+      # Two statements because clients variously send prefix="" or omit it, and
+      # StringLike/StringEquals don't match an ABSENT context key.
+      {
+        Sid      = "ListRootFoldersEmptyPrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          StringEquals = {
+            "s3:prefix"    = ""
+            "s3:delimiter" = "/"
+          }
+        }
+      },
+      {
+        Sid      = "ListRootFoldersNoPrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          Null         = { "s3:prefix" = "true" }
+          StringEquals = { "s3:delimiter" = "/" }
+        }
+      },
+      {
+        Sid      = "BucketLocation" # Cyberduck/WinSCP resolve the region with this
+        Effect   = "Allow"
+        Action   = "s3:GetBucketLocation"
+        Resource = aws_s3_bucket.partner_inbound.arn
+      },
+    ]
+  })
+}
+
 output "partner_inbound_bucket" {
   description = "Inbound drop-zone bucket for external partner data deliveries"
   value       = aws_s3_bucket.partner_inbound.bucket
