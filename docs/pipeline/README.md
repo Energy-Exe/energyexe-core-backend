@@ -79,7 +79,7 @@ Three triggers:
 
 | Trigger | File | Notes |
 |---|---|---|
-| Nightly ECS task | `scripts/jobs/run_pipeline_daily.py` → `app/cron/pipeline_daily.py:run_pipeline_job` | 03:00 UTC (after the 01:30 daily ERA5 weather task — `infra/weather_daily.tf` / `scripts/jobs/run_weather_daily.py`, EPR-121 — and before the 06:00 generation imports). Scheduled by **EventBridge**, declared in `infra/pipeline_daily.tf` — not in-process. Hour comes from `var.pipeline_daily_hour`, which drives both the rule and the `PIPELINE_DAILY_HOUR` the container reports to the GlitchTip cron monitor. Exits 0/1/2 (ok / batch failed / detection failed); a non-zero exit or an abnormal stop alarms to SNS. |
+| Nightly ECS task | `scripts/jobs/run_pipeline_daily.py` → `app/cron/pipeline_daily.py:run_pipeline_job` | 03:00 UTC (after the 01:30 daily ERA5 weather task — `infra/weather_daily.tf` / `scripts/jobs/run_weather_daily.py`, EPR-121 — and after the 22:10–22:55 UTC generation/price import batch of the previous evening — `infra/scheduled_imports.tf`). Scheduled by **EventBridge**, declared in `infra/pipeline_daily.tf` — not in-process. Hour comes from `var.pipeline_daily_hour`, which drives both the rule and the `PIPELINE_DAILY_HOUR` the container reports to the GlitchTip cron monitor. Exits 0/1/2 (ok / batch failed / detection failed); a non-zero exit or an abnormal stop alarms to SNS. |
 | Manual API | `POST /api/v1/performance-pipeline/run` | Admin UI "Run Pipeline" button. Optional `windfarm_ids` filter. |
 | Read API | `GET /api/v1/performance-pipeline/...` | Read-only endpoints for power curves, ODI, wind-norm, degradation, commercial summary. Consumed by admin-ui and client-ui. |
 

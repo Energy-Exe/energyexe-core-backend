@@ -21,21 +21,27 @@ https://api.energyexe.com/api/v1/import-jobs/trigger/{job_name}
 ImportJobExecution row → import runs → DB updated → visible at /import-jobs
 ```
 
-| Job | Frequency | Time (UTC) | Data imported |
-|-----|-----------|------------|---------------|
-| **taipower-hourly** | Hourly | :05 | Current snapshot |
-| **entsoe-daily** | Daily | 06:00 | 3 days ago |
-| **elexon-daily** | Daily | 07:00 | 3 days ago |
-| **entsoe-prices-daily** | Daily | 08:00 | 2 days ago (day-ahead, 11 bidzones) |
-| **elexon-prices-daily** | Daily | 09:00 | 1 day ago (GB market index) |
-| **eia-monthly** | Monthly | 1st @ 02:00 | 2 months ago |
-| **ecb-rates-daily** | Weekdays | 15:00 Mon–Fri | ECB exchange rates |
+| Job | Frequency | Time (UTC) | Oslo (summer / winter) | Data imported |
+|-----|-----------|------------|------------------------|---------------|
+| **taipower-hourly** | Hourly | :05 | — | Current snapshot |
+| **entsoe-daily** | Daily | 22:10 | 00:10 / 23:10 | 3 days ago |
+| **elexon-daily** | Daily | 22:20 | 00:20 / 23:20 | 10 days ago |
+| **entsoe-prices-daily** | Daily | 22:30 | 00:30 / 23:30 | 2 days ago (day-ahead, 11 bidzones) |
+| **elexon-prices-daily** | Daily | 22:40 | 00:40 / 23:40 | 1 day ago (GB market index) |
+| **ecb-rates-daily** | Weekdays | 22:50 Mon–Fri | 00:50 / 23:50 | ECB exchange rates (same day) |
+| **eia-monthly** | Monthly | 1st @ 22:55 | 00:55 / 23:55 | 2 months ago |
 
-The daily jobs are spaced an hour apart on purpose. The backend runs a single
-task with `--workers 1` (`infra/ecs.tf`) and `execute_job` blocks on
-`subprocess.run`, so two imports firing together stall each other's event loop.
-Keep these times in sync with `_calculate_next_run` in
-`app/services/import_job_service.py`, which drives the admin "next run" column.
+The daily batch runs at ~midnight Norway on purpose (moved 2026-09-05 from
+06:00–09:00 UTC). The backend runs a single task with `--workers 1`
+(`infra/ecs.tf`) and `execute_job` blocks on `subprocess.run`, so while an
+import runs the API is frozen — `/health` times out, the ALB marks the target
+unhealthy after 150 s and ECS restarts the task. At 08:00/10:00 Oslo that took
+the portal down twice a day and dropped every live Brain-agent stream. The jobs
+are 10 min apart so they never overlap each other or the :05 Taipower run, and
+all sit inside one UTC day because every date window is computed from the UTC
+date (`import_jobs.py`). The times are mirrored in `IMPORT_SCHEDULES` in
+`app/services/import_job_service.py` (admin "next run" column);
+`tests/test_import_schedules.py` parses the `.tf` and fails if they drift.
 
 The nightly *performance pipeline* also runs on EventBridge, as its own
 run-to-completion ECS task at 03:00 UTC rather than through the Lambda —

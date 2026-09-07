@@ -4,10 +4,12 @@ resource "aws_lb" "this" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = data.aws_subnets.default.ids
 
-  # Default is 60s. Synchronous import-job triggers (POST /import-jobs/trigger/*)
-  # run the import in-request; ENTSOE daily takes ~66s, so a 60s idle timeout
-  # returned spurious 504s to the GitHub scheduled-imports curl even though the
-  # import completed. 300s gives long imports headroom while keeping a sane ceiling.
+  # Default is 60s. Import-job triggers (POST /import-jobs/trigger/*) answer
+  # only when the import has finished (ENTSOE up to ~4 min; the import itself
+  # runs on a worker thread since 2026-09-05, so the API keeps serving
+  # meanwhile). A 60s idle timeout returned spurious 504s to the trigger
+  # Lambda/curl even though the import completed. 300s gives long imports
+  # headroom while keeping a sane ceiling; the Lambda reads with 270s.
   idle_timeout = 300
 }
 

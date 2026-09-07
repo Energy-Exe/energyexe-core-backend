@@ -28,7 +28,12 @@ import argparse
 import asyncio
 import logging
 import sys
+from pathlib import Path
 from typing import List, Sequence
+
+# Runnable as ``python scripts/rerun_report_narratives.py`` from the repo root
+# (or /app in the image) without PYTHONPATH: put the repo root on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # structlog emits nothing at INFO from a standalone script unless stdlib
 # logging is configured first.

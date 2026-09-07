@@ -1001,3 +1001,147 @@ def test_persist_across_recreation_accumulates_not_overwrites(monkeypatch):
     assert out1.cost_delta_usd == 1.0
     assert out2.cost_delta_usd == pytest.approx(0.7)
     assert out2.thread_total_cost_usd == pytest.approx(1.7)  # not 0.7
+
+
+# --- Files/images survive the transcript rebuild (2026-09-05) ---------------
+
+
+def _img(name, session_id="s-img", user_id=1):
+    return {"url": f"/brain-agent/files/{user_id}/{session_id}/{name}", "filename": name}
+
+
+def _session_with_run_files(*names) -> AgentSession:
+    session = AgentSession(
+        session_id="s-img",
+        user_id=1,
+        client=None,
+        created_at=_time.time(),
+        last_activity=_time.time(),
+    )
+    session.run_files = [_img(n) for n in names]
+    return session
+
+
+def test_persist_attaches_run_files_and_carries_stored_images(monkeypatch):
+    sleeps = []
+    saved = _persist_harness(
+        monkeypatch,
+        [
+            _sm("user", "u1", "q0"),
+            _sm("assistant", "a1", "a0"),
+            _sm("user", "u2", "q1"),
+            _sm("assistant", "a2", "a1"),
+        ],
+        sleeps,
+    )
+
+    async def _stored(self, session_id):
+        # What the thread looked like before this run: turn 0 had a chart,
+        # and the client persisted the new prompt at send time.
+        return [
+            {"id": "u1", "type": "user", "content": "q0"},
+            {"id": "a1", "type": "assistant", "content": "a0", "images": [_img("old.png")]},
+            {"id": "u2", "type": "user", "content": "q1"},
+        ]
+
+    monkeypatch.setattr(BrainAgentService, "_load_thread_messages", _stored)
+
+    service = BrainAgentService(db=None)
+    outcome = asyncio.run(
+        service._persist_completed_run(
+            user_id=1,
+            session_id="s-img",
+            result_message=_result_message(),
+            session=_session_with_run_files("chart.png"),
+        )
+    )
+
+    msgs = saved["messages"]
+    assert [m["content"] for m in msgs] == ["q0", "a0", "q1", "a1"]
+    assert msgs[1]["images"] == [_img("old.png")]
+    assert msgs[3]["images"] == [_img("chart.png")]
+    assert "images" not in msgs[0] and "images" not in msgs[2]
+    assert outcome.messages == msgs
+
+
+def test_persist_error_terminal_keeps_run_files_off_the_marker(monkeypatch):
+    sleeps = []
+    saved = _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", "q0"), _sm("assistant", "a1", "working on it")],
+        sleeps,
+    )
+
+    service = BrainAgentService(db=None)
+    asyncio.run(
+        service._persist_completed_run(
+            user_id=1,
+            session_id="s-img",
+            result_message=_budget_kill_result(),
+            session=_session_with_run_files("chart.png"),
+        )
+    )
+
+    msgs = saved["messages"]
+    assert msgs[-1]["terminal"]["kind"] == "budget_exhausted"
+    assert "images" not in msgs[-1]
+    assert msgs[-2]["content"] == "working on it"
+    assert msgs[-2]["images"] == [_img("chart.png")]
+
+
+def test_persist_synthetic_tail_carries_run_files(monkeypatch):
+    sleeps = []
+    saved = _persist_harness(
+        monkeypatch,
+        [
+            _sm("user", "u1", "q0"),
+            _sm(
+                "assistant",
+                "a1",
+                [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "python chart.py"}}],
+            ),
+        ],
+        sleeps,
+    )
+
+    service = BrainAgentService(db=None)
+    asyncio.run(
+        service._persist_completed_run(
+            user_id=1,
+            session_id="s-img",
+            result_message=_result_message(result="Here is the chart."),
+            session=_session_with_run_files("chart.png"),
+        )
+    )
+
+    tail = saved["messages"][-1]
+    assert tail["content"] == "Here is the chart."
+    assert tail["images"] == [_img("chart.png")]
+    assert "images" not in saved["messages"][-2]  # the tool-call entry
+
+
+def test_finish_orphaned_run_records_late_files_before_persisting(monkeypatch):
+    fake_client = _FakeClient([_result_message()])
+    session = _detached_session(fake_client)
+    seen = {}
+
+    async def _fake_persist(
+        self, user_id, session_id, result_message, model=None, session=None, detached=False
+    ):
+        seen["run_files"] = list(session.run_files)
+        return PersistOutcome(messages=[], terminal_info=derive_terminal_info(result_message))
+
+    async def _no_upload(self, user_id, session_id, filename, file_path):
+        seen.setdefault("uploaded", []).append(filename)
+
+    monkeypatch.setattr(BrainAgentService, "_persist_completed_run", _fake_persist)
+    monkeypatch.setattr(BrainAgentService, "_scan_for_new_files", lambda self, s: ["late.png"])
+    monkeypatch.setattr(BrainAgentService, "_upload_file_to_s3", _no_upload)
+
+    service = BrainAgentService(db=None)
+    asyncio.run(service._finish_orphaned_run(session))
+
+    assert seen["uploaded"] == ["late.png"]
+    assert seen["run_files"] == [
+        {"url": f"/brain-agent/files/{USER_ID_DETACH}/s-detach/late.png", "filename": "late.png"}
+    ]
