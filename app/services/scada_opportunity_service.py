@@ -46,6 +46,10 @@ _LIFECYCLE_JOIN = """
 # Once the findings tables are seen they never disappear mid-process; absence is rechecked per call
 # so a fresh persist / migration lights the feature up without a backend restart.
 _tables_seen = False
+_by_year_seen = False
+
+_CLASS_SLOT = {"REALIZED": "realized", "RECOVERABLE": "recoverable", "CURTAILMENT": "curtailment"}
+_BY_YEAR_SERIES = (("real", "gbp_real"), ("constant_price", "gbp_constant_price"))
 
 
 async def scada_opportunities_present(db: AsyncSession) -> bool:
@@ -67,6 +71,80 @@ async def scada_opportunities_present(db: AsyncSession) -> bool:
     if present:
         _tables_seen = True
     return present
+
+
+async def scada_by_year_present(db: AsyncSession) -> bool:
+    """True when the per-year tables (pipeline migration a9c3e7f1b2d4, EPR-131) exist here.
+
+    Checked separately from the base register: an environment can carry the v1 register long
+    before the by-year rows are materialised, and the client renders that as 'not yet loaded'."""
+    global _by_year_seen
+    if _by_year_seen:
+        return True
+    try:
+        table = (
+            await db.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'scada' AND table_name = 'opportunity_register_by_year' LIMIT 1"
+                )
+            )
+        ).scalar() is not None
+        column = (
+            await db.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = 'scada' AND table_name = 'opportunity_run' "
+                    "AND column_name = 'decade_only_triggers' LIMIT 1"
+                )
+            )
+        ).scalar() is not None
+        present = table and column
+    except Exception:
+        logger.warning("scada_by_year_check_failed", exc_info=True)
+        return False
+    if present:
+        _by_year_seen = True
+    return present
+
+
+def split_csv(value: Optional[str]) -> List[str]:
+    """'OPS_08,OPS_09' -> ['OPS_08', 'OPS_09'] (the run row stores the flat-line list as a comma string)."""
+    return [p.strip() for p in (value or "").split(",") if p.strip()]
+
+
+def summarise_by_year(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Class totals per (series, year), real series first then constant-price, years ascending.
+
+    Done in Python rather than SQL: at most ~165 rows, the SQLite test suite cannot run scada.*
+    SQL, and computing it from the same rows the client tabulates means chart, table and CSV
+    reconcile by construction. Numeric columns arrive as Decimal -> float(v or 0); a class whose
+    lines are all null (e.g. constant-price CURTAILMENT) sums to 0, the row basis says why."""
+    acc: Dict[tuple, Dict[str, Any]] = {}
+    for r in rows:
+        year = int(r["year"])
+        slot = _CLASS_SLOT.get(str(r.get("cls")))
+        for series, key in _BY_YEAR_SERIES:
+            d = acc.setdefault(
+                (series, year),
+                {
+                    "year": year,
+                    "series": series,
+                    "realized": 0.0,
+                    "recoverable": 0.0,
+                    "curtailment": 0.0,
+                    "total": 0.0,
+                    "partial_year": False,
+                },
+            )
+            d["partial_year"] = d["partial_year"] or bool(r.get("partial_year"))
+            if slot is None:
+                continue
+            v = float(r.get(key) or 0)
+            d[slot] += v
+            d["total"] += v
+    order = {series: i for i, (series, _) in enumerate(_BY_YEAR_SERIES)}
+    return [acc[k] for k in sorted(acc, key=lambda k: (order[k[0]], k[1]))]
 
 
 class ScadaOpportunityService:
@@ -175,6 +253,59 @@ class ScadaOpportunityService:
         )
         found = row.fetchone()
         return dict(found._mapping) if found else None
+
+    async def by_year(self, farm: str) -> Optional[Dict[str, Any]]:
+        """The per-year view (EPR-131): run provenance + (year, trigger) rows + totals + trend.
+        None when the farm has no run or no by-year rows (a v1-only persist)."""
+        run = (
+            await self.db.execute(
+                text(
+                    "SELECT farm, run_id, generated_at, window_start_year, window_end_year, ann_years, "
+                    "headline_gbp_year, price_basis_gbp_mwh, price_basis_note, decade_only_triggers "
+                    "FROM scada.opportunity_run WHERE farm = :farm"
+                ),
+                {"farm": farm},
+            )
+        ).fetchone()
+        if run is None:
+            return None
+        rows = [
+            dict(r._mapping)
+            for r in (
+                await self.db.execute(
+                    text(
+                        "SELECT farm, year, trigger, run_id, cls, label, gbp_real, basis_real, "
+                        "gbp_constant_price, basis_constant_price, energy_mwh, partial_year, "
+                        "recon_status, recon_delta_gbp "
+                        "FROM scada.opportunity_register_by_year WHERE farm = :farm "
+                        "ORDER BY year, cls, trigger"
+                    ),
+                    {"farm": farm},
+                )
+            ).fetchall()
+        ]
+        if not rows:
+            return None
+        trend = [
+            dict(r._mapping)
+            for r in (
+                await self.db.execute(
+                    text(
+                        "SELECT series, cls, n_full_years, slope_gbp_per_year, intercept_gbp, se_slope, "
+                        "ci_lo, ci_hi, r2, year_first, year_last, note "
+                        "FROM scada.opportunity_by_year_trend WHERE farm = :farm ORDER BY series, cls"
+                    ),
+                    {"farm": farm},
+                )
+            ).fetchall()
+        ]
+        out = dict(run._mapping)
+        out["decade_only_triggers"] = split_csv(out.pop("decade_only_triggers", None))
+        out["years"] = sorted({int(r["year"]) for r in rows})
+        out["rows"] = rows
+        out["summary"] = summarise_by_year(rows)
+        out["trend"] = trend
+        return out
 
     async def triggers(self) -> List[Dict[str, Any]]:
         rows = await self.db.execute(

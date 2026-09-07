@@ -19,6 +19,7 @@ from app.schemas.scada_opportunity import (
     ScadaFindingActionResult,
     ScadaFindingActionUpdate,
     ScadaOpportunity,
+    ScadaOpportunityByYear,
     ScadaOpportunityListResponse,
     ScadaOpportunitySummary,
     ScadaTrigger,
@@ -26,6 +27,7 @@ from app.schemas.scada_opportunity import (
 from app.services.scada_finding_service import ScadaFindingService
 from app.services.scada_opportunity_service import (
     ScadaOpportunityService,
+    scada_by_year_present,
     scada_opportunities_present,
 )
 
@@ -112,6 +114,35 @@ async def list_triggers(
     """The schema-v7 trigger catalog (labels/domain/persona/action for filter chips)."""
     service = await _service(db)
     return await service.triggers()
+
+
+@router.get("/by-year", response_model=ScadaOpportunityByYear)
+async def get_by_year(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Revenue at risk per calendar year (EPR-131): the real-price and constant-price series per
+    (year, trigger), class totals per year, and the fitted trend over full years.
+
+    Declared above ``/{id}`` so it is not parsed as an id. 404 (not 503) until the by-year tables
+    are materialised on this environment — the client renders that as 'not yet loaded' and never
+    reports it, whereas a 503 would page the error tracker.
+    """
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    if not await scada_by_year_present(db):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Per-year view not available on this environment "
+                "(scada.opportunity_register_by_year not materialised)"
+            ),
+        )
+    out = await service.by_year(farm)
+    if out is None:
+        raise HTTPException(status_code=404, detail=f"No per-year register for farm: {farm}")
+    return out
 
 
 @router.put("/actions", response_model=ScadaFindingActionResult)

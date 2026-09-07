@@ -88,6 +88,84 @@ class ScadaOpportunityListResponse(BaseModel):
     summary: Optional[ScadaOpportunitySummary] = None
 
 
+# --- Per-year Revenue-at-Risk (EPR-131) -----------------------------------------------------------
+# Served from scada.opportunity_register_by_year / opportunity_by_year_trend (pipeline persist v2).
+# One row per (year, trigger) with the real-price and constant-price series side by side; the
+# class totals per (series, year) are computed in the service so chart, table and CSV agree.
+
+
+class ScadaByYearRow(BaseModel):
+    """One (year, trigger) line: the suite's real-price value and its constant-price twin."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    farm: str
+    year: int
+    trigger: str
+    run_id: str
+    cls: str
+    label: Optional[str] = None
+    gbp_real: Optional[float] = None
+    basis_real: Optional[str] = None
+    gbp_constant_price: Optional[float] = None
+    basis_constant_price: Optional[str] = None
+    energy_mwh: Optional[float] = None
+    partial_year: bool
+    recon_status: Optional[str] = None
+    recon_delta_gbp: Optional[float] = None
+
+
+class ScadaByYearSummary(BaseModel):
+    """Class totals for one (series, year); a class with only null lines sums to 0."""
+
+    year: int
+    series: str  # real | constant_price
+    realized: float
+    recoverable: float
+    curtailment: float
+    total: float
+    partial_year: bool
+
+
+class ScadaByYearTrend(BaseModel):
+    """Fitted trend per (series, class) over FULL years only. x is the calendar year, so the fitted
+    value for year y is ``intercept_gbp + slope_gbp_per_year * y``; stats are null when n < 3."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    series: str
+    cls: str  # REALIZED | RECOVERABLE | CURTAILMENT | TOTAL
+    n_full_years: int
+    slope_gbp_per_year: Optional[float] = None
+    intercept_gbp: Optional[float] = None
+    se_slope: Optional[float] = None
+    ci_lo: Optional[float] = None
+    ci_hi: Optional[float] = None
+    r2: Optional[float] = None
+    year_first: Optional[int] = None
+    year_last: Optional[int] = None
+    note: Optional[str] = None
+
+
+class ScadaOpportunityByYear(BaseModel):
+    """The per-year view for a farm: run provenance + rows + per-(series, year) totals + trend."""
+
+    farm: str
+    run_id: str
+    generated_at: datetime
+    window_start_year: Optional[int] = None
+    window_end_year: Optional[int] = None
+    ann_years: Optional[int] = None
+    headline_gbp_year: Optional[float] = None
+    price_basis_gbp_mwh: Optional[float] = None
+    price_basis_note: Optional[str] = None
+    decade_only_triggers: List[str]
+    years: List[int]
+    rows: List[ScadaByYearRow]
+    summary: List[ScadaByYearSummary]
+    trend: List[ScadaByYearTrend]
+
+
 class ScadaTrigger(BaseModel):
     code: str
     name: Optional[str] = None
