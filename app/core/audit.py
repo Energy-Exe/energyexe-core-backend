@@ -163,6 +163,12 @@ def audit_action(
             if action in [AuditAction.CREATE, AuditAction.UPDATE] and result:
                 try:
                     new_values = serialize_for_audit(result)
+                    # A handler that returns a collection (the multi-farm SCADA PPA create
+                    # writes one row per windfarm) serializes to a list, which
+                    # AuditLogCreate.new_values rejects — the audit row was then dropped
+                    # silently. Wrap it so the write still lands.
+                    if not isinstance(new_values, dict):
+                        new_values = {"items": new_values}
                 except Exception:
                     pass
 
