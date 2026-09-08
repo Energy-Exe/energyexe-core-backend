@@ -44,6 +44,7 @@ from app.api.v1.endpoints import (
     reports,
     scada,
     scada_opportunities,
+    scada_ppas,
     states,
     structural_constraints,
     substations,
@@ -193,6 +194,10 @@ api_router.include_router(scada.router, prefix="/scada", tags=["scada"])
 api_router.include_router(
     scada_opportunities.router, prefix="/scada/opportunities", tags=["scada-opportunities"]
 )
+
+# SCADA PPAs — EPR-97's detailed offtake structure. Superadmin-gated and audited, unlike the
+# read-only /scada charts. Entirely separate from the Perform /ppas router above.
+api_router.include_router(scada_ppas.router, prefix="/scada/ppas", tags=["scada-ppas"])
 
 # Reports platform (EPR-81/82 — generated reports store + async two-pass pipeline)
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])

@@ -53,6 +53,15 @@ from .scada_finding_action import (
     ScadaFindingAction,
     ScadaFindingStatus,
 )
+from .scada_ppa import (
+    CounterpartyRole,
+    IndexationType,
+    PpaStatus,
+    PricingModel,
+    ScadaPpa,
+    SettlementMechanism,
+    VolumeShape,
+)
 from .state import State
 from .substation import Substation
 from .substation_owner import SubstationOwner
@@ -96,6 +105,13 @@ __all__ = [
     "ScadaFindingAction",
     "ScadaFindingStatus",
     "SCADA_FINDING_WRITABLE_STATUSES",
+    "ScadaPpa",
+    "CounterpartyRole",
+    "SettlementMechanism",
+    "VolumeShape",
+    "PpaStatus",
+    "PricingModel",
+    "IndexationType",
     "State",
     "Substation",
     "SubstationOwner",
