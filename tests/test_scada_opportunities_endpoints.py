@@ -102,12 +102,99 @@ def present(monkeypatch):
     monkeypatch.setattr(endpoint_module, "scada_opportunities_present", _present)
 
 
+_BY_YEAR_ROW = {
+    "farm": "hill_of_towie",
+    "year": 2022,
+    "trigger": "OPS_01",
+    "run_id": "golden-hot-2026-08-20",
+    "cls": "REALIZED",
+    "label": "Priced downtime (all causes)",
+    "gbp_real": 1230446.0,
+    "basis_real": "per-year (measured, downtime causes only - D-032)",
+    "gbp_constant_price": 553651.0,
+    "basis_constant_price": "constant-price (own-curve lost MWh, downtime causes only, x P x loss_factor)",
+    "energy_mwh": 6762.1,
+    "partial_year": False,
+    "recon_status": "OK",
+    "recon_delta_gbp": -1.0,
+}
+_BY_YEAR = {
+    "farm": "hill_of_towie",
+    "run_id": "golden-hot-2026-08-20",
+    "generated_at": "2026-09-07T10:00:00+00:00",
+    "window_start_year": 2016,
+    "window_end_year": 2026,
+    "ann_years": 10,
+    "headline_gbp_year": 783902.0,
+    "price_basis_gbp_mwh": 81.88,
+    "price_basis_note": "P = 81.88 GBP/MWh; mean of the staged 30-min price within the site window",
+    "decade_only_triggers": ["OPS_08", "OPS_09", "OPS_12", "OPS_13", "OPS_14"],
+    "years": [2022],
+    "rows": [_BY_YEAR_ROW],
+    "summary": [
+        {
+            "year": 2022,
+            "series": "real",
+            "realized": 1230446.0,
+            "recoverable": 0.0,
+            "curtailment": 0.0,
+            "total": 1230446.0,
+            "partial_year": False,
+        },
+        {
+            "year": 2022,
+            "series": "constant_price",
+            "realized": 553651.0,
+            "recoverable": 0.0,
+            "curtailment": 0.0,
+            "total": 553651.0,
+            "partial_year": False,
+        },
+    ],
+    "trend": [
+        {
+            "series": "real",
+            "cls": "TOTAL",
+            "n_full_years": 9,
+            "slope_gbp_per_year": 102075.07,
+            "intercept_gbp": -205473064.84,
+            "se_slope": 103761.86,
+            "ci_lo": -143321.74,
+            "ci_hi": 347471.87,
+            "r2": 0.121,
+            "year_first": 2017,
+            "year_last": 2025,
+            "note": "OLS on full years, x = calendar year",
+        }
+    ],
+}
+
+
+@pytest.fixture
+def by_year_present(monkeypatch):
+    async def _present(_db):
+        return True
+
+    monkeypatch.setattr(endpoint_module, "scada_by_year_present", _present)
+
+
+@pytest.fixture
+def by_year_absent(monkeypatch):
+    async def _absent(_db):
+        return False
+
+    monkeypatch.setattr(endpoint_module, "scada_by_year_present", _absent)
+
+
 @pytest.fixture
 def service(monkeypatch, present):
     svc = scada_opportunity_service.ScadaOpportunityService
 
     async def _slugs(self):
         return ["hill_of_towie"]
+
+    async def _by_year(self, farm):
+        return _BY_YEAR
 
     async def _list(self, farm, **kw):
         return {"items": [_ITEM], "total": 1, "summary": _SUMMARY}
@@ -126,6 +213,7 @@ def service(monkeypatch, present):
     monkeypatch.setattr(svc, "summary", _summary)
     monkeypatch.setattr(svc, "get", _get)
     monkeypatch.setattr(svc, "triggers", _triggers)
+    monkeypatch.setattr(svc, "by_year", _by_year)
 
 
 def test_tables_absent_returns_503(app_client, monkeypatch):
@@ -183,6 +271,66 @@ def test_auth_required():
     app.dependency_overrides[get_db] = _db
     with TestClient(app) as c:
         assert c.get("/scada/opportunities/").status_code in (401, 403)
+        assert c.get("/scada/opportunities/by-year").status_code in (401, 403)
+
+
+# --- EPR-131: GET /by-year (per-year Revenue at Risk) ---
+
+
+def test_by_year_envelope(app_client, service, by_year_present):
+    resp = app_client.get("/scada/opportunities/by-year", params={"farm": "hill_of_towie"})
+    assert resp.status_code == 200, resp.text  # not 422: declared above /{id}
+    body = resp.json()
+    assert body["years"] == [2022]
+    assert body["headline_gbp_year"] == 783902.0
+    assert body["price_basis_gbp_mwh"] == 81.88
+    assert body["decade_only_triggers"] == ["OPS_08", "OPS_09", "OPS_12", "OPS_13", "OPS_14"]
+    row = body["rows"][0]
+    assert row["trigger"] == "OPS_01" and row["gbp_real"] == 1230446.0
+    assert row["gbp_constant_price"] == 553651.0 and row["partial_year"] is False
+    assert row["recon_status"] == "OK"
+    series = {(s["series"], s["year"]): s for s in body["summary"]}
+    assert series[("real", 2022)]["total"] == 1230446.0
+    assert series[("constant_price", 2022)]["total"] == 553651.0
+    trend = body["trend"][0]
+    assert trend["cls"] == "TOTAL" and trend["n_full_years"] == 9
+    assert trend["year_first"] == 2017 and trend["year_last"] == 2025
+
+
+def test_by_year_default_farm(app_client, service, by_year_present):
+    assert app_client.get("/scada/opportunities/by-year").status_code == 200
+
+
+def test_by_year_tables_absent_is_404_not_503(app_client, service, by_year_absent):
+    """The base register can exist long before the by-year rows are materialised: the client must
+    see a quiet 404 ('not yet loaded'), never a 503 that pages the error tracker."""
+    resp = app_client.get("/scada/opportunities/by-year", params={"farm": "hill_of_towie"})
+    assert resp.status_code == 404
+    assert "not materialised" in resp.json()["detail"]
+
+
+def test_by_year_base_register_absent_is_503(app_client, monkeypatch):
+    async def _absent(_db):
+        return False
+
+    monkeypatch.setattr(endpoint_module, "scada_opportunities_present", _absent)
+    assert app_client.get("/scada/opportunities/by-year").status_code == 503
+
+
+def test_by_year_unknown_farm_404(app_client, service, by_year_present):
+    resp = app_client.get("/scada/opportunities/by-year", params={"farm": "nope"})
+    assert resp.status_code == 404
+    assert "No SCADA opportunities for farm" in resp.json()["detail"]
+
+
+def test_by_year_no_rows_404(app_client, service, by_year_present, monkeypatch):
+    async def _none(self, farm):
+        return None
+
+    monkeypatch.setattr(scada_opportunity_service.ScadaOpportunityService, "by_year", _none)
+    resp = app_client.get("/scada/opportunities/by-year", params={"farm": "hill_of_towie"})
+    assert resp.status_code == 404
+    assert "No per-year register" in resp.json()["detail"]
 
 
 # --- Phase 7b: PUT /actions (finding lifecycle) ---
