@@ -60,12 +60,22 @@ def test_table_is_public_scada_prefixed_and_separate_from_perform():
     assert PPA.__tablename__ == "ppas", "the Perform table must be untouched"
 
 
-def test_natural_key_is_code_plus_windfarm():
+def test_natural_key_is_code_plus_windfarm_per_user():
+    """EPR-136: the key is scoped by owner so one user's code never collides with (and so never
+    reveals) another user's row. A global (ppa_code, windfarm_id) key would be an existence leak."""
     uniques = [
         c for c in ScadaPpa.__table__.constraints if c.__class__.__name__ == "UniqueConstraint"
     ]
     assert len(uniques) == 1
-    assert {c.name for c in uniques[0].columns} == {"ppa_code", "windfarm_id"}
+    assert uniques[0].name == "uq_scada_ppa_code_windfarm_user"
+    assert {c.name for c in uniques[0].columns} == {"ppa_code", "windfarm_id", "created_by_id"}
+
+
+def test_owner_column_is_nullable_fk_to_users_with_no_relationship():
+    col = ScadaPpa.__table__.c.created_by_id
+    assert col.nullable, "legacy unattributed rows must be representable (and invisible)"
+    assert {fk.target_fullname for fk in col.foreign_keys} == {"users.id"}
+    assert "created_by" not in ScadaPpa.__mapper__.relationships
 
 
 def test_windfarm_model_has_no_backref_to_scada_ppa():
@@ -147,3 +157,19 @@ def test_update_is_fully_optional():
     """exclude_unset is what keeps a per-row edit from clobbering the sibling farm legs' terms."""
     patch = ScadaPpaUpdate(power_share_pct="30.00")
     assert patch.model_dump(exclude_unset=True) == {"power_share_pct": 30}
+
+
+# ─── ownership is never a payload field (EPR-136) ────────────────────────────
+
+
+def test_created_by_id_is_not_a_schema_field():
+    assert "created_by_id" not in ScadaPpaCreate.model_fields
+    assert "created_by_id" not in ScadaPpaUpdate.model_fields
+
+
+def test_created_by_id_in_a_payload_is_dropped_not_applied():
+    """The API sets ownership from the token; a body naming another owner must be inert."""
+    created = ScadaPpaCreate(**_MINIMAL, created_by_id=999)
+    assert "created_by_id" not in created.model_dump()
+    patched = ScadaPpaUpdate(ppa_buyer="X", created_by_id=999)
+    assert patched.model_dump(exclude_unset=True) == {"ppa_buyer": "X"}
