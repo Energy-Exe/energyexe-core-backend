@@ -1,8 +1,15 @@
-"""CRUD service for the SCADA PPA structure (EPR-97).
+"""CRUD service for the SCADA PPA structure (EPR-97), private per user (EPR-136).
 
 Instance-based (``ScadaPpaService(db)``), matching ScadaFindingService / ScadaOpportunityService.
 Plain ORM ``select()`` throughout — the raw-SQL style elsewhere in SCADA is only for the
 pipeline-owned ``scada.*`` tables, and this one is an ordinary public core table.
+
+Every method takes the caller's ``user_id`` and scopes on ``ScadaPpa.created_by_id`` **unconditionally**
+— there is no superuser bypass and no ``is_client_request()`` branch (that helper is False for every
+superuser, and every caller here is one, so a role-based exemption would be a no-op that reads as a
+guard). The predicate is baked into each statement rather than applied at the call site so that no
+endpoint can forget it. Foreign rows are simply ``None`` / empty / 0, which the endpoint turns into a
+404 — never a 403, which would confirm the row exists.
 
 Never raises HTTP: "not found" is ``None`` and the endpoint turns that into a 404.
 """
@@ -21,8 +28,14 @@ from app.schemas.scada_ppa import ScadaPpaCreate, ScadaPpaUpdate
 logger = structlog.get_logger()
 
 # Terms shared across every farm leg of a multi-farm PPA — everything on the create payload except
-# the asset list, which is what we fan out over.
+# the asset list, which is what we fan out over. Ownership is not a term: it is set explicitly from
+# the authenticated user, never from the payload.
 _FANOUT_EXCLUDED = {"windfarm_ids"}
+
+
+def _owned_by(user_id: int):
+    """The one ownership predicate. Legacy rows with NULL created_by_id match nobody."""
+    return ScadaPpa.created_by_id == user_id
 
 
 class ScadaPpaService:
@@ -32,6 +45,7 @@ class ScadaPpaService:
     async def list_ppas(
         self,
         *,
+        user_id: int,
         windfarm_id: Optional[int] = None,
         ppa_code: Optional[str] = None,
         ppa_status: Optional[str] = None,
@@ -39,8 +53,8 @@ class ScadaPpaService:
         limit: int = 50,
         offset: int = 0,
     ) -> Tuple[List[ScadaPpa], int]:
-        """Filtered page of rows plus the total matching count (before limit/offset)."""
-        filters = []
+        """Filtered page of the caller's rows plus the total matching count (before limit/offset)."""
+        filters = [_owned_by(user_id)]
         if windfarm_id is not None:
             filters.append(ScadaPpa.windfarm_id == windfarm_id)
         if ppa_code:
@@ -51,50 +65,55 @@ class ScadaPpaService:
             like = f"%{q}%"
             filters.append(or_(ScadaPpa.ppa_buyer.ilike(like), ScadaPpa.ppa_code.ilike(like)))
 
-        count_stmt = select(func.count(ScadaPpa.id))
-        if filters:
-            count_stmt = count_stmt.where(*filters)
+        count_stmt = select(func.count(ScadaPpa.id)).where(*filters)
         total = (await self.db.execute(count_stmt)).scalar() or 0
 
-        stmt = select(ScadaPpa).options(selectinload(ScadaPpa.windfarm))
-        if filters:
-            stmt = stmt.where(*filters)
+        stmt = select(ScadaPpa).options(selectinload(ScadaPpa.windfarm)).where(*filters)
         # Group a multi-farm PPA together, newest contract first.
-        stmt = stmt.order_by(ScadaPpa.ppa_code.asc(), ScadaPpa.windfarm_id.asc()).offset(offset).limit(limit)
+        stmt = (
+            stmt.order_by(ScadaPpa.ppa_code.asc(), ScadaPpa.windfarm_id.asc())
+            .offset(offset)
+            .limit(limit)
+        )
         rows = list((await self.db.execute(stmt)).scalars().all())
         return rows, int(total)
 
-    async def get_ppa(self, ppa_id: int) -> Optional[ScadaPpa]:
+    async def get_ppa(self, ppa_id: int, *, user_id: int) -> Optional[ScadaPpa]:
         stmt = (
             select(ScadaPpa)
             .options(selectinload(ScadaPpa.windfarm))
-            .where(ScadaPpa.id == ppa_id)
+            .where(ScadaPpa.id == ppa_id, _owned_by(user_id))
         )
         return (await self.db.execute(stmt)).scalar_one_or_none()
 
-    async def get_by_code(self, ppa_code: str) -> List[ScadaPpa]:
-        """Every farm leg of one contract."""
+    async def get_by_code(self, ppa_code: str, *, user_id: int) -> List[ScadaPpa]:
+        """Every farm leg of one of the caller's contracts."""
         stmt = (
             select(ScadaPpa)
             .options(selectinload(ScadaPpa.windfarm))
-            .where(ScadaPpa.ppa_code == ppa_code)
+            .where(ScadaPpa.ppa_code == ppa_code, _owned_by(user_id))
             .order_by(ScadaPpa.windfarm_id.asc())
         )
         return list((await self.db.execute(stmt)).scalars().all())
 
     async def missing_windfarm_ids(self, windfarm_ids: Sequence[int]) -> List[int]:
         """Which of these ids have no windfarms row — so the endpoint can 400 with the specific ids
-        instead of letting the FK raise an opaque IntegrityError."""
+        instead of letting the FK raise an opaque IntegrityError. Windfarms are shared reference
+        data, so this is the one query that is not user-scoped."""
         if not windfarm_ids:
             return []
         stmt = select(Windfarm.id).where(Windfarm.id.in_(list(windfarm_ids)))
         found = {row for row in (await self.db.execute(stmt)).scalars().all()}
         return [wf_id for wf_id in windfarm_ids if wf_id not in found]
 
-    async def create_ppas(self, payload: ScadaPpaCreate) -> List[ScadaPpa]:
-        """Fan the shared terms out into one row per windfarm, all sharing ``ppa_code``."""
+    async def create_ppas(self, payload: ScadaPpaCreate, *, user_id: int) -> List[ScadaPpa]:
+        """Fan the shared terms out into one row per windfarm, all sharing ``ppa_code`` and all
+        owned by the caller."""
         terms = payload.model_dump(exclude=_FANOUT_EXCLUDED)
-        rows = [ScadaPpa(windfarm_id=wf_id, **terms) for wf_id in payload.windfarm_ids]
+        rows = [
+            ScadaPpa(windfarm_id=wf_id, created_by_id=user_id, **terms)
+            for wf_id in payload.windfarm_ids
+        ]
         self.db.add_all(rows)
         await self.db.commit()
         for row in rows:
@@ -104,14 +123,17 @@ class ScadaPpaService:
             ppa_code=payload.ppa_code,
             windfarm_ids=payload.windfarm_ids,
             rows=len(rows),
+            user_id=user_id,
         )
         # Re-read so the windfarm relationship is loaded for the response.
-        return await self.get_by_code(payload.ppa_code)
+        return await self.get_by_code(payload.ppa_code, user_id=user_id)
 
-    async def update_ppa(self, ppa_id: int, patch: ScadaPpaUpdate) -> Optional[ScadaPpa]:
+    async def update_ppa(
+        self, ppa_id: int, patch: ScadaPpaUpdate, *, user_id: int
+    ) -> Optional[ScadaPpa]:
         """Edit one farm's leg. Deliberately does not touch the rest of the ppa_code group."""
         row = (
-            await self.db.execute(select(ScadaPpa).where(ScadaPpa.id == ppa_id))
+            await self.db.execute(select(ScadaPpa).where(ScadaPpa.id == ppa_id, _owned_by(user_id)))
         ).scalar_one_or_none()
         if row is None:
             return None
@@ -121,24 +143,27 @@ class ScadaPpaService:
 
         await self.db.commit()
         await self.db.refresh(row)
-        logger.info("scada_ppa_updated", id=ppa_id, ppa_code=row.ppa_code)
-        return await self.get_ppa(ppa_id)
+        logger.info("scada_ppa_updated", id=ppa_id, ppa_code=row.ppa_code, user_id=user_id)
+        return await self.get_ppa(ppa_id, user_id=user_id)
 
-    async def delete_ppa(self, ppa_id: int) -> Optional[ScadaPpa]:
+    async def delete_ppa(self, ppa_id: int, *, user_id: int) -> Optional[ScadaPpa]:
         row = (
-            await self.db.execute(select(ScadaPpa).where(ScadaPpa.id == ppa_id))
+            await self.db.execute(select(ScadaPpa).where(ScadaPpa.id == ppa_id, _owned_by(user_id)))
         ).scalar_one_or_none()
         if row is None:
             return None
         await self.db.delete(row)
         await self.db.commit()
-        logger.info("scada_ppa_deleted", id=ppa_id, ppa_code=row.ppa_code)
+        logger.info("scada_ppa_deleted", id=ppa_id, ppa_code=row.ppa_code, user_id=user_id)
         return row
 
-    async def delete_by_code(self, ppa_code: str) -> int:
-        """Drop every farm leg of one contract. Returns the number of rows removed (0 = unknown code)."""
-        result = await self.db.execute(delete(ScadaPpa).where(ScadaPpa.ppa_code == ppa_code))
+    async def delete_by_code(self, ppa_code: str, *, user_id: int) -> int:
+        """Drop every farm leg of one of the caller's contracts. Returns the number of rows removed
+        (0 = unknown code, or someone else's)."""
+        result = await self.db.execute(
+            delete(ScadaPpa).where(ScadaPpa.ppa_code == ppa_code, _owned_by(user_id))
+        )
         await self.db.commit()
         deleted = int(result.rowcount or 0)
-        logger.info("scada_ppa_group_deleted", ppa_code=ppa_code, rows=deleted)
+        logger.info("scada_ppa_group_deleted", ppa_code=ppa_code, rows=deleted, user_id=user_id)
         return deleted

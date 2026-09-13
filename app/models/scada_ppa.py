@@ -129,7 +129,10 @@ class ScadaPpa(Base):
     settlement_mechanism: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     volume_shape: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     ppa_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=PpaStatus.DRAFT.value, server_default=PpaStatus.DRAFT.value
+        String(20),
+        nullable=False,
+        default=PpaStatus.DRAFT.value,
+        server_default=PpaStatus.DRAFT.value,
     )
 
     execution_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)  # signed
@@ -157,11 +160,24 @@ class ScadaPpa(Base):
     indexation_rate_pct: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
 
     has_availability_penalties: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
-    availability_guarantee_pct: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
+    availability_guarantee_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
 
     # Load-bearing, not commentary: step prices, buyer changes, partial offtake and any structure the
     # columns above cannot represent. The agent parses it at query time.
     ppa_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # EPR-136: the register is private to the user who entered each row — contract terms are
+    # confidential between colleagues, not just from clients. Every ScadaPpaService query is
+    # scoped on this column unconditionally (no superuser bypass: every internal account is one,
+    # so a role exemption would leave the register shared in practice — same call as EPR-112 for
+    # reports). Nullable only for rows that pre-date the column and could not be attributed from
+    # the audit log; those are visible to nobody until reassigned by hand. No relationship: nothing
+    # reads it back, and an unloaded relationship is a MissingGreenlet waiting to happen.
+    created_by_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True, index=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -171,8 +187,13 @@ class ScadaPpa(Base):
     # One-way on purpose — adding a Windfarm.scada_ppas backref would edit the core model.
     windfarm = relationship("Windfarm", lazy="selectin")
 
+    # Scoped per user, not global: with private rows a global (ppa_code, windfarm_id) key would
+    # 400 one user against a row they cannot see — an existence leak — for a code as ordinary as
+    # PPA-2026-001. Postgres treats NULLs as distinct, so legacy unattributed rows never collide.
     __table_args__ = (
-        UniqueConstraint("ppa_code", "windfarm_id", name="uq_scada_ppa_code_windfarm"),
+        UniqueConstraint(
+            "ppa_code", "windfarm_id", "created_by_id", name="uq_scada_ppa_code_windfarm_user"
+        ),
     )
 
     def __repr__(self) -> str:

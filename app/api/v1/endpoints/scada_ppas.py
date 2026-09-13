@@ -11,6 +11,9 @@ Two departures from the rest of ``/scada``, both deliberate:
 * **Writes are audited.** ``@audit_action`` is not used on SCADA endpoints today; contract data is
   worth the audit trail. The decorator resolves ``db`` / ``request`` / ``current_user`` by kwarg name,
   so those names are load-bearing in the handler signatures below.
+* **Rows are private to the user who entered them (EPR-136).** Every service call carries
+  ``current_user.id`` and the service scopes on it unconditionally — superusers get no bypass. A row
+  belonging to someone else is indistinguishable from a row that does not exist: 404, never 403.
 
 ``get_db`` comes from ``app.core.deps`` (the SCADA convention) — the copy in ``app.core.database`` is
 a different function object, and test ``dependency_overrides`` only match the one actually imported.
@@ -44,8 +47,8 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 _DUPLICATE_DETAIL = (
-    "A PPA with this code already exists for one of those windfarms "
-    "(ppa_code + windfarm must be unique)."
+    "You already have a PPA with this code for one of those windfarms "
+    "(ppa_code + windfarm must be unique within your register)."
 )
 
 
@@ -76,7 +79,9 @@ def _validate_merged_row(row: ScadaPpaModel, patch: ScadaPpaUpdate) -> None:
 async def list_scada_ppas(
     windfarm_id: Optional[int] = Query(None, description="Only this windfarm's contract legs"),
     ppa_code: Optional[str] = Query(None, description="Exact contract code"),
-    ppa_status: Optional[str] = Query(None, description="Draft/Active/Superseded/Terminated/Expired"),
+    ppa_status: Optional[str] = Query(
+        None, description="Draft/Active/Superseded/Terminated/Expired"
+    ),
     q: Optional[str] = Query(None, description="Substring match on buyer or code"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -86,6 +91,7 @@ async def list_scada_ppas(
 ) -> Any:
     """The SCADA PPA register. One row per windfarm; a multi-farm PPA is several rows sharing a code."""
     items, total = await ScadaPpaService(db).list_ppas(
+        user_id=current_user.id,
         windfarm_id=windfarm_id,
         ppa_code=ppa_code,
         ppa_status=ppa_status,
@@ -106,7 +112,7 @@ async def get_scada_ppa_group(
     current_user: User = Depends(get_current_superuser),
 ) -> Any:
     """Every farm leg of one contract."""
-    rows = await ScadaPpaService(db).get_by_code(ppa_code)
+    rows = await ScadaPpaService(db).get_by_code(ppa_code, user_id=current_user.id)
     if not rows:
         raise HTTPException(status_code=404, detail="SCADA PPA not found")
     return rows
@@ -126,7 +132,7 @@ async def delete_scada_ppa_group(
     current_user: User = Depends(get_current_superuser),
 ) -> Any:
     """Delete the contract across every farm it covers."""
-    deleted = await ScadaPpaService(db).delete_by_code(ppa_code)
+    deleted = await ScadaPpaService(db).delete_by_code(ppa_code, user_id=current_user.id)
     if deleted == 0:
         raise HTTPException(status_code=404, detail="SCADA PPA not found")
     return ScadaPpaDeleteResult(ppa_code=ppa_code, deleted=deleted)
@@ -145,7 +151,7 @@ async def get_scada_ppa(
     request: Request = None,
     current_user: User = Depends(get_current_superuser),
 ) -> Any:
-    row = await ScadaPpaService(db).get_ppa(ppa_id)
+    row = await ScadaPpaService(db).get_ppa(ppa_id, user_id=current_user.id)
     if row is None:
         raise HTTPException(status_code=404, detail="SCADA PPA not found")
     return row
@@ -164,12 +170,10 @@ async def create_scada_ppa(
 
     missing = await service.missing_windfarm_ids(payload.windfarm_ids)
     if missing:
-        raise HTTPException(
-            status_code=400, detail=f"Unknown windfarm_id(s): {sorted(missing)}"
-        )
+        raise HTTPException(status_code=400, detail=f"Unknown windfarm_id(s): {sorted(missing)}")
 
     try:
-        return await service.create_ppas(payload)
+        return await service.create_ppas(payload, user_id=current_user.id)
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status_code=400, detail=_DUPLICATE_DETAIL)
@@ -192,7 +196,7 @@ async def update_scada_ppa(
     """Edit ONE farm's leg. Terms may legitimately diverge per farm, so this never fans out."""
     service = ScadaPpaService(db)
 
-    existing = await service.get_ppa(ppa_id)
+    existing = await service.get_ppa(ppa_id, user_id=current_user.id)
     if existing is None:
         raise HTTPException(status_code=404, detail="SCADA PPA not found")
 
@@ -206,7 +210,7 @@ async def update_scada_ppa(
             )
 
     try:
-        updated = await service.update_ppa(ppa_id, payload)
+        updated = await service.update_ppa(ppa_id, payload, user_id=current_user.id)
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status_code=400, detail=_DUPLICATE_DETAIL)
@@ -230,7 +234,7 @@ async def delete_scada_ppa(
     current_user: User = Depends(get_current_superuser),
 ) -> Any:
     """Remove one farm from a PPA, leaving the contract's other legs in place."""
-    deleted = await ScadaPpaService(db).delete_ppa(ppa_id)
+    deleted = await ScadaPpaService(db).delete_ppa(ppa_id, user_id=current_user.id)
     if deleted is None:
         raise HTTPException(status_code=404, detail="SCADA PPA not found")
     return deleted
