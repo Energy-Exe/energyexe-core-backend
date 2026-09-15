@@ -236,6 +236,36 @@ def test_list_envelope(app_client, service):
     assert body["summary"]["by_class"]["CURTAILMENT"]["count"] == 2
 
 
+@pytest.mark.parametrize("path", ["/", "/0"])
+@pytest.mark.parametrize(
+    ("price_basis", "offtake_regime"),
+    [(None, None), ("SPOT", "2016-2026 UNKNOWN"), ("SPOT", None)],
+)
+def test_analysis_metadata_is_nullable_and_verbatim(
+    app_client, service, monkeypatch, path, price_basis, offtake_regime
+):
+    monkeypatch.setitem(_ITEM, "price_basis", price_basis)
+    monkeypatch.setitem(_ITEM, "offtake_regime", offtake_regime)
+    # The public response remains an allowlist even if unexpected private data reaches it.
+    monkeypatch.setitem(_ITEM, "ppa_buyer", "Private counterparty")
+    monkeypatch.setitem(_ITEM, "contract_price", "123.456789")
+    monkeypatch.setitem(_ITEM, "owner_user_id", 99)
+    resp = app_client.get(f"/scada/opportunities{path}", params={"farm": "hill_of_towie"})
+    assert resp.status_code == 200
+    row = resp.json()["items"][0] if path == "/" else resp.json()
+    assert row["price_basis"] == price_basis
+    assert row["offtake_regime"] == offtake_regime
+    assert row["gbp_year"] == 378623.0
+    assert row["basis"] == "GBP/yr"
+    assert {"ppa_buyer", "contract_price", "owner_user_id"}.isdisjoint(row)
+
+
+def test_legacy_response_has_null_metadata(app_client, service):
+    row = app_client.get("/scada/opportunities/0").json()
+    assert row["price_basis"] is None
+    assert row["offtake_regime"] is None
+
+
 def test_unknown_farm_returns_404(app_client, service):
     resp = app_client.get("/scada/opportunities/", params={"farm": "nope"})
     assert resp.status_code == 404

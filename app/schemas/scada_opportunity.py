@@ -32,6 +32,10 @@ class ScadaOpportunity(BaseModel):
     status: Optional[str] = None
     cls: str
     basis: Optional[str] = None
+    # Vendor metadata for this analysis; separate from by-year constant-price normalization.
+    # Null until a legacy register is regenerated. Private PPA terms are never served here.
+    price_basis: Optional[str] = None
+    offtake_regime: Optional[str] = None
     gbp_year: Optional[float] = None
     cond_mean_lo: Optional[float] = None
     cond_mean_hi: Optional[float] = None
