@@ -21,9 +21,11 @@ logger = structlog.get_logger(__name__)
 
 _ADDITIVE_CLASSES = ("REALIZED", "RECOVERABLE", "CURTAILMENT")
 
-# Register row columns returned to the API (dim fields joined on).
+# Register row columns returned to the API (dim fields joined on). Deploy pipeline migration
+# f138a6b7c8d9 before this code: price_basis / offtake_regime are nullable on legacy rows.
 _REGISTER_SELECT = """
     r.farm, r.id, r.run_id, r.trigger, r.scope, r.scope_kind, r.item, r.status, r.cls, r.basis,
+    r.price_basis, r.offtake_regime,
     r.gbp_year, r.cond_mean_lo, r.cond_mean_hi, r.cond_worst_hi, r.cond_worst_month,
     r.value_of_acting_early, r.additive, r.confidence, r.note, r.now_costing_gbp, r.now_floor_gbp,
     r.now_basis, r.now_available, r.now_confounded, r.rank_gbp,
