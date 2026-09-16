@@ -133,7 +133,7 @@ def create_preview_app(settings: PreviewSettings | None = None) -> FastAPI:
 
     @app.get("/api/v1/scada/farms")
     async def farms(user=Depends(preview_superuser), db: AsyncSession = Depends(get_preview_db)):
-        return await IngestionSummaryService(db).farms()
+        return await IngestionSummaryService(db, local_preview=True).farms()
 
     @app.get("/api/v1/scada/ingestion-summary", response_model=IngestionSummary)
     async def ingestion_summary(
@@ -142,7 +142,7 @@ def create_preview_app(settings: PreviewSettings | None = None) -> FastAPI:
         user=Depends(preview_superuser),
         db: AsyncSession = Depends(get_preview_db),
     ):
-        return await IngestionSummaryService(db).get(farm, run_id)
+        return await IngestionSummaryService(db, local_preview=True).get(farm, run_id)
 
     @app.api_route("/api/v1/scada/{unsupported:path}", methods=["GET", "POST"])
     async def unsupported_scada(unsupported: str, user=Depends(preview_superuser)):

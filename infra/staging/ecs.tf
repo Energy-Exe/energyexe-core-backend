@@ -72,6 +72,8 @@ resource "aws_ecs_task_definition" "api" {
         { name = "DEBUG", value = "false" },
         { name = "LOG_LEVEL", value = "INFO" },
         { name = "SENTRY_ENVIRONMENT", value = "staging" },
+        { name = "SCADA_INGESTION_ENABLED", value = "true" },
+        { name = "BRAIN_AGENT_ACCESS_POLICY", value = "superusers" },
         # Pipeline OFF on staging — no scheduler, no heavy nightly load.
         { name = "PIPELINE_DAILY_ENABLED", value = "false" },
         { name = "CDSAPI_URL", value = "https://cds.climate.copernicus.eu/api" },

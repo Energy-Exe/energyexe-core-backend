@@ -2,7 +2,7 @@
 
 import os
 import secrets
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -159,6 +159,9 @@ class Settings(BaseSettings):
     REPORTS_MAX_COST_USD: float = 0.50  # hard budget per report generation run
 
     # Brain Agent default model (used as fallback when caller omits one)
+    SCADA_INGESTION_ENABLED: bool = False
+    BRAIN_AGENT_ACCESS_POLICY: Literal["authenticated", "superusers"] = "authenticated"
+
     BRAIN_MODEL: str = "claude-sonnet-5"
 
     # Brain Agent — Postgres read-only role.

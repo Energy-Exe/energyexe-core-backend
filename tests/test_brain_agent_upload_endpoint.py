@@ -26,6 +26,9 @@ USER_ID = 42
 
 
 class _FakeUser:
+    role = "admin"
+    is_superuser = False
+    is_active = True
     id = USER_ID
     first_name = "Test"
     company_name = None

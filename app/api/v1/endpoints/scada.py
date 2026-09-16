@@ -14,6 +14,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.deps import get_current_active_user, get_current_superuser, get_db
 from app.models.user import User
 from app.scada_preview.schemas import IngestionSummary
@@ -35,6 +36,8 @@ async def get_ingestion_summary(
     db: AsyncSession = Depends(get_db),
 ) -> IngestionSummary:
     """Read an immutable measured-data run; never starts ingestion or calculation."""
+    if not get_settings().SCADA_INGESTION_ENABLED:
+        raise HTTPException(503, "Measured ingestion data not available")
     return await IngestionSummaryService(db).get(farm, run_id)
 
 
@@ -58,7 +61,7 @@ async def get_farms(
     """Farm metadata + data-through dates for the freshness header."""
     service = await _service(db)
     result = await service.farms()
-    if current_user.is_superuser:
+    if current_user.is_superuser and get_settings().SCADA_INGESTION_ENABLED:
         measured = await IngestionSummaryService(db).farms()
         by_farm = {row["farm"]: row for row in result["farms"]}
         for row in measured["farms"]:

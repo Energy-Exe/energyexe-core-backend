@@ -90,7 +90,10 @@ def db_mock(summary=None, present=True):
     row_result.mappings.return_value.one_or_none.return_value = (
         {"run_id": summary["run_id"], "summary": summary} if summary else None
     )
-    return AsyncMock(execute=AsyncMock(side_effect=[present_result, row_result]))
+    return AsyncMock(
+        execute=AsyncMock(side_effect=[present_result, row_result]),
+        begin_nested=MagicMock(return_value=AsyncMock()),
+    )
 
 
 @pytest.mark.asyncio
