@@ -14,8 +14,10 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_active_user, get_db
+from app.core.deps import get_current_active_user, get_current_superuser, get_db
 from app.models.user import User
+from app.scada_preview.schemas import IngestionSummary
+from app.scada_preview.service import IngestionSummaryService
 from app.schemas.scada import ScadaFarmsResponse
 from app.services.scada_service import ScadaService, scada_schema_present
 
@@ -23,6 +25,17 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 DEFAULT_FARM = "hill_of_towie"
+
+
+@router.get("/ingestion-summary", response_model=IngestionSummary)
+async def get_ingestion_summary(
+    farm: str = Query("lutelandet", min_length=1, max_length=100, pattern=r"^[a-z0-9_]+$"),
+    run_id: str | None = Query(None, min_length=1, max_length=128),
+    current_user: User = Depends(get_current_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> IngestionSummary:
+    """Read an immutable measured-data run; never starts ingestion or calculation."""
+    return await IngestionSummaryService(db).get(farm, run_id)
 
 
 async def _service(db: AsyncSession) -> ScadaService:
@@ -44,7 +57,16 @@ async def get_farms(
 ) -> Any:
     """Farm metadata + data-through dates for the freshness header."""
     service = await _service(db)
-    return await service.farms()
+    result = await service.farms()
+    if current_user.is_superuser:
+        measured = await IngestionSummaryService(db).farms()
+        by_farm = {row["farm"]: row for row in result["farms"]}
+        for row in measured["farms"]:
+            if row["farm"] in by_farm:
+                by_farm[row["farm"]]["ingestion"] = row["ingestion"]
+            else:
+                result["farms"].append(row)
+    return result
 
 
 @router.get("/heartbeat")
