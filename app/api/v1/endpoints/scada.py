@@ -311,7 +311,8 @@ async def get_portfolio(
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
-    """All farms on one normalized monthly CF/availability strip."""
+    """All farms on one monthly strip: CF, availability and the day-ahead-priced
+    revenue loss (``rev_loss_gbp``, null for unpriced months)."""
     service = await _service(db)
     return await service.portfolio()
 
