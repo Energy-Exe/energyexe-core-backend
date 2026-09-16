@@ -2370,9 +2370,18 @@ class ScadaService:
         }
 
     async def portfolio(self) -> Dict[str, Any]:
-        """All farms on one normalized strip: monthly capacity factor and
-        availability. CF divides by capacity x hours actually covered by
-        kpi days, so partial first/last months don't fake a dip."""
+        """All farms on one normalized strip: monthly capacity factor,
+        availability and (EPR-139) the day-ahead-priced revenue loss.
+
+        CF divides by capacity x hours actually covered by kpi days, so partial
+        first/last months don't fake a dip. ``rev_loss_gbp`` is the monthly sum of
+        ``revenue_impact_daily.revenue_loss_total_gbp`` — the same series the
+        revenue waterfall sums over a year — and is ``None`` for months with no
+        priced hour (unpriced hours contribute 0 to the £ sums, so a row's
+        presence alone does not make a month priced); ``priced_share`` is the
+        priced fraction of the month's hours so partial months can be flagged.
+        This is the platform's priced-loss series, NOT the opportunity register
+        (which has no monthly form)."""
         rated_res = await self.db.execute(
             text("SELECT farm, SUM(rated_kw) AS rated FROM scada.dim_turbine GROUP BY 1")
         )
@@ -2401,6 +2410,26 @@ class ScadaService:
         avail = {
             (r.farm, r.mo): float(r.avail) for r in avail_res.fetchall() if r.avail is not None
         }
+        rev_res = await self.db.execute(
+            text(
+                """
+                SELECT farm, DATE_TRUNC('month', date_utc)::date AS mo,
+                       SUM(revenue_loss_total_gbp) AS rev_loss,
+                       SUM(hours_priced)           AS hp,
+                       SUM(hours_unpriced)         AS hu
+                FROM scada.revenue_impact_daily
+                GROUP BY 1, 2
+                """
+            )
+        )
+        rev: Dict[Any, Dict[str, Optional[float]]] = {}
+        for r in rev_res.fetchall():
+            hp = int(r.hp or 0)
+            hu = int(r.hu or 0)
+            rev[(r.farm, r.mo)] = {
+                "rev_loss_gbp": round(float(r.rev_loss or 0)) if hp > 0 else None,
+                "priced_share": round(hp / (hp + hu), 2) if hp + hu > 0 else None,
+            }
         farms: Dict[str, List[Dict[str, Any]]] = {}
         for r in cf_res.fetchall():
             cap = rated.get(r.farm)
@@ -2412,6 +2441,7 @@ class ScadaService:
                     "m": r.mo.isoformat(),
                     "cf": round(cf, 1),
                     "avail": round(avail[(r.farm, r.mo)], 1) if (r.farm, r.mo) in avail else None,
+                    **rev.get((r.farm, r.mo), {"rev_loss_gbp": None, "priced_share": None}),
                 }
             )
         return {
