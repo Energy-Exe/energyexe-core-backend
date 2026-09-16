@@ -170,3 +170,13 @@ async def get_current_admin_user(
     if not current_user.is_superuser and current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return current_user
+
+
+async def get_brain_agent_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Apply the environment's agent policy after normal authentication."""
+    from app.core.agent_access import require_agent_access
+
+    require_agent_access(current_user)
+    return current_user

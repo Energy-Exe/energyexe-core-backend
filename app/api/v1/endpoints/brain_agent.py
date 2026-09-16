@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, get_db
+from app.core.deps import get_brain_agent_user, get_db
 from app.models.agent_thread import AgentThread
 from app.models.user import User
 from app.schemas.brain_agent import (
@@ -59,7 +59,7 @@ RATE_LIMIT_PER_MINUTE = {"admin": 20, "client": 10}
 async def agent_chat(
     request: AgentChatRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
     x_agent_source: Optional[str] = Header(default=None, alias="X-Agent-Source"),
 ) -> StreamingResponse:
     """Stream a Brain Agent response via Server-Sent Events.
@@ -72,7 +72,6 @@ async def agent_chat(
     # Resolve effective source from body, header, and role.
     # Clients are always forced to "client" regardless of what they send.
     # Admins default to "admin" but may opt into "client" for testing.
-    # Brain agent is currently open to every authenticated user — no feature gate.
     requested_source = request.source or x_agent_source
     if current_user.role == "client":
         effective_source = "client"
@@ -209,7 +208,7 @@ async def _with_heartbeat(aiter, interval: float):
 async def agent_interrupt(
     request: AgentInterruptRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ) -> dict:
     """Interrupt a running agent task."""
     service = BrainAgentService(db)
@@ -220,7 +219,7 @@ async def agent_interrupt(
 @router.get("/sessions")
 async def list_sessions(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ) -> List[dict]:
     """List active agent sessions for the current user."""
     service = BrainAgentService(db)
@@ -231,7 +230,7 @@ async def list_sessions(
 async def end_session(
     session_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ) -> dict:
     """End an agent session and clean up resources.
 
@@ -269,7 +268,7 @@ async def upload_session_file(
     session_id: str,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ) -> dict:
     """Attach a file to a chat so the agent can read it.
 
@@ -372,7 +371,7 @@ async def get_session_file(
     session_id: str,
     filename: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ) -> FileResponse:
     """Serve an image file from an agent session's sandbox directory."""
     # Validate session ownership
@@ -400,7 +399,7 @@ async def get_agent_file(
     user_id: int,
     thread_id: str,
     filename: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ):
     """Serve a brain agent file (image, CSV, etc.) — local first, then S3."""
     if current_user.id != user_id:
@@ -440,7 +439,7 @@ async def list_threads(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ) -> List[ThreadListItem]:
     """List the current user's chat threads (lightweight, no messages)."""
     result = await db.execute(
@@ -458,7 +457,7 @@ async def list_threads(
 async def get_thread(
     thread_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ) -> ThreadDetail:
     """Get a full thread including messages. Validates user ownership."""
     result = await db.execute(
@@ -478,7 +477,7 @@ async def upsert_thread(
     thread_id: str,
     body: ThreadUpsertRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ) -> ThreadDetail:
     """Create or update a chat thread."""
     result = await db.execute(
@@ -524,7 +523,7 @@ async def upsert_thread(
 async def delete_thread(
     thread_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ) -> dict:
     """Delete a chat thread. Validates user ownership."""
     result = await db.execute(
@@ -556,7 +555,7 @@ async def rename_thread(
     thread_id: str,
     body: ThreadTitleUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_brain_agent_user),
 ) -> ThreadDetail:
     """Rename a chat thread. Validates user ownership."""
     result = await db.execute(

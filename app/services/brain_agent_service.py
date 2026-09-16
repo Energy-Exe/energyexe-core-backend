@@ -29,6 +29,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
+from app.core.agent_access import require_fresh_agent_access
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
@@ -337,6 +338,8 @@ class BrainAgentService:
         message_id: Optional[str] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Send a prompt to the agent and yield SSE events."""
+        await require_fresh_agent_access(self.db, user_id)
+
         if not session_id:
             session_id = str(uuid.uuid4())
 

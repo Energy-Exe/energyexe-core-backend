@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_active_user, get_db
+from app.core.deps import get_brain_agent_user, get_current_active_user, get_db
 from app.models.user import User
 from app.schemas.map import (
     MapFinancialMetricsResponse,
@@ -127,7 +127,7 @@ async def _with_heartbeat(aiter, interval: float):
 @router.post("/interpret-view")
 async def interpret_map_view(
     payload: MapStatePayload,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_brain_agent_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Stream an AI interpretation of the current map state via brain-agent.
