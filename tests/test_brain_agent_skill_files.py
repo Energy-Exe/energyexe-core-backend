@@ -309,3 +309,53 @@ def test_domain_and_schema_document_the_detection_window():
     assert "price-data-absent" not in SKILL_DOMAIN
     assert "created_at" in SKILL_SCHEMA and "detection_run_id" in SKILL_SCHEMA
     assert "last day with metered generation" in SKILL_SCHEMA
+
+
+# ── Lutelandet: native 5-min, silver-only (pipeline D-034) ──
+
+
+def test_lutelandet_is_documented_in_all_three_admin_places():
+    """The farm name must reach the agent on every admin path, or a question naming
+    'Lutelandet' + SCADA dead-ends in schema scada (where it has no rows)."""
+    import inspect
+
+    from app.services import brain_agent_service
+    from app.services.brain_agent_skill_files import SKILL_SCADA, SKILL_SCADA_SILVER
+
+    prompt_src = inspect.getsource(brain_agent_service)
+    for text in (SKILL_SCADA, SKILL_SCADA_SILVER, prompt_src):
+        assert "Lutelandet" in text
+        assert "7197" in text
+        assert "measurements_5m" in text
+    assert "SILVER-LAKE ONLY" in SKILL_SCADA
+    assert "never query schema scada for Lutelandet" in SKILL_SCADA
+
+
+def test_lutelandet_silver_skill_pins_the_caveats_that_prevent_wrong_answers():
+    from app.services.brain_agent_skill_files import SKILL_SCADA_SILVER as S
+
+    assert "ONE turbine of nine" in S and "NEVER scale T09 to the farm" in S
+    assert "power_kw / 12" in S and "288 rows" in S
+    assert "Europe/Oslo" in S and "NOK" in S
+    assert "PROVEN\n  EMPIRICALLY" in S and "supplier confirmation is pending" in S
+    assert "NO supplier dictionary" in S and "INFERRED" in S
+    assert "`service_category` are NULL for lutelandet" in S
+    assert "BOTH halves" in S and "atan2" in S            # strict 10-min recipe, circular mean
+    assert "`measurements` is 10-minute farms ONLY" in S
+    assert "status_observations" in S and "EFFBEGAARS" in S
+    assert "frozen at 5.496" in S
+
+
+def test_lutelandet_never_reaches_the_client_surface():
+    from pathlib import Path
+
+    text = Path("app/prompts/brain_agent_system_client.md").read_text(encoding="utf-8")
+    assert "measurements_5m" not in text and "status_observations" not in text
+
+
+def test_silver_helper_declares_optional_views():
+    from app.services.brain_agent_silver_script import SILVER_HELPER_SCRIPT
+
+    assert "OPTIONAL_VIEWS" in SILVER_HELPER_SCRIPT and "MISSING_VIEWS" in SILVER_HELPER_SCRIPT
+    assert "measurements_5m" in SILVER_HELPER_SCRIPT and "status_observations" in SILVER_HELPER_SCRIPT
+    assert "union_by_name" not in SILVER_HELPER_SCRIPT

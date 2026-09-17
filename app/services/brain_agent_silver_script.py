@@ -24,7 +24,8 @@ SILVER_HELPER_SCRIPT = '''#!/usr/bin/env python3
 Usage: python3 silver.py "SELECT farm, count(*) FROM measurements WHERE farm='kelmarsh' AND year=2023 GROUP BY 1"
 
 Views: measurements (10-min intervals), alarms (raw events),
-dim_farm, dim_turbine, dim_turbine_config, dim_signal, dim_signal_map,
+measurements_5m (native 5-min farms, e.g. lutelandet), status_observations
+(verbatim change-driven status channels), dim_farm, dim_turbine, dim_turbine_config, dim_signal, dim_signal_map,
 dim_signal_capability, dim_alarm_code, dim_event_category.
 DuckDB SQL dialect. Always filter farm (and year when possible) — they prune
 partitions. Aggregate in SQL; never SELECT * over raw intervals.
@@ -44,6 +45,17 @@ DIMS = [
     "dim_signal_map", "dim_signal_capability", "dim_alarm_code",
     "dim_event_category",
 ]
+
+# Sibling datasets that only exist once a farm of that kind has landed. They
+# are created ONLY when the query names them (each view costs an S3 listing +
+# a footer read per call) and never break the core views when the prefix is
+# empty: DuckDB raises on a glob with no match, so that is caught and turned
+# into a hint instead.
+OPTIONAL_VIEWS = {
+    "measurements_5m": "measurements_5m",
+    "status_observations": "status_observations",
+}
+MISSING_VIEWS = {}
 
 DANGEROUS_KEYWORDS = [
     "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
@@ -78,8 +90,10 @@ def validate_sql(sql: str) -> str:
     return sql
 
 
-def open_lake():
-    """Connect DuckDB and create the silver views. Returns (conn, error)."""
+def open_lake(sql=None):
+    """Connect DuckDB and create the silver views. Returns (conn, error).
+    Optional views are created when `sql` mentions them (all of them if no
+    sql is given)."""
     import duckdb
 
     root = os.environ.get("SCADA_SILVER_URI", "").rstrip("/")
@@ -108,6 +122,17 @@ def open_lake():
         conn.execute(
             f"CREATE VIEW {dim} AS SELECT * FROM read_parquet('{root}/registry/{dim}.parquet')"
         )
+    MISSING_VIEWS.clear()
+    for view, prefix in OPTIONAL_VIEWS.items():
+        if sql is not None and not re.search(rf"\\b{view}\\b", sql, re.IGNORECASE):
+            continue
+        try:
+            conn.execute(
+                f"CREATE VIEW {view} AS SELECT * FROM read_parquet("
+                f"'{root}/{prefix}/**/*.parquet', hive_partitioning = 1)"
+            )
+        except Exception as e:
+            MISSING_VIEWS[view] = str(e).splitlines()[0][:200]
     return conn, None
 
 
@@ -120,9 +145,16 @@ def run_query(sql: str) -> str:
 
     conn = None
     try:
-        conn, err = open_lake()
+        conn, err = open_lake(sql)
         if err:
             return json.dumps({"error": err})
+        if MISSING_VIEWS:
+            return json.dumps({"error": (
+                "No data has landed in the silver lake for: "
+                + ", ".join(sorted(MISSING_VIEWS))
+                + ". These views exist only for native-period farms (e.g. lutelandet). "
+                "The core views (measurements, alarms, dim_*) are unaffected."
+            )})
 
         watchdog = threading.Timer(QUERY_TIMEOUT_S, conn.interrupt)
         watchdog.start()
