@@ -2073,7 +2073,11 @@ class BrainAgentService:
                 "(DuckDB over the silver Parquet lake). Use for sub-hourly, "
                 "per-signal (temperatures/pitch/rpm) or event-sequence questions "
                 "that the gold scada tables cannot answer; gold stays authoritative "
-                "for daily/monthly KPIs"
+                "for daily/monthly KPIs. ALSO the only SCADA source for "
+                "**Lutelandet** (Norway, platform windfarm 7197): raw 5-minute data "
+                "for ONE turbine of nine (T09, 2025) in view `measurements_5m` — "
+                "silver-only, no `scada` schema rows, never scale it to the farm; "
+                "farm-level Lutelandet questions still use the platform tables"
             )
         prompt = prompt.replace("{{SCADA_SKILL_LINES}}", scada_lines)
         prompt = prompt.replace(
