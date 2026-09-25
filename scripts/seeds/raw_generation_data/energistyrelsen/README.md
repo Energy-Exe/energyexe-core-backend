@@ -23,6 +23,9 @@ Notes
 - `--park-map` is only needed for a park that has no tracked turbine yet
   (e.g. Thor before its turbines were created). Afterwards the park →
   windfarm relation is inferred from existing turbine_units.
+- A farm that already has placeholder units (e.g. `THOR-001`) never gets
+  extra units: `--adopt-existing` gives the placeholders the GSRNs (earliest
+  connection first); without it the GSRNs are listed as unresolved.
 - Farms with ENTSOE hourly data for a month keep ENTSOE only in
   `generation_data` (raw rows are still stored).
 - The old parallel importer below is disabled because it deletes the

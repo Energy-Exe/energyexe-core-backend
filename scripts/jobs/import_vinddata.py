@@ -16,6 +16,7 @@ that have no tracked turbine yet and --model-map for DEA model spellings);
 import argparse
 import asyncio
 import json
+import logging
 from pathlib import Path
 import sys
 
@@ -53,7 +54,8 @@ def summarize(report):
     turbines = report.get("turbines") or {}
     if turbines:
         pending = [d for d in turbines["decommission"] if not d["already_applied"]]
-        lines.append(f"Turbines: create={len(turbines['create'])}, decommission={len(pending)} pending "
+        lines.append(f"Turbines: create={len(turbines['create'])}, adopt={len(turbines.get('adopt', []))}, "
+                     f"decommission={len(pending)} pending "
                      f"of {len(turbines['decommission'])}, unresolved={len(turbines['unresolved'])}, "
                      f"applied={turbines['applied']}")
         for row in turbines["unresolved"][:10]:
@@ -74,6 +76,7 @@ async def run(args):
             park_content=args.park_file.read_bytes() if args.park_file else None,
             park_map=pairs(args.park_map, int), model_map=pairs(args.model_map, int),
             add_turbines=args.add_turbines, update_decommissions=args.update_decommissions,
+            adopt_existing=args.adopt_existing,
         )
     if args.apply:
         report["view_refresh"] = await refresh_generation_monthly_view()
@@ -97,8 +100,13 @@ if __name__ == "__main__":
                         help="Map a DEA model name to turbine_models.id (repeatable)")
     parser.add_argument("--add-turbines", action="store_true",
                         help="Create turbine_units for new GSRNs in tracked parks")
+    parser.add_argument("--adopt-existing", action="store_true",
+                        help="With --add-turbines: give a farm's placeholder units (non-GSRN codes) "
+                             "the new GSRNs instead of creating units")
     parser.add_argument("--update-decommissions", action="store_true",
                         help="Apply 'Dato for afmeldning' to turbine_units")
     parser.add_argument("--apply", action="store_true", help="Write one transaction per month")
     parser.add_argument("--report-out", type=Path, help="Write the full JSON report here")
+    # structlog stays silent in a standalone script until stdlib logging is configured.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     asyncio.run(run(parser.parse_args()))

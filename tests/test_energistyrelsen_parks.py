@@ -103,6 +103,7 @@ def test_plan_turbine_changes_create_and_idempotent():
     assert changes["unresolved"] == [{"gsrn": "new2", "park": PARK, "reasons": ["model_unknown:Unknown-X"]}]
     assert changes["decommission"] == [{"gsrn": "existing", "turbine_unit_id": 5, "windfarm_id": 8801,
                                         "end_date": "2025-06-01", "already_applied": False}]
+    assert changes["adopt"] == []
     # Once created, a second plan yields nothing new.
     turbines["new1"] = SimpleNamespace(id=6, code="new1", windfarm_id=8801, end_date=None, status="operational")
     again = plan_turbine_changes(attributes, turbines, {PARK: 8801}, {"sg dd-222": 727}, {8801: windfarm}, "2025-01")
@@ -147,3 +148,31 @@ async def test_reconcile_applies_turbine_changes_before_months(monkeypatch):
     assert {r.identifier: r.value_extracted for r in raws} == {"123": Decimal("1.000"), "456": Decimal("1.000")}
     assert raws[0].data["park"] == PARK and raws[0].data["split_n"] == 2
     assert db.commit.await_count == 2
+
+
+def test_plan_turbine_changes_adopts_placeholder_units():
+    windfarm = SimpleNamespace(id=8801, lat=56.3, lng=7.6)
+    attributes = {
+        "gsrn-b": dict(attrs(connected=date(2026, 3, 1)), model="SG DD-222", hub_height_m=Decimal("145")),
+        "gsrn-a": dict(attrs(connected=date(2026, 2, 23)), model="SG DD-222", hub_height_m=Decimal("145")),
+        "gsrn-c": dict(attrs(connected=date(2026, 4, 1)), model="SG DD-222", hub_height_m=None),
+    }
+    placeholders = {code: SimpleNamespace(id=i, code=code, windfarm_id=8801, end_date=None, status="operational")
+                    for i, code in ((2, "THOR-002"), (1, "THOR-001"))}
+    without = plan_turbine_changes(attributes, dict(placeholders), {PARK: 8801}, {"sg dd-222": 727},
+                                   {8801: windfarm}, "2025-01")
+    assert without["create"] == [] and without["adopt"] == []
+    assert [(u["gsrn"], u["reasons"]) for u in without["unresolved"]] == [
+        ("gsrn-a", ["windfarm_has_placeholder_units:2"]), ("gsrn-b", ["windfarm_has_placeholder_units:2"]),
+        ("gsrn-c", ["windfarm_has_placeholder_units:2"])]
+    # Placeholders keep their own turbine model, so no model map is needed to adopt.
+    adopted = plan_turbine_changes(attributes, dict(placeholders), {PARK: 8801}, {},
+                                   {8801: windfarm}, "2025-01", adopt_existing=True)
+    # Earliest connection takes the first placeholder; the third GSRN has no placeholder left.
+    assert [(a["old_code"], a["code"], a["start_date"]) for a in adopted["adopt"]] == [
+        ("THOR-001", "gsrn-a", date(2026, 2, 23)), ("THOR-002", "gsrn-b", date(2026, 3, 1))]
+    assert adopted["create"] == []
+    assert adopted["unresolved"] == [{"gsrn": "gsrn-c", "park": PARK, "reasons": ["model_unknown:SG DD-222"]}]
+    with_model = plan_turbine_changes(attributes, dict(placeholders), {PARK: 8801}, {"sg dd-222": 727},
+                                      {8801: windfarm}, "2025-01", adopt_existing=True)
+    assert [c["code"] for c in with_model["create"]] == ["gsrn-c"] and with_model["unresolved"] == []
