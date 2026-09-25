@@ -168,13 +168,13 @@ class ScadaPpa(Base):
     # columns above cannot represent. The agent parses it at query time.
     ppa_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # EPR-136: the register is private to the user who entered each row — contract terms are
-    # confidential between colleagues, not just from clients. Every ScadaPpaService query is
-    # scoped on this column unconditionally (no superuser bypass: every internal account is one,
-    # so a role exemption would leave the register shared in practice — same call as EPR-112 for
-    # reports). Nullable only for rows that pre-date the column and could not be attributed from
-    # the audit log; those are visible to nobody until reassigned by hand. No relationship: nothing
-    # reads it back, and an unloaded relationship is a MissingGreenlet waiting to happen.
+    # EPR-143 (Aje 2026-09-25, "one official set of terms per farm"): the register is SHARED per
+    # wind farm between EnergyExe staff and hidden from everyone else by ``get_current_internal_user``
+    # (users.is_internal AND is_superuser) - not private per user as EPR-136 had it. This column is
+    # now "entered by" provenance only: stamped from the token on create, exposed read-only on the
+    # response, never a filter and never a payload field. Nullable for rows that pre-date EPR-136
+    # and could not be attributed from the audit log. No relationship: nothing reads it back, and
+    # an unloaded relationship is a MissingGreenlet waiting to happen.
     created_by_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("users.id"), nullable=True, index=True
     )
@@ -187,13 +187,11 @@ class ScadaPpa(Base):
     # One-way on purpose — adding a Windfarm.scada_ppas backref would edit the core model.
     windfarm = relationship("Windfarm", lazy="selectin")
 
-    # Scoped per user, not global: with private rows a global (ppa_code, windfarm_id) key would
-    # 400 one user against a row they cannot see — an existence leak — for a code as ordinary as
-    # PPA-2026-001. Postgres treats NULLs as distinct, so legacy unattributed rows never collide.
+    # One row per (contract, farm) for everyone: the register is shared, so the natural key is
+    # global again (EPR-143; the per-user key of EPR-136 existed only to avoid an existence leak
+    # between private registers). The migration refuses to run while two rows share a pair.
     __table_args__ = (
-        UniqueConstraint(
-            "ppa_code", "windfarm_id", "created_by_id", name="uq_scada_ppa_code_windfarm_user"
-        ),
+        UniqueConstraint("ppa_code", "windfarm_id", name="uq_scada_ppa_code_windfarm"),
     )
 
     def __repr__(self) -> str:

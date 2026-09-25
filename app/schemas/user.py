@@ -53,6 +53,8 @@ class UserResponse(UserBase):
 
     id: int
     is_superuser: bool
+    # EPR-143: read-only staff flag (defaulted so hand-built response dicts stay valid).
+    is_internal: bool = False
     created_at: datetime
     updated_at: datetime
 

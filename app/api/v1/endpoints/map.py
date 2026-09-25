@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.agent_access import is_internal_staff
 from app.core.deps import get_brain_agent_user, get_current_active_user, get_db
 from app.models.user import User
 from app.schemas.map import (
@@ -164,7 +165,12 @@ async def interpret_map_view(
     )
 
     brain_service = BrainAgentService(db)
-    source = "client" if current_user.role == "client" else "admin"
+    # EPR-143: the admin profile is internal-staff only (see brain_agent.agent_chat).
+    source = (
+        "client"
+        if current_user.role == "client" or not is_internal_staff(current_user)
+        else "admin"
+    )
 
     user_name = None
     if current_user.first_name:

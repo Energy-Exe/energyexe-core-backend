@@ -163,6 +163,30 @@ async def get_current_superuser(
     return current_user
 
 
+async def get_current_internal_user(
+    current_user: User = Depends(get_current_superuser),
+) -> User:
+    """EPR-143: a superuser who is ALSO flagged ``is_internal`` (EnergyExe staff).
+
+    Guards the surfaces that are shared between colleagues but must never be readable by a
+    superuser account that is not staff (the SCADA PPA register). The flag is granted per
+    environment by SQL against a vetted id list - never derived from the email domain, which a
+    user can change through ``PUT /users/me``.
+    """
+    if not current_user.is_internal:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Internal EnergyExe access required"
+        )
+    return current_user
+
+
+# EPR-143 (review round 2): audit rows for these resource types carry the serialized contract
+# data that ``@audit_action`` stores in ``new_values`` / ``old_values``. The write side is gated by
+# ``get_current_internal_user``; every audit READ path must hide these rows from a caller who is
+# not internal, or the register leaks through /audit-logs.
+INTERNAL_ONLY_RESOURCE_TYPES = frozenset({"scada_ppa"})
+
+
 async def get_current_admin_user(
     current_user: User = Depends(get_current_user),
 ) -> User:

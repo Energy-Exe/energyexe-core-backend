@@ -2,9 +2,10 @@
 
 Minimal app rather than conftest's client: conftest only creates five SQLite-safe auth tables, so a
 real ``scada_ppa`` table cannot exist there. These cover the things that are easy to get wrong in
-wiring — the superuser gate, route ordering (``/by-code/{code}`` vs ``/{id}``), the multi-farm
-fan-out payload, 404s, duplicate handling returning 400 rather than a 500, and (EPR-136) that every
-handler hands the caller's id to the service so rows stay private per user.
+wiring — the internal-user gate (EPR-143: superuser AND is_internal), route ordering
+(``/by-code/{code}`` vs ``/{id}``), the multi-farm fan-out payload, 404s, duplicate handling
+returning 409 rather than a 500, the shared register (no handler passes a user to the service
+except create, which stamps "entered by"), and the ppa_status filter rejecting unknown values.
 
 Row-level DB behaviour (the unique constraint actually firing, per-row edits leaving sibling farm
 legs untouched) is exercised against real Postgres separately — see the ticket's verification notes.
@@ -19,7 +20,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.endpoints import scada_ppas as endpoint_module
-from app.core.deps import get_current_superuser, get_db
+from app.core.deps import get_current_internal_user, get_current_superuser, get_db
 from app.services import scada_ppa_service
 
 PREFIX = "/scada/ppas"
@@ -30,6 +31,7 @@ class _FakeUser:
     role = "admin"
     is_active = True
     is_superuser = True
+    is_internal = True
     first_name = "Ada"
     last_name = "Lovelace"
     username = "admin"
@@ -63,6 +65,7 @@ def _row(ppa_id: int, windfarm_id: int, ppa_code: str = "PPA-2026-001", **over):
         has_availability_penalties=None,
         availability_guarantee_pct=None,
         ppa_notes=None,
+        created_by_id=42,
         created_at="2026-09-09T00:00:00",
         updated_at="2026-09-09T00:00:00",
         windfarm=None,
@@ -89,7 +92,7 @@ def app_client():
         yield None
 
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[get_current_superuser] = lambda: _FakeUser()
+    app.dependency_overrides[get_current_internal_user] = lambda: _FakeUser()
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
@@ -105,56 +108,51 @@ def service(monkeypatch):
         "updated": None,
         "deleted": None,
         "group_deleted": None,
-        # EPR-136: every call must carry the caller. Recorded per method so a handler that drops
-        # the kwarg fails loudly here rather than silently sharing rows in production.
-        "user_ids": {},
+        # EPR-143: only create carries the caller (as "entered by"); everything else is shared.
+        "create_user_id": None,
+        "existing_pairs": [],
     }
-    OWNER = 42  # the only user the stubs hold rows for
 
     async def _list(self, **kw):
         state["list_kwargs"] = kw
-        state["user_ids"]["list"] = kw.get("user_id")
-        if kw.get("user_id") != OWNER:
-            return [], 0
         return [_row(1, 7309), _row(2, 7197)], 2
 
-    async def _get(self, ppa_id, *, user_id):
-        state["user_ids"]["get"] = user_id
-        return _row(ppa_id, 7309) if ppa_id == 1 and user_id == OWNER else None
+    async def _get(self, ppa_id):
+        return _row(ppa_id, 7309) if ppa_id == 1 else None
 
-    async def _by_code(self, ppa_code, *, user_id):
-        state["user_ids"]["by_code"] = user_id
-        if ppa_code == "PPA-2026-001" and user_id == OWNER:
+    async def _by_code(self, ppa_code):
+        if ppa_code == "PPA-2026-001":
             return [_row(1, 7309, ppa_code), _row(2, 7197, ppa_code)]
         return []
 
     async def _missing(self, ids):
         return [i for i in ids if i not in (7309, 7197)]
 
+    async def _existing_pairs(self, ppa_code, ids):
+        return list(state["existing_pairs"])
+
     async def _create(self, payload, *, user_id):
         state["created"] = payload
-        state["user_ids"]["create"] = user_id
+        state["create_user_id"] = user_id
         return [_row(i + 1, wf, payload.ppa_code) for i, wf in enumerate(payload.windfarm_ids)]
 
-    async def _update(self, ppa_id, patch, *, user_id):
+    async def _update(self, ppa_id, patch):
         state["updated"] = (ppa_id, patch)
-        state["user_ids"]["update"] = user_id
-        return _row(ppa_id, 7309) if ppa_id == 1 and user_id == OWNER else None
+        return _row(ppa_id, 7309) if ppa_id == 1 else None
 
-    async def _delete(self, ppa_id, *, user_id):
+    async def _delete(self, ppa_id):
         state["deleted"] = ppa_id
-        state["user_ids"]["delete"] = user_id
-        return _row(ppa_id, 7309) if ppa_id == 1 and user_id == OWNER else None
+        return _row(ppa_id, 7309) if ppa_id == 1 else None
 
-    async def _delete_by_code(self, ppa_code, *, user_id):
+    async def _delete_by_code(self, ppa_code):
         state["group_deleted"] = ppa_code
-        state["user_ids"]["delete_by_code"] = user_id
-        return 2 if ppa_code == "PPA-2026-001" and user_id == OWNER else 0
+        return 2 if ppa_code == "PPA-2026-001" else 0
 
     monkeypatch.setattr(svc, "list_ppas", _list)
     monkeypatch.setattr(svc, "get_ppa", _get)
     monkeypatch.setattr(svc, "get_by_code", _by_code)
     monkeypatch.setattr(svc, "missing_windfarm_ids", _missing)
+    monkeypatch.setattr(svc, "existing_pairs", _existing_pairs)
     monkeypatch.setattr(svc, "create_ppas", _create)
     monkeypatch.setattr(svc, "update_ppa", _update)
     monkeypatch.setattr(svc, "delete_ppa", _delete)
@@ -166,7 +164,7 @@ def service(monkeypatch):
 
 
 def test_auth_required():
-    """No superuser override -> every route refuses."""
+    """No internal-user override -> every route refuses."""
     app = FastAPI()
     app.include_router(endpoint_module.router, prefix=PREFIX)
 
@@ -182,14 +180,19 @@ def test_auth_required():
         assert c.delete(f"{PREFIX}/1").status_code in (401, 403)
 
 
-def test_routes_use_the_superuser_dependency():
-    """Guards the decision that this resource is superadmin-only on the BACKEND, not just behind the
-    portal's frontend gate — a downgrade to get_current_active_user should fail here."""
+def test_routes_use_the_internal_user_dependency():
+    """Guards the decision that this resource is internal-staff-only on the BACKEND (EPR-143:
+    superuser AND is_internal), not just behind the portal's frontend gate — a downgrade to
+    get_current_superuser or get_current_active_user should fail here."""
     from app.core.deps import get_current_active_user
 
     deps = {d.call for route in endpoint_module.router.routes for d in route.dependant.dependencies}
-    assert get_current_superuser in deps
+    assert get_current_internal_user in deps
+    assert get_current_superuser not in deps
     assert get_current_active_user not in deps
+    assert len(endpoint_module.router.routes) == 7
+    for route in endpoint_module.router.routes:
+        assert get_current_internal_user in {d.call for d in route.dependant.dependencies}, route.path
 
 
 # ─── list ────────────────────────────────────────────────────────────────────
@@ -207,7 +210,6 @@ def test_list_returns_items_total_envelope(app_client, service):
 def test_list_passes_filters_through(app_client, service):
     app_client.get(f"{PREFIX}?windfarm_id=7309&ppa_status=Active&q=statk&limit=10&offset=5")
     assert service["list_kwargs"] == {
-        "user_id": 42,
         "windfarm_id": 7309,
         "ppa_code": None,
         "ppa_status": "Active",
@@ -220,6 +222,13 @@ def test_list_passes_filters_through(app_client, service):
 def test_list_rejects_out_of_range_limit(app_client, service):
     assert app_client.get(f"{PREFIX}?limit=501").status_code == 422
     assert app_client.get(f"{PREFIX}?offset=-1").status_code == 422
+
+
+def test_list_rejects_an_unknown_status_instead_of_returning_an_empty_page(app_client, service):
+    """EPR-143: ``ppa_status`` is the Literal, so a typo is a 422, not a silent empty register."""
+    assert app_client.get(f"{PREFIX}?ppa_status=bogus").status_code == 422
+    assert app_client.get(f"{PREFIX}?ppa_status=active").status_code == 422
+    assert app_client.get(f"{PREFIX}?ppa_status=Active").status_code == 200
 
 
 # ─── create (the multi-farm fan-out) ─────────────────────────────────────────
@@ -264,8 +273,28 @@ def test_create_rejects_reversed_dates(app_client, service):
     assert resp.status_code == 422
 
 
-def test_create_duplicate_is_400_not_500(app_client, monkeypatch, service):
-    """The unique (ppa_code, windfarm_id) constraint must surface as a readable 400."""
+def test_create_names_the_farms_that_already_carry_the_code(app_client, service):
+    """EPR-143: the shared register pre-checks (ppa_code, windfarm_id) and answers 409 with the ids."""
+    service["existing_pairs"] = [7197]
+    resp = app_client.post(PREFIX, json=_CREATE_BODY)
+    assert resp.status_code == 409
+    assert "7197" in resp.json()["detail"] and "shared" in resp.json()["detail"]
+    assert service["created"] is None
+
+
+def test_create_rejects_an_out_of_range_indexation_rate(app_client, service):
+    for bad in ("100.01", "-100.01", "250"):
+        resp = app_client.post(PREFIX, json={**_CREATE_BODY, "indexation_rate_pct": bad})
+        assert resp.status_code == 422, bad
+    for ok in ("100", "-100", "2.50", "0"):
+        assert app_client.post(PREFIX, json={**_CREATE_BODY, "indexation_rate_pct": ok}).status_code == 201
+    assert app_client.put(f"{PREFIX}/1", json={"indexation_rate_pct": "101"}).status_code == 422
+    assert app_client.put(f"{PREFIX}/1", json={"indexation_rate_pct": "-99.5"}).status_code == 200
+
+
+def test_create_duplicate_is_409_not_500(app_client, monkeypatch, service):
+    """The unique (ppa_code, windfarm_id) constraint must surface as a readable 409 (the pre-check
+    can lose a race; the constraint is the authority)."""
 
     async def _boom(self, payload, *, user_id):
         raise IntegrityError("dup", {}, Exception("dup"))
@@ -290,10 +319,10 @@ def test_create_duplicate_is_400_not_500(app_client, monkeypatch, service):
         yield _Db()
 
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[get_current_superuser] = lambda: _FakeUser()
+    app.dependency_overrides[get_current_internal_user] = lambda: _FakeUser()
     with TestClient(app) as c:
         resp = c.post(PREFIX, json=_CREATE_BODY)
-    assert resp.status_code == 400
+    assert resp.status_code == 409
     assert "unique" in resp.json()["detail"].lower()
 
 
@@ -330,7 +359,7 @@ def test_update_revalidates_against_stored_values(app_client, monkeypatch, servi
     """A patch supplying only expiration_date must still be checked against the STORED
     effective_date — the schema validator alone cannot see the other half."""
 
-    async def _get(self, ppa_id, *, user_id):
+    async def _get(self, ppa_id):
         # A real ORM row hands back date objects, not strings.
         return _row(ppa_id, 7309, effective_date=date(2026, 1, 1))
 
@@ -376,12 +405,11 @@ def test_audit_wraps_a_list_result_so_the_row_is_not_dropped():
     assert payload.new_values["items"][0]["ppa_code"] == "P1"
 
 
-# ─── per-user privacy (EPR-136) ──────────────────────────────────────────────
+# ─── shared register behind the internal gate (EPR-143) ──────────────────────
 
 
-def test_every_handler_passes_the_callers_id_to_the_service(app_client, service):
-    """The service scopes on user_id unconditionally, so the only way a handler can leak another
-    user's rows is by not passing it. Exercise every route and check each stub saw user 42."""
+def test_only_create_passes_the_caller_to_the_service(app_client, service):
+    """The register is shared: no handler scopes by user. Create stamps the caller as "entered by"."""
     app_client.get(PREFIX)
     app_client.get(f"{PREFIX}/1")
     app_client.get(f"{PREFIX}/by-code/PPA-2026-001")
@@ -389,20 +417,12 @@ def test_every_handler_passes_the_callers_id_to_the_service(app_client, service)
     app_client.put(f"{PREFIX}/1", json={"ppa_buyer": "X"})
     app_client.delete(f"{PREFIX}/1")
     app_client.delete(f"{PREFIX}/by-code/PPA-2026-001")
-    assert service["user_ids"] == {
-        "list": 42,
-        "get": 42,
-        "by_code": 42,
-        "create": 42,
-        "update": 42,
-        "delete": 42,
-        "delete_by_code": 42,
-    }
+    assert service["create_user_id"] == 42
+    assert "user_id" not in service["list_kwargs"]
 
 
-def test_another_superuser_sees_nothing_and_gets_404s(monkeypatch, service):
-    """User 43 is a superuser too — and still cannot see, edit or delete user 42's rows.
-    Foreign rows read as absent (404), never forbidden (403): existence must not leak."""
+def test_another_internal_user_sees_and_edits_everything(service):
+    """User 43 is internal too: same rows, same edits — one official register per farm."""
 
     class _OtherUser(_FakeUser):
         id = 43
@@ -415,18 +435,62 @@ def test_another_superuser_sees_nothing_and_gets_404s(monkeypatch, service):
         yield None
 
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[get_current_superuser] = lambda: _OtherUser()
+    app.dependency_overrides[get_current_internal_user] = lambda: _OtherUser()
     with TestClient(app) as c:
         listed = c.get(PREFIX)
         assert listed.status_code == 200
-        assert listed.json() == {"items": [], "total": 0}
-        assert c.get(f"{PREFIX}/1").status_code == 404
-        assert c.get(f"{PREFIX}/by-code/PPA-2026-001").status_code == 404
-        assert c.put(f"{PREFIX}/1", json={"ppa_buyer": "X"}).status_code == 404
-        assert c.delete(f"{PREFIX}/1").status_code == 404
-        assert c.delete(f"{PREFIX}/by-code/PPA-2026-001").status_code == 404
+        assert listed.json()["total"] == 2
+        assert [i["created_by_id"] for i in listed.json()["items"]] == [42, 42]
+        assert c.get(f"{PREFIX}/1").status_code == 200
+        assert c.get(f"{PREFIX}/by-code/PPA-2026-001").status_code == 200
+        assert c.put(f"{PREFIX}/1", json={"ppa_buyer": "X"}).status_code == 200
+        assert c.delete(f"{PREFIX}/1").status_code == 200
+        assert c.delete(f"{PREFIX}/by-code/PPA-2026-001").status_code == 200
+        created = c.post(PREFIX, json=_CREATE_BODY)
+        assert created.status_code == 201
     app.dependency_overrides.clear()
-    assert set(service["user_ids"].values()) == {43}
+    assert service["create_user_id"] == 43
+
+
+@pytest.mark.parametrize("is_superuser,is_internal", [(True, False), (False, True), (False, False)])
+def test_a_superuser_without_the_internal_flag_gets_403_on_every_route(service, is_superuser, is_internal):
+    """The REAL get_current_internal_user runs (only the superuser layer is stubbed): a superuser
+    that is not staff, or a staff-flagged non-superuser, is refused everywhere — 403, not 404."""
+
+    class _Outsider(_FakeUser):
+        id = 44
+        email = "outsider@example.com"
+
+    _Outsider.is_superuser = is_superuser
+    _Outsider.is_internal = is_internal
+
+    app = FastAPI()
+    app.include_router(endpoint_module.router, prefix=PREFIX)
+
+    async def _db():
+        yield None
+
+    app.dependency_overrides[get_db] = _db
+    if is_superuser:
+        app.dependency_overrides[get_current_superuser] = lambda: _Outsider()
+    else:
+        from app.core.deps import get_current_user
+
+        app.dependency_overrides[get_current_user] = lambda: _Outsider()
+    with TestClient(app) as c:
+        for call in (
+            lambda: c.get(PREFIX),
+            lambda: c.get(f"{PREFIX}/1"),
+            lambda: c.get(f"{PREFIX}/by-code/PPA-2026-001"),
+            lambda: c.post(PREFIX, json=_CREATE_BODY),
+            lambda: c.put(f"{PREFIX}/1", json={"ppa_buyer": "X"}),
+            lambda: c.delete(f"{PREFIX}/1"),
+            lambda: c.delete(f"{PREFIX}/by-code/PPA-2026-001"),
+        ):
+            resp = call()
+            assert resp.status_code == 403, resp.text
+    app.dependency_overrides.clear()
+    assert service["created"] is None and service["updated"] is None and service["deleted"] is None
 
 
 def test_ownership_cannot_be_forged_through_the_payload(app_client, service):
@@ -434,7 +498,7 @@ def test_ownership_cannot_be_forged_through_the_payload(app_client, service):
     row is still created as the caller. Same for PUT."""
     resp = app_client.post(PREFIX, json={**_CREATE_BODY, "created_by_id": 999})
     assert resp.status_code == 201
-    assert service["user_ids"]["create"] == 42
+    assert service["create_user_id"] == 42
     assert not hasattr(service["created"], "created_by_id")
     assert "created_by_id" not in service["created"].model_dump()
 
