@@ -3,7 +3,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -326,26 +326,40 @@ async def upload_energistyrelsen_file(
     file: UploadFile = File(...),
     start_date: str = Form(...),
     end_date: str = Form(...),
-    clean_first: bool = Form(True),
+    clean_first: bool = Form(False),
     workers: int = Form(4),
+    park_file: Optional[UploadFile] = File(None),
+    park_map: str = Form(""),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Upload and process Energistyrelsen Excel file with real-time progress updates.
+    Upload and process the Energistyrelsen Vinddatasæt with real-time progress updates.
 
     Returns Server-Sent Events stream with progress updates, followed by final result.
 
     Form Parameters:
-    - file: Excel file (.xlsx)
-    - start_date: Start date for filtering (ISO format)
-    - end_date: End date for filtering (ISO format)
-    - clean_first: Whether to clear existing Energistyrelsen data first (default: true)
-    - workers: Number of parallel workers (1-8, default: 4)
+    - file: Vinddatasæt workbook (.xlsx, sheet 'Vinddatasæt')
+    - start_date / end_date: source month range (ISO dates; only year-month is used)
+    - clean_first: Must be false; whole-source deletion is disabled
+    - park_file: optional Parkproduktion workbook; park totals are split over active turbines
+    - park_map: optional comma-separated PARK_GUID=WINDFARM_ID overrides
+    - workers: ignored (kept for form compatibility)
     """
     # Validate file type
     if not file.filename.endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Only .xlsx files are supported")
+    if park_file is not None and park_file.filename and not park_file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Park file must be .xlsx")
+    park_overrides = {}
+    for item in filter(None, (part.strip() for part in park_map.split(","))):
+        if "=" not in item:
+            raise HTTPException(status_code=400, detail=f"Invalid park_map entry: {item}")
+        guid, windfarm_id = item.split("=", 1)
+        try:
+            park_overrides[guid.strip().upper()] = int(windfarm_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid windfarm id in park_map: {item}")
 
     # Parse dates
     try:
@@ -357,6 +371,7 @@ async def upload_energistyrelsen_file(
     # Read file content
     try:
         file_content = await file.read()
+        park_content = await park_file.read() if park_file is not None and park_file.filename else None
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error reading file: {str(e)}")
 
@@ -380,6 +395,8 @@ async def upload_energistyrelsen_file(
                     end_date=end_dt,
                     clean_first=clean_first,
                     progress_callback=progress_callback,
+                    park_content=park_content,
+                    park_map=park_overrides,
                 )
                 result_holder["result"] = result
             except Exception as e:

@@ -194,6 +194,10 @@ async def clear_existing_energistyrelsen_data():
 
 async def import_energistyrelsen_data(workers: int = 4, clean_first: bool = True, sample_size: Optional[int] = None):
     """Main import function for Energistyrelsen monthly data."""
+    raise RuntimeError(
+        "This legacy importer can delete the whole Energistyrelsen source. "
+        "Use scripts/jobs/import_vinddata.py with an explicit workbook and month range."
+    )
     
     print("="*80)
     print(" "*15 + "🇩🇰 ENERGISTYRELSEN MONTHLY DATA IMPORT 🇩🇰")
