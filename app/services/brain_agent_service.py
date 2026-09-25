@@ -29,6 +29,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
+from app.core.agent_access import require_fresh_agent_access
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
@@ -337,6 +338,8 @@ class BrainAgentService:
         message_id: Optional[str] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Send a prompt to the agent and yield SSE events."""
+        await require_fresh_agent_access(self.db, user_id)
+
         if not session_id:
             session_id = str(uuid.uuid4())
 
@@ -2070,7 +2073,11 @@ class BrainAgentService:
                 "(DuckDB over the silver Parquet lake). Use for sub-hourly, "
                 "per-signal (temperatures/pitch/rpm) or event-sequence questions "
                 "that the gold scada tables cannot answer; gold stays authoritative "
-                "for daily/monthly KPIs"
+                "for daily/monthly KPIs. ALSO the only SCADA source for "
+                "**Lutelandet** (Norway, platform windfarm 7197): raw 5-minute data "
+                "for ONE turbine of nine (T09, 2025) in view `measurements_5m` — "
+                "silver-only, no `scada` schema rows, never scale it to the farm; "
+                "farm-level Lutelandet questions still use the platform tables"
             )
         prompt = prompt.replace("{{SCADA_SKILL_LINES}}", scada_lines)
         prompt = prompt.replace(

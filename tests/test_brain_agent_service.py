@@ -591,7 +591,13 @@ def test_chat_result_event_carries_terminal_fields(monkeypatch, _isolated_sessio
 
     class _NoBudgetDB:
         async def execute(self, *_a, **_kw):
-            return SimpleNamespace(scalar_one_or_none=lambda: None)
+            return SimpleNamespace(
+                scalar_one_or_none=lambda: None,
+                one_or_none=lambda: SimpleNamespace(
+                    is_active=True, role="admin", email_verified=True,
+                    is_approved=True, is_superuser=True,
+                ),
+            )
 
     async def _run():
         service = BrainAgentService(db=_NoBudgetDB())
