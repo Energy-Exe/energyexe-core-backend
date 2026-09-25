@@ -1,11 +1,9 @@
 """Service for importing raw generation data from uploaded Excel files."""
 
-import asyncio
-import json
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncGenerator, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from decimal import Decimal
 
 import pandas as pd
@@ -15,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.generation_data import GenerationDataRaw
 from app.models.generation_unit import GenerationUnit
-from app.models.turbine_unit import TurbineUnit
 from app.schemas.raw_data_fetch import (
     FileUploadProgressUpdate,
     FileUploadResponse,
@@ -194,155 +191,78 @@ class FileImportService:
         filename: str,
         start_date: datetime,
         end_date: datetime,
-        clean_first: bool = True,
+        clean_first: bool = False,
         progress_callback: Optional[Callable[[FileUploadProgressUpdate], None]] = None,
+        park_content: Optional[bytes] = None,
+        park_map: Optional[Dict[str, int]] = None,
     ) -> FileUploadResponse:
-        """Import Energistyrelsen data from uploaded Excel file with date range filtering."""
-        start_time = datetime.now(timezone.utc)
-        errors = []
-        warnings = []
+        """Reconcile source months and rebuild Perform records atomically.
 
+        ``park_content`` is the optional Parkproduktion workbook; its park
+        totals are split over each park's active turbines. Turbine catalogue
+        changes (new turbines, decommissions) are a deliberate CLI step and
+        are not applied from the web upload.
+        """
+        if clean_first:
+            raise ValueError("clean_first is unsupported for Energistyrelsen; use month reconciliation")
+        from app.services.energistyrelsen_import import reconcile_vinddata
+
+        async def progress(month, counts, index, total):
+            if progress_callback:
+                percent = 10 + int(80 * (index + 1) / max(total, 1))
+                await progress_callback(FileUploadProgressUpdate(
+                    status="processing",
+                    message=f"Committed {month}: {counts['added']} added, {counts['revised']} revised, "
+                            f"{counts['unchanged']} unchanged",
+                    progress_percent=percent,
+                ))
+
+        started = datetime.now(timezone.utc)
         try:
-            # Send progress: Validating
+            report = await reconcile_vinddata(
+                self.db, file_content, start_date.strftime("%Y-%m"),
+                end_date.strftime("%Y-%m"), apply=True, progress=progress,
+                park_content=park_content, park_map=park_map,
+            )
             if progress_callback:
-                await progress_callback(
-                    FileUploadProgressUpdate(
-                        status="validating",
-                        message="Validating Energistyrelsen file structure...",
-                        progress_percent=5,
-                    )
-                )
-
-            # Save to temp file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
-                tmp_file.write(file_content)
-                tmp_path = Path(tmp_file.name)
-
-            try:
-                # Read Excel file
-                df = pd.read_excel(tmp_path, sheet_name="kWh")
-
-                # Validate structure
-                if len(df) < 7:
-                    raise ValueError("Invalid Energistyrelsen file: Too few rows")
-
-                if progress_callback:
-                    await progress_callback(
-                        FileUploadProgressUpdate(
-                            status="validating",
-                            message=f"File validated: {len(df):,} rows, {len(df.columns)} columns",
-                            progress_percent=10,
-                        )
-                    )
-
-                # Get turbine mapping
-                turbine_mapping = await self._get_energistyrelsen_turbine_mapping()
-
-                if not turbine_mapping:
-                    raise ValueError("No Energistyrelsen turbine units found in database")
-
-                # Clear existing data if requested
-                if clean_first:
-                    if progress_callback:
-                        await progress_callback(
-                            FileUploadProgressUpdate(
-                                status="processing",
-                                message="Clearing existing Energistyrelsen data...",
-                                progress_percent=15,
-                            )
-                        )
-                    await self.db.execute(
-                        text("DELETE FROM generation_data_raw WHERE source = 'ENERGISTYRELSEN'")
-                    )
-                    await self.db.commit()
-
-                # Process data with date filtering
-                if progress_callback:
-                    await progress_callback(
-                        FileUploadProgressUpdate(
-                            status="processing",
-                            message="Processing Energistyrelsen data...",
-                            progress_percent=20,
-                        )
-                    )
-
-                records = await self._process_energistyrelsen_data(
-                    df, turbine_mapping, start_date, end_date, progress_callback
-                )
-
-                # Insert records
-                if progress_callback:
-                    await progress_callback(
-                        FileUploadProgressUpdate(
-                            status="inserting",
-                            message=f"Inserting {len(records):,} records...",
-                            progress_percent=80,
-                        )
-                    )
-
-                records_stored, records_updated, units_summary = await self._insert_records(
-                    records, progress_callback
-                )
-
-                # Calculate actual date range from processed data
-                actual_min_date = min(r["period_start"] for r in records) if records else start_date
-                actual_max_date = max(r["period_start"] for r in records) if records else end_date
-
-                end_time = datetime.now(timezone.utc)
-                duration = (end_time - start_time).total_seconds()
-
-                if progress_callback:
-                    await progress_callback(
-                        FileUploadProgressUpdate(
-                            status="completed",
-                            message=f"Completed: {len(records):,} records processed",
-                            progress_percent=100,
-                        )
-                    )
-
-                return FileUploadResponse(
-                    success=True,
-                    source="ENERGISTYRELSEN",
-                    file_info={
-                        "filename": filename,
-                        "size_bytes": len(file_content),
-                        "rows": len(df),
-                        "columns": len(df.columns),
-                    },
-                    date_range_requested={
-                        "start": start_date.isoformat(),
-                        "end": end_date.isoformat(),
-                    },
-                    date_range_processed={
-                        "start": actual_min_date.isoformat() if isinstance(actual_min_date, datetime) else actual_min_date,
-                        "end": actual_max_date.isoformat() if isinstance(actual_max_date, datetime) else actual_max_date,
-                    },
-                    records_stored=records_stored,
-                    records_updated=records_updated,
-                    generation_units_processed=units_summary,
-                    summary={
-                        "duration_seconds": duration,
-                        "processing_rate": len(records) / duration if duration > 0 else 0,
-                        "total_records_processed": len(records),
-                    },
-                    errors=errors,
-                    warnings=warnings,
-                )
-
-            finally:
-                # Clean up temp file
-                tmp_path.unlink(missing_ok=True)
-
-        except Exception as e:
-            logger.error(f"Error importing Energistyrelsen file: {str(e)}")
+                await progress_callback(FileUploadProgressUpdate(
+                    status="processing", message="Refreshing monthly generation view...",
+                    progress_percent=95,
+                ))
+            from app.services.generation_monthly_view import refresh_generation_monthly_view
+            view_refresh = await refresh_generation_monthly_view()
+            duration = (datetime.now(timezone.utc) - started).total_seconds()
+            total = sum(m["added"] + m["revised"] + m["unchanged"]
+                        for m in report["months"].values())
             if progress_callback:
-                await progress_callback(
-                    FileUploadProgressUpdate(
-                        status="error",
-                        message=f"Error: {str(e)}",
-                        progress_percent=0,
-                    )
-                )
+                await progress_callback(FileUploadProgressUpdate(
+                    status="completed", message="Energistyrelsen month reconciliation complete",
+                    progress_percent=100,
+                ))
+            warnings = []
+            if report["unmatched_gsrns"]:
+                warnings.append(f"{len(report['unmatched_gsrns'])} unmatched GSRNs held for review")
+            unmapped = report["parks"].get("unmapped_with_production") or {}
+            if unmapped:
+                warnings.append(f"{len(unmapped)} parks with production have no tracked turbines")
+            return FileUploadResponse(
+                success=True, source="ENERGISTYRELSEN",
+                file_info={"filename": filename, "size_bytes": len(file_content),
+                           "park_file": park_content is not None},
+                date_range_requested={"start": start_date.isoformat(), "end": end_date.isoformat()},
+                date_range_processed={"start": min(report["months"], default=""),
+                                      "end": max(report["months"], default="")},
+                records_stored=sum(m["added"] for m in report["months"].values()),
+                records_updated=sum(m["revised"] for m in report["months"].values()),
+                generation_units_processed=[],
+                summary={"duration_seconds": duration,
+                         "processing_rate": total / duration if duration else 0,
+                         "total_records_processed": total,
+                         "report": report, "view_refresh": view_refresh},
+                warnings=warnings,
+            )
+        except Exception:
+            await self.db.rollback()
             raise
 
     async def _get_nve_unit_mapping(self) -> Dict[str, List]:
@@ -363,19 +283,6 @@ class FileImportService:
 
         logger.info(f"Found {len(units)} NVE units across {len(units_by_code)} unique codes")
         return units_by_code
-
-    async def _get_energistyrelsen_turbine_mapping(self) -> Dict[str, any]:
-        """Get mapping of Energistyrelsen turbine units."""
-        result = await self.db.execute(select(TurbineUnit))
-        turbines = result.scalars().all()
-
-        turbines_by_gsrn = {str(turbine.code): turbine for turbine in turbines}
-        logger.info(f"Found {len(turbines)} turbine units in database")
-
-        return {
-            "by_code": turbines_by_gsrn,
-            "turbines": {turbine.id: turbine for turbine in turbines},
-        }
 
     def _find_operational_unit(self, units_list: List, timestamp: datetime):
         """Find which phase/unit was operational at the given timestamp."""
@@ -498,118 +405,6 @@ class FileImportService:
                 continue
 
         logger.info(f"Processed {len(records):,} NVE records")
-        return records
-
-    async def _process_energistyrelsen_data(
-        self,
-        df: pd.DataFrame,
-        turbine_mapping: Dict,
-        start_date: datetime,
-        end_date: datetime,
-        progress_callback: Optional[Callable] = None,
-    ) -> List[Dict]:
-        """Process Energistyrelsen data from DataFrame with date filtering."""
-        records = []
-        turbines_by_gsrn = turbine_mapping["by_code"]
-
-        # Extract month columns (from column 17 onwards)
-        month_columns = df.columns[17:]
-
-        # Get month dates from row 1
-        month_dates = {}
-        for col_idx, col in enumerate(month_columns):
-            try:
-                month_str = df.iloc[1, col_idx + 17]
-                if pd.notna(month_str) and "Note" not in str(month_str):
-                    month_date = pd.to_datetime(month_str)
-                    # Filter by date range
-                    if start_date <= month_date <= end_date:
-                        month_dates[col_idx + 17] = month_date
-            except Exception:
-                continue
-
-        logger.info(f"Found {len(month_dates)} months in date range")
-
-        # Process turbine rows (skip header rows 0-6)
-        data_start_row = 7
-        total_rows = len(df) - data_start_row
-        processed_rows = 0
-
-        for idx in range(data_start_row, len(df)):
-            row = df.iloc[idx]
-            gsrn = row.iloc[1]  # Column 'Turbine data' contains GSRN
-
-            if pd.isna(gsrn) or str(gsrn).lower() in ["turbine identifier (gsrn)", "nan"]:
-                continue
-
-            gsrn_str = str(int(gsrn)) if isinstance(gsrn, (int, float)) else str(gsrn)
-            turbine = turbines_by_gsrn.get(gsrn_str)
-
-            if not turbine:
-                continue
-
-            # Process each month in date range
-            for col_idx, month_date in month_dates.items():
-                try:
-                    value = row.iloc[col_idx]
-
-                    if pd.isna(value) or str(value).lower() in ["nan", "n/a", "-", ""]:
-                        continue
-
-                    # Convert to float
-                    if isinstance(value, str):
-                        value = value.replace(",", "").replace(" ", "")
-                    generation_kwh = float(value)
-
-                    if generation_kwh <= 0:
-                        continue
-
-                    # Convert kWh to MWh
-                    generation_mwh = generation_kwh / 1000.0
-
-                    # Calculate period end
-                    if month_date.month == 12:
-                        period_end = datetime(month_date.year + 1, 1, 1) - timedelta(seconds=1)
-                    else:
-                        period_end = datetime(month_date.year, month_date.month + 1, 1) - timedelta(seconds=1)
-
-                    record = {
-                        "period_start": month_date.isoformat(),
-                        "period_end": period_end.isoformat(),
-                        "period_type": "month",
-                        "source": "ENERGISTYRELSEN",
-                        "source_type": "file",
-                        "identifier": turbine.code,
-                        "value_extracted": generation_mwh,
-                        "unit": "MWh",
-                        "data": {
-                            "generation_mwh": generation_mwh,
-                            "generation_kwh": generation_kwh,
-                            "turbine_unit_id": turbine.id,
-                            "gsrn": gsrn_str,
-                            "month": month_date.strftime("%Y-%m"),
-                            "period_type": "monthly_total",
-                        },
-                    }
-                    records.append(record)
-
-                except Exception as e:
-                    logger.debug(f"Error processing month column for turbine {gsrn_str}: {e}")
-                    continue
-
-            processed_rows += 1
-            if progress_callback and processed_rows % 100 == 0:
-                progress_percent = 20 + int((processed_rows / total_rows) * 60)
-                await progress_callback(
-                    FileUploadProgressUpdate(
-                        status="processing",
-                        message=f"Processing turbines... {processed_rows:,}/{total_rows:,}",
-                        progress_percent=progress_percent,
-                        records_processed=len(records),
-                    )
-                )
-
-        logger.info(f"Processed {len(records):,} Energistyrelsen records")
         return records
 
     async def _insert_records(

@@ -17,7 +17,7 @@ Usage:
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Any
 from decimal import Decimal
 import argparse
@@ -29,7 +29,7 @@ from pathlib import Path
 from dateutil.relativedelta import relativedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, delete, func
+from sqlalchemy import select, and_, or_, delete, func
 
 # Add parent directories to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -220,13 +220,22 @@ class MonthlyGenerationProcessor:
         logger.info(f"Processing {source} for {month_start.strftime('%Y-%m')}")
 
         # Fetch raw data for this month
+        raw_month_filter = and_(GenerationDataRaw.period_start >= month_start,
+                                GenerationDataRaw.period_start < month_end)
+        if source == 'ENERGISTYRELSEN':
+            recorded_month = GenerationDataRaw.data['month'].astext
+            raw_month_filter = or_(
+                recorded_month == month_start.strftime('%Y-%m'),
+                and_(recorded_month.is_(None),
+                     or_(raw_month_filter,
+                         GenerationDataRaw.period_start == month_start - timedelta(hours=6))),
+            )
         result = await self.db.execute(
             select(GenerationDataRaw)
             .where(
                 and_(
                     GenerationDataRaw.source == source,
-                    GenerationDataRaw.period_start >= month_start,
-                    GenerationDataRaw.period_start < month_end,
+                    raw_month_filter,
                     GenerationDataRaw.period_type == 'month'
                 )
             )
@@ -251,6 +260,16 @@ class MonthlyGenerationProcessor:
             monthly_records = self.transform_eia(raw_data)
         elif source == 'ENERGISTYRELSEN':
             monthly_records = self.transform_energistyrelsen(raw_data)
+            # ENTSOE is the preferred metered source for a farm-month.
+            entsoe_farms = set((await self.db.execute(
+                select(GenerationData.windfarm_id).where(
+                    GenerationData.source == 'ENTSOE',
+                    GenerationData.hour >= month_start,
+                    GenerationData.hour < month_end,
+                ).distinct()
+            )).scalars())
+            monthly_records = [record for record in monthly_records
+                               if record.metadata['windfarm_id'] not in entsoe_farms]
         else:
             logger.warning(f"Unknown monthly source: {source}")
             return {'error': f'Unknown source: {source}'}
@@ -337,7 +356,16 @@ class MonthlyGenerationProcessor:
         skipped_units = set()
         matched_units = 0
 
+        # Older uploads may have left repeated raw rows. Conflicts require
+        # review; identical rows must not be counted twice.
+        by_gsrn = {}
         for record in raw_data:
+            existing = by_gsrn.get(record.identifier)
+            if existing and existing.value_extracted != record.value_extracted:
+                raise ValueError(f"Conflicting raw generation for {record.identifier}")
+            by_gsrn[record.identifier] = record
+
+        for record in by_gsrn.values():
             # ENERGISTYRELSEN identifiers are GSRN codes - look them up in turbine_units
             turbine_unit = self.turbine_units_cache.get(record.identifier)
 
@@ -354,8 +382,13 @@ class MonthlyGenerationProcessor:
             capacity_mw = turbine_unit.get('capacity_mw')
 
             # Create monthly record with turbine_unit info
+            source_month = data_json.get('month')
+            if source_month:
+                year, month = map(int, source_month.split('-'))
+            else:
+                year, month = record.period_start.year, record.period_start.month
             monthly_record = MonthlyRecord(
-                month=record.period_start,
+                month=datetime(year, month, 1, tzinfo=timezone.utc),
                 identifier=record.identifier,
                 generation_mwh=float(record.value_extracted),
                 capacity_mw=capacity_mw,
@@ -396,8 +429,15 @@ class MonthlyGenerationProcessor:
             .where(
                 and_(
                     GenerationData.source == source,
-                    GenerationData.hour >= month_start,
-                    GenerationData.hour < month_end,
+                    or_(
+                        and_(GenerationData.hour >= month_start,
+                             GenerationData.hour < month_end),
+                        # Legacy rows were stamped with a process-local offset
+                        # (six hours, seven for a few 2009 months).
+                        and_(source == 'ENERGISTYRELSEN',
+                             GenerationData.hour.in_([month_start - timedelta(hours=6),
+                                                      month_start - timedelta(hours=7)])),
+                    ),
                     GenerationData.source_resolution == 'monthly'
                 )
             )

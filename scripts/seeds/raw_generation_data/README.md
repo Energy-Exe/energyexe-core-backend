@@ -124,19 +124,14 @@ poetry run python scripts/seeds/raw_generation_data/nve/check_import_status.py
 
 Import raw Energistyrelsen (Danish Energy Agency) monthly generation data:
 
-**Option 1: CLI Import (for initial bulk load)**
+**Option 1: Preview and apply the current Vinddatasæt + Parkproduktion workbooks**
 ```bash
-# Standard import with cleanup (removes existing data first)
-poetry run python scripts/seeds/raw_generation_data/energistyrelsen/import_parallel_optimized.py
-
-# Import without cleanup (append mode)
-poetry run python scripts/seeds/raw_generation_data/energistyrelsen/import_parallel_optimized.py --no-clean
-
-# Test with sample data (first 1000 rows)
-poetry run python scripts/seeds/raw_generation_data/energistyrelsen/import_parallel_optimized.py --sample 1000
-
-# Faster import with 8 workers
-poetry run python scripts/seeds/raw_generation_data/energistyrelsen/import_parallel_optimized.py --workers 8
+poetry run python scripts/jobs/import_vinddata.py /path/to/Vinddata.xlsx --start 2023-01 --end 2026-08 \
+  --park-file /path/to/Parkproduktion.xlsx --report-out preview.json
+# After reviewing the preview and taking a database backup:
+poetry run python scripts/jobs/import_vinddata.py /path/to/Vinddata.xlsx --start 2023-01 --end 2026-08 \
+  --park-file /path/to/Parkproduktion.xlsx --apply --report-out apply.json
+# See scripts/seeds/raw_generation_data/energistyrelsen/README.md for --add-turbines / --park-map
 
 # Check import status
 poetry run python scripts/seeds/raw_generation_data/energistyrelsen/check_import_status.py
@@ -149,7 +144,7 @@ poetry run python scripts/seeds/raw_generation_data/energistyrelsen/check_energi
 1. Navigate to `/raw-data-fetch` page in admin UI
 2. Go to "File Upload" tab
 3. Select "Energistyrelsen (Denmark)"
-4. Upload updated Excel file (.xlsx format with 'kWh' sheet)
+4. Upload the Vinddatasæt workbook (.xlsx, sheet 'Vinddatasæt') and, optionally, Parkproduktion.xlsx
 5. Specify date range to import (e.g., last month)
 6. Click "Upload & Process"
 7. Monitor real-time progress updates
@@ -446,11 +441,11 @@ POST /api/v1/raw-data/taipower/upload
 
 ## Notes
 
-- **Taipower, NVE, Energistyrelsen & EIA**: Automatically clear existing data before import (use `--no-clean` to append)
+- **Taipower, NVE & EIA**: Existing cleanup and append rules apply. Energistyrelsen reconciles by source month; whole-source deletion is disabled.
 - **ELEXON & ENTSOE**: Append by default (manually clear if needed)
 - **NVE, Energistyrelsen & EIA**: Data is pivoted - columns are units/months, rows are timestamps/turbines/plants
 - **All sources**: Data stored in `raw_generation_data_raw` table with JSONB structure
-- **NVE & Energistyrelsen**: Use `--sample N` to test with first N rows before full import (CLI) or date range filtering (Web UI)
+- **NVE**: Use `--sample N` to test with first N rows before full import. Energistyrelsen has a read-only preview command.
 - **EIA**: Use `--sample N` to test with first N files before full import
 - **Energistyrelsen & EIA**: Monthly data (not hourly), stored with `period_type='month'`
 - **EIA**: Filters for wind data only (fuel_type='WND'), Plant ID maps to generation_unit.code
