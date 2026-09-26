@@ -26,6 +26,19 @@ PricingModelLiteral = Literal["Fixed", "Indexed", "Collar"]
 IndexationTypeLiteral = Literal["None", "CPI", "RPI", "Fixed_Pct"]
 
 
+# EPR-143 (Aje 2026-09-25): the unit of every price column, said once and shown in the OpenAPI
+# schema so nobody enters a per-kWh or per-annum figure. Percent columns are 0-100, not 0-1.
+_PER_MWH = "per MWh in `currency`, stored exactly as contracted"
+_PCT_POINTS = "percentage points per year (0-100 scale; -100..100 accepted on create/update)"
+
+
+def _indexation_rate_in_range(v: Optional[Decimal]) -> Optional[Decimal]:
+    """-100..100: an annual escalation outside that is a keying error (e.g. 250 for 2.50%)."""
+    if v is not None and not (Decimal(-100) <= v <= Decimal(100)):
+        raise ValueError("indexation_rate_pct must be between -100 and 100 (percentage points)")
+    return v
+
+
 class ScadaPpaTerms(BaseModel):
     """Every contract field except the asset link. Shared by create (fanned out over N windfarms)
     and the row schemas."""
@@ -47,15 +60,20 @@ class ScadaPpaTerms(BaseModel):
     power_share_pct: Optional[Decimal] = Field(None, gt=0, le=100)
 
     pricing_model: Optional[PricingModelLiteral] = None
-    strike_price: Optional[Decimal] = None
-    floor_price: Optional[Decimal] = None
-    cap_price: Optional[Decimal] = None
+    strike_price: Optional[Decimal] = Field(None, description=_PER_MWH)
+    floor_price: Optional[Decimal] = Field(None, description=_PER_MWH)
+    cap_price: Optional[Decimal] = Field(None, description=_PER_MWH)
 
     index_name: Optional[str] = Field(None, max_length=50)
-    index_spread: Optional[Decimal] = None  # signed: negative = discount
+    index_spread: Optional[Decimal] = Field(  # signed: negative = discount
+        None, description=_PER_MWH + "; signed, negative = discount to the index"
+    )
 
     indexation_type: Optional[IndexationTypeLiteral] = None
-    indexation_rate_pct: Optional[Decimal] = None
+    # Percentage points per year on the 0-100 scale of the other *_pct fields. The range check
+    # lives on Create/Update only (see _indexation_rate_in_range): this base also feeds the GET
+    # response, and a legacy out-of-range row must still be readable.
+    indexation_rate_pct: Optional[Decimal] = Field(None, description=_PCT_POINTS)
 
     has_availability_penalties: Optional[bool] = None
     availability_guarantee_pct: Optional[Decimal] = Field(None, ge=0, le=100)
@@ -98,6 +116,8 @@ class ScadaPpaCreate(ScadaPpaTerms):
     """
 
     windfarm_ids: List[int] = Field(..., min_length=1)
+
+    _indexation_rate_in_range = field_validator("indexation_rate_pct")(_indexation_rate_in_range)
 
     @field_validator("windfarm_ids")
     @classmethod
@@ -146,6 +166,7 @@ class ScadaPpaUpdate(BaseModel):
     _currency_is_iso4217 = field_validator("currency")(
         ScadaPpaTerms._currency_is_iso4217.__func__
     )
+    _indexation_rate_in_range = field_validator("indexation_rate_pct")(_indexation_rate_in_range)
 
     @model_validator(mode="after")
     def _check_partial_cross_field_rules(self) -> "ScadaPpaUpdate":
@@ -181,6 +202,8 @@ class ScadaPpa(ScadaPpaTerms):
 
     id: int
     windfarm_id: int
+    # EPR-143: "entered by" provenance, read-only (never on Create/Update). NULL on legacy rows.
+    created_by_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
     windfarm: Optional[WindfarmBasic] = None

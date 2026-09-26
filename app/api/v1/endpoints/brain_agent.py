@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.agent_access import is_internal_staff
 from app.core.deps import get_brain_agent_user, get_db
 from app.models.agent_thread import AgentThread
 from app.models.user import User
@@ -77,6 +78,12 @@ async def agent_chat(
         effective_source = "client"
     else:
         effective_source = requested_source if requested_source in ("admin", "client") else "admin"
+    # EPR-143: the admin profile (shared RO role = SELECT on every public table, the
+    # internal-only SCADA PPA register included) is for internal staff only. Any other
+    # non-client account runs on the client profile and its allowlisted RO role.
+    if effective_source == "admin" and not is_internal_staff(current_user):
+        logger.info("brain_agent_admin_profile_denied", user_id=current_user.id)
+        effective_source = "client"
 
     # Per-user rate limit. Checked before opening the SSE stream so we can
     # return a real 429 with Retry-After (an error event mid-stream can't carry

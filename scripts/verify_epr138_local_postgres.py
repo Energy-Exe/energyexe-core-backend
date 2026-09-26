@@ -313,8 +313,9 @@ async def verify_reads(sync_engine, scratch, source_schema):
         assert missing["readiness"]["blocked_reasons"] == ["farm_mapping_missing"]
         assert missing["source"]["transaction"]["read_only"] == "on"
 
-        # 201 records crosses the real service's 200-row page boundary. Other owner,
-        # lowercase status, Draft, NULL owner and other farm must all be excluded.
+        # 201 records crosses the real service's 200-row page boundary. EPR-143: the register is
+        # shared per farm, so the other creator (id 202) and the NULL creator (id 205) are INCLUDED
+        # whoever exports; lowercase status, Draft and the other farm are still excluded.
         now = datetime(2025, 1, 1)
         terms = [
             {
@@ -344,26 +345,24 @@ async def verify_reads(sync_engine, scratch, source_schema):
         with sync_engine.begin() as db:
             db.execute(source_schema.tables["scada_ppa"].insert(), terms)
         counts = []
-        for owner, count in ((7, 201), (8, 1), (9, 0)):
+        for exporting_user, count in ((7, 203), (8, 203), (9, 203)):
             req = ExportRequest(
-                "hill_of_towie", owner, request.period_start, request.period_end, "EUR"
+                "hill_of_towie", exporting_user, request.period_start, request.period_end, "EUR"
             )
             snapshot = await exporter.export_snapshot(req, url, source)
-            assert snapshot["readiness"]["status"] == (
-                "prepared" if count else "no_terms"
-            ), snapshot["readiness"]
+            assert snapshot["readiness"]["status"] == "prepared", snapshot["readiness"]
+            assert snapshot["scope"] == "farm" and snapshot["owner_user_id"] == exporting_user
             assert len(snapshot["original_terms"]) == count
+            assert {t["created_by_id"] for t in snapshot["original_terms"]} == {7, 8, None}
             assert all(
-                t["created_by_id"] == owner
-                and t["strike_price"] == "123.45"
-                and t["power_share_pct"] == "50.00"
+                t["strike_price"] == "123.45" and t["power_share_pct"] == "50.00"
                 for t in snapshot["original_terms"]
             )
             assert snapshot["readiness"]["ppa_monetary_activation"] is False
             assert all(Decimal(row["rate"]) == 1 for row in snapshot["fx_schedule"])
             counts.append(count)
         report["exporter"] = {
-            "owner_counts": counts,
+            "farm_counts_by_exporting_user": counts,
             "missing_mapping_blocked": True,
             "native_decimals_preserved": True,
             "activation": False,

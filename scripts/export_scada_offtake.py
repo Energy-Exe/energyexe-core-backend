@@ -71,7 +71,10 @@ def source_version() -> dict:
         revision = "unavailable"
     return {
         "backend_revision": revision,
-        "exporter_version": "1",
+        # "2" since EPR-143: farm-scoped envelope (scope: "farm"), no owner filter on the terms.
+        # The pipeline validates v1 and v2 under different rules; a farm-wide export must never
+        # be emitted as v1.
+        "exporter_version": "2",
         "file_sha256": {
             str(path.relative_to(REPO_ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in files
@@ -130,7 +133,13 @@ async def export_snapshot(request: ExportRequest, source_url: URL, source: dict)
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--farm", required=True)
-    parser.add_argument("--owner-user-id", required=True, type=int)
+    parser.add_argument(
+        "--owner-user-id",
+        required=True,
+        type=int,
+        help="The exporting user (recorded as owner_user_id); the register is shared per farm "
+        "since EPR-143, so this no longer filters the terms",
+    )
     parser.add_argument("--from", dest="period_start", required=True, type=date.fromisoformat)
     parser.add_argument("--to", dest="period_end", required=True, type=date.fromisoformat)
     parser.add_argument("--output-root", required=True, type=Path)

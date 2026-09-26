@@ -74,6 +74,17 @@ async def get_user_by_id(
     return user
 
 
+def _refuse_non_internal_touching_internal(target: User, current_user: User) -> None:
+    """EPR-143: an internal (staff) account can only be edited or deleted by another internal
+    account. Without this, any superuser could reset an internal user's password through this
+    route and log in as them, which would make ``is_internal`` a decoration rather than a boundary."""
+    if target.is_internal and not current_user.is_internal:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Internal EnergyExe accounts can only be managed by internal accounts",
+        )
+
+
 @router.put("/{user_id}", response_model=UserResponse)
 async def update_user(
     user_id: int,
@@ -81,8 +92,13 @@ async def update_user(
     current_user: User = Depends(get_current_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update user (superuser only)."""
+    """Update user (superuser only; internal accounts only by internal callers)."""
     user_service = UserService(db)
+
+    target = await user_service.get_by_id(user_id)
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    _refuse_non_internal_touching_internal(target, current_user)
 
     try:
         updated_user = await user_service.update(user_id, user_data)
@@ -98,13 +114,18 @@ async def delete_user(
     current_user: User = Depends(get_current_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete user (superuser only)."""
+    """Delete user (superuser only; internal accounts only by internal callers)."""
     if user_id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete your own account"
         )
 
     user_service = UserService(db)
+
+    target = await user_service.get_by_id(user_id)
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    _refuse_non_internal_touching_internal(target, current_user)
 
     try:
         await user_service.delete(user_id)
