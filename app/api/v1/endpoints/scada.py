@@ -15,7 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.deps import get_current_active_user, get_current_superuser, get_db
+from app.core.agent_access import is_internal_staff
+from app.core.deps import get_current_active_user, get_current_internal_user, get_db
 from app.models.user import User
 from app.scada_preview.schemas import IngestionSummary
 from app.scada_preview.service import IngestionSummaryService
@@ -32,7 +33,9 @@ DEFAULT_FARM = "hill_of_towie"
 async def get_ingestion_summary(
     farm: str = Query("lutelandet", min_length=1, max_length=100, pattern=r"^[a-z0-9_]+$"),
     run_id: str | None = Query(None, min_length=1, max_length=128),
-    current_user: User = Depends(get_current_superuser),
+    # Internal staff only (is_superuser AND users.is_internal): the measured delivery is a
+    # partner's data and is not a client surface yet (SFE Lutelandet, EPR-143 boundary).
+    current_user: User = Depends(get_current_internal_user),
     db: AsyncSession = Depends(get_db),
 ) -> IngestionSummary:
     """Read an immutable measured-data run; never starts ingestion or calculation."""
@@ -61,7 +64,9 @@ async def get_farms(
     """Farm metadata + data-through dates for the freshness header."""
     service = await _service(db)
     result = await service.farms()
-    if current_user.is_superuser and get_settings().SCADA_INGESTION_ENABLED:
+    # The measured profile is merged for internal staff only; every other caller sees the
+    # legacy farm list unchanged (no `ingestion` key, so the client never renders it).
+    if is_internal_staff(current_user) and get_settings().SCADA_INGESTION_ENABLED:
         measured = await IngestionSummaryService(db).farms()
         by_farm = {row["farm"]: row for row in result["farms"]}
         for row in measured["farms"]:
