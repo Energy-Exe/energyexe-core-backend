@@ -149,6 +149,9 @@ class AuditLogService:
                     )
                 )
 
+            if filters.exclude_resource_types:
+                conditions.append(AuditLog.resource_type.notin_(filters.exclude_resource_types))
+
             if conditions:
                 query = query.where(and_(*conditions))
 
@@ -204,6 +207,9 @@ class AuditLogService:
                     )
                 )
 
+            if filters.exclude_resource_types:
+                conditions.append(AuditLog.resource_type.notin_(filters.exclude_resource_types))
+
             if conditions:
                 query = query.where(and_(*conditions))
 
@@ -228,6 +234,10 @@ class AuditLogService:
                 conditions.append(AuditLog.created_at >= filters.date_from)
             if filters.date_to:
                 conditions.append(AuditLog.created_at <= filters.date_to)
+            if filters.exclude_resource_types:
+                # EPR-143: hidden resource types leave every aggregate, including the
+                # per-resource-type breakdown (a count alone would still reveal activity).
+                conditions.append(AuditLog.resource_type.notin_(filters.exclude_resource_types))
 
         def filtered(stmt):
             return stmt.where(*conditions) if conditions else stmt
@@ -305,16 +315,18 @@ class AuditLogService:
         resource_id: str,
         skip: int = 0,
         limit: int = 100,
+        exclude_resource_types: Optional[List[str]] = None,
     ) -> List[AuditLog]:
         """Get audit history for a specific resource."""
+        conditions = [
+            AuditLog.resource_type == resource_type,
+            AuditLog.resource_id == resource_id,
+        ]
+        if exclude_resource_types:
+            conditions.append(AuditLog.resource_type.notin_(exclude_resource_types))
         result = await db.execute(
             select(AuditLog)
-            .where(
-                and_(
-                    AuditLog.resource_type == resource_type,
-                    AuditLog.resource_id == resource_id,
-                )
-            )
+            .where(and_(*conditions))
             .order_by(desc(AuditLog.created_at))
             .offset(skip)
             .limit(limit)
@@ -327,11 +339,15 @@ class AuditLogService:
         user_id: int,
         skip: int = 0,
         limit: int = 100,
+        exclude_resource_types: Optional[List[str]] = None,
     ) -> List[AuditLog]:
         """Get audit history for a specific user."""
+        conditions = [AuditLog.user_id == user_id]
+        if exclude_resource_types:
+            conditions.append(AuditLog.resource_type.notin_(exclude_resource_types))
         result = await db.execute(
             select(AuditLog)
-            .where(AuditLog.user_id == user_id)
+            .where(and_(*conditions))
             .order_by(desc(AuditLog.created_at))
             .offset(skip)
             .limit(limit)

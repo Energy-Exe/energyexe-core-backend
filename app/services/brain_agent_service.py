@@ -338,7 +338,8 @@ class BrainAgentService:
         message_id: Optional[str] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Send a prompt to the agent and yield SSE events."""
-        await require_fresh_agent_access(self.db, user_id)
+        # EPR-143: source="admin" additionally requires superuser AND is_internal (fresh read).
+        await require_fresh_agent_access(self.db, user_id, source=source)
 
         if not session_id:
             session_id = str(uuid.uuid4())

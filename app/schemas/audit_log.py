@@ -56,6 +56,10 @@ class AuditLogFilter(BaseModel):
     search: Optional[str] = Field(
         None, description="Search in resource_name, description, or user_email"
     )
+    exclude_resource_types: Optional[List[str]] = Field(
+        None,
+        description="Resource types hidden from the caller (EPR-143: internal-only audit rows)",
+    )
 
 
 class AuditLogSummary(BaseModel):

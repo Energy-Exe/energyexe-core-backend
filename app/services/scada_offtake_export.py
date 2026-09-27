@@ -28,6 +28,10 @@ PAGE_SIZE = 200
 
 @dataclass(frozen=True)
 class ExportRequest:
+    """``owner_user_id`` is the EXPORTING user (recorded on the envelope as ``owner_user_id`` for
+    the pipeline's private lane); since EPR-143 the register is shared per farm, so it no longer
+    filters the terms. Name and position are kept for the positional callers."""
+
     farm: str
     owner_user_id: int
     period_start: date
@@ -84,6 +88,9 @@ def empty_snapshot(request: ExportRequest, source: dict, *, blocked_reason: str)
             "schema_version": SCHEMA_VERSION,
             "kind": "private_offtake_snapshot",
             "visibility": "private",
+            # EPR-143: explicit scope discriminator. v1 envelopes (exporter_version "1") were
+            # owner-filtered; v2 exports every Active term on the farm regardless of who entered it.
+            "scope": "farm",
             "owner_user_id": request.owner_user_id,
             "farm": {"slug": request.farm, "windfarm_id": None, "timezone": None},
             "analysis_window": {
@@ -192,12 +199,12 @@ class ScadaOfftakeExporter:
         self.financials = FinancialDataService(db)
         self.rates = ExchangeRateService(db)
 
-    async def all_active_terms(self, owner_id: int, windfarm_id: int) -> list[dict]:
+    async def all_active_terms(self, windfarm_id: int) -> list[dict]:
+        """Every Active term on the farm, whoever entered it (EPR-143: the register is shared)."""
         terms: list[dict] = []
         expected_total = None
         while expected_total is None or len(terms) < expected_total:
             page, total = await self.ppas.list_ppas(
-                user_id=owner_id,
                 windfarm_id=windfarm_id,
                 ppa_status="Active",
                 limit=PAGE_SIZE,
@@ -209,11 +216,7 @@ class ScadaOfftakeExporter:
             if not page and len(terms) < total:
                 raise ValueError("PPA pagination ended before the advertised count")
             for row in page:
-                if (
-                    row.created_by_id != owner_id
-                    or row.windfarm_id != windfarm_id
-                    or row.ppa_status != "Active"
-                ):
+                if row.windfarm_id != windfarm_id or row.ppa_status != "Active":
                     raise ValueError("PPA service returned a row outside the requested scope")
                 terms.append(row_columns(row))
             if len(terms) > total or len({row["id"] for row in terms}) != len(terms):
@@ -361,7 +364,7 @@ class ScadaOfftakeExporter:
         except (ZoneInfoNotFoundError, ValueError):
             snapshot["readiness"]["blocked_reasons"] = ["farm_timezone_missing_or_invalid"]
             return seal_snapshot(snapshot)
-        terms = await self.all_active_terms(request.owner_user_id, farm["windfarm_id"])
+        terms = await self.all_active_terms(farm["windfarm_id"])
         snapshot["original_terms"] = terms
         filings = await self.financials.get_by_windfarm(farm["windfarm_id"])
         filing_rows = native(
