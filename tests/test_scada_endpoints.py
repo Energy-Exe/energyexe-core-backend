@@ -222,3 +222,84 @@ def test_scada_schema_present_caches_true(monkeypatch):
     assert asyncio.run(scada_service.scada_schema_present(_Db())) is True
     assert asyncio.run(scada_service.scada_schema_present(_Db())) is True
     assert calls["n"] == 1
+
+
+# --- SFE measured delivery: internal-staff boundary (is_superuser AND is_internal) ---
+
+
+class _Superuser(_FakeUser):
+    role = "admin"
+    is_superuser = True
+    is_internal = False
+
+
+class _InternalSuperuser(_Superuser):
+    is_internal = True
+
+
+class _IngestionOn:
+    SCADA_INGESTION_ENABLED = True
+
+
+@pytest.fixture
+def ingestion_on(monkeypatch):
+    monkeypatch.setattr(endpoint_module, "get_settings", lambda: _IngestionOn())
+
+    async def _legacy_farms(self):
+        return {"farms": [{"farm": "hill_of_towie", "name": "Hill of Towie"}]}
+
+    async def _measured_farms(self):
+        return {"farms": [{"farm": "lutelandet", "ingestion": {"profile": "measured_native"}}]}
+
+    async def _summary(self, farm, run_id=None):
+        # Reaching the service is the proof the gate let the caller through; a 503 keeps the
+        # response valid without building a full IngestionSummary payload.
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=503, detail=f"stub reached for {farm}")
+
+    monkeypatch.setattr(scada_service.ScadaService, "farms", _legacy_farms)
+    monkeypatch.setattr(endpoint_module.IngestionSummaryService, "farms", _measured_farms)
+    monkeypatch.setattr(endpoint_module.IngestionSummaryService, "get", _summary)
+
+
+def _client_as(user_cls):
+    from app.core.deps import get_current_superuser
+
+    app = FastAPI()
+    app.include_router(endpoint_module.router, prefix="/scada")
+
+    async def _db():
+        yield None
+
+    app.dependency_overrides[get_db] = _db
+    app.dependency_overrides[get_current_active_user] = lambda: user_cls()
+    app.dependency_overrides[get_current_superuser] = lambda: user_cls()
+    return TestClient(app)
+
+
+def test_farms_merge_measured_profile_for_internal_staff_only(schema_present, ingestion_on):
+    with _client_as(_InternalSuperuser) as c:
+        farms = {row["farm"]: row for row in c.get("/scada/farms").json()["farms"]}
+    assert farms["lutelandet"]["ingestion"]["profile"] == "measured_native"
+
+    with _client_as(_Superuser) as c:
+        farms = {row["farm"]: row for row in c.get("/scada/farms").json()["farms"]}
+    assert "lutelandet" not in farms
+    assert "ingestion" not in farms["hill_of_towie"]
+
+    with _client_as(_FakeUser) as c:
+        farms = {row["farm"]: row for row in c.get("/scada/farms").json()["farms"]}
+    assert list(farms) == ["hill_of_towie"]
+
+
+def test_ingestion_summary_requires_internal_staff(ingestion_on):
+    with _client_as(_InternalSuperuser) as c:
+        response = c.get("/scada/ingestion-summary?farm=lutelandet")
+    assert response.status_code == 503
+    assert "stub reached for lutelandet" in response.text
+
+    with _client_as(_Superuser) as c:
+        response = c.get("/scada/ingestion-summary?farm=lutelandet")
+    assert response.status_code == 403
+    assert "Internal EnergyExe access required" in response.text
