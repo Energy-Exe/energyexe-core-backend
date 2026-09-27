@@ -78,6 +78,13 @@ resource "aws_ecs_task_definition" "api" {
         { name = "LOG_LEVEL", value = "INFO" },
         # Tags errors in GlitchTip. Harmless when SENTRY_DSN is unset (init no-ops).
         { name = "SENTRY_ENVIRONMENT", value = "production" },
+        # SFE measured delivery (Lutelandet T09) — the store is scada_ingestion.ingestion_run,
+        # published by hand through scada_pipeline.sfe.staging --target prod. Reads are
+        # internal-staff only (is_superuser AND users.is_internal, EPR-143). No
+        # BRAIN_AGENT_ACCESS_POLICY=superusers here: clients use the agent on prod, the
+        # scada_ingestion schema is closed to both read-only agent roles, and the admin
+        # profile is already internal-only.
+        { name = "SCADA_INGESTION_ENABLED", value = "true" },
         # No PIPELINE_DAILY_* here any more — the nightly pipeline is not run by
         # this container. It has its own task definition in pipeline_daily.tf.
         { name = "CDSAPI_URL", value = "https://cds.climate.copernicus.eu/api" },
