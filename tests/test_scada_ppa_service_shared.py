@@ -48,6 +48,10 @@ class _FakeSession:
 
     async def execute(self, stmt):
         self.statements.append(stmt)
+        # The farm lock (D-041) must see the farms it asked for, or the service refuses the write
+        # as "unknown windfarm" before it reaches the statements these tests assert on.
+        if "FROM windfarms" in _sql(stmt):
+            return _Result(rows=[7309, 7197])
         return _Result()
 
     def add_all(self, rows):
@@ -119,6 +123,45 @@ async def test_create_stamps_the_caller_as_entered_by_on_every_leg(db):
     assert isinstance(db.added[0], ScadaPpa)
     # the re-read for the response is by code, not by owner
     assert OWNED not in _sql(db.statements[-1])
+
+
+@pytest.mark.asyncio
+async def test_writes_lock_the_farms_in_id_order_before_reading_overlaps(db):
+    """D-041: the first statement of an Active create is the ordered farm lock, and the overlap
+    query that follows is scoped to Active rows on that farm - nothing else is locked or read."""
+    payload = ScadaPpaCreate(
+        ppa_code="PPA-2026-001",
+        ppa_buyer="Statkraft",
+        windfarm_ids=[7309, 7197],
+        ppa_status="Active",
+    )
+    await ScadaPpaService(db).create_ppas(payload, user_id=USER)
+    lock = _sql(db.statements[0])
+    assert "FROM windfarms" in lock and "FOR UPDATE" in lock
+    assert "ORDER BY windfarms.id ASC" in lock
+    overlap = _sql(db.statements[1])
+    assert "scada_ppa.ppa_status =" in overlap and "scada_ppa.windfarm_id =" in overlap
+    assert OWNED not in overlap
+    # a Draft is not in force: no overlap query at all, only the lock
+    db.statements.clear()
+    await ScadaPpaService(db).create_ppas(
+        payload.model_copy(update={"ppa_status": "Draft"}), user_id=USER
+    )
+    assert "FROM windfarms" in _sql(db.statements[0])
+    assert not any("scada_ppa.ppa_status =" in _sql(s) for s in db.statements)
+
+
+@pytest.mark.asyncio
+async def test_update_locks_and_rereads_the_row_before_anything_else(db):
+    """The endpoint's earlier read is stale; the service's first statement re-reads the row
+    under FOR UPDATE (populate_existing) and only then locks farms and checks overlaps."""
+    await ScadaPpaService(db).update_ppa(1, ScadaPpaUpdate(ppa_status="Active"))
+    first = db.statements[0]
+    sql = _sql(first)
+    assert "FROM scada_ppa" in sql and "FOR UPDATE" in sql and "scada_ppa.id =" in sql
+    assert first.get_execution_options().get("populate_existing") is True
+    # the fake session holds no row, so the service stopped there: not found
+    assert len(db.statements) == 1
 
 
 @pytest.mark.asyncio
