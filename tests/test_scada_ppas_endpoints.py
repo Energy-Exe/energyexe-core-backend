@@ -83,13 +83,24 @@ _CREATE_BODY = {
 }
 
 
+class _Db:
+    """A session stand-in: the handlers only ever ``rollback()`` it here (after a 409/400 from
+    the service), so that is all it implements."""
+
+    def __init__(self):
+        self.rollbacks = 0
+
+    async def rollback(self):
+        self.rollbacks += 1
+
+
 @pytest.fixture
 def app_client():
     app = FastAPI()
     app.include_router(endpoint_module.router, prefix=PREFIX)
 
     async def _db():
-        yield None
+        yield _Db()
 
     app.dependency_overrides[get_db] = _db
     app.dependency_overrides[get_current_internal_user] = lambda: _FakeUser()
@@ -192,7 +203,9 @@ def test_routes_use_the_internal_user_dependency():
     assert get_current_active_user not in deps
     assert len(endpoint_module.router.routes) == 7
     for route in endpoint_module.router.routes:
-        assert get_current_internal_user in {d.call for d in route.dependant.dependencies}, route.path
+        assert get_current_internal_user in {
+            d.call for d in route.dependant.dependencies
+        }, route.path
 
 
 # ─── list ────────────────────────────────────────────────────────────────────
@@ -287,7 +300,10 @@ def test_create_rejects_an_out_of_range_indexation_rate(app_client, service):
         resp = app_client.post(PREFIX, json={**_CREATE_BODY, "indexation_rate_pct": bad})
         assert resp.status_code == 422, bad
     for ok in ("100", "-100", "2.50", "0"):
-        assert app_client.post(PREFIX, json={**_CREATE_BODY, "indexation_rate_pct": ok}).status_code == 201
+        assert (
+            app_client.post(PREFIX, json={**_CREATE_BODY, "indexation_rate_pct": ok}).status_code
+            == 201
+        )
     assert app_client.put(f"{PREFIX}/1", json={"indexation_rate_pct": "101"}).status_code == 422
     assert app_client.put(f"{PREFIX}/1", json={"indexation_rate_pct": "-99.5"}).status_code == 200
 
@@ -311,10 +327,6 @@ def test_create_duplicate_is_409_not_500(app_client, monkeypatch, service):
     app = FastAPI()
     app.include_router(endpoint_module.router, prefix=PREFIX)
 
-    class _Db:
-        async def rollback(self):
-            return None
-
     async def _db():
         yield _Db()
 
@@ -324,6 +336,77 @@ def test_create_duplicate_is_409_not_500(app_client, monkeypatch, service):
         resp = c.post(PREFIX, json=_CREATE_BODY)
     assert resp.status_code == 409
     assert "unique" in resp.json()["detail"].lower()
+
+
+# ─── overlapping Active terms (EPR-143, Aje 2026-09-28, D-041) ───────────────
+
+
+def _conflict(windfarm_id=7309):
+    other = _row(9, windfarm_id, "PPA-OLD", effective_date=date(2025, 1, 1), expiration_date=None)
+    return scada_ppa_service.ActiveTermsConflict(windfarm_id, [other])
+
+
+def test_create_over_an_active_contract_is_409_conflicting_terms(app_client, monkeypatch, service):
+    """The service found another Active row on one of the farms whose dates overlap: 409 with
+    the farm and the contract named, and nothing written (the service raised before add_all)."""
+
+    async def _boom(self, payload, *, user_id):
+        raise _conflict(7197)
+
+    monkeypatch.setattr(scada_ppa_service.ScadaPpaService, "create_ppas", _boom)
+    resp = app_client.post(PREFIX, json={**_CREATE_BODY, "ppa_status": "Active"})
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail.startswith("conflicting terms: an Active PPA (PPA-OLD, 2025-01-01 to open)")
+    assert detail.endswith("already covers windfarm 7197")
+    assert service["created"] is None
+
+
+def test_update_that_would_overlap_is_409(app_client, monkeypatch, service):
+    """Activating a row, moving it onto an occupied farm or widening its dates all end here."""
+
+    async def _boom(self, ppa_id, patch):
+        raise _conflict(7309)
+
+    monkeypatch.setattr(scada_ppa_service.ScadaPpaService, "update_ppa", _boom)
+    resp = app_client.put(f"{PREFIX}/1", json={"ppa_status": "Active"})
+    assert resp.status_code == 409
+    assert "conflicting terms" in resp.json()["detail"]
+    assert service["updated"] is None
+
+
+def test_update_revalidated_on_the_locked_row_is_400(app_client, monkeypatch, service):
+    """The endpoint's early check passed on the stale row; the service re-checked the merged row
+    under the lock and a concurrent half-patch had inverted the dates: 400, not a 500."""
+
+    async def _boom(self, ppa_id, patch):
+        raise scada_ppa_service.ScadaPpaTermsError("expiration_date must be after effective_date")
+
+    monkeypatch.setattr(scada_ppa_service.ScadaPpaService, "update_ppa", _boom)
+    resp = app_client.put(f"{PREFIX}/1", json={"expiration_date": "2027-01-01"})
+    assert resp.status_code == 400
+    assert "expiration_date" in resp.json()["detail"]
+
+
+def test_conflict_and_terms_errors_roll_the_session_back(monkeypatch, service):
+    """Rolling back is what releases the row/farm locks the service took (FOR UPDATE)."""
+
+    async def _boom(self, ppa_id, patch):
+        raise _conflict(7309)
+
+    monkeypatch.setattr(scada_ppa_service.ScadaPpaService, "update_ppa", _boom)
+    app = FastAPI()
+    app.include_router(endpoint_module.router, prefix=PREFIX)
+    db = _Db()
+
+    async def _db():
+        yield db
+
+    app.dependency_overrides[get_db] = _db
+    app.dependency_overrides[get_current_internal_user] = lambda: _FakeUser()
+    with TestClient(app) as c:
+        assert c.put(f"{PREFIX}/1", json={"ppa_status": "Active"}).status_code == 409
+    assert db.rollbacks == 1
 
 
 # ─── read / update / delete ──────────────────────────────────────────────────
@@ -453,7 +536,9 @@ def test_another_internal_user_sees_and_edits_everything(service):
 
 
 @pytest.mark.parametrize("is_superuser,is_internal", [(True, False), (False, True), (False, False)])
-def test_a_superuser_without_the_internal_flag_gets_403_on_every_route(service, is_superuser, is_internal):
+def test_a_superuser_without_the_internal_flag_gets_403_on_every_route(
+    service, is_superuser, is_internal
+):
     """The REAL get_current_internal_user runs (only the superuser layer is stubbed): a superuser
     that is not staff, or a staff-flagged non-superuser, is refused everywhere — 403, not 404."""
 

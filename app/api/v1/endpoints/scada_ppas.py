@@ -17,12 +17,16 @@ Two departures from the rest of ``/scada``, both deliberate:
   ``created_by_id`` is "entered by" provenance (stamped from the token on create, read-only on the
   response); the natural key is ``(ppa_code, windfarm_id)`` again.
 
+* **Overlapping Active terms are refused at entry (EPR-143, Aje 2026-09-28, D-041).** Two Active
+  rows on one farm whose date ranges share a day are "conflicting terms" -> 409. The service does
+  the check inside the write transaction under row/farm locks (see its module docstring); this
+  layer only maps :class:`ActiveTermsConflict` to 409 and :class:`ScadaPpaTermsError` to 400, and
+  rolls the session back so the locks go.
+
 ``get_db`` comes from ``app.core.deps`` (the SCADA convention) — the copy in ``app.core.database`` is
 a different function object, and test ``dependency_overrides`` only match the one actually imported.
 """
 
-from datetime import date
-from decimal import Decimal
 from typing import Any, List, Optional
 
 import structlog
@@ -43,7 +47,12 @@ from app.schemas.scada_ppa import (
     ScadaPpaListResponse,
     ScadaPpaUpdate,
 )
-from app.services.scada_ppa_service import ScadaPpaService
+from app.services.scada_ppa_service import (
+    ActiveTermsConflict,
+    ScadaPpaService,
+    ScadaPpaTermsError,
+    validate_merged_terms,
+)
 
 logger = structlog.get_logger()
 
@@ -59,22 +68,18 @@ def _validate_merged_row(row: ScadaPpaModel, patch: ScadaPpaUpdate) -> None:
     """Re-check the cross-field rules against the row as it will be AFTER the patch.
 
     ``ScadaPpaUpdate`` can only validate pairs where the caller supplied both halves; a patch that
-    sets just ``expiration_date`` has to be judged against the stored ``effective_date``.
+    sets just ``expiration_date`` has to be judged against the stored ``effective_date``. This is
+    the cheap early answer on the row as read; the service applies the same rules again to the
+    LOCKED row before writing, because two concurrent half-patches can each pass this check.
     """
     supplied = patch.model_dump(exclude_unset=True)
-
-    def merged(field: str):
-        return supplied.get(field, getattr(row, field))
-
-    effective: Optional[date] = merged("effective_date")
-    expiration: Optional[date] = merged("expiration_date")
-    if effective is not None and expiration is not None and expiration <= effective:
-        raise HTTPException(status_code=400, detail="expiration_date must be after effective_date")
-
-    floor: Optional[Decimal] = merged("floor_price")
-    cap: Optional[Decimal] = merged("cap_price")
-    if floor is not None and cap is not None and Decimal(floor) > Decimal(cap):
-        raise HTTPException(status_code=400, detail="floor_price must not exceed cap_price")
+    merged = {
+        field: supplied.get(field, getattr(row, field)) for field in ScadaPpaUpdate.model_fields
+    }
+    try:
+        validate_merged_terms(merged)
+    except ScadaPpaTermsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("", response_model=ScadaPpaListResponse)
@@ -182,6 +187,13 @@ async def create_scada_ppa(
 
     try:
         return await service.create_ppas(payload, user_id=current_user.id)
+    except ActiveTermsConflict as exc:
+        # Overlapping Active terms on one of the farms (D-041); nothing was written.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ScadaPpaTermsError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
     except IntegrityError:
         # The pre-check above lost a race; the constraint is the authority.
         await db.rollback()
@@ -220,6 +232,14 @@ async def update_scada_ppa(
 
     try:
         updated = await service.update_ppa(ppa_id, payload)
+    except ActiveTermsConflict as exc:
+        # The merged row would be Active over another Active row on that farm (D-041).
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ScadaPpaTermsError as exc:
+        # Re-validation on the LOCKED row failed (a concurrent patch changed the other half).
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status_code=409, detail=_DUPLICATE_DETAIL)
