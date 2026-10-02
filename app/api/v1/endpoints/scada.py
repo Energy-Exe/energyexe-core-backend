@@ -18,7 +18,7 @@ from app.core.config import get_settings
 from app.core.agent_access import is_internal_staff
 from app.core.deps import get_current_active_user, get_current_internal_user, get_db
 from app.models.user import User
-from app.scada_preview.schemas import IngestionSummary
+from app.scada_preview.schemas import AnyIngestionSummary
 from app.scada_preview.service import IngestionSummaryService
 from app.schemas.scada import ScadaFarmsResponse
 from app.services.scada_service import ScadaService, scada_schema_present
@@ -29,15 +29,15 @@ router = APIRouter()
 DEFAULT_FARM = "hill_of_towie"
 
 
-@router.get("/ingestion-summary", response_model=IngestionSummary)
+@router.get("/ingestion-summary", response_model=AnyIngestionSummary)
 async def get_ingestion_summary(
-    farm: str = Query("lutelandet", min_length=1, max_length=100, pattern=r"^[a-z0-9_]+$"),
+    farm: str = Query(..., min_length=1, max_length=100, pattern=r"^[a-z0-9_]+$"),
     run_id: str | None = Query(None, min_length=1, max_length=128),
     # Internal staff only (is_superuser AND users.is_internal): the measured delivery is a
     # partner's data and is not a client surface yet (SFE Lutelandet, EPR-143 boundary).
     current_user: User = Depends(get_current_internal_user),
     db: AsyncSession = Depends(get_db),
-) -> IngestionSummary:
+) -> AnyIngestionSummary:
     """Read an immutable measured-data run; never starts ingestion or calculation."""
     if not get_settings().SCADA_INGESTION_ENABLED:
         raise HTTPException(503, "Measured ingestion data not available")

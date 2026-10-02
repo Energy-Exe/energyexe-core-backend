@@ -9,7 +9,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.scada_preview.schemas import IngestionSummary, farm_metadata
+from app.scada_preview.schemas import SUMMARY_ADAPTER, IngestionSummary, farm_metadata
+from app.scada_preview.schemas_v2 import IngestionSummaryV2
 
 MAX_SUMMARY_BYTES = 2_000_000
 logger = structlog.get_logger(__name__)
@@ -48,14 +49,18 @@ class IngestionSummaryService:
         result = await self.db.execute(self.sql["present"])
         return result.scalar_one_or_none() is not None
 
-    async def get(self, farm: str, run_id: str | None = None) -> IngestionSummary:
+    async def get(
+        self, farm: str, run_id: str | None = None
+    ) -> IngestionSummary | IngestionSummaryV2:
         try:
             return await self._read(farm, run_id)
         except SQLAlchemyError:
             logger.warning("ingestion_store_unavailable", farm=farm, run_id=run_id)
             raise HTTPException(503, UNAVAILABLE) from None
 
-    async def _read(self, farm: str, run_id: str | None = None) -> IngestionSummary:
+    async def _read(
+        self, farm: str, run_id: str | None = None
+    ) -> IngestionSummary | IngestionSummaryV2:
         if not await self.available():
             raise HTTPException(503, UNAVAILABLE)
         result = await self.db.execute(
@@ -67,7 +72,7 @@ class IngestionSummaryService:
             raise HTTPException(404, "No published ingestion run for this farm and run")
         try:
             raw = json.loads(row["summary"]) if isinstance(row["summary"], str) else row["summary"]
-            summary = IngestionSummary.model_validate(raw)
+            summary = SUMMARY_ADAPTER.validate_python(raw)
             if summary.farm.slug != farm or summary.run_id != row["run_id"]:
                 raise ValueError("Published run identity mismatch")
         except (ValidationError, ValueError, TypeError):
