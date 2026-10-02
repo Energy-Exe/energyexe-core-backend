@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.scada_preview.config import PreviewSettings
-from app.scada_preview.schemas import IngestionSummary
+from app.scada_preview.schemas import AnyIngestionSummary
 from app.scada_preview.service import IngestionSummaryService
 
 PREVIEW_USER = {
@@ -135,7 +135,7 @@ def create_preview_app(settings: PreviewSettings | None = None) -> FastAPI:
     async def farms(user=Depends(preview_superuser), db: AsyncSession = Depends(get_preview_db)):
         return await IngestionSummaryService(db, local_preview=True).farms()
 
-    @app.get("/api/v1/scada/ingestion-summary", response_model=IngestionSummary)
+    @app.get("/api/v1/scada/ingestion-summary", response_model=AnyIngestionSummary)
     async def ingestion_summary(
         farm: str = Query("lutelandet", min_length=1, max_length=100, pattern=r"^[a-z0-9_]+$"),
         run_id: str | None = Query(None, min_length=1, max_length=128),

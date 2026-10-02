@@ -1,8 +1,8 @@
 """Versioned, bounded measured-ingestion payload shared with the pipeline."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, TypeAdapter, model_validator
 
 Count = Annotated[int, Field(ge=0)]
 
@@ -153,7 +153,16 @@ class IngestionSummary(Payload):
         return self
 
 
-def farm_metadata(summary: IngestionSummary) -> dict:
+from app.scada_preview.schemas_v2 import IngestionSummaryV2  # noqa: E402
+
+# A stored run is v1 (Lutelandet) or v2 (measured farms); schema_version decides.
+AnyIngestionSummary = Annotated[
+    Union[IngestionSummary, IngestionSummaryV2], Field(discriminator="schema_version")
+]
+SUMMARY_ADAPTER = TypeAdapter(AnyIngestionSummary)
+
+
+def farm_metadata(summary: IngestionSummary | IngestionSummaryV2) -> dict:
     return {
         "profile": "measured_native",
         "run_id": summary.run_id,
