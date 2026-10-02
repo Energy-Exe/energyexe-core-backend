@@ -5,6 +5,8 @@ session start. If a future edit silently removes the new-pipeline table
 entries or the metric caveats, the agent will revert to raw-SQL fallbacks
 or misleading answers — this test is the canary.
 """
+import pytest
+
 from app.services.brain_agent_skill_files import (
     SKILL_DOMAIN,
     SKILL_QUERIES,
@@ -136,7 +138,8 @@ def test_brain_agent_system_prompts_list_all_19_schema_names():
 
 
 def test_scada_skill_covers_all_gold_tables():
-    """Canary: every scada gold table stays documented in SKILL_SCADA."""
+    """Canary: every scada roll-up table the agent may read stays documented
+    in SKILL_SCADA (the raw alarm_events log is deliberately not)."""
     from app.services.brain_agent_skill_files import SKILL_SCADA
 
     for table in (
@@ -158,7 +161,6 @@ def test_scada_skill_covers_all_gold_tables():
         "settlement_recon_daily",
         "turbine_performance_yearly",
         "dim_alarm_code",
-        "alarm_events",
         "alarm_code_daily",
     ):
         assert f"scada.{table}" in SKILL_SCADA, f"scada.{table} missing from SKILL_SCADA"
@@ -183,7 +185,7 @@ def test_scada_skill_pins_frame_caveat():
 def test_scada_skill_pins_alarm_caveats():
     """The alarm-lane load-bearing caveats: buckets are proposals, alarm hours
     are not downtime, undocumented codes are never invented, instantaneous
-    events are filtered for duration analysis."""
+    events are status transitions, not outages."""
     from app.services.brain_agent_skill_files import (
         SKILL_SCADA,
         SKILL_SCADA_QUERIES,
@@ -193,7 +195,7 @@ def test_scada_skill_pins_alarm_caveats():
     assert "proposed" in SKILL_SCADA and "confirmed" in SKILL_SCADA
     assert "Alarm hours are NOT downtime hours" in SKILL_SCADA
     assert "NEVER invent what a code means" in SKILL_SCADA
-    assert "duration_h IS NOT NULL" in SKILL_SCADA
+    assert "instantaneous** status transitions" in SKILL_SCADA
     assert "alarm_code_daily" in SKILL_SCADA_QUERIES
     assert "dim_alarm_code" in SKILL_SCADA_QUERIES
     assert "buckets are proposed" in SKILL_SCADA_QUERIES
@@ -235,59 +237,29 @@ def test_scada_content_stays_out_of_unconditional_skills():
         assert "silver.py" not in blob
 
 
-# ── SCADA silver lake (silver.py / DuckDB over Parquet) ──
+# ── Aggregated SCADA only: no raw 10-min data, no raw alarm log ──
 
 
-def test_scada_skill_routes_to_silver_not_dead_end():
-    """The old boundary said raw 10-min data 'cannot be reached'. Post-silver
-    access, SKILL_SCADA must route to silver.py instead of dead-ending."""
-    from app.services.brain_agent_skill_files import SKILL_SCADA
+def test_scada_skill_offers_no_raw_data_route():
+    """The agent sees roll-ups only. SKILL_SCADA must not route to the silver
+    lake or teach the event-grain alarm log, and must say raw data is out of
+    reach instead of inviting the agent to invent tables."""
+    from app.services.brain_agent_skill_files import SKILL_SCADA, SKILL_SCADA_QUERIES
 
-    assert "silver.py" in SKILL_SCADA
-    assert "skill_scada_silver.md" in SKILL_SCADA
+    for text in (SKILL_SCADA, SKILL_SCADA_QUERIES):
+        assert "silver" not in text.lower()
+        assert "alarm_events" not in text
     assert "fact_10min" in SKILL_SCADA  # never-invent warning stays
-    assert "only the daily/hourly gold aggregates are queryable" not in SKILL_SCADA
+    assert "NOT\navailable to you" in SKILL_SCADA
+    assert "alarm_code_daily" in SKILL_SCADA
 
 
-def test_scada_silver_skill_pins_load_bearing_facts():
-    """Canary for skill_scada_silver.md: the facts that prevent wrong answers."""
-    from app.services.brain_agent_skill_files import SKILL_SCADA_SILVER
+def test_brain_agent_modules_drop_silver_helper():
+    from app.services import brain_agent_skill_files
 
-    # Views + frame
-    assert "measurements" in SKILL_SCADA_SILVER
-    assert "alarms" in SKILL_SCADA_SILVER
-    assert "ts_start_utc" in SKILL_SCADA_SILVER
-    # qc bitmask semantics + the clean-filter idiom
-    assert "qc = 0" in SKILL_SCADA_SILVER
-    assert "128 pre_commissioning" in SKILL_SCADA_SILVER
-    # capability caveat (greenbyte all-null columns)
-    assert "dim_signal_capability" in SKILL_SCADA_SILVER
-    assert "all-null" in SKILL_SCADA_SILVER
-    # identity + partition pruning + aggregate-first rules
-    assert "COLLIDE" in SKILL_SCADA_SILVER
-    assert "partition pruning" in SKILL_SCADA_SILVER
-    assert "Never SELECT *" in SKILL_SCADA_SILVER or "never SELECT *" in SKILL_SCADA_SILVER
-    # alarms semantics
-    assert "time_off IS NOT NULL" in SKILL_SCADA_SILVER
-    # gold stays authoritative
-    assert "AUTHORITATIVE" in SKILL_SCADA_SILVER
-
-
-def test_silver_helper_script_guardrails_present():
-    """The seeded silver.py must keep its read-only + resource guardrails."""
-    from app.services.brain_agent_silver_script import SILVER_HELPER_SCRIPT
-
-    for token in (
-        "SCADA_SILVER_URI",
-        "credential_chain",
-        "memory_limit",
-        "hive_partitioning",
-        "DANGEROUS_KEYWORDS",
-        "interrupt",
-    ):
-        assert token in SILVER_HELPER_SCRIPT, f"silver.py guardrail missing: {token}"
-    # Efficiency: bind must NOT read every footer (schema is enforced-identical)
-    assert "union_by_name" not in SILVER_HELPER_SCRIPT
+    assert not hasattr(brain_agent_skill_files, "SKILL_SCADA_SILVER")
+    with pytest.raises(ImportError):
+        import app.services.brain_agent_silver_script  # noqa: F401
 
 
 def test_client_surface_never_mentions_silver():
@@ -311,39 +283,22 @@ def test_domain_and_schema_document_the_detection_window():
     assert "last day with metered generation" in SKILL_SCHEMA
 
 
-# ── Lutelandet: native 5-min, silver-only (pipeline D-034) ──
+# ── Lutelandet: SCADA exists only as raw data, so the agent has none ──
 
 
-def test_lutelandet_is_documented_in_all_three_admin_places():
+def test_lutelandet_is_documented_in_both_admin_places():
     """The farm name must reach the agent on every admin path, or a question naming
     'Lutelandet' + SCADA dead-ends in schema scada (where it has no rows)."""
     import inspect
 
     from app.services import brain_agent_service
-    from app.services.brain_agent_skill_files import SKILL_SCADA, SKILL_SCADA_SILVER
+    from app.services.brain_agent_skill_files import SKILL_SCADA
 
-    prompt_src = inspect.getsource(brain_agent_service)
-    for text in (SKILL_SCADA, SKILL_SCADA_SILVER, prompt_src):
+    for text in (SKILL_SCADA, inspect.getsource(brain_agent_service)):
         assert "Lutelandet" in text
         assert "7197" in text
-        assert "measurements_5m" in text
-    assert "SILVER-LAKE ONLY" in SKILL_SCADA
-    assert "never query schema scada for Lutelandet" in SKILL_SCADA
-
-
-def test_lutelandet_silver_skill_pins_the_caveats_that_prevent_wrong_answers():
-    from app.services.brain_agent_skill_files import SKILL_SCADA_SILVER as S
-
-    assert "ONE turbine of nine" in S and "NEVER scale T09 to the farm" in S
-    assert "power_kw / 12" in S and "288 rows" in S
-    assert "Europe/Oslo" in S and "NOK" in S
-    assert "PROVEN\n  EMPIRICALLY" in S and "supplier confirmation is pending" in S
-    assert "NO supplier dictionary" in S and "INFERRED" in S
-    assert "`service_category` are NULL for lutelandet" in S
-    assert "BOTH halves" in S and "atan2" in S            # strict 10-min recipe, circular mean
-    assert "`measurements` is 10-minute farms ONLY" in S
-    assert "status_observations" in S and "EFFBEGAARS" in S
-    assert "frozen at 5.496" in S
+        assert "measurements_5m" not in text
+    assert "never query schema scada for it" in SKILL_SCADA
 
 
 def test_lutelandet_never_reaches_the_client_surface():
@@ -351,11 +306,3 @@ def test_lutelandet_never_reaches_the_client_surface():
 
     text = Path("app/prompts/brain_agent_system_client.md").read_text(encoding="utf-8")
     assert "measurements_5m" not in text and "status_observations" not in text
-
-
-def test_silver_helper_declares_optional_views():
-    from app.services.brain_agent_silver_script import SILVER_HELPER_SCRIPT
-
-    assert "OPTIONAL_VIEWS" in SILVER_HELPER_SCRIPT and "MISSING_VIEWS" in SILVER_HELPER_SCRIPT
-    assert "measurements_5m" in SILVER_HELPER_SCRIPT and "status_observations" in SILVER_HELPER_SCRIPT
-    assert "union_by_name" not in SILVER_HELPER_SCRIPT

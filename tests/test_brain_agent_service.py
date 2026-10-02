@@ -215,24 +215,18 @@ def test_client_prompt_never_mentions_scada():
         prompt = BrainAgentService._build_system_prompt(
             prompt_file="brain_agent_system_client.md",
             scada_enabled=enabled,
-            silver_enabled=enabled,
         )
         assert "skill_scada" not in prompt
         assert "silver.py" not in prompt
 
 
-def test_system_prompt_silver_line_gated_on_both_flags():
-    # silver routing appears only when scada AND silver are enabled.
-    both = BrainAgentService._build_system_prompt(scada_enabled=True, silver_enabled=True)
-    assert "skill_scada_silver.md" in both
-    assert "silver.py" in both
-
-    no_silver = BrainAgentService._build_system_prompt(scada_enabled=True, silver_enabled=False)
-    assert "skill_scada_silver" not in no_silver
-
-    # silver without scada must be a no-op (helper is never seeded then).
-    no_scada = BrainAgentService._build_system_prompt(scada_enabled=False, silver_enabled=True)
-    assert "silver" not in no_scada.lower() or "skill_scada_silver" not in no_scada
+def test_system_prompt_never_offers_raw_scada():
+    # The agent gets aggregated SCADA only: no silver lake, no raw 10-min data.
+    prompt = BrainAgentService._build_system_prompt(scada_enabled=True)
+    assert "skill_scada.md" in prompt
+    assert "silver" not in prompt.lower()
+    assert "RAW 10-minute" not in prompt
+    assert "Lutelandet" in prompt and "7197" in prompt
 
 
 # ---------------------------------------------------------------------------

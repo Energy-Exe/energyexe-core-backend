@@ -34,7 +34,6 @@ from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
 from app.services.brain_agent_files import attach_run_files, merge_images_by_turn
-from app.services.brain_agent_silver_script import SILVER_HELPER_SCRIPT
 from app.services.brain_agent_hooks import make_pre_tool_use_hook
 from app.services.brain_agent_uploads import (
     UPLOAD_MANIFEST,
@@ -48,7 +47,6 @@ from app.services.brain_agent_skill_files import (
     SKILL_QUERIES,
     SKILL_SCADA,
     SKILL_SCADA_QUERIES,
-    SKILL_SCADA_SILVER,
     SKILL_SCHEMA,
     SKILL_SOURCES,
 )
@@ -226,7 +224,7 @@ def derive_terminal_info(result_message: Any) -> Dict[str, Any]:
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
 
 # Files placed in the sandbox at session creation — skip when scanning for agent output
-SANDBOX_SEED_FILES = {"db.py", "silver.py", "eexe_style.py", "report_pdf.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md", "skill_methodology.md", "skill_scada.md", "skill_scada_queries.md", "skill_scada_silver.md"}
+SANDBOX_SEED_FILES = {"db.py", "eexe_style.py", "report_pdf.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md", "skill_methodology.md", "skill_scada.md", "skill_scada_queries.md"}
 
 # Working file extensions — scripts the agent writes to execute, not user-facing output
 WORKING_FILE_EXTENSIONS = {".py", ".sh", ".bash", ".sql"}
@@ -1436,7 +1434,6 @@ class BrainAgentService:
             user_company_name=user_company_name,
             user_id=user_id,
             scada_enabled=scada_enabled,
-            silver_enabled=bool(settings.SCADA_SILVER_URI),
         )
 
         # Write db.py helper script and skill files to sandbox
@@ -1461,12 +1458,11 @@ class BrainAgentService:
         if scada_enabled:
             (work_dir / "skill_scada.md").write_text(seed_stamp + SKILL_SCADA)
             (work_dir / "skill_scada_queries.md").write_text(seed_stamp + SKILL_SCADA_QUERIES)
-            # Silver Parquet lake access (10-min measurements, raw alarms):
-            # DuckDB-over-S3 helper + its skill file. Gated on the same
-            # scada_enabled flag plus an explicit URI (empty = off switch).
-            if settings.SCADA_SILVER_URI:
-                (work_dir / "silver.py").write_text(SILVER_HELPER_SCRIPT)
-                (work_dir / "skill_scada_silver.md").write_text(seed_stamp + SKILL_SCADA_SILVER)
+        # The agent gets aggregated SCADA only (gold roll-ups) — never raw
+        # 10-minute values or the silver lake. Sandboxes from before that
+        # change may still hold the old silver helper; remove it.
+        for stale in ("silver.py", "skill_scada_silver.md"):
+            (work_dir / stale).unlink(missing_ok=True)
 
         # DB-driven methodology (client-ui #177): compose the admin-editable
         # methodology sections into a skill file so the agent answers
@@ -1611,9 +1607,6 @@ class BrainAgentService:
                 # The PreToolUse hook above enforces the same rule for commands
                 # that never touch db.py.
                 "BRAIN_AGENT_BLOCK_INTROSPECTION": "1" if source == "client" else "0",
-                # Silver Parquet lake root for silver.py (empty when disabled;
-                # the helper isn't seeded then either).
-                "SCADA_SILVER_URI": settings.SCADA_SILVER_URI if scada_enabled else "",
                 "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": "1200000",  # 20 min (was 10)
                 # Raise the CLI's API retry count (default ~10, hard clamp 15).
                 # A 529-overload storm then costs extra in-outage latency
@@ -2041,7 +2034,6 @@ class BrainAgentService:
         user_company_name: Optional[str] = None,
         user_id: Optional[int] = None,
         scada_enabled: bool = False,
-        silver_enabled: bool = False,
     ) -> str:
         """Build the system prompt for the Brain Agent."""
         prompt = cls._load_prompt_template(prompt_file)
@@ -2052,8 +2044,8 @@ class BrainAgentService:
         # word SCADA otherwise routes to public.windfarms, finds nothing, and
         # the agent wrongly reports the farm doesn't exist (battery test q04).
         scada_lines = (
-            "- `cat skill_scada.md` — 10-minute SCADA turbine data (Postgres schema "
-            "`scada`) for **Hill of Towie, Kelmarsh and Penmanshiel**: availability, "
+            "- `cat skill_scada.md` — aggregated SCADA turbine data (daily/hourly/"
+            "monthly roll-ups in Postgres schema `scada`) for **Hill of Towie, Kelmarsh and Penmanshiel**: availability, "
             "losses, power curves, revenue impact. For ANY question about these "
             "three farms — including revenue, pricing, settlement, data-coverage "
             "and alarm/event/fault-code questions — read this skill FIRST and "
@@ -2061,25 +2053,14 @@ class BrainAgentService:
             "authoritative per-cause loss/revenue source; platform tables are not a "
             "substitute for these farms). Only Hill of Towie also exists in "
             "public.windfarms (id 7309); Kelmarsh/Penmanshiel are NOT platform "
-            "windfarms — never report them as missing from the database\n"
+            "windfarms — never report them as missing from the database. "
+            "**Lutelandet** (platform windfarm 7197) has NO SCADA available to "
+            "you — farm-level questions use the platform tables\n"
             "- `cat skill_scada_queries.md` — efficient SCADA query patterns "
             "(pre-aggregated roll-ups, cross-schema joins to public)"
             if scada_enabled
             else ""
         )
-        if scada_enabled and silver_enabled:
-            scada_lines += (
-                "\n- `cat skill_scada_silver.md` — RAW 10-minute SCADA data + raw "
-                "alarm events for these farms via `python3 silver.py \"SELECT ...\"` "
-                "(DuckDB over the silver Parquet lake). Use for sub-hourly, "
-                "per-signal (temperatures/pitch/rpm) or event-sequence questions "
-                "that the gold scada tables cannot answer; gold stays authoritative "
-                "for daily/monthly KPIs. ALSO the only SCADA source for "
-                "**Lutelandet** (Norway, platform windfarm 7197): raw 5-minute data "
-                "for ONE turbine of nine (T09, 2025) in view `measurements_5m` — "
-                "silver-only, no `scada` schema rows, never scale it to the farm; "
-                "farm-level Lutelandet questions still use the platform tables"
-            )
         prompt = prompt.replace("{{SCADA_SKILL_LINES}}", scada_lines)
         prompt = prompt.replace(
             "{{USER_NAME}}",
