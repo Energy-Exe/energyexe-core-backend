@@ -52,12 +52,6 @@ variable "s3_bucket_name" {
   default     = "energyexe-agent-images"
 }
 
-variable "scada_data_bucket" {
-  description = "SCADA pipeline data lake bucket; task role gets READ-ONLY access to its silver/ prefix (brain-agent 10-min queries)"
-  type        = string
-  default     = "energyexe-scada-data"
-}
-
 variable "pipeline_daily_hour" {
   description = "UTC hour the nightly pipeline task runs. Drives both the EventBridge rule and the PIPELINE_DAILY_HOUR the container reports to GlitchTip — keep them derived from this one value so they cannot drift."
   type        = string

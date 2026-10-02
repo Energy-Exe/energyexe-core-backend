@@ -535,12 +535,11 @@ schema-qualify: `scada.dim_farm`, never `dim_farm`.
 
 The tables documented below are the ONLY tables in schema scada. The raw
 10-minute interval data (individual wind/power/temperature readings) is NOT
-in Postgres — it lives in the pipeline's Parquet lake, which you CAN query
-via `python3 silver.py "SELECT ..."` (DuckDB SQL; read skill_scada_silver.md
-FIRST). Never invent Postgres tables like `scada.fact_10min`. Routing rule:
-daily/monthly KPIs and anything a gold table answers → db.py against schema
-scada (authoritative); sub-hourly, per-signal, or raw alarm-event questions
-→ silver.py.
+available to you — not in Postgres, and you have no access to the pipeline's
+Parquet lake. Never invent tables like `scada.fact_10min`. For sub-hourly or
+per-signal (temperature/pitch/rpm) questions, say the agent only has the
+aggregated SCADA tables and answer from the finest roll-up that fits
+(losses_hourly, the *_daily tables).
 
 ## Farms & identity
 
@@ -552,13 +551,12 @@ scada (authoritative); sub-hourly, per-signal, or raw alarm-event questions
 - Platform link: `dim_farm.windfarm_id` → `public.windfarms.id`. Only
   Hill of Towie is linked (windfarm_id 7309). Kelmarsh and Penmanshiel are
   NOT platform windfarms — for them, everything lives in schema scada only.
-- **Lutelandet (Norway) is the opposite case: SILVER-LAKE ONLY.** Turbine T09
-  (1 of 9) has raw 5-minute SCADA for 2025 in the silver lake — there are NO
-  `scada.*` rows for it, so never query schema scada for Lutelandet and never
-  report it as missing. It IS a platform windfarm (public.windfarms id 7197):
-  farm-level generation/price/performance questions → the normal platform
-  tables; turbine-level SCADA questions → `skill_scada_silver.md`
-  (view `measurements_5m`), when that skill is available.
+- **Lutelandet (Norway) has NO `scada.*` rows** — its turbine SCADA exists
+  only as raw data you cannot reach, so never query schema scada for it and
+  never report it as missing. It IS a platform windfarm (public.windfarms id
+  7197): farm-level generation/price/performance questions → the normal
+  platform tables; for turbine-level SCADA questions, say that data isn't
+  available to the agent.
 
 ## Dimensions
 
@@ -623,19 +621,12 @@ lower edge; n, power_mean_kw, power_p50_kw, power_std_kw, ws_mean_ms
 aep_epoch_mwh, performance_index (1.0 = epoch average), bins_used,
 intervals_used, ws_coverage_pct (< ~90 ⇒ index unreliable — say so)
 
-## Alarm & event data (all 3 farms)
+## Alarm data (all 3 farms) — daily roll-up only
 
-**scada.alarm_events** (PK farm,turbine,source_code,time_on; indexes
-(farm,source_code) and (farm,turbine,time_on)): event-grain log, ~8M rows.
-station_id, time_off (NULL = instantaneous status event), duration_h (NULL
-when unbracketed — ALWAYS filter `duration_h IS NOT NULL` for duration
-analysis), severity_class, message, iec_category + service_category
-(greenbyte farms only). Hill of Towie rows are OEM alarm codes;
-Kelmarsh/Penmanshiel rows are Greenbyte status events (join
-dim_event_category on iec_category for their semantics). time_on/time_off
-are UTC.
+The raw event-grain alarm log is NOT available to you; you cannot list
+individual alarm events or their on/off times. Answer alarm questions from:
 **scada.alarm_code_daily** (PK farm,turbine,date_utc,source_code; index
-farm,date_utc): the rollup to PREFER for per-code Paretos and trends.
+farm,date_utc): per-code Paretos and trends.
 events_started, bracketed_events (onset UTC day), alarm_hours = hours the
 code was ACTIVE that UTC day (same-code overlaps union-merged, clipped at
 UTC midnights, so ≤ 24 h per row).
@@ -705,10 +696,9 @@ curtailment_delta_mwh, consumption_mwh, hours_scada/settlement/both
 - **Most Hill of Towie codes are undocumented** (message IS NULL — only 12
   codes have OEM text). NEVER invent what a code means; report the number,
   its empirical stats, and the proposed bucket + confidence if present.
-- **~93% of Hill of Towie events are instantaneous** (time_off NULL,
-  duration_h NULL) — status transitions, not outages. Any duration or
-  hours analysis must filter `duration_h IS NOT NULL` (or use
-  alarm_code_daily, which already does).
+- **~93% of Hill of Towie events are instantaneous** status transitions,
+  not outages — `events_started` counts them, but only `alarm_hours`
+  (bracketed events) says how long a code was active.
 
 ## Units & conventions
 
@@ -904,192 +894,8 @@ WHERE a.farm = 'hill_of_towie' AND a.date_utc = '2024-01-31'
 ORDER BY l.loss_total_kwh DESC, a.alarm_hours DESC LIMIT 20
 ```
 Correlation, not attribution: `availability_daily` stays the downtime truth.
-
-## Longest individual outage events (event grain)
-
-```sql
-SELECT turbine, source_code, time_on, time_off,
-       round(duration_h::numeric, 1) AS hours
-FROM scada.alarm_events
-WHERE farm = 'penmanshiel' AND duration_h IS NOT NULL
-ORDER BY duration_h DESC LIMIT 10
-```
-Greenbyte farms: filter/interpret via iec_category (join
-dim_event_category); Hill of Towie: via source_code (join dim_alarm_code).
-NEVER SUM raw duration_h across codes as "downtime" — codes overlap.
+NEVER SUM alarm_hours across codes as "downtime" — codes overlap.
 """
-
-SKILL_SCADA_SILVER = """# SCADA Silver Lake — raw 10-minute data via silver.py (DuckDB)
-
-`python3 silver.py "SELECT ..."` queries the pipeline's silver Parquet lake
-(S3) with DuckDB SQL. This is the RAW layer under the gold tables: 10-minute
-turbine measurements (~19.8M rows), raw alarm/status events (~8M rows), and
-the registry dims. Read-only; results cap at 20 displayed rows + a summary.
-
-Routing: gold (db.py, schema scada) stays AUTHORITATIVE for daily/monthly
-KPIs — energy, availability, losses, revenue are pre-computed there with QC
-and meter-vs-integral selection you would otherwise have to re-derive. Use
-silver ONLY for what gold can't answer: sub-hourly behaviour, per-signal
-analysis (temperatures, pitch, rpm, setpoints), power curves from raw points,
-alarm event sequences. NEVER recompute a gold KPI from silver and present it
-as the platform number.
-
-## Views
-
-**measurements** — one row per (farm, turbine, 10-min interval), 46 columns:
-- `ts_start_utc` TIMESTAMP: interval START, UTC (naive — no tz suffix; the
-  whole lake is UTC, same frame as gold's date_utc).
-- `farm`, `turbine`, `station_id` (BIGINT, hill_of_towie only, NULL elsewhere).
-  Key on (farm, turbine) — turbine codes like 'T01' COLLIDE across farms.
-- `year` (BIGINT): hive partition key. ALWAYS filter `farm` and, when you
-  can, `year` — they prune which files are read; a full unfiltered scan
-  reads the whole lake and is slow. `month` is NOT a column — derive from
-  ts_start_utc.
-- 39 signal columns, all DOUBLE. Main ones (unit): power_kw (kW),
-  power_min/max/std_kw, energy_kwh + energy_export/import_kwh (kWh per
-  10 min, hill_of_towie only), wind_speed_ms (+min/max/std, m/s),
-  wind_dir_deg, nacelle_pos_deg, yaw_pos_deg (deg), gen_rpm, rotor_rpm,
-  pitch_a/b/c_deg, power_setpoint_kw, reactive_power_kvar, grid_freq_hz,
-  power_factor, ambient_temp_c, nacelle_temp_c, gear_oil_temp_c,
-  gearbox_hs/ims_gen/rot_temp_c, main_bearing(_rear)_temp_c,
-  gen_bearing_nde/de_temp_c (degC), time_running/ready/error_s (s of 600).
-- `qc` (UINTEGER): QC bitmask. **`qc = 0` means clean (~95% of rows) — for
-  analysis default to `WHERE qc = 0`.** Bits: 1 range_power, 2 range_wind,
-  4 range_temp, 8 range_other, 16 null_core, 32 stuck_anemometer,
-  64 duplicate_source_row, 128 pre_commissioning, 256 off_grid. Test a bit
-  with `(qc & 128) > 0`. Exclude pre-commissioning rows from any KPI.
-
-CAPABILITY CAVEAT — not every farm reports every signal. kelmarsh and
-penmanshiel (greenbyte) have 14 all-null columns incl. energy_kwh,
-time_running_s, power_setpoint_kw, yaw_pos_deg, grid_freq_hz, gearbox_*;
-some signals start late (hill_of_towie wind_dir_deg only from 2022,
-penmanshiel pitch/main-bearing from 2018). CHECK `dim_signal_capability`
-(farm, signal, status reported|all_null, null_pct, first_year) BEFORE
-declaring "no data" or averaging a mostly-null column.
-
-**alarms** — raw event log, one row per event (10-min farms AND lutelandet
-— always filter `farm`): farm, turbine, station_id,
-time_on, time_off, source_code, severity_class (info|stop|warning|comms|NULL),
-message, iec_category (greenbyte farms only), service_category, year (hive).
-- `time_off` is NULL on ~93% of rows = instantaneous/status event, NOT
-  "still open". For durations filter `time_off IS NOT NULL` and compute
-  `epoch(time_off - time_on)`.
-- Only 12 of ~589 hill_of_towie source_codes are documented
-  (dim_alarm_code). NEVER invent a meaning for an undocumented code — report
-  the code number and say it is undocumented.
-- Alarm durations OVERLAP across codes — never sum them into "downtime";
-  scada.availability_daily (gold) is the downtime truth.
-
-**Dims** (small, safe to SELECT fully): dim_farm, dim_turbine (rated_kw,
-model, cod, lat/lon), dim_turbine_config (baseline/aeroup epochs — power
-curve comparisons must be epoch-scoped), dim_signal (canonical name, unit,
-valid range), dim_signal_map (OEM tag lineage), dim_signal_capability,
-dim_alarm_code, dim_event_category (IEC category → availability semantics).
-
-## Native 5-minute farms — `measurements_5m` + `status_observations`
-
-`measurements` is 10-minute farms ONLY. A farm delivered at another cadence
-keeps its own cadence in a sibling view and never appears in `measurements`
-or in Postgres schema scada. Today that is one farm:
-
-**lutelandet** — Lutelandet, Norway (platform windfarm id 7197, NOK market,
-tz Europe/Oslo). Supplier SFE. **ONE turbine of nine: T09** (Nordex
-N149/5700, rated 5,700 kW). Calendar 2025 (UTC 2024-12-31 23:00 →
-2025-12-31 22:55). 🔴 NEVER scale T09 to the farm, never call its energy
-"Lutelandet's production", and never price it: there is no SCADA revenue
-lane for this farm (no GBP, no `scada.*` rows). For farm-level numbers use
-the platform tables for windfarm 7197 and say which source you used.
-
-**measurements_5m** — one row per (farm, turbine, 5-MINUTE interval):
-- 288 rows per turbine-day. **kWh = power_kw / 12** (not / 6). Annual energy
-  = `sum(power_kw) / 12 / 1000` MWh (T09 2025 ≈ 14,213 MWh).
-- `ts_start_utc` = interval START, UTC. This convention was PROVEN
-  EMPIRICALLY from the delivery (yaw-motion and run/stop alignment);
-  supplier confirmation is pending — say so if timing to the minute matters.
-- Same `qc` bitmask and `WHERE qc = 0` default. Filter `farm = 'lutelandet'`
-  (+ `year`; 2024 holds only the last UTC hour of 2024-12-31).
-- 52 signals. Shared names mean the same thing as in `measurements`
-  (power_kw, wind_speed_ms, wind_dir_deg, nacelle_pos_deg, rotor_rpm,
-  gen_rpm, pitch_a/b/c_deg, power_setpoint_kw, reactive_power_kvar,
-  ambient_temp_c, gear_oil_temp_c, main_bearing_temp_c, …). Extra here:
-  apparent_power_kva, power_limit_{park,safety,grid_fault,grid_normal,
-  environment,operational,manual}_kw (which limiter is active),
-  air_pressure_hpa, volt_l12/l23/l31_v, cable_twist_deg (signed, unbounded —
-  NOT a bearing), pitch_encoder_a/b/c_deg, cabinet/coolant temperatures,
-  power_factor_setpoint_deg (a phase ANGLE, not a power factor).
-  `SELECT canonical, unit FROM dim_signal_map JOIN dim_signal USING
-  (canonical) WHERE source_format = 'sfe_historian'` lists them all.
-- NOT available: energy meter, counters, min/max/std, time_running/ready/
-  error timers → no contractual availability, no meter reconciliation.
-- Known defect: wind_speed_ms is frozen at 5.496 m/s for 66 h from
-  2025-12-08 17:55 UTC (flagged qc bit 32) — `qc = 0` removes it.
-
-**status_observations** — verbatim change-driven status channels, second
-resolution: farm, turbine, channel, ts_utc, raw_value (VARCHAR), source_tag,
-year. A value holds until the next row of that channel; identical repeats
-every 12 h are heartbeats. Channels: DRSTATUS (operating state), FEILKODE
-(fault code), EFFBEGAARS (power-limit reason), KOMMSTAT (comms), YAWSTATUS,
-YAWRETN (yaw direction, ~160k flips). The same channels (except YAWRETN)
-are in `alarms` as intervals with `source_code = 'DRSTATUS:3'`.
-🔴 **There is NO supplier dictionary. `severity_class`, `iec_category` and
-`service_category` are NULL for lutelandet by design.** Meanings below are
-INFERRED from occupancy and power — always label them "inferred":
-DRSTATUS 2 = running (~6,830 h), 3 = idle/ready, 4 = transition, 0 = fault/
-stopped; FEILKODE 0 = no fault; EFFBEGAARS 13 and 21 = curtailment-like
-limitation (~131 h in 2025). Report any other code by number only.
-
-10-minute view of a 5-minute farm (to compare with `measurements` farms).
-Keep a bucket only when BOTH halves are present, and average compass
-bearings as vectors (350° & 10° → 0°, not 180°):
-```sql
-SELECT time_bucket(INTERVAL '10 minutes', ts_start_utc) AS ts10,
-       CASE WHEN count(power_kw) = 2 THEN avg(power_kw) END AS power_kw,
-       CASE WHEN count(wind_speed_ms) = 2 THEN avg(wind_speed_ms) END AS ws,
-       (degrees(atan2(avg(sin(radians(wind_dir_deg))),
-                      avg(cos(radians(wind_dir_deg))))) + 360) % 360 AS wind_dir_deg
-FROM measurements_5m
-WHERE farm = 'lutelandet' AND year = 2025 AND qc = 0
-  AND ts_start_utc >= '2025-03-01' AND ts_start_utc < '2025-04-01'
-GROUP BY 1 ORDER BY 1
-```
-Hours in a state (here: inferred curtailment):
-```sql
-WITH s AS (SELECT raw_value, ts_utc,
-                  lead(ts_utc) OVER (PARTITION BY turbine, channel ORDER BY ts_utc) AS nxt
-           FROM status_observations
-           WHERE farm = 'lutelandet' AND channel = 'EFFBEGAARS')
-SELECT raw_value, sum(epoch(nxt - ts_utc)) / 3600 AS hours
-FROM s WHERE nxt IS NOT NULL GROUP BY 1 ORDER BY 2 DESC
-```
-If silver.py says no data has landed for a view, the farm's data is not in
-the lake yet — say that; do not fall back to another farm.
-
-## Golden rules
-
-1. ALWAYS filter farm (+ year when possible) — partition pruning.
-2. AGGREGATE IN SQL (GROUP BY / avg / percentile_cont / time_bucket via
-   date_trunc). Never SELECT * over raw intervals; for plots, aggregate or
-   sample down to <= a few thousand points first, THEN chart.
-3. `WHERE qc = 0` for clean analysis; state it when you deviate.
-4. DuckDB dialect: date_trunc('hour', ts_start_utc), epoch(interval),
-   percentile_cont(0.5) WITHIN GROUP (ORDER BY x). No Postgres-only syntax
-   like ::interval tricks; LIMIT is auto-added if you omit it.
-5. Gold vs silver numbers may differ slightly by design (gold applies
-   meter-QC bands and integral fallback per interval). If asked to
-   reconcile, name that mechanism instead of guessing.
-
-Example — hourly power curve points for one turbine, one month:
-```sql
-SELECT date_trunc('hour', ts_start_utc) AS hour_utc,
-       avg(wind_speed_ms) AS ws, avg(power_kw) AS kw
-FROM measurements
-WHERE farm='hill_of_towie' AND turbine='T07' AND year=2025
-  AND ts_start_utc >= '2025-06-01' AND ts_start_utc < '2025-07-01'
-  AND qc = 0
-GROUP BY 1 ORDER BY 1
-```
-"""
-
 
 # Branded PDF report builder seeded into the sandbox as report_pdf.py.
 # Lets the agent produce downloadable, document-style PDFs (EPR-68) instead of
