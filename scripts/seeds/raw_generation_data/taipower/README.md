@@ -236,9 +236,9 @@ poetry run python scripts/seeds/raw_generation_data/taipower/import_parallel_opt
 # 2. Start capturing live snapshots
 poetry run python scripts/seeds/raw_generation_data/taipower/import_from_api.py
 
-# 3. Set up cron for hourly snapshots
-crontab -e
-# Add: 0 * * * * cd /path/to/project && poetry run python scripts/seeds/raw_generation_data/taipower/import_from_api.py
+# 3. Hourly snapshots are already scheduled in AWS: EventBridge rule `taipower-hourly`
+#    (cron(5 * * * ? *)) -> Lambda -> POST /api/v1/import-jobs/trigger/taipower-hourly.
+#    Do NOT add a local crontab. See docs/operations/scheduled-jobs.md.
 ```
 
 ### Scenario 2: Daily API Snapshot

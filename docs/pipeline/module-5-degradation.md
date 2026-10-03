@@ -55,7 +55,7 @@ OLS with `n = 2 monthly aggregates` is a line through two points — meaningless
 
 A 7-month export outage creates a step-down in the residual time series. OLS sees the step as accelerated downtrend and reports a much steeper slope than the true degradation rate. For long enough outages the bias can flip the sign of the answer.
 
-**Module 1b is what handles this.** Active constraint flags (`review_status IN ('pending_review', 'confirmed')`) are loaded by the orchestrator and used to mask out constrained hours from the dataset before this module fits. The number of hours excluded is persisted on `degradation_results.n_constraint_hours_excluded` so reports can show "X hours of Y excluded as known constraints" alongside the slope.
+**Module 1b is what handles this.** Confirmed constraint flags (`review_status = 'confirmed'` only — issue #79; pending candidates are not masked until an analyst confirms them) are loaded by the orchestrator and used to mask out constrained hours from the dataset before this module fits. The number of hours excluded is persisted on `degradation_results.n_constraint_hours_excluded` so reports can show "X hours of Y excluded as known constraints" alongside the slope.
 
 ### Why Q50 and Q90 references
 

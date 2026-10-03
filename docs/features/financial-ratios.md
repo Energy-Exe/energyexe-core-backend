@@ -36,7 +36,8 @@ GET /financial-data/ratios/{windfarm_id}
 |-------|------|------|
 | Schema | `app/schemas/financial_data.py` | `FinancialRatioPeriod`, `FinancialRatiosResponse` |
 | Service | `app/services/financial_data_service.py` | `_compute_ratios()` (static), `calculate_financial_ratios()` |
-| Endpoint | `app/api/v1/endpoints/financial_data.py` | `GET /ratios/{windfarm_id}` |
+| Endpoint | `app/api/v1/endpoints/financial_data.py` | `GET /ratios/{windfarm_id}`, `GET /peer-summary` |
+| OPEX/MWh (shared) | `app/services/financial_opex_metrics.py` | Single definition of OPEX per MWh used by the FIN-02 / FIN-03 opportunity detectors **and** the report builders (fixes the asymmetric denominator bug — five years of OPEX over one year of generation — found on Lutelandet). Metered `generation_data` denominator via `mv_generation_monthly_by_windfarm`, COD+365d ramp-up exclusion, ECB FX; works for one farm or a whole peer cohort. Tests: `tests/test_financial_opex_metrics.py`. |
 | Types | `admin-ui/src/types/financial.ts` | TypeScript interfaces |
 | Hook | `admin-ui/src/lib/financial-data-api.ts` | `useFinancialRatios(windfarmId)` |
 | UI | `admin-ui/src/components/windfarms/financial-data-section.tsx` | Ratio cards + trend table |
@@ -48,6 +49,19 @@ GET /api/v1/financial-data/ratios/{windfarm_id}
 ```
 
 **Response:** `List[FinancialRatiosResponse]` — one entry per financial entity linked to the windfarm.
+
+### Peer summary (added later)
+
+```
+GET /api/v1/financial-data/peer-summary?display_currency=EUR&<windfarm scope filters>
+```
+
+Most-recent financial ratios per farm across a peer group, plus averages. The scope filters are
+the shared `PeerScopeParams` (`app/services/windfarm_scope_service.py`); with no filters the peer
+group is every non-deleted windfarm. Sourced from filed accounts, so not every farm has data — the
+`coverage` block reports how many of the scoped farms do. Rows whose filing currency cannot be
+converted to `display_currency` keep their original currency and are excluded from the per-MWh
+averages. Implemented in `FinancialDataService.get_peer_financial_summary`.
 
 ### Example Response
 

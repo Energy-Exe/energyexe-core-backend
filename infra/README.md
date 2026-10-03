@@ -5,14 +5,26 @@ in the same default VPC as the `energyexedb` RDS instance (`eu-north-1`).
 
 ```
 Internet ──► ALB (:80/:443) ──► Fargate task (uvicorn :8001, 1 worker,
-                                  APScheduler in-process, desired_count = 1)
+                                  desired_count = 1; no in-process scheduler)
                                         │ 5432                │ 6379 (TLS)
                                         ▼                     ▼
                                   RDS energyexedb       ElastiCache Serverless
-                                  (existing, untouched  (Valkey, replaces the
-                                  except one added      Railway instance)
-                                  ingress rule)
+                                  (private since         (Valkey: report cache
+                                  2026-07-15, see         + brain-agent rate limit)
+                                  below)
+
+EventBridge ──► Lambda ──► POST /import-jobs/trigger/{job}     (scheduled_imports.tf)
+EventBridge ──► ecs:RunTask  weather task 01:30 UTC            (weather_daily.tf)
+EventBridge ──► ecs:RunTask  pipeline task 03:00 UTC           (pipeline_daily.tf)
 ```
+
+Files in this root: `main.tf`/`variables.tf`/`outputs.tf`, `network.tf`, `alb.tf`, `acm.tf`,
+`ecs.tf` (API service), `iam.tf`, `secrets.tf`, `valkey.tf`, `cicd.tf` (GitHub OIDC deploy
+role), `scheduled_imports.tf` + `lambda/trigger_import/`, `pipeline_daily.tf`,
+`weather_daily.tf`, `partner_inbound.tf` (S3 drop zone for partner SCADA deliveries — SFE,
+Varanger Kraft; see `docs/operations/partner-upload-*.md`), `frontend.tf` (prod frontends:
+private S3 + CloudFront for `dashboard.` / `app.energyexe.com`, replacing Vercel), `glitchtip.tf`,
+`monitoring.tf`. Staging is a separate root in `staging/` (see `STAGING.md`).
 
 Key design decisions (see inline comments for detail):
 
@@ -29,10 +41,12 @@ Key design decisions (see inline comments for detail):
   external data APIs (ENTSOE/Elexon/EIA/...).
 - **Secrets in Secrets Manager**, injected by ECS; values never enter TF state.
 
-- **Valkey on ElastiCache Serverless** — used only for the windfarm report
-  cache (1h TTL, graceful no-cache fallback). `REDIS_URL` is injected as a
-  plain env var (`rediss://`, no password): the endpoint is VPC-only and
-  SG-gated, so there's nothing secret in it.
+- **Valkey on ElastiCache Serverless** — used for the windfarm report cache
+  (1h TTL, graceful no-cache fallback) and for the brain agent's per-user
+  fixed-window rate limit (`check_rate_limit` in `app/core/redis.py`, called
+  from `app/api/v1/endpoints/brain_agent.py`; fails *open* if Valkey is down).
+  `REDIS_URL` is injected as a plain env var (`rediss://`, no password): the
+  endpoint is VPC-only and SG-gated, so there's nothing secret in it.
 
 Estimated cost: ~$45–50/mo for the task (1 vCPU / 4 GB) + ~$20/mo ALB
 + ~$6–7/mo Valkey ≈ **$75/mo total**.
@@ -70,7 +84,7 @@ terraform plan                # review everything before creating anything
 terraform apply
 
 # Set secret values (see secrets.tf header for exact commands).
-# Reuse the Railway SECRET_KEY to keep existing JWTs valid.
+# Keep the existing SECRET_KEY if you are re-creating the stack, so issued JWTs stay valid.
 
 # Build and push the first image (Apple Silicon needs --platform):
 aws ecr get-login-password --profile energyexe --region eu-north-1 \
@@ -88,29 +102,12 @@ curl "$(terraform output -raw api_url)/health"
 aws logs tail /ecs/energyexe-core-backend --follow --profile energyexe
 ```
 
-## Cutover from Railway
+## History: the Railway → AWS cutover (done)
 
-1. Burn-in: leave Railway serving traffic, watch the Fargate task's nightly
-   pipeline + import jobs in CloudWatch for a couple of days.
-   ⚠️ While BOTH are up, the daily crons run twice (once per platform) — keep
-   the burn-in short, or pause Railway's scheduler.
-2. Add an ACM cert (DNS validation at your DNS host), set `certificate_arn`
-   in terraform.tfvars, re-apply, CNAME your api domain to the ALB.
-3. Point the frontends' API base URL at the new domain; set `cors_origins`.
-4. Flip the nightly pipeline to AWS: set `pipeline_daily_enabled = true` in
-   terraform.tfvars and apply (and disable `PIPELINE_DAILY_ENABLED` on Railway
-   if shutting it down later rather than immediately). If the brain agent's
-   frontend-repo access is used in prod, also provide `GITHUB_TOKEN` (add a
-   secret + task-def entry like the existing two).
-5. Shut down Railway — both the app service and the Valkey instance (the
-   ECS task's `REDIS_URL` already points at ElastiCache, and losing the
-   Railway cache contents is harmless: 1h TTL, repopulates on demand).
-   Remember to delete the stale `REDIS_URL`/`VALKEY_*` vars wherever they
-   linger (local `.env` keeps working — it points at docker-compose redis
-   or the Railway proxy until then).
-6. Optional hardening afterwards (ASK FIRST — laptop scripts depend on public
-   RDS access): narrowing the RDS SG's 0.0.0.0/0 rule to specific IPs + the
-   service SG keeps laptop access while closing the internet-wide hole.
+The backend was hosted on Railway until mid-2026. The cutover to this Fargate stack is complete
+(ACM cert + ALB CNAME, frontends repointed, nightly pipeline moved to EventBridge, Railway app and
+Valkey shut down; prod RDS made private on 2026-07-15 — see below). Nothing in this file or in
+the code depends on Railway any more; if you find a `railway.app` URL anywhere, it is stale.
 
 ## Monitoring & error tracking
 
@@ -223,11 +220,18 @@ endpoint that raises and confirm the issue appears in GlitchTip with a
 
 ## Day-2 operations
 
-- **Deploy**: automatic on push to `master` via `.github/workflows/deploy-aws.yml`
-  (builds, pushes to ECR, forces an ECS redeploy). It authenticates with GitHub
-  OIDC assuming the `energyexe-core-backend-github-deploy` role (infra/cicd.tf) —
-  no stored AWS keys. Skips docs-only / `infra/**` changes. You can also trigger
-  it manually (Actions → Run workflow) or run the build/push/redeploy by hand.
+- **Deploy (staging-first)**: a push to the `staging` branch runs
+  `.github/workflows/deploy-staging.yml`, which **builds** the image, pushes it to
+  the staging ECR repo and redeploys the staging service (skips `**.md`-only
+  commits). A push to `master` runs `deploy-aws.yml`, which does **not rebuild**:
+  it copies the staging-validated `:staging` image into the prod ECR repo as
+  `:latest` and forces a new prod deployment (pull access is granted by
+  `infra/staging/promotion.tf`). Therefore `master` must be reached by merging
+  `staging`. Both authenticate with GitHub OIDC (`infra/cicd.tf`,
+  `infra/staging/cicd.tf`) — no stored AWS keys. `deploy-aws.yml` skips
+  `**.md`, `docs/**`, `infra/**` and `.github/**` changes; both can be run
+  manually (Actions → Run workflow). Chunks that change `requirements.txt` or
+  the `Dockerfile` therefore change the image on **staging first**.
 - **Logs**: `aws logs tail /ecs/energyexe-core-backend --follow --profile energyexe`
 - **Shell into the task** (debugging): enable ECS Exec later if needed, or run a
   one-off task with the same task def.

@@ -1,3 +1,7 @@
+> **Historical evidence — superseded as guidance on 21 September 2026.**
+> Current architecture, operation, decisions and status are maintained only in the [canonical SCADA opportunity guide](../../../../energyexe-scada-pipeline/docs/opportunities/SCADA_OPPORTUNITY_SCHEMA.md).
+> The record below preserves its original dated claims, including superseded proposals and release states. It is not a current runbook.
+
 # EPR-138 disposable PostgreSQL verification
 
 Verified on 2026-09-15 against PostgreSQL 16.11 (Homebrew), server address
@@ -16,7 +20,7 @@ checkout/environment available:
 .venv/bin/python -m black --check scripts/verify_epr138_local_postgres.py
 ```
 
-The [verification script](../scripts/verify_epr138_local_postgres.py) requires an
+The [verification script](../../../scripts/verify_epr138_local_postgres.py) requires an
 explicit loopback `/postgres` admin URL and rejects query options. It proves the
 server address, generates a unique UUID database name, supplies explicit source
 URLs to Alembic and backend connections, and drops only its generated database in

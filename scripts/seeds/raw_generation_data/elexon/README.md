@@ -199,7 +199,7 @@ UK settlement periods are relative to **local time** (`Europe/London`), not UTC.
 - The correct UTC hour **must** be derived from `settlement_date + settlement_period` in the JSONB `data` column — **not** from `period_start`, which was stored incorrectly for historical CSV imports
 - `settlement_date` must be present in the JSONB `data` column for correct aggregation. If missing, the pipeline falls back to `period_start` which is wrong during BST.
 
-See `docs/ELEXON_BST_FIX_LOG.md` for full details on the BST fixes applied.
+See [`docs/history/ELEXON_BST_FIX_LOG.md`](../../../../docs/history/ELEXON_BST_FIX_LOG.md) for full details on the BST fixes applied.
 
 ### `metered_mwh` vs `generation_mwh`
 

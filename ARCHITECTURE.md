@@ -20,14 +20,16 @@ The EnergyExe Core Backend is built using modern Python web development practice
 
 ### Technology Stack
 
-- **Framework**: FastAPI 0.104+ (high-performance, modern Python web framework)
-- **Dependency Management**: Poetry 1.7+ (modern Python dependency management)
-- **Database**: PostgreSQL with SQLAlchemy 2.0 (async ORM)
+- **Framework**: FastAPI (Python 3.11)
+- **Dependency Management**: Poetry for local development (`pyproject.toml` / `poetry.lock`); the Docker image installs from `requirements.txt` — keep both in step
+- **Database**: PostgreSQL (RDS) with SQLAlchemy 2.0 async ORM + asyncpg; Alembic migrations
+- **Cache / rate limit**: Valkey (ElastiCache Serverless) via `app/core/redis.py`
 - **Authentication**: JWT tokens with bcrypt password hashing
 - **Validation**: Pydantic v2 for request/response validation
-- **Testing**: pytest with async support
-- **Logging**: Structured logging with structlog
-- **Containerization**: Docker with multi-stage builds
+- **Testing**: pytest with async support (SQLite in-memory for unit tests)
+- **Logging / errors**: structlog with request ids; Sentry SDK pointed at self-hosted GlitchTip
+- **Containerization / hosting**: Docker multi-stage build (`pip install -r requirements.txt`), AWS Fargate behind an ALB, Terraform in `infra/`
+- **Scheduling**: AWS EventBridge (Lambda-triggered imports; ECS run-task for the nightly weather and pipeline jobs) — no in-process scheduler
 
 ## Architecture Design
 
@@ -49,13 +51,24 @@ The EnergyExe Core Backend is built using modern Python web development practice
 
 ```
 app/
-├── api/v1/             # API versioning for backward compatibility
-├── core/               # Core application configuration & utilities
-├── models/             # Database models (SQLAlchemy ORM)
-├── schemas/            # Pydantic models for validation
-├── services/           # Business logic layer
-└── main.py             # Application entry point
+├── api/v1/                 # versioned API; endpoints/ (one module per resource) + router.py
+├── core/                   # config, database, deps (auth dependencies), middleware, exceptions,
+│                           #   observability (GlitchTip), redis (cache + rate limit), audit, security
+├── cron/                   # job bodies for EventBridge-run ECS tasks (pipeline_daily.py); no scheduler here
+├── models/                 # SQLAlchemy 2.0 ORM models
+├── prompts/                # brain-agent system prompts (+ client variant)
+│   └── reports/            # <report_type>/<section>.txt narrative prompts for the reports platform
+├── scada_preview/          # isolated local-only preview API (own FastAPI app, own settings)
+├── schemas/                # Pydantic request/response schemas
+├── services/               # business logic, one service per domain
+│   ├── opportunity_schemas/  # one detector module per opportunity schema + registry/orchestrator
+│   └── reports/            # reports platform: registry, orchestrator, data_builders/, pdf/, narratives
+├── templates/email/        # Jinja2 templates for Resend transactional email
+├── utils/                  # shared helpers (date bounds, ramp-up, unit resolver)
+└── main.py                 # app factory, lifespan (startup sweepers), middleware, /health
 ```
+
+(`find app -maxdepth 2 -type d` is the source of truth for this tree.)
 
 **Why this structure?**
 - **Separation of Concerns**: Each layer has a single responsibility
@@ -368,9 +381,14 @@ def test_register_user(client: TestClient, user_data):
 - **Async Support**: Native async test support
 - **Comprehensive Coverage**: API, service, and model testing
 
-## Dependency Management with Poetry
+## Dependency Management
 
-### Why Poetry?
+Two dependency manifests exist and both must be kept in step:
+
+- **`pyproject.toml` + `poetry.lock`** — what developers install locally (`poetry install --with dev,test`) and what `make`, `scripts/start.py` and the test commands assume.
+- **`requirements.txt`** — what the **Docker image** installs (`pip install -r requirements.txt` in the `Dockerfile`). This is the only manifest that reaches staging and production. A package added only with `poetry add` will import fine on a laptop and fail on Fargate.
+
+### Why Poetry locally?
 
 Poetry provides several advantages over traditional pip-based dependency management:
 
@@ -428,45 +446,34 @@ The project uses Poetry's dependency groups for organization:
 
 ### Docker Strategy
 
-```dockerfile
-# Multi-stage build with Poetry
-FROM python:3.11-slim as base
-# Install Poetry
-RUN pip install poetry==1.7.1
+The `Dockerfile` is a `python:3.11-slim` multi-stage build **without Poetry**: both stages run
+`pip install -r requirements.txt`, copy the source, and run as a non-root `app` user on port
+**8001**.
 
-FROM base as development
-RUN poetry install --with dev,test
-CMD ["poetry", "run", "uvicorn", "app.main:app", "--reload"]
-
-FROM base as production  
-RUN poetry install --only main --no-dev
-CMD ["poetry", "run", "uvicorn", "app.main:app", "--workers", "4"]
-```
+- `development` target: `uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload` (used by `docker-compose.yml`).
+- `production` target: `uvicorn ... --port 8001 --workers 4`, a `/health` HEALTHCHECK, and
+  `ARG GIT_SHA` → `ENV SENTRY_RELEASE` so every GlitchTip event carries the commit it came from
+  (CI passes `--build-arg GIT_SHA=$GITHUB_SHA`). The ECS task definition (`infra/ecs.tf`)
+  overrides the CMD to run `alembic upgrade head` first and `--workers 1`.
 
 ### Docker Compose for Development
 
-```yaml
-services:
-  api:
-    build:
-      target: development
-    volumes:
-      - .:/app  # Live code reloading
-    depends_on:
-      - db
-      - redis
-  
-  db:
-    image: postgres:15-alpine
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-```
+`docker-compose.yml` runs three services: `postgres` (15-alpine), `valkey` (7-alpine) and `api`
+(the `development` image target, published on `localhost:8001`). It is a convenience for a
+self-contained local stack; most day-to-day development runs the API directly with Poetry on
+port 8002 (see `README.md`, "Port").
 
-**Deployment Benefits:**
-- **Multi-stage Builds**: Optimized production images
-- **Development Environment**: Consistent dev setup across team
-- **Service Dependencies**: Proper service orchestration
-- **Data Persistence**: Persistent database storage
+### Deployment
+
+Staging-first, driven by GitHub Actions with OIDC (no stored AWS keys):
+
+1. Push to `staging` → `.github/workflows/deploy-staging.yml` builds the image, pushes to the
+   staging ECR repo and redeploys the staging Fargate service.
+2. Merge `staging` → `master` → `deploy-aws.yml` **promotes** the exact staging image to the prod
+   ECR repo and redeploys prod. No rebuild, so prod runs what staging tested.
+
+Infrastructure is Terraform in `infra/` (prod) and `infra/staging/`; see `infra/README.md`.
+Recurring work is scheduled by EventBridge, documented in `docs/operations/scheduled-jobs.md`.
 
 ### Code Quality Tools
 
@@ -583,15 +590,15 @@ logger.info("User created", user_id=user.id, username=user.username)
 ```
 
 ### 2. Request Tracing
-- Unique request IDs
-- Request/response logging
-- Performance metrics
+- `LoggingMiddleware` (`app/core/middleware.py`) assigns a unique `request_id` per request and
+  binds it into every structlog line; `SecurityHeadersMiddleware` adds the standard headers.
 
 ### 3. Health Checks
-```python
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
-```
+`GET /health` in `app/main.py` — used by the ALB target group and the Dockerfile HEALTHCHECK.
+
+### 4. Error tracking and cron monitors
+`app/core/observability.py` initialises the Sentry SDK against self-hosted GlitchTip when
+`SENTRY_DSN` is set (no-op otherwise) and exposes `cron_checkin()` for the scheduled tasks.
+See `docs/operations/observability.md`.
 
 This architecture provides a solid foundation for building scalable, maintainable web applications with modern Python practices. The modular design allows for easy extension and modification as requirements evolve. 

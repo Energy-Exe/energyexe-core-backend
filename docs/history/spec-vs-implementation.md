@@ -1,3 +1,10 @@
+> **HISTORICAL — comparison frozen at 2026-05-25.** Line-by-line comparison of the pipeline against
+> the May 2026 reference Python pipeline (`tests/reference/`). Everything in its improvement plan
+> shipped; the body is preserved verbatim as the record. Current module behaviour is described in
+> [`docs/pipeline/`](../pipeline/README.md). Known drift: the "APScheduler cron" it mentions was
+> replaced by an EventBridge-run ECS task ([`docs/operations/scheduled-jobs.md`](../operations/scheduled-jobs.md)).
+> Moved from `docs/pipeline/spec-vs-implementation.md` on 2026-10-04.
+
 # Spec vs implementation — gaps and improvement plan
 
 > **STATUS (2026-05-25): everything in the original improvement plan has shipped.** All headline bugs (A, B, C), Gap D (Module 1b), Gap E (Module 4), the API gaps in Module 5, the Module 6 polish work, and the W1/W2 quick wins are merged to master. See `HANDOFF.md` for the consolidated post-implementation summary and what's left (backfill + release note + analyst-review UI).

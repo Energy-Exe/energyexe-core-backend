@@ -32,7 +32,14 @@ Supported reads:
 - The same endpoint with `run_id=...` — that farm's historical stored payload.
 
 Unsupported SCADA analyses return 409. Other application routes are absent.
-Stored summaries must match the bounded v1 schema and stored farm/run identity.
+Stored summaries must match a bounded schema and the stored farm/run identity. Two
+schema versions are accepted, discriminated by `schema_version`
+(`AnyIngestionSummary` in `app/scada_preview/schemas.py`): **v1**
+(`schemas.py: IngestionSummary`, the Lutelandet single-turbine run) and **v2**
+(`schemas_v2.py: IngestionSummaryV2`, multi-turbine 10-minute measured farms such
+as Raggovidda — `turbines[]`, `meters[]`, interval evidence). `schemas_v2.py` is a
+byte-for-byte mirror of the pipeline's `scada_pipeline/measured/summary_contract_v2.py`;
+`tests/test_scada_preview_schemas.py` compares them when the pipeline checkout is present.
 Unconfirmed timestamp labels cannot expose dated energy or interval windows.
 
 The normal application's matching summary endpoint uses its existing superuser
@@ -44,3 +51,8 @@ Focused checks (avoid normal tests/conftest.py, which imports app.main):
 ```sh
 .venv/bin/python -m pytest preview_tests --noconftest --no-cov -q
 ```
+
+Note: `preview_tests/` sits **outside** `testpaths = ["tests"]` in `pyproject.toml`, so a plain
+`pytest` run does not collect it, and the repo's GitHub Actions workflows run no tests at all
+(see the follow-ups list in [`docs/README.md`](../README.md)). Run the command above by hand
+when touching `app/scada_preview/`.

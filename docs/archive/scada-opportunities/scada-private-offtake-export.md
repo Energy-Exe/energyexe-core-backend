@@ -1,3 +1,7 @@
+> **Historical evidence — superseded as guidance on 21 September 2026.**
+> Current architecture, operation, decisions and status are maintained only in the [canonical SCADA opportunity guide](../../../../energyexe-scada-pipeline/docs/opportunities/SCADA_OPPORTUNITY_SCHEMA.md).
+> The record below preserves its original dated claims, including superseded proposals and release states. It is not a current runbook.
+
 # Private SCADA offtake snapshot (EPR-138 stage 1)
 
 This internal operator command exports one owner's SCADA PPA inputs and platform
