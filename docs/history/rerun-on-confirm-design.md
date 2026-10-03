@@ -1,3 +1,8 @@
+> **HISTORICAL — design note, 2026-05-29. Not implemented** as of 2026-10-04: confirming a
+> structural-constraint flag still takes effect on the next nightly pipeline run
+> ([`docs/operations/scheduled-jobs.md`](../operations/scheduled-jobs.md)); nothing re-runs a single
+> windfarm on confirm. Kept as the design record. Moved from `docs/pipeline/` on 2026-10-04.
+
 # Re-run-on-confirm trigger — design
 
 **Status:** designed 2026-05-29, NOT yet implemented. **Gated on the 7404

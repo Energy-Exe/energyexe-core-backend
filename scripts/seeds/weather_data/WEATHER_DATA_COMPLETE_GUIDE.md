@@ -141,7 +141,9 @@ energyexe-core-backend/
 │   ├── fetch_daily_all_windfarms.py            # Main import script
 │   └── WEATHER_DATA_COMPLETE_GUIDE.md          # This file
 └── alembic/versions/
-    └── *_add_weather_data_tables.py            # Database migration
+    ├── b16106a6b685_add_weather_data_tables.py        # weather_data table
+    ├── c551d9abe526_add_weather_import_jobs_table.py  # weather_import_jobs (admin import page / daily job rows)
+    └── 2026041700_weather_no_nan.py                   # NaN guard (2026-04-17)
 ```
 
 ### Key Components

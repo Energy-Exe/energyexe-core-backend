@@ -43,11 +43,15 @@ date (`import_jobs.py`). The times are mirrored in `IMPORT_SCHEDULES` in
 `app/services/import_job_service.py` (admin "next run" column);
 `tests/test_import_schedules.py` parses the `.tf` and fails if they drift.
 
-The nightly *performance pipeline* also runs on EventBridge, as its own
-run-to-completion ECS task at 03:00 UTC rather than through the Lambda —
-`infra/pipeline_daily.tf` → `scripts/jobs/run_pipeline_daily.py`. It is a task
-rather than an HTTP trigger because it runs for ~3 hours; nothing is left running
-on an in-process scheduler.
+Two more nightly jobs also run on EventBridge, as their own run-to-completion ECS
+tasks rather than through the Lambda: the daily **ERA5 weather import** at 01:30
+UTC (`infra/weather_daily.tf` → `scripts/jobs/run_weather_daily.py`, EPR-121) and
+the **performance pipeline + opportunity detection** at 03:00 UTC
+(`infra/pipeline_daily.tf` → `scripts/jobs/run_pipeline_daily.py`). They are
+tasks rather than HTTP triggers because they run for minutes to hours; nothing is
+left running on an in-process scheduler. The single page covering every
+scheduled mechanism, with times and entrypoints, is
+[`docs/operations/scheduled-jobs.md`](../../docs/operations/scheduled-jobs.md).
 
 ### Why GitHub cron was retired (2026-08-17)
 

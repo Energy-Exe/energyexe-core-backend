@@ -72,8 +72,8 @@ Without the constraint mask, a 7-month cable constraint in a 4-year dataset pois
 Detection is borderline (real constraint vs prolonged maintenance vs noise curtailment), so flags are staged for analyst review:
 
 1. **Auto-detector** runs during the daily pipeline, writes candidate runs with `review_status='pending_review'`.
-2. **Modules 3/4/5 mask out all active flags (`pending_review` OR `confirmed`) automatically.** This is the locked design (Option 1 from the FX2 decision) — fixes EAO/Hornsea 1 immediately, without waiting on analyst review.
-3. **Analyst reviews** each candidate. Marking a flag `dismissed` opts those hours back into the calculation on the next pipeline run.
+2. **Modules 3/4/5 mask out `confirmed` flags only.** Auto-detected `pending_review` candidates are visible for review but do **not** alter published analytics until an analyst confirms them (issue #79; `load_active_periods` in `structural_constraint_detection_service.py`). The original 2026-05-25 design masked `pending_review` too (Option 1 from the FX2 decision) — that was changed to confirmed-only so a false-positive candidate cannot move a client's numbers.
+3. **Analyst reviews** each candidate (`PATCH /api/v1/structural-constraints/{flag_id}`). Confirming a flag masks its hours on the next pipeline run; `dismissed` leaves them in.
 4. **Read API**: `GET /api/v1/structural-constraints?windfarm_id=&review_status=` lists flags. Confirm/dismiss actions are a future admin-ui ticket (out of backend scope).
 
 ## Implementation walkthrough
@@ -98,7 +98,7 @@ Detection is borderline (real constraint vs prolonged maintenance vs noise curta
 | Method | Purpose |
 |---|---|
 | `detect_constraints(windfarm_id, df_curve, *, pipeline_run_id=None, replace_existing=True)` | Runs `detect_constraints_df` and persists each run as a `pending_review` row. With `replace_existing=True` (default), drops prior auto-detected `pending_review` rows for the windfarm first — analyst-curated rows (status != pending_review) are preserved. |
-| `load_active_periods(windfarm_id)` | Returns all flag periods with `review_status IN ('pending_review', 'confirmed')`. Used by the orchestrator to build the downstream mask. |
+| `load_active_periods(windfarm_id)` | Returns flag periods with `review_status = 'confirmed'` only (issue #79 — confirmed-only gating). Used by the orchestrator to build the downstream mask. |
 
 ### Orchestrator integration
 

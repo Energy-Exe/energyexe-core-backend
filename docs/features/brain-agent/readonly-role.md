@@ -20,7 +20,20 @@ The role makes that impossible at the database layer. Even if an agent flips the
 | Settings | `app/core/config.py` | `BRAIN_AGENT_RO_USER` (default `"brain_agent_ro"`) + `BRAIN_AGENT_RO_PASSWORD` (no default — empty means "not configured"). Property `database_url_agent_ro` builds the read-only DSN by swapping credentials in the existing `DATABASE_URL`. |
 | Service | `app/services/brain_agent_service.py` | Agent process env uses `database_url_agent_ro` when configured. Falls back to the main `DATABASE_URL` with a session-level `PGOPTIONS=-c default_transaction_read_only=on` if the role isn't set up yet (logs `brain_agent_ro_role_not_configured` warning). Belt-and-suspenders: even when the role is in use, the same `PGOPTIONS` is still passed. |
 
-Both admin and client agent profiles use the same read-only role.
+Since EPR-59 there are **two** read-only roles, both configured in `app/core/config.py`:
+
+| Role | Settings | Used for | Grants |
+|---|---|---|---|
+| `brain_agent_ro` | `BRAIN_AGENT_RO_USER` / `BRAIN_AGENT_RO_PASSWORD` | `source='admin'` sessions (internal staff only — `is_superuser AND is_internal`, see `app/core/agent_access.py`) | `SELECT` on every table in `public` (migration `a1b2c3d4e5f6_add_brain_agent_ro_role.py`) |
+| `brain_agent_client_ro` | `BRAIN_AGENT_CLIENT_RO_USER` / `BRAIN_AGENT_CLIENT_RO_PASSWORD` | `source='client'` sessions | `SELECT` on client-appropriate tables only — no `users`, `audit_logs`, `agent_threads`, `import_*` or raw tables, so a client session cannot read internal data or enumerate internal tables via `information_schema` (migration `c1a2b3c4d5e6_add_brain_agent_client_ro_role.py`) |
+
+`Settings.database_url_agent_ro` / `database_url_agent_client_ro` (`app/core/config.py`) return
+`None` when the matching password is unset. The fallbacks are deliberate and layered: no client
+password → the client session uses the admin RO role; no admin password → the regular application
+URL with the session-level read-only guard in `brain_agent_db_script.py` (`set_session(readonly=True)`).
+Set both passwords in every deployed environment so the **database** enforces SELECT-only. The
+rest of this document describes the original admin role; the client role follows the same wiring
+and rotation steps with its own secret.
 
 ---
 

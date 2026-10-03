@@ -6,7 +6,7 @@
 > doc is the acceptance artifact; each checklist becomes the activation gate.
 >
 > Source spec: `energyexe_opportunity_schemas_15 May 2026.docx` (SharePoint → Development site).
-> Plan: `~/.claude/plans/wobbly-crafting-mitten.md`.
+> Originates from the M8 opportunity-detection expansion plan (6 → 18 schemas, issues #90–#116).
 
 ## Summary
 

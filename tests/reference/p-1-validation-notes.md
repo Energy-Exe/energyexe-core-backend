@@ -469,7 +469,7 @@ Do not cite the P-1.1 / P-1.2 / P-1.3 "Spec" columns in stakeholder communicatio
 
 ## Trigger
 
-After applying the Module 1b month-level run-grouping fix (this session, see `docs/pipeline/SESSION_2026_05_25_PROGRESS.md`), the pre-flight re-run gave:
+After applying the Module 1b month-level run-grouping fix (this session; the session log was retired — the durable lessons are in `docs/history/lessons.md`), the pre-flight re-run gave:
 
 | WF | Our v2 (no mask) | Spec target (P-1.3) | Disagreement |
 |---|---|---|---|

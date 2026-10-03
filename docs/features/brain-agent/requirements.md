@@ -1,3 +1,15 @@
+> **Status note (2026-10-04).** Written in April 2026; the core requirements and the SSE / transcript
+> architecture below still hold. What has been added since and is **not** described here:
+> the Railway hosting it mentions is gone (AWS Fargate, see `infra/README.md`); the client-portal
+> agent profile (`source='client'`) with its own locked-down DB role
+> ([`readonly-role.md`](readonly-role.md)); `BRAIN_AGENT_ACCESS_POLICY` and the internal-staff gate
+> for the admin profile (`app/core/agent_access.py`, [`docs/features/auth-and-users.md`](../auth-and-users.md));
+> seeded skill files incl. SCADA gold roll-ups (`app/services/brain_agent_skill_files.py`,
+> [`scada-integration.md`](scada-integration.md)); user file uploads
+> (`app/services/brain_agent_uploads.py`); the DB-driven methodology skill composed from
+> `/methodology-sections`; and a per-user rate limit backed by Valkey (`app/core/redis.py`).
+> Moved from `docs/brain-agent-requirements.md` on 2026-10-04.
+
 # Brain Agent — Requirements & Architecture
 
 ## 1. What It Is
@@ -23,7 +35,7 @@ An AI-powered data analyst embedded in the EnergyExe admin dashboard. Users ask 
 | Streaming text | User sees agent's text as it's generated, character by character |
 | Tool visibility | User sees which tools the agent is calling (Bash, Read, Grep) |
 | Status indicators | Thinking, executing, analyzing phases visible |
-| Connection resilience | Works through Railway proxy; handles drops gracefully |
+| Connection resilience | Handles dropped DB connections gracefully (written for the retired Railway proxy; now RDS from Fargate) |
 
 ### 2.3 Data Access
 

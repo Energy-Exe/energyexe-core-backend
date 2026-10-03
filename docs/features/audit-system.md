@@ -17,9 +17,11 @@ optional before/after values.
 | Registration (`/auth/register`) | `@audit_action(AuditAction.CREATE, "user")` | `CREATE` |
 | Owners list / search / get / get-by-code | `@audit_action(AuditAction.ACCESS, "owner")` in `owners.py` | `ACCESS` |
 | Owners create / update / delete | `@audit_action` in `owners.py` | `CREATE` / `UPDATE` / `DELETE` |
+| SCADA PPA register (EPR-97/143) — list / get / by-code, create, update, delete, delete-by-code | 7 `@audit_action` in `scada_ppas.py` (resource type `scada_ppa`) | `ACCESS` / `CREATE` / `UPDATE` / `DELETE` — rows carry the serialized contract terms in `old_values` / `new_values`, so every audit **read** path hides `scada_ppa` rows from callers who are not internal staff (`INTERNAL_ONLY_RESOURCE_TYPES` in `app/core/deps.py`) |
 
 Everything else (users CRUD, wind farms, reports, portfolios, the brain agent, …) is **not**
-audited — 3 of the ~50 endpoint modules carry the decorator. Reading the audit log itself is
+audited — 3 of the ~50 endpoint modules carry the decorator (`auth.py`, `owners.py`,
+`scada_ppas.py`). Reading the audit log itself is
 deliberately not audited (it used to be: every admin page view would add "viewed audit log"
 rows and inflate the counts being viewed). There is no `/auth/logout` endpoint, so `LOGOUT`
 is never emitted, and there is no `users.last_login_at` column — "active clients" is currently
