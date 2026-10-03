@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EnergyExe Pipeline — Remaining Work, Fix Plan & Test Plan</title>
+<style>
+  @page { size: A4; margin: 22mm 18mm 24mm 18mm; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #1a1a1a; font-size: 10.5pt; line-height: 1.45;
+  }
+  h1 { font-size: 22pt; margin: 0 0 4px 0; color: #0b2e4f; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 14pt; margin: 28px 0 8px 0; color: #0b2e4f;
+    border-bottom: 1.5px solid #0b2e4f; padding-bottom: 4px;
+    page-break-after: avoid;
+  }
+  h3 { font-size: 11.5pt; margin: 18px 0 6px 0; color: #1a4870; page-break-after: avoid; }
+  h4 { font-size: 10.5pt; margin: 12px 0 4px 0; color: #2a2a2a; page-break-after: avoid; }
+  p { margin: 6px 0; }
+  ul, ol { margin: 6px 0 6px 20px; padding: 0; }
+  li { margin: 2px 0; }
+  code, kbd, pre { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; }
+  code { background: #f1f3f7; padding: 1px 4px; border-radius: 3px; color: #b4324d; }
+  pre {
+    background: #f7f8fa; border: 1px solid #e3e6ec; border-left: 3px solid #4a7fbf;
+    padding: 8px 12px; border-radius: 3px; overflow-x: auto;
+    page-break-inside: avoid; line-height: 1.35;
+  }
+  pre code { background: transparent; color: #1a1a1a; padding: 0; }
+  table {
+    border-collapse: collapse; width: 100%; margin: 8px 0;
+    page-break-inside: avoid; font-size: 9.5pt;
+  }
+  th, td { border: 1px solid #d4d8df; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #eef1f6; font-weight: 600; color: #0b2e4f; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .meta { color: #666; font-size: 10pt; margin-bottom: 20px; }
+  .callout {
+    background: #fff8e6; border-left: 3px solid #f0a500;
+    padding: 8px 12px; margin: 12px 0; border-radius: 3px; font-size: 10pt;
+  }
+  .callout.danger  { background: #fdecec; border-left-color: #c0392b; }
+  .callout.note    { background: #eef5fb; border-left-color: #4a7fbf; }
+  .callout.success { background: #ecf8ee; border-left-color: #2c8a3a; }
+  .pill {
+    display: inline-block; padding: 1px 7px; border-radius: 10px;
+    font-size: 8.5pt; font-weight: 600; margin-right: 4px;
+  }
+  .pill.p1 { background: #fde2e2; color: #931a1a; }
+  .pill.p2 { background: #fff1d4; color: #8a5500; }
+  .pill.p3 { background: #dceaf8; color: #1a4870; }
+  .toc { background: #f7f8fa; padding: 14px 20px; border-radius: 4px; margin: 18px 0 28px 0; }
+  .toc ol { margin-left: 18px; }
+  .pagebreak { page-break-before: always; }
+  .small { font-size: 9pt; color: #666; }
+  .check { color: #2c8a3a; font-weight: 700; }
+  .x { color: #c0392b; font-weight: 700; }
+  .filepath {
+    font-family: "SF Mono", Menlo, monospace; font-size: 9pt;
+    color: #444; background: #f1f3f7; padding: 1px 5px; border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Pipeline Backfill — Remaining Work, Fix &amp; Test Plan</h1>
+<div class="meta">
+  Companion to <em>Performance Pipeline &amp; Opportunity Detection</em> release doc<br>
+  Date: <strong>2026&#8209;04&#8209;16</strong>
+  &nbsp;·&nbsp; Audience: backend + data engineering
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li>Outstanding gaps overview</li>
+    <li><span class="pill p1">P1</span> ERA5 NaN wind data &mdash; root cause &amp; fix</li>
+    <li><span class="pill p1">P1</span> Backfill data cleanup &amp; re&#8209;import</li>
+    <li><span class="pill p2">P2</span> 130&#8209;windfarm retry (phantom&#8209;OK + autoflush)</li>
+    <li><span class="pill p2">P2</span> Windfarm 7190 &amp; aggregated&#8209;data outliers</li>
+    <li><span class="pill p3">P3</span> 71 insufficient&#8209;data windfarms</li>
+    <li><span class="pill p3">P3</span> Cron schedule &amp; PPA enrichment</li>
+    <li>Test plan (unit, integration, manual verification)</li>
+    <li>Acceptance criteria &amp; rollout sequence</li>
+  </ol>
+</div>
+
+<h2>1. Outstanding gaps overview</h2>
+
+<p>From the 1,468 windfarms in the first end&#8209;to&#8209;end backfill run:</p>
+
+<table>
+<tr><th>Status</th><th>Count</th><th>%</th><th>Priority</th><th>Class</th></tr>
+<tr><td>Successfully processed (now in DB)</td><td>360</td><td>24.5%</td><td>&mdash;</td><td>done</td></tr>
+<tr><td>NaN wind data (ERA5 gap)</td><td><strong>1,168</strong></td><td>79.6%</td><td><span class="pill p1">P1</span></td><td>data engineering</td></tr>
+<tr><td>"Phantom OK" / autoflush retry candidates</td><td>~0</td><td>&mdash;</td><td>&mdash;</td><td>resolved by SQL refactor</td></tr>
+<tr><td>Insufficient data for stable curves</td><td>71</td><td>4.8%</td><td><span class="pill p3">P3</span></td><td>time / config</td></tr>
+<tr><td>Windfarm 7190 (unknown error)</td><td>1</td><td>0.1%</td><td><span class="pill p2">P2</span></td><td>investigation</td></tr>
+<tr><td>Aggregated data in hourly column (outliers)</td><td>~5&ndash;10</td><td>&lt;1%</td><td><span class="pill p2">P2</span></td><td>upstream data quality</td></tr>
+</table>
+
+<div class="callout danger">
+<strong>Headline blocker:</strong> 79.6% of failures &mdash; <strong>1,168 windfarms</strong>
+&mdash; share a single root cause: <code>weather_data.wind_speed_100m</code> contains
+<strong>~98 million NaN rows</strong>. Until ERA5 imports are fixed, those windfarms will
+keep failing the pipeline regardless of retries.
+</div>
+
+<h2>2. <span class="pill p1">P1</span> ERA5 NaN wind data &mdash; root cause &amp; fix</h2>
+
+<h3>2.1 What we found</h3>
+
+<p>Two production import paths exist with inconsistent bounding&#8209;box (bbox) handling:</p>
+
+<table>
+<tr><th>Path</th><th>Bbox</th><th>Used by</th></tr>
+<tr><td><span class="filepath">app/core/weather_import.py:249</span></td><td><strong>Hardcoded Europe</strong> <code>[71, &minus;11, 35, 32]</code></td><td><code>WeatherImportService.execute_job()</code> &rarr; <code>POST /weather-imports/*</code></td></tr>
+<tr><td><span class="filepath">scripts/seeds/weather_data/fetch_daily_all_windfarms.py:87&ndash;92</span></td><td><strong>Dynamic</strong> from windfarm coords (max&plusmn;0.5&deg;)</td><td><code>WeatherDataService</code> &rarr; <code>POST /weather-data/fetch</code></td></tr>
+</table>
+
+<h3>2.2 The bug chain</h3>
+<ol>
+  <li><code>cdsapi.Client.retrieve(...)</code> requests a GRIB only over Europe.</li>
+  <li>For a US/Taiwan windfarm, <code>xarray.interp(method='linear')</code> on a coordinate <em>outside</em> the bbox returns <code>NaN</code>.</li>
+  <li><code>float(NaN)</code> propagates without raising. <code>math.sqrt(NaN**2 + NaN**2) = NaN</code>. <code>round(NaN, 3) = NaN</code>.</li>
+  <li>The model column is <code>wind_speed_100m: Numeric(8, 3), nullable=False</code>. <strong><code>nullable=False</code> only blocks <code>NULL</code></strong> &mdash; PostgreSQL <code>numeric</code> accepts <code>NaN</code> as a valid value, so the row inserts cleanly.</li>
+  <li>Downstream queries use <code>WHERE wind_speed_100m IS NOT NULL</code> which doesn't catch NaN. The pandas pipeline filters NaN out and ends with zero usable hours per windfarm.</li>
+</ol>
+
+<h3>2.3 Impact distribution &mdash; matches the bbox theory</h3>
+<table>
+<tr><th>Country</th><th>NaN windfarms</th><th>Inside Europe bbox?</th><th>Likely cause</th></tr>
+<tr><td>USA</td><td>1,090</td><td><span class="x">No</span></td><td>Hardcoded Europe bbox</td></tr>
+<tr><td>Taiwan</td><td>4</td><td><span class="x">No</span></td><td>Hardcoded Europe bbox</td></tr>
+<tr><td>Denmark</td><td>74</td><td><span class="check">Yes</span></td><td>Edge interpolation, land&#8209;sea masking, or older import passes &mdash; needs spot&#8209;check</td></tr>
+</table>
+<p><strong>1,094 / 1,168 = 93.7%</strong> of NaN windfarms are explained directly by the Europe&#8209;only bbox.</p>
+
+<h3>2.4 Code fixes (3 changes, scoped to <code>app/core/weather_import.py</code> + the daily script)</h3>
+
+<h4>Fix A &mdash; Replace hardcoded Europe bbox with dynamic bbox</h4>
+<p>Extract a shared helper to avoid the same bug from recurring through duplication.</p>
+<pre><code># app/core/weather_import.py &mdash; new helper
+async def _compute_windfarm_bbox(self) -> List[float]:
+    """Return [N, W, S, E] covering all active windfarms with 0.5&deg; buffer."""
+    from app.core.database import get_session_factory
+    from app.models.windfarm import Windfarm
+    from sqlalchemy import select
+
+    AsyncSessionLocal = get_session_factory()
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Windfarm.lat, Windfarm.lng).where(
+                Windfarm.lat.isnot(None), Windfarm.lng.isnot(None),
+            )
+        )
+        coords = result.fetchall()
+    if not coords:
+        # Defensive default &mdash; global rather than Europe&#8209;only
+        return [85.0, -180.0, -85.0, 180.0]
+    lats = [float(c.lat) for c in coords]
+    lngs = [float(c.lng) for c in coords]
+    return [max(lats) + 0.5, min(lngs) - 0.5, min(lats) - 0.5, max(lngs) + 0.5]
+
+# In _download_era5_grib, replace the hardcoded line:
+- 'area': [71, -11, 35, 32],  # N, W, S, E - covers Europe
++ 'area': await self._compute_windfarm_bbox(),
+</code></pre>
+<p>Update <code>fetch_daily_all_windfarms.py</code> to call the same helper (or duplicate the same logic and add a comment pointing to the canonical helper). Delete the inline inline bbox calculation in the script.</p>
+
+<h4>Fix B &mdash; NaN guard before insert</h4>
+<p>Apply in <strong>both</strong> <code>weather_import.py</code> and <code>fetch_daily_all_windfarms.py</code>:</p>
+<pre><code>import math
+
+u100 = float(u100_all[time_idx])
+v100 = float(v100_all[time_idx])
+t2m  = float(t2m_all[time_idx])
+
+# NEW: skip rows where ERA5 returned NaN (out&#8209;of&#8209;bbox, masked, etc.)
+if math.isnan(u100) or math.isnan(v100) or math.isnan(t2m):
+    logger.warning("era5_nan_skipped",
+                   windfarm_id=wf.id,
+                   hour=timestamp.isoformat(),
+                   u100=u100, v100=v100, t2m=t2m)
+    continue
+</code></pre>
+
+<h4>Fix C (defensive) &mdash; CHECK constraint to fail loud on regressions</h4>
+<p>Alembic migration:</p>
+<pre><code># alembic/versions/&lt;new&gt;_weather_data_no_nan.py
+def upgrade():
+    op.execute("""
+        ALTER TABLE weather_data
+        ADD CONSTRAINT chk_weather_no_nan
+        CHECK (
+            wind_speed_100m = wind_speed_100m       -- NaN != NaN
+            AND wind_direction_deg = wind_direction_deg
+            AND temperature_2m_k = temperature_2m_k
+        ) NOT VALID;
+    """)
+    # NOT VALID = applies to new inserts only; existing NaN rows survive
+    # until cleanup. Deliberate &mdash; we drop them in step 3 separately.
+
+def downgrade():
+    op.execute("ALTER TABLE weather_data DROP CONSTRAINT chk_weather_no_nan;")
+</code></pre>
+
+<h3>2.5 Effort estimate</h3>
+<ul>
+  <li>Code changes: ~30 lines across 2 files + 1 migration</li>
+  <li>Local manual test (one US windfarm, one EU windfarm): a few minutes</li>
+  <li>PR review + merge: standard</li>
+</ul>
+
+<h2>3. <span class="pill p1">P1</span> Backfill data cleanup &amp; re&#8209;import</h2>
+
+<p>After Fix A+B+C land:</p>
+
+<h3>Step 1 &mdash; Confirm NaN row count matches investigation</h3>
+<pre><code>-- Should return ~98M rows
+SELECT COUNT(*) FROM weather_data WHERE wind_speed_100m::text = 'NaN';
+
+-- Per&#8209;windfarm breakdown to sanity&#8209;check the 1,168 figure
+SELECT w.id, w.name, w.country, COUNT(*) AS nan_rows
+FROM weather_data wd
+JOIN windfarms w ON w.id = wd.windfarm_id
+WHERE wd.wind_speed_100m::text = 'NaN'
+GROUP BY w.id, w.name, w.country
+ORDER BY nan_rows DESC LIMIT 20;</code></pre>
+
+<h3>Step 2 &mdash; Delete NaN rows (run in a transaction; can take minutes on 98M rows)</h3>
+<pre><code>BEGIN;
+DELETE FROM weather_data WHERE wind_speed_100m::text = 'NaN';
+-- Sanity check
+SELECT COUNT(*) FROM weather_data WHERE wind_speed_100m::text = 'NaN'; -- expect 0
+COMMIT;
+</code></pre>
+
+<h3>Step 3 &mdash; Re&#8209;import affected years for affected windfarms</h3>
+<p>The 1,168 windfarm IDs are listed in
+<span class="filepath">docs/backfill_2026_04_16/nan_wind_ids.txt</span>. Re&#8209;import per year batched by region:</p>
+<pre><code># 1) Trigger via the existing weather import job (now uses dynamic bbox)
+poetry run python -c "
+import asyncio
+from datetime import date
+from app.core.weather_import import WeatherImportCore
+async def main():
+    core = WeatherImportCore()
+    await core.fetch_and_process_date_range(
+        start_date=date(2017, 1, 1),
+        end_date=date(2025, 12, 31),
+        force_refresh=False,  # only fills missing days
+    )
+asyncio.run(main())
+"
+</code></pre>
+<p>
+This is bandwidth&#8209;heavy on the CDS API and will take time. Recommended approach:
+</p>
+<ul>
+  <li>Run as a background <code>WeatherImportJob</code> with progress tracking (<code>job_metadata.dates_completed</code>).</li>
+  <li>Process one year at a time with explicit windfarm list, so we can resume on failure.</li>
+  <li>Cap at e.g. 4 concurrent days to respect CDS API throttling.</li>
+</ul>
+
+<h3>Step 4 &mdash; Re&#8209;run pipeline backfill for the 1,168</h3>
+<pre><code>poetry run python scripts/backfill_pipeline.py \
+    --windfarm-ids $(paste -sd' ' docs/backfill_2026_04_16/nan_wind_ids.txt)
+</code></pre>
+
+<h3>Step 5 &mdash; Re&#8209;run opportunity detection for the same set</h3>
+<pre><code>curl -X POST /api/v1/opportunities/detect \
+    -H 'Authorization: Bearer ...' \
+    -d '{"windfarm_ids": [7234, 7237, ...], "period_months": 24}'
+</code></pre>
+
+<h2>4. <span class="pill p2">P2</span> 130&#8209;windfarm retry (phantom&#8209;OK + autoflush)</h2>
+
+<p>
+The original investigation flagged 121 phantom&#8209;OK + 9 autoflush windfarms for retry.
+The PR&#8209;31 SQL refactor (3 single&#8209;table queries + pandas merge, per&#8209;module SAVEPOINTs)
+should resolve <strong>both</strong>. Status check:
+</p>
+
+<pre><code>-- Are these IDs already in the DB now?
+WITH retry_ids AS (
+    SELECT unnest(ARRAY[7224, 7243, 7244, /* ... 130 IDs ... */]) AS id
+)
+SELECT r.id, w.name,
+       (SELECT COUNT(*) FROM power_curve_bins WHERE windfarm_id = r.id) AS bins,
+       (SELECT COUNT(*) FROM performance_summaries WHERE windfarm_id = r.id) AS summaries
+FROM retry_ids r
+JOIN windfarms w ON w.id = r.id
+ORDER BY bins, summaries;
+</code></pre>
+
+<p>If <code>bins = 0</code> AND <code>summaries = 0</code>, run:</p>
+<pre><code>poetry run python scripts/backfill_pipeline.py \
+    --windfarm-ids $(cat docs/backfill_2026_04_16/missing_data_to_retry.txt \
+                     docs/backfill_2026_04_16/autoflush_to_retry.txt | sort -u | xargs)
+</code></pre>
+
+<h2>5. <span class="pill p2">P2</span> Windfarm 7190 &amp; aggregated&#8209;data outliers</h2>
+
+<h3>5.1 Windfarm 7190</h3>
+<p>One windfarm produced an empty error message after 62.8s. Investigate manually:</p>
+<pre><code>poetry run python -c "
+import asyncio, structlog
+from app.core.database import get_session_factory
+from app.services.performance_pipeline_service import PerformancePipelineService
+
+structlog.configure(wrapper_class=structlog.stdlib.BoundLogger)
+
+async def main():
+    AsyncSessionLocal = get_session_factory()
+    async with AsyncSessionLocal() as db:
+        svc = PerformancePipelineService(db)
+        result = await svc.run_pipeline(7190)
+        print(result)
+asyncio.run(main())
+"
+</code></pre>
+<p>Capture the full stack trace; if not informative, add a try/except around each module call inside <code>run_pipeline</code> and re&#8209;run.</p>
+
+<h3>5.2 Aggregated&#8209;data outliers</h3>
+<p>
+Some upstream sources (e.g. EIA for Block Island, South Fork) write daily/monthly totals into
+the hourly <code>generation_data.hour</code> column. Block Island (30 MW) shows
+<em>13,764 MWh / day</em> &mdash; 458&times; rated capacity. The plausibility filter discards
+these but they indicate broken upstream data.
+</p>
+<p>Detection query:</p>
+<pre><code>SELECT
+    g.windfarm_id, w.name, w.nameplate_capacity_mw AS rated_mw,
+    g.hour, SUM(g.generation_mwh) AS hourly_mwh,
+    SUM(g.generation_mwh) / w.nameplate_capacity_mw AS multiplier
+FROM generation_data g
+JOIN windfarms w ON w.id = g.windfarm_id
+WHERE g.generation_mwh IS NOT NULL AND w.nameplate_capacity_mw &gt; 0
+GROUP BY g.windfarm_id, w.name, w.nameplate_capacity_mw, g.hour
+HAVING SUM(g.generation_mwh) &gt; 1.5 * w.nameplate_capacity_mw
+ORDER BY multiplier DESC LIMIT 50;</code></pre>
+<p>
+Triage upstream &mdash; this is most likely an EIA importer issue
+(<code>app/services/eia_client.py</code>). Track in a separate ticket.
+</p>
+
+<h2>6. <span class="pill p3">P3</span> 71 insufficient&#8209;data windfarms</h2>
+
+<p>
+These pass plausibility filters but no wind bin reaches the minimum 30 samples needed for stable percentiles. Two options:
+</p>
+<ol>
+  <li><strong>Time</strong>: most are very new windfarms; will qualify with more data. Re&#8209;run pipeline monthly.</li>
+  <li><strong>Lower threshold for early&#8209;stage farms</strong>: <code>MIN_SAMPLES_PER_BIN</code> from 30 &rarr; 10&ndash;15. Trade&#8209;off: less stable curves. Implementation:
+    <pre><code># app/services/power_curve_service.py
+MIN_SAMPLES_PER_BIN_DEFAULT = 30
+MIN_SAMPLES_PER_BIN_EARLY = 15
+
+async def build_power_curves(self, windfarm_id, ..., early_stage: bool = False):
+    min_samples = MIN_SAMPLES_PER_BIN_EARLY if early_stage else MIN_SAMPLES_PER_BIN_DEFAULT
+    ...
+</code></pre>
+  </li>
+</ol>
+<p>
+Decision needed from product / data: do we want noisier curves on young assets, or wait for stable ones?
+</p>
+
+<h2>7. <span class="pill p3">P3</span> Cron schedule &amp; PPA enrichment</h2>
+
+<p>The release shipped the pipeline service but not its scheduled trigger. Required follow&#8209;ups:</p>
+
+<table>
+<tr><th>Task</th><th>Where</th><th>What</th></tr>
+<tr><td>Daily ERA5 ingest cron</td><td>APScheduler in <code>app/cron/</code></td><td>Run yesterday's day for all active windfarms (idempotent &mdash; <code>_is_date_complete</code> handles re&#8209;runs)</td></tr>
+<tr><td>Weekly performance pipeline cron</td><td>APScheduler in <code>app/cron/</code></td><td>Sunday 03:00 UTC: <code>PerformancePipelineService.run_pipeline_batch()</code> for all operational windfarms</td></tr>
+<tr><td>Weekly opportunity detection cron</td><td>APScheduler in <code>app/cron/</code></td><td>Sunday 04:00 UTC after pipeline completes</td></tr>
+<tr><td>PPA enrichment</td><td>Data team</td><td>Backfill <code>contract_type</code>, <code>has_availability_penalties</code>, <code>ppa_status</code> on existing PPAs &mdash; without these, OPS&#8209;03 sits at WATCH and MKT&#8209;01 suppression rules can't fire</td></tr>
+</table>
+
+<h2>8. Test plan</h2>
+
+<h3>8.1 Unit tests (new)</h3>
+
+<table>
+<tr><th>File</th><th>Test</th><th>Asserts</th></tr>
+<tr><td><span class="filepath">tests/test_weather_import_bbox.py</span></td><td><code>test_compute_windfarm_bbox_includes_all</code></td><td>Returned bbox bounds &ge; max coord &plusmn; 0.5&deg;</td></tr>
+<tr><td>same</td><td><code>test_compute_windfarm_bbox_handles_empty</code></td><td>Returns global default rather than crashing when DB has 0 windfarms</td></tr>
+<tr><td>same</td><td><code>test_compute_windfarm_bbox_us_taiwan_in_range</code></td><td>For a fixture with US and Taiwan coords, bbox covers both</td></tr>
+<tr><td><span class="filepath">tests/test_weather_import_nan_guard.py</span></td><td><code>test_nan_u100_skipped</code></td><td>Mock <code>xr.interp</code> to return NaN; verify no row inserted, warning logged</td></tr>
+<tr><td>same</td><td><code>test_finite_values_inserted</code></td><td>Mock returns valid floats; verify exactly 24 rows per windfarm/day</td></tr>
+<tr><td><span class="filepath">tests/test_weather_data_constraint.py</span></td><td><code>test_check_constraint_blocks_nan_insert</code></td><td>Direct INSERT of NaN raises <code>IntegrityError</code> after migration</td></tr>
+</table>
+
+<p>Existing pipeline tests in
+<code>tests/test_power_curve_service.py</code>,
+<code>tests/test_performance_anomaly.py</code>,
+<code>tests/test_degradation.py</code>,
+<code>tests/test_opportunity_detection.py</code> remain valid &mdash; no changes expected.</p>
+
+<h3>8.2 Integration test (new)</h3>
+
+<p><span class="filepath">tests/integration/test_era5_to_pipeline_e2e.py</span></p>
+<ol>
+  <li>Seed one US windfarm (e.g. lat 41.0, lng &minus;71.5, "Block Island").</li>
+  <li>Mock <code>cdsapi.Client.retrieve</code> to write a small fixture GRIB containing 24h of valid ERA5 data covering that point.</li>
+  <li>Trigger <code>WeatherImportCore.fetch_and_process_date_range(2024&#8209;01&#8209;01, 2024&#8209;01&#8209;01)</code>.</li>
+  <li>Assert <code>weather_data</code> has 24 rows for that windfarm, all with finite <code>wind_speed_100m</code>.</li>
+  <li>Run pipeline (small synthetic generation set spanning a year + the new weather row).</li>
+  <li>Assert <code>power_curve_bins</code>, <code>performance_summaries</code>, <code>opportunities</code> have the expected counts.</li>
+</ol>
+
+<h3>8.3 Manual verification queries (post&#8209;deploy)</h3>
+
+<pre><code>-- 1) No new NaN rows after fix lands (constraint blocks them)
+SELECT COUNT(*) FROM weather_data
+WHERE created_at &gt; '2026&#8209;04&#8209;17 00:00:00'
+  AND wind_speed_100m::text = 'NaN'; -- expect 0
+
+-- 2) US/Taiwan windfarms now have weather coverage after re&#8209;import
+SELECT w.country, COUNT(DISTINCT wd.windfarm_id) AS wf_with_weather
+FROM weather_data wd
+JOIN windfarms w ON w.id = wd.windfarm_id
+WHERE w.country IN ('United States of America', 'Taiwan')
+  AND wd.hour &gt;= '2024&#8209;01&#8209;01'
+GROUP BY w.country;
+-- Expect: USA &asymp; 1090, Taiwan &asymp; 4
+
+-- 3) Pipeline now produces results for re&#8209;imported windfarms
+SELECT w.country, COUNT(DISTINCT pcb.windfarm_id) AS wf_with_curves
+FROM power_curve_bins pcb
+JOIN windfarms w ON w.id = pcb.windfarm_id
+WHERE w.country IN ('United States of America', 'Taiwan')
+GROUP BY w.country;
+-- Expect: rising from 0 toward full coverage as re&#8209;imports complete
+
+-- 4) Opportunities created for previously&#8209;blocked windfarms
+SELECT severity, COUNT(*)
+FROM opportunities
+WHERE windfarm_id IN (SELECT id FROM windfarms WHERE country = 'United States of America')
+  AND status = 'ACTIVE'
+GROUP BY severity;
+</code></pre>
+
+<h3>8.4 Manual smoke test (single windfarm, end&#8209;to&#8209;end)</h3>
+<ol>
+  <li>Pick one previously&#8209;NaN US windfarm, e.g. <strong>7361 Block Island</strong>.</li>
+  <li><strong>Before fix:</strong> hit <code>GET /performance-pipeline/power-curves/7361</code> &mdash; expect 404 (no curves).</li>
+  <li>Apply Fix A+B+C migrations &amp; deploy.</li>
+  <li>Trigger weather re&#8209;import for 2017&ndash;2025 for this single windfarm.</li>
+  <li>Verify weather rows exist with valid wind speeds (no NaN).</li>
+  <li>Trigger pipeline: <code>POST /performance-pipeline/run {"windfarm_ids": [7361]}</code>.</li>
+  <li>Hit <code>GET /performance-pipeline/power-curves/7361</code> &mdash; expect a curve.</li>
+  <li>Hit <code>GET /performance-pipeline/odi/7361</code> &mdash; expect monthly + yearly rows.</li>
+  <li>Trigger opportunity detection: <code>POST /opportunities/detect {"windfarm_ids": [7361]}</code>.</li>
+  <li>Open <code>/opportunities</code> in admin UI, filter by Block Island &mdash; should show schemas it qualifies for.</li>
+</ol>
+
+<h3>8.5 Regression checks (existing 360 windfarms)</h3>
+<ol>
+  <li>Snapshot row counts before deploy:
+    <pre><code>SELECT
+  (SELECT COUNT(*) FROM power_curve_bins) AS bins,
+  (SELECT COUNT(*) FROM performance_summaries) AS summaries,
+  (SELECT COUNT(*) FROM degradation_results) AS degradation,
+  (SELECT COUNT(*) FROM opportunities WHERE status='ACTIVE') AS active_opps;</code></pre>
+  </li>
+  <li>Apply migration (CHECK constraint <code>NOT VALID</code> &mdash; doesn't touch existing rows).</li>
+  <li>Re&#8209;snapshot &mdash; counts should be identical.</li>
+  <li>Run pipeline for one of the 360 already&#8209;processed windfarms; row counts should not double, ON&#8209;CONFLICT upserts should overwrite.</li>
+</ol>
+
+<h2>9. Acceptance criteria &amp; rollout sequence</h2>
+
+<table>
+<tr><th>Step</th><th>Action</th><th>Acceptance</th></tr>
+<tr><td>1</td><td>Open PR with Fix A+B+C + unit tests</td><td>CI green; reviewer approves</td></tr>
+<tr><td>2</td><td>Merge + deploy to prod</td><td>API still serves; existing data untouched</td></tr>
+<tr><td>3</td><td>Run alembic upgrade</td><td><code>chk_weather_no_nan</code> exists in <code>information_schema.check_constraints</code></td></tr>
+<tr><td>4</td><td>Trigger NaN cleanup DELETE</td><td>NaN row count drops to 0</td></tr>
+<tr><td>5</td><td>Single&#8209;windfarm smoke test (8.4)</td><td>Curves + ODI + opportunity returned via API</td></tr>
+<tr><td>6</td><td>Bulk re&#8209;import (3.3) by region in batches</td><td>Per&#8209;country COUNT matches Section 8.3 query 2</td></tr>
+<tr><td>7</td><td>Bulk pipeline backfill (3.4)</td><td>Pipeline writes &gt; 0 rows for previously&#8209;blocked windfarms</td></tr>
+<tr><td>8</td><td>Opportunity detection re&#8209;run (3.5)</td><td>Opportunities present for &ge; 80% of newly&#8209;processable US/Taiwan windfarms</td></tr>
+<tr><td>9</td><td>Schedule cron jobs (Section 7)</td><td>Daily weather + weekly pipeline + weekly opportunity jobs visible in <code>/import-jobs</code> UI</td></tr>
+</table>
+
+<div class="callout success">
+<strong>Definition of done:</strong> &gt;1,400 of the 1,468 windfarms have power curves and at
+least one performance summary; the 71 insufficient&#8209;data windfarms have a documented
+re&#8209;run cadence; cron is running; CHECK constraint is in place to prevent regression.
+</div>
+
+<div class="callout note">
+<strong>Risks &amp; mitigations:</strong>
+<ul>
+  <li><strong>CDS API throttling</strong> on bulk re&#8209;import &mdash; mitigate with day&#8209;by&#8209;day batching and a 4&#8209;concurrent cap.</li>
+  <li><strong>Long delete on weather_data</strong> &mdash; 98M rows; do in a maintenance window or chunk by year (<code>WHERE EXTRACT(YEAR FROM hour) = N</code>) to avoid lock timeouts.</li>
+  <li><strong>CHECK NOT VALID</strong> deliberately doesn't validate existing rows &mdash; if you'd rather block&#8209;then&#8209;cleanup, drop <code>NOT VALID</code> and run cleanup first.</li>
+  <li><strong>Partial re&#8209;import</strong> &mdash; if a region's re&#8209;import is interrupted, <code>force_refresh=False</code> ensures resume picks up only missing days, not duplicates.</li>
+</ul>
+</div>
+
+</body>
+</html>

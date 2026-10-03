@@ -1,70 +1,73 @@
-version: '3.8'
+# Local stack: Postgres + Valkey + the API (development image target, port 8001).
+#
+# Most day-to-day development runs the API directly with Poetry on port 8002
+# (see README.md, "Port"); this file is the self-contained alternative.
+#   docker compose up -d
+#   docker compose exec api alembic upgrade head
+#   curl http://localhost:8001/health
 
 services:
-  # FastAPI application
   api:
     build:
       context: .
       target: development
     ports:
-      - "8000:8000"
+      - "8001:8001"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://energyexe:password@db:5432/energyexe_db
-      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/energyexe_db
+      - REDIS_URL=redis://valkey:6379
       - DEBUG=true
       - LOG_LEVEL=DEBUG
     volumes:
       - .:/app
-      - poetry-cache:/opt/poetry-cache
     depends_on:
-      - db
-      - redis
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
     networks:
       - energyexe-network
 
-  # PostgreSQL database
-  db:
+  postgres:
     image: postgres:15-alpine
+    container_name: energyexe-postgres
     environment:
-      - POSTGRES_USER=energyexe
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=energyexe_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: energyexe_db
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - energyexe-network
 
-  # Redis cache
-  redis:
-    image: redis:7-alpine
+  valkey:
+    image: valkey/valkey:7-alpine
+    container_name: energyexe-valkey
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
-    networks:
-      - energyexe-network
-
-  # pgAdmin for database management
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    environment:
-      - PGADMIN_DEFAULT_EMAIL=admin@energyexe.com
-      - PGADMIN_DEFAULT_PASSWORD=admin
-    ports:
-      - "5050:80"
-    depends_on:
-      - db
+      - valkey_data:/data
+    command: valkey-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - energyexe-network
 
 volumes:
   postgres_data:
-  redis_data:
-  poetry-cache:
+  valkey_data:
 
 networks:
   energyexe-network:
-    driver: bridge 
+    driver: bridge
