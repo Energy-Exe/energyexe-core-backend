@@ -1,65 +1,44 @@
 #!/bin/bash
-# Start all development services in tmux
+# Start the backend API in a tmux session (local development).
+#
+# There is no worker process any more: scheduled jobs run in AWS EventBridge
+# (docs/operations/scheduled-jobs.md). Valkey is optional locally — the report
+# cache and the brain-agent rate limit fail open without it.
 
-echo "🚀 Starting EnergyExe Development Environment"
+set -e
+
+echo "Starting EnergyExe backend (tmux session 'energyexe')"
 echo ""
 
-# Check if Redis is running
-if ! redis-cli ping > /dev/null 2>&1; then
-    echo "❌ Redis is not running!"
-    echo "Please start Redis first:"
-    echo "  Option 1: redis-server"
-    echo "  Option 2: docker run -d -p 6379:6379 redis:7-alpine"
+if ! command -v tmux &> /dev/null; then
+    echo "tmux is not installed. Install with: brew install tmux"
     exit 1
 fi
 
-echo "✅ Redis is running"
-
-# Check if tmux is installed
-if ! command -v tmux &> /dev/null; then
-    echo "❌ tmux is not installed"
-    echo "Install with: brew install tmux"
-    exit 1
+if command -v redis-cli &> /dev/null && redis-cli ping > /dev/null 2>&1; then
+    echo "Valkey/Redis: running"
+else
+    echo "Valkey/Redis: not running (optional; start with 'docker compose up -d valkey' if you want the cache)"
 fi
 
 # Kill existing session if it exists
-tmux kill-session -t energyexe 2>/dev/null
+tmux kill-session -t energyexe 2>/dev/null || true
 
-# Create new tmux session
 tmux new-session -d -s energyexe -n 'energyexe'
-
-# Split into 3 panes
 tmux split-window -h -t energyexe
-tmux split-window -v -t energyexe
 
-# Pane 0: Celery Worker
-tmux send-keys -t energyexe:0.0 'cd energyexe-core-backend' C-m
-tmux send-keys -t energyexe:0.0 'echo "🔄 Starting Celery Worker..."' C-m
-tmux send-keys -t energyexe:0.0 'poetry run python scripts/run_celery_worker.py' C-m
+# Pane 0: FastAPI server (PORT from .env, default 8001; local convention is 8002)
+tmux send-keys -t energyexe:0.0 'echo "Starting FastAPI server..."' C-m
+tmux send-keys -t energyexe:0.0 'poetry run python scripts/start.py' C-m
 
-# Pane 1: FastAPI Server
-tmux send-keys -t energyexe:0.1 'cd energyexe-core-backend' C-m
-tmux send-keys -t energyexe:0.1 'echo "🌐 Starting FastAPI Server..."' C-m
-tmux send-keys -t energyexe:0.1 'sleep 3' C-m  # Wait for Celery to start
-tmux send-keys -t energyexe:0.1 'poetry run python scripts/start.py' C-m
+# Pane 1: shell for commands
+tmux send-keys -t energyexe:0.1 'echo "Useful commands:"' C-m
+tmux send-keys -t energyexe:0.1 'echo "  poetry run pytest"' C-m
+tmux send-keys -t energyexe:0.1 'echo "  poetry run alembic upgrade head"' C-m
+tmux send-keys -t energyexe:0.1 'echo "  curl http://localhost:${PORT:-8001}/health"' C-m
 
-# Pane 2: Logs/Commands
-tmux send-keys -t energyexe:0.2 'cd energyexe-core-backend' C-m
-tmux send-keys -t energyexe:0.2 'echo "📊 Monitoring Pane"' C-m
-tmux send-keys -t energyexe:0.2 'echo ""' C-m
-tmux send-keys -t energyexe:0.2 'echo "Useful commands:"' C-m
-tmux send-keys -t energyexe:0.2 'echo "  - Check Celery tasks: celery -A app.celery_app inspect active"' C-m
-tmux send-keys -t energyexe:0.2 'echo "  - Monitor queue: redis-cli llen celery"' C-m
-tmux send-keys -t energyexe:0.2 'echo "  - Clear queue: redis-cli del celery"' C-m
-tmux send-keys -t energyexe:0.2 'echo ""' C-m
-
-# Attach to the session
 echo ""
-echo "✨ All services started in tmux session 'energyexe'"
-echo ""
-echo "To attach: tmux attach -t energyexe"
-echo "To detach: Ctrl+b, then d"
-echo "To kill: tmux kill-session -t energyexe"
+echo "To attach: tmux attach -t energyexe   |  detach: Ctrl+b, d   |  kill: tmux kill-session -t energyexe"
 echo ""
 
 tmux attach -t energyexe
