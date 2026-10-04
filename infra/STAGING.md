@@ -248,13 +248,14 @@ The staging frontends are hosted on **AWS S3 + CloudFront** (`frontend.tf`), one
 - **us-east-1 ACM cert** per host, DNS-validated, attached as the alias cert (phase 2).
 - Hostnames are **direct children** of `energyexe.com` — `staging-dashboard.energyexe.com` (admin-ui)
   and `staging-app.energyexe.com` (client-ui). **This is the crux:** an earlier attempt used
-  `staging.dashboard.*` / `staging.app.*`, which sit *under* the Vercel-CNAME'd `dashboard` / `app`
+  `staging.dashboard.*` / `staging.app.*`, which sat *under* the (then) Vercel-CNAME'd `dashboard` / `app`
   labels and inherited Vercel's Amazon-excluding CAA → ACM refused (see §6). Direct children have no
   Vercel label in their path, so ACM issues cleanly (proven first by `staging-api`).
 
 The backend's CORS (`cors_origins`) + `admin_portal_url` / `client_portal_url` are set to these two
-hostnames. **Prod frontends stay on Vercel** (`dashboard.*` / `app.*`) — only staging moved to AWS,
-as the pilot for eventually moving prod too.
+hostnames. At build time the prod frontends were still on Vercel (`dashboard.*` / `app.*`) and
+staging was the pilot; the prod frontends have since moved to the same S3 + CloudFront shape
+(`infra/frontend.tf`, deployed by each UI repo's `deploy-prod.yml`). Vercel is retired.
 
 ### CORS — how the frontends are allowed to call the API
 
@@ -291,8 +292,8 @@ Fargate ≈ $18/mo. The two frontend stacks (S3 + CloudFront, low traffic) add �
 - **CloudFront ACM certs must be in `us-east-1`** (needs a provider alias).
 - **ELB/target-group names cap at 32 chars** — the staging TG is `energyexe-staging-tg`, not
   `${local.name}-tg`.
-- **ACM `CAA_ERROR` from following a CNAME (and the fix):** `dashboard.energyexe.com` /
-  `app.energyexe.com` are **CNAMEs to Vercel**, and Vercel's CAA authorizes only Let's Encrypt /
+- **ACM `CAA_ERROR` from following a CNAME (and the fix):** at the time `dashboard.energyexe.com` /
+  `app.energyexe.com` were **CNAMEs to Vercel** (retired since), and Vercel's CAA authorized only Let's Encrypt /
   Sectigo / Google / GlobalSign — **not Amazon**. ACM's CAA tree-walk for `staging.dashboard` /
   `staging.app` follows that CNAME and is refused. `staging-api` (a *direct* child of `energyexe.com`,
   no intermediate CNAME) issued fine. **Resolution:** the frontends use **direct-child hostnames**
@@ -313,7 +314,9 @@ Fargate ≈ $18/mo. The two frontend stacks (S3 + CloudFront, low traffic) add �
   origin is echoed on every response (`app/main.py`, backend PR #135). Diagnose by checking the ACAO
   header on the real GET (`curl -D - -H 'Origin: …'`), not just the OPTIONS preflight.
 - **A "CORS error" in the browser is often NOT a CORS bug — check what host the frontend actually
-  calls first.** During the 2026-06-29 incident the prod frontends showed CORS errors, but the real
+  calls first.** (Historical: the frontends were on Vercel at the time; the lesson carries over to
+  the S3 + CloudFront builds, where `VITE_API_URL` is set in each UI repo's `deploy-prod.yml`.)
+  During the 2026-06-29 incident the prod frontends showed CORS errors, but the real
   cause was their **Vercel `VITE_API_URL` pointing at the wrong backend**: `dashboard.energyexe.com`
   (admin-ui) was baked to the **deleted Railway URL** (`…railway.app/api/v1`) and `app.energyexe.com`
   (client-ui) to **`staging-api.energyexe.com`** (whose CORS allowlist excludes `app.energyexe.com`).
@@ -322,8 +325,8 @@ Fargate ≈ $18/mo. The two frontend stacks (S3 + CloudFront, low traffic) add �
   Railway exposed it. **Fix:** set Vercel `VITE_API_URL=https://api.energyexe.com/api/v1` (Production)
   on **both** projects + redeploy (API base is build-time env in `src/lib/api.ts`; it only falls back
   to localhost). **Diagnostic:** `curl <site>/assets/index-*.js | grep -oE 'https://[^"]+/api/v1'`.
-- **Vercel Hobby plan blocks a deploy whose git *commit author* lacks project access.** The prod
-  frontends deploy on Vercel (Hobby, no collaborators on private repos). Merging client-ui #194
+- **(Historical — Vercel retired.) Vercel Hobby plan blocks a deploy whose git *commit author* lacks project access.** The prod
+  frontends deployed on Vercel (Hobby, no collaborators on private repos). Merging client-ui #194
   (`staging`→`main`) with the `Mohammad-Faisal` account made that the commit author → Vercel marked the
   deploy *"Blocked"*. The frontend prod-branch commit must be **authored by the Vercel-linked account
   `faisal-energyexe`** (verified email `mohammad.faisal@energyexe.com`). Note a PR *merge* re-blocks
@@ -401,13 +404,11 @@ task def → brief staging redeploy).
 - Railway fully **retired/deleted**; backend is AWS-only; nightly `pipeline_daily_hour` reset 5→3
   (prod task-def rev 9).
 
-**Remaining:**
-- **Prod frontends still point at the wrong API** (a Vercel env issue, NOT staging): set Vercel
-  `VITE_API_URL=https://api.energyexe.com/api/v1` (Production) on the **admin-ui + client-ui** projects
-  + redeploy — currently admin→deleted-Railway, client→staging-api (see §6). Done in the Vercel
-  dashboard (no Terraform).
-- `infra/staging/**` + the backend `deploy-staging.yml` currently live only on the `staging` branch;
-  they reach `master` on the next `staging → master` promotion.
-- Optional: a post-restore PII scrub for the staging DB; extending the AWS-hosting pilot to the
-  **prod** frontends (move them off Vercel).
-- Future cleanup: extract a shared backend-service module so prod and staging stop duplicating.
+**Remaining (status 2026-10-04 — the original list is resolved):**
+- ~~Prod frontends point at the wrong API~~ — resolved; the prod frontends now build with
+  `VITE_API_URL=https://api.energyexe.com/api/v1` in their `deploy-prod.yml` and deploy to
+  S3 + CloudFront (`infra/frontend.tf`). Vercel is retired.
+- ~~`infra/staging/**` + `deploy-staging.yml` live only on `staging`~~ — promoted to `master`.
+- ~~Extend the AWS-hosting pilot to the prod frontends~~ — done (`infra/frontend.tf`).
+- Still open: a post-restore PII scrub for the staging DB; extracting a shared backend-service
+  module so prod and staging stop duplicating Terraform.

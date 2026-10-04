@@ -33,8 +33,9 @@ Do NOT edit `energyexe_pipeline_full.py` directly. If the reference is revised b
 The script expects a CSV at `cfg.csv_path` (windows-style path by default — see top of the file). To run against a windfarm exported from our DB:
 
 ```bash
-# After P0.2 (SpecCSVExporter) lands:
-poetry run python scripts/export_windfarm_to_spec_csv.py --wf-id <ID> --year-from 2021 --year-to 2024 --out /tmp/wf_<code>.csv
+# Historical note: the P0.2 exporter (scripts/export_windfarm_to_spec_csv.py) referenced here
+# was never kept in the repo. Export a windfarm's hourly data by hand (see
+# docs/pipeline/module-1-data-loading.md for the columns the reference expects), then:
 
 # Run the reference (need statsmodels, sklearn, scipy, matplotlib, pandas, numpy):
 poetry run python tests/reference/energyexe_pipeline_full.py

@@ -13,10 +13,10 @@ cd energyexe-core-backend
 
 # Add all generation units (ELEXON + ENTSOE)
 poetry run python scripts/seeds/seed_generation_units.py
-
-# Or add only missing ENTSOE units
-poetry run python scripts/seeds/add_entsoe_units_only.py
 ```
+
+(An `add_entsoe_units_only.py` helper used to exist here; it was removed. Use
+`seed_generation_units.py`, which skips units that already exist.)
 
 ### 2. Import ELEXON Data
 
@@ -135,10 +135,11 @@ poetry run python scripts/jobs/import_vinddata.py /path/to/Vinddata.xlsx --start
 
 # Check import status
 poetry run python scripts/seeds/raw_generation_data/energistyrelsen/check_import_status.py
-
-# Check configured units
-poetry run python scripts/seeds/raw_generation_data/energistyrelsen/check_energistyrelsen_units.py
 ```
+
+(There is no separate `check_energistyrelsen_units.py` any more; unit/park mapping is
+handled by `scripts/jobs/import_vinddata.py --park-map/--model-map`, see the
+[energistyrelsen README](energistyrelsen/README.md).)
 
 **Option 2: Web UI File Upload (for monthly updates)**
 1. Navigate to `/raw-data-fetch` page in admin UI
@@ -183,15 +184,14 @@ poetry add polars pyarrow psutil asyncpg openpyxl
 To clear existing data before re-import:
 
 ```bash
-# Clear all raw_generation_data_raw
-poetry run python scripts/seeds/raw_generation_data/elexon/clear_raw_generation_data_raw.py
+# Clear ALL of generation_data_raw (every source — use with care)
+poetry run python scripts/seeds/raw_generation_data/clear_generation_data_raw.py
 
-# Or clear only specific source
-poetry run python scripts/seeds/raw_generation_data/clear_by_source.py --source ELEXON
-poetry run python scripts/seeds/raw_generation_data/clear_by_source.py --source ENTSOE
-poetry run python scripts/seeds/raw_generation_data/clear_by_source.py --source Taipower
-poetry run python scripts/seeds/raw_generation_data/clear_by_source.py --source NVE
-poetry run python scripts/seeds/raw_generation_data/clear_by_source.py --source ENERGISTYRELSEN
+# Per-source clearing: only Taipower has a dedicated script today
+# (scripts/seeds/raw_generation_data/taipower/clear_taipower_data.py). The former
+# clear_by_source.py / elexon/clear_raw_generation_data_raw.py helpers no longer exist;
+# for other sources run a scoped DELETE by hand:
+#   DELETE FROM generation_data_raw WHERE source = 'ELEXON' AND period_start >= '...';
 
 # Clear Taipower data specifically
 poetry run python scripts/seeds/raw_generation_data/taipower/clear_taipower_data.py

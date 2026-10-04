@@ -1,203 +1,105 @@
 # EnergyExe Core Backend
 
-A modern, production-ready FastAPI backend application with best practices and comprehensive architecture.
+FastAPI backend for the EnergyExe wind-performance platform: generation / price / weather data
+ingestion from ENTSOE, Elexon, EIA, Taipower, NVE and Energistyrelsen, the six-module performance
+pipeline, opportunity detection, the reports platform, the brain agent and the SCADA portal API.
+Serves the admin UI (`energyexe-admin-ui`) and the client portal (`energyexe-client-ui`).
 
-## Features
+**Documentation index: [`docs/README.md`](docs/README.md).** Architecture and layering:
+[`ARCHITECTURE.md`](ARCHITECTURE.md). Infrastructure and runbooks: [`infra/README.md`](infra/README.md).
 
-- **FastAPI Framework**: High-performance, easy-to-use, fast to code
-- **Async/Await**: Full async support with SQLAlchemy 2.0
-- **Database**: PostgreSQL with async drivers and migrations
-- **Authentication**: JWT-based authentication with password hashing
-- **Security**: Built-in security headers and CORS support
-- **Logging**: Structured logging with request tracking
-- **Testing**: Comprehensive test suite with pytest
-- **Code Quality**: Pre-commit hooks, linting, and formatting
-- **Docker**: Multi-stage builds for development and production
-- **Database Migrations**: Alembic for database schema management
+## How it runs (the short version)
 
-## Quick Start
+| | |
+|---|---|
+| Hosting | AWS Fargate (`eu-north-1`), one always-on task behind an ALB, Postgres on RDS, Valkey on ElastiCache. Terraform in [`infra/`](infra/README.md); staging is a separate root in `infra/staging/` ([`infra/STAGING.md`](infra/STAGING.md)). |
+| Deploy flow | **Staging-first.** Push to the `staging` branch → `.github/workflows/deploy-staging.yml` builds the image and deploys staging. Merge `staging` → `master` → `deploy-aws.yml` **promotes the staging-validated image** to prod (no rebuild). Both workflows skip `**.md`-only commits. |
+| Scheduling | **EventBridge in AWS**, never GitHub `schedule:` or a crontab: Lambda-triggered imports (`infra/scheduled_imports.tf`), the 01:30 UTC weather task and the 03:00 UTC pipeline task (`infra/weather_daily.tf`, `infra/pipeline_daily.tf`). Details: [`docs/operations/scheduled-jobs.md`](docs/operations/scheduled-jobs.md). |
+| Error tracking | Self-hosted GlitchTip via the Sentry SDK; `SENTRY_DSN` empty = disabled. [`docs/operations/observability.md`](docs/operations/observability.md). |
+| Dependencies | **The Docker image installs from `requirements.txt`** (see `Dockerfile`). **Local development uses Poetry** (`pyproject.toml` / `poetry.lock`). When you add a dependency, update both or the image will not have it. |
+| Port | The app's default is **8001** (`PORT` in `app/core/config.py`; `EXPOSE 8001` and the `uvicorn --port 8001` CMD in the `Dockerfile`; `docker-compose.yml`). The **local-dev convention is 8002** — the workspace `start` skill runs `uvicorn --port 8002` and `energyexe-client-ui/src/lib/api.ts` falls back to `127.0.0.1:8002` — so a locally started API and a locally running Docker container never collide. |
 
-### Prerequisites
+## Local development
 
-- Python 3.11+
-- Poetry 1.7+ (for dependency management)
-- PostgreSQL 15+
-- Docker (optional)
-
-### Local Development
-
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd energyexe-core-backend
-   ```
-
-2. **Install Poetry** (if not already installed)
-   ```bash
-   curl -sSL https://install.python-poetry.org | python3 -
-   # Or using pip: pip install poetry
-   ```
-
-3. **Install dependencies**
-   ```bash
-   poetry install --with dev,test
-   ```
-
-4. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your configuration
-   ```
-
-5. **Set up database**
-   ```bash
-   # Start PostgreSQL and create database
-   poetry run alembic upgrade head
-   ```
-
-6. **Run the application**
-   ```bash
-   poetry run python scripts/start.py
-   # Or directly:
-   poetry run uvicorn app.main:app --reload
-   ```
-
-The API will be available at `http://localhost:8000`
-
-### Docker Development
-
-1. **Start all services**
-   ```bash
-   docker-compose up -d
-   ```
-
-2. **Run migrations**
-   ```bash
-   docker-compose exec api alembic upgrade head
-   ```
-
-The API will be available at `http://localhost:8000`
-
-## API Documentation
-
-- **Interactive API docs**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-
-## Project Structure
-
-```
-energyexe-core-backend/
-├── app/
-│   ├── api/                 # API routes
-│   │   └── v1/
-│   │       ├── endpoints/   # API endpoints
-│   │       └── router.py    # Main router
-│   ├── core/                # Core configuration
-│   │   ├── config.py        # Settings
-│   │   ├── database.py      # Database setup
-│   │   ├── security.py      # Security utilities
-│   │   └── exceptions.py    # Exception handlers
-│   ├── models/              # Database models
-│   ├── schemas/             # Pydantic schemas
-│   ├── services/            # Business logic
-│   └── main.py              # FastAPI app
-├── alembic/                 # Database migrations
-├── tests/                   # Test suite
-├── scripts/                 # Utility scripts
-├── docker-compose.yml       # Docker services
-├── Dockerfile              # Docker build
-├── pyproject.toml          # Python project config
-└── .env.example            # Environment variables
-```
-
-## Development Commands
+Prerequisites: Python 3.11+, Poetry, PostgreSQL 15+ (or Docker for the compose stack).
 
 ```bash
-# Run tests
-poetry run pytest
+poetry install --with dev,test
+cp .env.example .env            # then fill in DATABASE_URL and any API keys you need
+poetry run alembic upgrade head
+poetry run uvicorn app.main:app --reload --port 8002   # local convention (see "Port" above)
+# or, honouring PORT from .env (default 8001):
+poetry run python scripts/start.py
+```
 
-# Run tests with coverage
+API docs: `http://localhost:8002/docs` and `/redoc` (or `:8001` if you used `scripts/start.py`
+with the default `PORT`). Health: `GET /health`.
+
+Local fixture login for the two portals: see the workspace `CLAUDE.md` ("Local Test Credentials").
+
+### Docker Compose
+
+`docker-compose.yml` runs Postgres, Valkey and the API (development image target, port **8001**).
+
+```bash
+docker compose up -d
+docker compose exec api alembic upgrade head
+curl http://localhost:8001/health
+```
+
+## Everyday commands
+
+```bash
+# Tests (SQLite in-memory via tests/conftest.py; some *_api tests expect a live server on :8001 and skip/fail without one)
+poetry run pytest
+poetry run pytest -q -k "test_name"
 poetry run pytest --cov=app
 
-# Format code
-poetry run black .
-poetry run isort .
+# Lint / format
+poetry run black app && poetry run isort app
+poetry run flake8 app && poetry run mypy app
 
-# Lint code
-poetry run flake8 .
-poetry run mypy .
-
-# Create database migration
-poetry run alembic revision --autogenerate -m "Migration message"
-
-# Apply migrations
+# Migrations — never edit an applied migration; add a new one
+poetry run alembic revision --autogenerate -m "describe the change"
 poetry run alembic upgrade head
 
-# Install pre-commit hooks
-poetry run pre-commit install
-
-# Add new dependencies
-poetry add <package-name>
-
-# Add development dependencies
-poetry add --group dev <package-name>
-
-# Update dependencies
-poetry update
-
-# Show dependency tree
-poetry show --tree
+# Makefile shortcuts: make install | migrate | run-api | test | lint | format
 ```
 
-## Environment Variables
+Note: the GitHub Actions workflows in this repo deploy; **they run no tests or linters**. Run
+`poetry run pytest` locally before pushing to `staging`.
 
-Key environment variables (see `.env.example` for complete list):
+## Project layout
 
-- `DATABASE_URL`: PostgreSQL connection string
-- `SECRET_KEY`: JWT signing key
-- `DEBUG`: Enable debug mode
-- `BACKEND_CORS_ORIGINS`: Allowed CORS origins
-
-## Testing
-
-The project includes comprehensive tests covering:
-
-- API endpoints
-- Authentication flows
-- Database operations
-- Error handling
-
-Run tests with:
-```bash
-pytest -v
+```
+app/
+├── api/v1/endpoints/   # one module per resource, mounted by app/api/v1/router.py
+├── core/               # config, database, deps (auth), middleware, observability, redis, audit
+├── cron/               # job bodies for the EventBridge-run ECS tasks (pipeline_daily.py)
+├── models/             # SQLAlchemy 2.0 models
+├── prompts/            # brain-agent system prompts; reports/<type>/<section>.txt narrative prompts
+├── scada_preview/      # isolated local-only preview API for measured SCADA runs
+├── schemas/            # Pydantic request/response schemas
+├── services/           # business logic; reports/ and opportunity_schemas/ sub-packages
+├── templates/email/    # Jinja2 transactional-email templates (Resend)
+└── utils/              # small shared helpers
+alembic/                # migrations
+infra/                  # Terraform (prod root) + infra/staging/ (staging root)
+scripts/                # seeds/, jobs/ (batch entrypoints), fixes/, operator one-offs
+tests/                  # pytest suite; tests/reference/ = vendored reference pipeline
+docs/                   # see docs/README.md
 ```
 
-## Deployment
+## Environment variables
 
-### Production with Docker
-
-```bash
-# Build production image
-docker build --target production -t energyexe-backend .
-
-# Run production container
-docker run -p 8000:8000 energyexe-backend
-```
+`.env.example` lists the variables `app/core/config.py` reads. The ones you need locally:
+`DATABASE_URL`, `SECRET_KEY`, `DEBUG`, `BACKEND_CORS_ORIGINS`; everything else (API keys,
+Resend, LLM keys, GlitchTip DSN, brain-agent DB roles) is optional and off when empty. In AWS the
+values come from Secrets Manager via the ECS task definition — never from a committed file.
 
 ## Contributing
 
-1. Install Poetry and dependencies: `poetry install --with dev,test`
-2. Install pre-commit hooks: `poetry run pre-commit install`
-3. Create feature branch: `git checkout -b feature/your-feature`
-4. Make changes and ensure tests pass: `poetry run pytest`
-5. Format code: `poetry run black . && poetry run isort .`
-6. Submit pull request
-
-## License
-
-This project is licensed under the MIT License. 
-
-Connect to db
-```bash
-psql "postgresql://postgres:RwaN9FJDCgP2AhuALxZ4Wa7QfvbKXQ647AAickORJ0rq5N6lUG19UneFJJTJ9Jnv@146.235.201.245:5432/energyexe_db"
-```
+1. Branch from `staging`; keep business logic in services and endpoints thin (see `ARCHITECTURE.md`).
+2. `poetry run pytest` locally; format with black/isort.
+3. Open a PR into `staging`. After it deploys, verify on staging, then promote with a `staging → master` merge.
+4. Record user-visible changes in the workspace `UPDATES.md`; put durable lessons in `docs/history/lessons.md`, not in session logs.

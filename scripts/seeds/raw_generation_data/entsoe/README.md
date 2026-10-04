@@ -166,10 +166,12 @@ poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
   --start 2025-10-18 --end 2025-10-18
 ```
 
-Or automate with cron:
+The daily import is **already scheduled** — an EventBridge rule (`entsoe-daily`, 22:10 UTC,
+3-day lag) calls `POST /api/v1/import-jobs/trigger/entsoe-daily`; see
+[`docs/operations/scheduled-jobs.md`](../../../../docs/operations/scheduled-jobs.md). Do not add a
+local crontab. For a manual re-run use the GitHub "Manual Data Import" workflow or:
 ```bash
-# Run daily at 6 AM to import data from 3 days ago
-0 6 * * * cd /path/to/project && poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py --start $(date -d "3 days ago" +\%Y-\%m-\%d) --end $(date -d "3 days ago" +\%Y-\%m-\%d)
+curl -X POST https://api.energyexe.com/api/v1/import-jobs/trigger/entsoe-daily
 ```
 
 ---
@@ -337,6 +339,7 @@ poetry run python scripts/seeds/raw_generation_data/entsoe/import_from_api.py \
 - `import_from_api.py` - API import script (recent data)
 - `import_parallel_optimized.py` - Excel import script (historical data)
 - `check_import_status.py` - View current data coverage
-- `clear_entsoe_data.py` - Clear all ENTSOE data (use with caution)
+- `fix_sept2024_gen_cons_swap.py` - One-off repair of the Sept-2024 generation/consumption column swap
+- (there is no per-source clear script; `../clear_generation_data_raw.py` clears **every** source — scope a manual `DELETE ... WHERE source = 'ENTSOE'` instead)
 - `data/` - Directory for Excel files
 - `README.md` - This file

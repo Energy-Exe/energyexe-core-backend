@@ -9,8 +9,8 @@ Two departures from the rest of ``/scada``, both deliberate:
   endpoint relies on the frontend's ``canAccessScada`` gate; this one holds commercial contract
   terms, so the backend requires a superuser that is ALSO flagged ``is_internal`` (EnergyExe staff,
   EPR-143). A superuser without the flag gets a 403 on every route.
-* **Writes are audited.** ``@audit_action`` is not used on SCADA endpoints today; contract data is
-  worth the audit trail. The decorator resolves ``db`` / ``request`` / ``current_user`` by kwarg name,
+* **Reads and writes are audited.** ``@audit_action`` is not used on any other SCADA endpoint; contract
+  data is worth the audit trail (see docs/features/audit-system.md). The decorator resolves ``db`` / ``request`` / ``current_user`` by kwarg name,
   so those names are load-bearing in the handler signatures below.
 * **The register is SHARED per wind farm (EPR-143, Aje 2026-09-25: "one official set of terms per
   farm").** EPR-136's per-user privacy is gone: every internal user sees and edits the same rows.

@@ -7,7 +7,7 @@ identity (so e.g. `power_curve_bins` is matched on `(curve_type, year, wind_bin)
 Pure function, no I/O beyond JSON read — easy to unit test, easy to call from a
 script that writes a markdown report.
 
-Tolerances follow the Layer-2 table in `spec-vs-implementation.md`:
+Tolerances follow the Layer-2 table in `docs/history/spec-vs-implementation.md`:
 
 | Module | Metric | Tolerance |
 |---|---|---|

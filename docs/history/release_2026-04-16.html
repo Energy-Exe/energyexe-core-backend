@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EnergyExe Release — Performance Pipeline & Opportunity Detection</title>
+<style>
+  @page { size: A4; margin: 22mm 18mm 24mm 18mm; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #1a1a1a;
+    font-size: 10.5pt;
+    line-height: 1.45;
+  }
+  h1 { font-size: 22pt; margin: 0 0 4px 0; color: #0b2e4f; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 14pt; margin: 28px 0 8px 0; color: #0b2e4f;
+    border-bottom: 1.5px solid #0b2e4f; padding-bottom: 4px;
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 11.5pt; margin: 18px 0 6px 0; color: #1a4870;
+    page-break-after: avoid;
+  }
+  h4 { font-size: 10.5pt; margin: 12px 0 4px 0; color: #2a2a2a; page-break-after: avoid; }
+  p { margin: 6px 0; }
+  ul, ol { margin: 6px 0 6px 20px; padding: 0; }
+  li { margin: 2px 0; }
+  code, kbd, pre {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 9pt;
+  }
+  code { background: #f1f3f7; padding: 1px 4px; border-radius: 3px; color: #b4324d; }
+  pre {
+    background: #f7f8fa;
+    border: 1px solid #e3e6ec;
+    border-left: 3px solid #4a7fbf;
+    padding: 8px 12px;
+    border-radius: 3px;
+    overflow-x: auto;
+    page-break-inside: avoid;
+    line-height: 1.35;
+  }
+  pre code { background: transparent; color: #1a1a1a; padding: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8px 0;
+    page-break-inside: avoid;
+    font-size: 9.5pt;
+  }
+  th, td {
+    border: 1px solid #d4d8df;
+    padding: 5px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #eef1f6; font-weight: 600; color: #0b2e4f; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .meta { color: #666; font-size: 10pt; margin-bottom: 20px; }
+  .callout {
+    background: #fff8e6;
+    border-left: 3px solid #f0a500;
+    padding: 8px 12px;
+    margin: 12px 0;
+    border-radius: 3px;
+    font-size: 10pt;
+  }
+  .callout.note { background: #eef5fb; border-left-color: #4a7fbf; }
+  .callout.success { background: #ecf8ee; border-left-color: #2c8a3a; }
+  .pill {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 8.5pt;
+    font-weight: 600;
+    margin-right: 4px;
+  }
+  .pill.confirmed { background: #fde2e2; color: #931a1a; }
+  .pill.indicative { background: #fff1d4; color: #8a5500; }
+  .pill.watch { background: #dceaf8; color: #1a4870; }
+  .ascii {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8.5pt;
+    line-height: 1.3;
+    background: #f7f8fa;
+    padding: 12px;
+    border: 1px solid #e3e6ec;
+    border-radius: 3px;
+    white-space: pre;
+    page-break-inside: avoid;
+  }
+  .toc { background: #f7f8fa; padding: 14px 20px; border-radius: 4px; margin: 18px 0 28px 0; }
+  .toc ol { margin-left: 18px; }
+  .pagebreak { page-break-before: always; }
+  .small { font-size: 9pt; color: #666; }
+  .formula {
+    background: #fefefe;
+    border: 1px dashed #c0c5cd;
+    padding: 6px 10px;
+    margin: 6px 0;
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 9.5pt;
+  }
+</style>
+</head>
+<body>
+
+<h1>EnergyExe — Performance Pipeline &amp; Opportunity Detection</h1>
+<div class="meta">
+  Release of <strong>2026&#8209;04&#8209;16</strong> &nbsp;·&nbsp;
+  Backend PR <code>Energy-Exe/energyexe-core-backend#31</code> &nbsp;·&nbsp;
+  Frontend PR <code>faisal-energyexe/energyexe-admin-ui#90</code><br>
+  Author: engineering &nbsp;·&nbsp; Audience: product, data, on&#8209;call
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li>What shipped &amp; why it matters</li>
+    <li>The 6&#8209;module performance pipeline</li>
+    <li>Opportunity detection (6 schemas)</li>
+    <li>Data model (5 new tables)</li>
+    <li>The "Phantom OK" backfill story &amp; root&#8209;cause fix</li>
+    <li>Frontend &mdash; opportunities UI</li>
+    <li>API surface</li>
+    <li>What's deployed today</li>
+  </ol>
+</div>
+
+<h2>1. What shipped &amp; why it matters</h2>
+
+<p>
+This release implements the full <strong>Asset Prioritisation</strong> spec end&#8209;to&#8209;end:
+a quantitative engine that converts raw hourly generation, wind, and price data into a ranked
+list of <em>commercial opportunities</em> per windfarm &mdash; e.g. <em>"this asset is losing
+~&euro;180k/yr to seasonal performance gaps with a confirmed structural cause"</em>.
+</p>
+
+<p>Before this release we could see <em>data</em>. After this release we can see <em>actions</em>.</p>
+
+<table>
+<tr><th>Capability</th><th>Before</th><th>After</th></tr>
+<tr><td>Empirical power curves</td><td>None</td><td>Per&#8209;windfarm, per&#8209;year, P50 / P10 / overall</td></tr>
+<tr><td>Underperformance loss in MWh / EUR</td><td>Not quantified</td><td>Per hour, monthly &amp; yearly aggregates</td></tr>
+<tr><td>Wind&#8209;normalised performance index</td><td>None</td><td>Hourly ratios &rarr; monthly index vs long&#8209;run mean</td></tr>
+<tr><td>Long&#8209;run degradation trend</td><td>None</td><td>OLS slope &plusmn; 95% CI per windfarm</td></tr>
+<tr><td>Constraint &amp; PPA scenario modelling</td><td>None</td><td>Constraint proxy MWh, lost EUR, PPA price sweep</td></tr>
+<tr><td>Automated opportunity flagging</td><td>None</td><td>6 schemas, 3 severity tiers, branch routing, suppression</td></tr>
+<tr><td>UI</td><td>n/a</td><td><code>/opportunities</code> page with summary cards, filters, expandable detail</td></tr>
+</table>
+
+<div class="callout success">
+<strong>State today (2026&#8209;04&#8209;16):</strong> 360 windfarms with full pipeline data
+(98 first pass + 131 retried + 131 re&#8209;processed after the root&#8209;cause fix).
+404 opportunities currently active.
+</div>
+
+<h2>2. The 6&#8209;module performance pipeline</h2>
+
+<p>
+Each module is a class in <code>app/services/</code>. The orchestrator
+(<code>PerformancePipelineService</code>) walks them in order, sharing a single in&#8209;memory
+hourly DataFrame so we don't re&#8209;query the database per stage.
+</p>
+
+<div class="ascii">
+                  &#9660; per windfarm
+   _load_hourly_data &mdash; ONE SQL pull (gen + weather + price)
+                  &#9660;
+   &#9484;&#9472; Module 1 &mdash; Hard plausibility filters (wind, p_pu range)
+   &#9474;
+   &#9500; Module 2 &mdash; Bin statistics &rarr; yearly raw curves
+   &#9474;              &rarr; flag overperformance &rarr; capability curves
+   &#9474;              &rarr; overall_clean curve     [&rarr; power_curve_bins]
+   &#9474;
+   &#9500; Module 3 &mdash; Classify each hour vs capability curve
+   &#9474;              &rarr; underperf / overperf / normal
+   &#9474;              &rarr; lost_mwh, lost_eur, run grouping
+   &#9474;              &rarr; monthly &amp; yearly ODI    [&rarr; performance_anomalies,
+   &#9474;                                              performance_summaries]
+   &#9474;
+   &#9500; Module 4 &mdash; norm_ratio = actual_mw / expected_mw
+   &#9474;              &rarr; monthly &amp; yearly index vs long&#8209;run mean
+   &#9474;                                            [&rarr; performance_summaries]
+   &#9474;
+   &#9500; Module 5 &mdash; OLS trend on monthly residuals (operational wind 4&ndash;14 m/s)
+   &#9474;              &rarr; slope %/yr, R&sup2;, p&#8209;value, 95% CI
+   &#9474;                                            [&rarr; degradation_results]
+   &#9474;
+   &#9492; Module 6 &mdash; Constraint proxy, PPA scenarios
+                                                [&rarr; performance_summaries]
+</div>
+
+<h3>Module 1 &mdash; Data cleaning</h3>
+<p>
+Hard plausibility filters drop physically impossible rows before any statistics are computed.
+The thresholds are conservative on purpose &mdash; we want to remove sensor errors and capacity
+breaches without hiding real underperformance.
+</p>
+<table>
+<tr><th>Variable</th><th>Allowed range</th><th>Comment</th></tr>
+<tr><td><code>wind_speed</code></td><td>0&ndash;40 m/s</td><td>Above 40 m/s = sensor fault or storm shutdown</td></tr>
+<tr><td><code>p_pu</code> (= MWh / rated MW)</td><td>&minus;0.05 to 1.20</td><td>Slight negatives allowed (auxiliary load); &gt;1.20 = data error</td></tr>
+<tr><td>For curve building</td><td>2&ndash;25 m/s wind</td><td>Below 2 m/s and above 25 m/s are operational edge cases</td></tr>
+</table>
+<p class="small">Source: <code>app/services/power_curve_service.py:25&ndash;35, 186&ndash;204</code></p>
+
+<h3>Module 2 &mdash; Empirical power curves</h3>
+<p>
+Wind speed is binned in 1.0 m/s steps. For each bin we compute <code>q50</code>, <code>q90</code>,
+mean, and <strong>MAD</strong> (median absolute deviation) of <code>p_pu</code>. Bins with fewer
+than 30 samples are dropped.
+</p>
+<p>
+Three curve types are stored per windfarm:
+</p>
+<ul>
+  <li><strong>raw</strong> &mdash; per year, before overperformance removal</li>
+  <li><strong>capability</strong> &mdash; per year, after overperformance removal (used by Module 3)</li>
+  <li><strong>overall_clean</strong> &mdash; one curve across all years (used by Modules 4, 6)</li>
+</ul>
+<p>Overperformance flag (a row is dropped before capability/overall computation):</p>
+<div class="formula">flag = (p_pu &gt; q90_bin + 1.5 &middot; MAD_bin)  OR  (p_pu &gt; 1.02)</div>
+<p class="small">Source: <code>app/services/power_curve_service.py:208&ndash;290</code></p>
+
+<h3>Module 3 &mdash; Anomaly detection &amp; ODI</h3>
+<p>Every hour is classified against its year's capability curve:</p>
+<table>
+<tr><th>Class</th><th>Condition</th></tr>
+<tr><td>underperformance</td><td><code>p_pu &lt; q50_bin &minus; 2.5 &middot; MAD_bin</code></td></tr>
+<tr><td>overperformance</td><td><code>p_pu &gt; q90_bin + 1.5 &middot; MAD_bin</code> OR <code>p_pu &gt; 1.02</code></td></tr>
+</table>
+
+<p>For underperformance hours, loss is quantified as:</p>
+<div class="formula">lost_mwh = max(0, q50_bin &middot; rated_mw &minus; actual_mwh)
+lost_eur = lost_mwh &middot; (PPA price if active, else hourly market price)</div>
+
+<p>
+Consecutive underperformance hours are grouped into <strong>runs</strong> (gap &gt; 1h starts a
+new run, vectorised via <code>diff().cumsum()</code>). Runs &ge; 24h are counted as
+<em>long runs</em> &mdash; a strong signal of unattended outages.
+</p>
+
+<p>Aggregates written to <code>performance_summaries</code> at month and year granularity:</p>
+<ul>
+  <li><code>odi_pct_underperf</code>, <code>odi_pct_loss_mwh</code>, <code>odi_pct_loss_eur</code></li>
+  <li><code>lost_mwh</code>, <code>expected_mwh</code>, <code>lost_eur</code>, <code>expected_revenue_eur</code></li>
+  <li><code>long_run_count</code>, <code>max_run_hours</code></li>
+</ul>
+<p class="small">Source: <code>app/services/performance_anomaly_service.py</code></p>
+
+<h3>Module 4 &mdash; Wind normalisation</h3>
+<p>
+Strips out the question <em>"was this year just less windy?"</em> from the performance signal.
+For each hour with wind &ge; 4 m/s and a valid curve lookup:
+</p>
+<div class="formula">norm_ratio = actual_mw / expected_mw
+expected_mw = curve_lookup[wind_bin] &middot; rated_mw</div>
+<p>
+Monthly average <code>norm_ratio</code> is then divided by the historical mean across all
+months and multiplied by 100. Index of <strong>100 = long&#8209;run average</strong>;
+&gt;100 means the asset over&#8209;delivered relative to its own history given that wind regime.
+</p>
+<p>Both <code>p50</code> and <code>p10</code> reference variants are stored.</p>
+<p class="small">Source: <code>app/services/wind_normalisation_service.py</code></p>
+
+<h3>Module 5 &mdash; Degradation analysis</h3>
+<p>
+Did the asset get worse over the last decade? Method:
+</p>
+<ol>
+  <li>Filter to operational wind range (4&ndash;14 m/s) and bins where the reference is &ge; 0.10 p.u.</li>
+  <li>Compute hourly residuals: <code>p_pu &minus; reference_curve_bin_p_pu</code>.</li>
+  <li>Aggregate to monthly mean residual.</li>
+  <li>Fit OLS: <code>residual ~ year_fraction</code> (<code>2020&#8209;Jul = 2020.542</code>).</li>
+  <li>Report slope, R&sup2;, p&#8209;value, 95% CI &mdash; per <code>q50</code> and <code>q90</code> reference.</li>
+</ol>
+<p>
+A statistically significant negative slope (e.g. <code>&minus;0.5%/yr</code>, p&#8209;value &lt; 0.05)
+is the quantitative evidence behind degradation&#8209;related opportunity flags.
+</p>
+<p class="small">Source: <code>app/services/degradation_service.py</code></p>
+
+<h3>Module 6 &mdash; Commercial reporting</h3>
+<p>Two outputs:</p>
+<p>
+<strong>Constraint proxy MWh:</strong> the energy <em>not produced</em> when the asset was at the P50
+curve, summed across hours where the (q90 &minus; q50) gap is positive. Read this as
+<em>"upside that's been left on the table within the asset's own statistical envelope."</em>
+</p>
+<div class="formula">constraint_proxy_mwh = &Sigma; (q90_bin &minus; q50_bin) &middot; rated_mw &middot; hours
+lost_value_eur     = constraint_proxy_mwh &middot; avg_market_price</div>
+<p>
+<strong>PPA scenarios</strong> (<code>POST /performance-pipeline/ppa-scenarios/{wf_id}</code>):
+sweep a list of EUR/MWh prices, return revenue, gap vs P50 target, and the
+<em>value of a 1% performance lift</em> at each price &mdash; useful for sales/AM conversations.
+</p>
+<p class="small">Source: <code>app/services/performance_pipeline_service.py:197&ndash;352</code></p>
+
+<h2>3. Opportunity detection &mdash; 6 schemas</h2>
+
+<p>
+The pipeline outputs feed a <strong>detector</strong> that creates <code>Opportunity</code> rows
+when patterns of concern emerge. Each opportunity has a schema (what kind), a severity
+(<span class="pill confirmed">CONFIRMED</span> <span class="pill indicative">INDICATIVE</span>
+<span class="pill watch">WATCH</span>), a branch (root&#8209;cause hypothesis A/B/C), and a
+JSONB blob of computed <code>data_slots</code> + a list of <code>missing_slots</code> that would
+strengthen the case if filled.
+</p>
+
+<table>
+<tr><th>Schema</th><th>What it flags</th><th>Trigger</th></tr>
+<tr><td><strong>OPS&#8209;01</strong> Volatile Disruptions</td><td>Months where ODI is below threshold &mdash; outage / sensor / control episodes</td><td>3+ low months = CONFIRMED, 2 = INDICATIVE, 1 = WATCH</td></tr>
+<tr><td><strong>OPS&#8209;02</strong> Performance Seasonality</td><td>Capacity factor in low&#8209;wind season &gt; high&#8209;wind season (an <em>inversion</em>)</td><td>&ge;8 pp gap and 2+ years sustained = CONFIRMED</td></tr>
+<tr><td><strong>OPS&#8209;03</strong> Contract Misalignment</td><td>OPS&#8209;01 fired AND PPA has no availability penalty &mdash; the operator has no skin in the game</td><td>Only fires if OPS&#8209;01 fired</td></tr>
+<tr><td><strong>MKT&#8209;01</strong> Low Capture Rate</td><td>Asset capture rate &gt;5 pp below zone average</td><td>&gt;10 pp = CONFIRMED, 5&ndash;10 = INDICATIVE, 2&ndash;5 = WATCH</td></tr>
+<tr><td><strong>MKT&#8209;02</strong> Storage Opportunity</td><td>MKT&#8209;01 fired AND no BESS &mdash; case for adding storage</td><td>Only fires if MKT&#8209;01 fired (currently downgraded due to missing BESS data)</td></tr>
+<tr><td><strong>MKT&#8209;03</strong> High Cannibalisation</td><td>Cannibalisation index (= 1 / capture rate) trending upward</td><td>&ge;1.20 + 2 years = CONFIRMED, &ge;1.10 = INDICATIVE, &ge;1.05 = WATCH</td></tr>
+</table>
+
+<h3>Severity, branch, suppression</h3>
+<ul>
+  <li><strong>Severity</strong> &mdash; how confident we are this is real and worth investigating now.</li>
+  <li><strong>Branch (A/B/C)</strong> &mdash; which root&#8209;cause hypothesis the data points at; helps a downstream agent decide what to investigate first.</li>
+  <li><strong>Suppression</strong> &mdash; conditions that <em>cancel</em> a flag because the financial exposure is locked. E.g. a long&#8209;dated fixed&#8209;price PPA suppresses MKT&#8209;01 and MKT&#8209;03 because price risk is already hedged.</li>
+  <li><strong>Graceful degradation</strong> &mdash; if a key input is missing (e.g. wind resource index), severity is downgraded rather than the opportunity being silently dropped, and the missing field is added to <code>missing_slots</code>.</li>
+</ul>
+
+<h3>Cross&#8209;schema dependencies</h3>
+<div class="ascii">
+   OPS&#8209;01 (volatile)            MKT&#8209;01 (low capture)        MKT&#8209;03 (cannibalisation)
+       &#9474;                            &#9474;                            (independent)
+       &#9492;&#8594; OPS&#8209;03 (contract mis)   &#9492;&#8594; MKT&#8209;02 (storage case)
+</div>
+<p>
+The active opportunity per <code>(windfarm_id, schema_code)</code> is unique
+(partial unique index <code>WHERE status = 'ACTIVE'</code>). Re&#8209;running detection
+<em>supersedes</em> the prior active row instead of duplicating it.
+</p>
+<p class="small">Source: <code>app/services/opportunity_detection_service.py</code> (single ~880&#8209;line file containing all 6 schemas + pure&#8209;static helpers for severity/branch/suppression)</p>
+
+<h2>4. Data model &mdash; 5 new tables</h2>
+
+<table>
+<tr><th>Table</th><th>Grain</th><th>Purpose</th></tr>
+<tr><td><code>power_curve_bins</code></td><td>(windfarm, year, curve_type, wind_bin)</td><td>Stored empirical curves &mdash; q50/q90/mean/MAD per bin</td></tr>
+<tr><td><code>performance_anomalies</code></td><td>(windfarm, hour) &mdash; flagged hours only</td><td>Per&#8209;hour underperf/overperf with lost MWh + EUR + run_id</td></tr>
+<tr><td><code>performance_summaries</code></td><td>(windfarm, period_type, year, month)</td><td>Wide table: ODI + normalisation + commercial columns share rows</td></tr>
+<tr><td><code>degradation_results</code></td><td>(windfarm, reference_curve)</td><td>OLS regression result per windfarm</td></tr>
+<tr><td><code>opportunities</code></td><td>(windfarm, schema_code) ACTIVE&#8209;unique</td><td>Detector output, lifecycle: ACTIVE&rarr;ACKNOWLEDGED&rarr;RESOLVED, plus SUPERSEDED on re&#8209;run</td></tr>
+</table>
+
+<p>Plus four new columns on <code>ppas</code>: <code>contract_type</code>, <code>ppa_status</code>,
+<code>ppa_price_eur_mwh</code>, <code>has_availability_penalties</code> &mdash; needed for
+opportunity suppression and OPS&#8209;03 contract&#8209;misalignment logic.</p>
+
+<p>Three migrations:</p>
+<ul>
+  <li><code>b064d48e436b</code> &mdash; PPA fields + opportunities table (idempotent CREATE&#8209;IF&#8209;NOT&#8209;EXISTS)</li>
+  <li><code>788b2ee80007</code> &mdash; the 4 pipeline tables</li>
+  <li><code>d7f91a2b3c4e</code> &mdash; widen <code>degradation_results</code> numeric precision (see &sect;5)</li>
+</ul>
+
+<h2>5. The "Phantom OK" backfill story</h2>
+
+<p>
+The first end&#8209;to&#8209;end run processed 1,468 windfarms in ~8.6 hours. 1,168 hit
+NaN wind data (separate issue, see remaining&#8209;work doc), but a smaller, more puzzling failure
+emerged: 121 windfarms <em>logged success</em> with full result counts &mdash; yet zero rows
+landed in the database for them.
+</p>
+
+<h3>Root cause: a single multi&#8209;source SQL join</h3>
+<p>
+The original <code>_load_hourly_data</code> joined three tables in one query:
+</p>
+<pre><code>SELECT g.hour, g.generation_mwh, w.wind_speed_100m, p.day_ahead_price
+FROM generation_data g
+LEFT JOIN weather_data w ON w.hour = g.hour AND w.windfarm_id = g.windfarm_id
+LEFT JOIN price_data   p ON p.hour = g.hour AND p.windfarm_id = g.windfarm_id
+WHERE g.windfarm_id = :wf_id;</code></pre>
+<p>
+On UK windfarms with multiple <em>generation_units</em> per windfarm <em>and</em> multiple
+price <em>sources</em> per hour (ENTSOE + ELEXON), the join Cartesian&#8209;exploded:
+the same hour was emitted up to 6&times;. Subsequent INSERTs into
+<code>performance_anomalies</code> tripped the
+<code>uq_perf_anomaly_wf_hour</code> constraint &mdash; a
+<code>UniqueViolationError</code>. asyncpg's transaction was silently aborted, so:
+</p>
+<ul>
+  <li>The job code's <code>try/except</code> didn't see anything &mdash; the error fired during commit, not during business logic.</li>
+  <li>The <code>logger.info("OK ...")</code> line had already executed.</li>
+  <li>The connection pool returned a poisoned connection to the next windfarm in the same worker.</li>
+</ul>
+<p>And the planner had its own problems: when wide enough joins were attempted on full&#8209;history windfarms, EXPLAIN estimated <strong>1.37 billion rows</strong> and the query stalled past 15 minutes.</p>
+
+<h3>The fix</h3>
+<p>
+Replace the 3&#8209;way join with three single&#8209;table aggregations + pandas merge.
+Each sub&#8209;query is a single <code>windfarm_id</code> index scan with a <code>GROUP BY hour</code>:
+</p>
+<pre><code># 1) Generation &mdash; aggregate across units
+SELECT hour,
+       SUM(generation_mwh) AS generation_mwh,
+       BOOL_OR(is_ramp_up) AS any_ramp_up
+FROM generation_data
+WHERE windfarm_id = :wf_id
+GROUP BY hour HAVING BOOL_OR(is_ramp_up) = false
+
+# 2) Weather &mdash; AVG across duplicates
+SELECT hour, AVG(wind_speed_100m) AS wind_speed
+FROM weather_data WHERE windfarm_id = :wf_id GROUP BY hour
+
+# 3) Price &mdash; AVG across sources
+SELECT hour, AVG(day_ahead_price) AS market_price
+FROM price_data WHERE windfarm_id = :wf_id GROUP BY hour
+
+# Then in pandas:
+df = df_gen.merge(df_wx, on="hour", how="inner") \
+           .merge(df_px, on="hour", how="left")</code></pre>
+
+<p>Other defensive changes that landed in the same PR:</p>
+<ul>
+  <li><strong>Per&#8209;module SAVEPOINTs</strong> via <code>self.db.begin_nested()</code> &mdash; one bad year of anomaly detection no longer poisons the whole pipeline transaction.</li>
+  <li><strong>Bulk <code>INSERT ... ON CONFLICT DO UPDATE</code></strong> in <code>_store_summaries</code> / <code>_store_normalisation</code> / commercial update &mdash; cuts ~780 round&#8209;trips per windfarm to ~4.</li>
+  <li><strong>Vectorised <code>assign_run_ids</code></strong> with <code>diff()/cumsum()</code> &mdash; replaced a Python loop.</li>
+  <li><strong>Widened <code>degradation_results</code> numeric precision</strong> &mdash; an OLS intercept of <em>(&minus;slope &middot; 2020)</em> overflowed <code>Numeric(8,6)</code>.</li>
+  <li><strong>Final <code>await db.flush()</code></strong> at the end of <code>run_pipeline</code> &mdash; surfaces any remaining issue loudly instead of silently rolling back at commit time.</li>
+</ul>
+
+<div class="callout success">
+After the fix, all 131 windfarms re&#8209;processed cleanly. DB now has <strong>360 windfarms</strong>
+with full pipeline data, 40k power curve bins, 954k anomaly rows, 15k summary rows,
+253 degradation results.
+</div>
+
+<h2>6. Frontend &mdash; opportunities UI</h2>
+
+<p>
+A new route at <code>/opportunities</code> (<code>src/routes/_protected/opportunities/index.tsx</code>):
+</p>
+<ul>
+  <li><strong>Three summary cards</strong> at the top: counts of CONFIRMED / INDICATIVE / WATCH (across all matching, not just current page).</li>
+  <li><strong>Filters</strong>: schema, severity, status (default excludes <code>SUPERSEDED</code>).</li>
+  <li><strong>Manual trigger</strong>: "Run Detection" button hits <code>POST /opportunities/detect</code> and toasts the result.</li>
+  <li><strong>Expandable rows</strong>: each row shows the windfarm, schema label, severity badge, branch, status. Clicking expands to show <code>data_slots</code> as a key&#8209;value grid and <code>missing_slots</code> as small badges.</li>
+  <li><strong>Lifecycle</strong>: in&#8209;line "Acknowledge" and "Resolve" buttons call <code>PATCH /opportunities/{id}</code>.</li>
+</ul>
+
+<p>
+API client lives in <code>src/lib/opportunities-api.ts</code> &mdash; thin wrapper over the
+existing <code>apiClient</code> with typed responses.
+</p>
+
+<h2>7. API surface</h2>
+
+<table>
+<tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
+<tr><td>POST</td><td><code>/api/v1/performance-pipeline/run</code></td><td>Run pipeline for all or specified windfarms</td></tr>
+<tr><td>GET</td><td><code>/api/v1/performance-pipeline/power-curves/{wf_id}</code></td><td>Get curve bins (yearly or overall)</td></tr>
+<tr><td>GET</td><td><code>/api/v1/performance-pipeline/odi/{wf_id}</code></td><td>Get ODI metrics (monthly/yearly)</td></tr>
+<tr><td>GET</td><td><code>/api/v1/performance-pipeline/normalisation/{wf_id}</code></td><td>Get wind&#8209;normalised indices</td></tr>
+<tr><td>GET</td><td><code>/api/v1/performance-pipeline/degradation/{wf_id}</code></td><td>Get OLS trend results</td></tr>
+<tr><td>GET</td><td><code>/api/v1/performance-pipeline/anomalies/{wf_id}</code></td><td>Get hourly anomaly records</td></tr>
+<tr><td>GET</td><td><code>/api/v1/performance-pipeline/summary/{wf_id}</code></td><td>Get unified summary (ODI + norm + commercial)</td></tr>
+<tr><td>POST</td><td><code>/api/v1/performance-pipeline/ppa-scenarios/{wf_id}</code></td><td>Sweep PPA prices, get revenue + 1% lift value</td></tr>
+<tr><td>POST</td><td><code>/api/v1/opportunities/detect</code></td><td>Run detection job</td></tr>
+<tr><td>GET</td><td><code>/api/v1/opportunities</code></td><td>List with filters, paged, includes severity summary</td></tr>
+<tr><td>GET</td><td><code>/api/v1/opportunities/{id}</code></td><td>Get one with windfarm name</td></tr>
+<tr><td>PATCH</td><td><code>/api/v1/opportunities/{id}</code></td><td>Acknowledge or resolve</td></tr>
+</table>
+
+<p>All endpoints require an authenticated user. Detection and pipeline endpoints are sync today (run inside the request) &mdash; that's fine for individual&#8209;windfarm operations from the UI but should move to a background job for full&#8209;portfolio sweeps once the cron lands.</p>
+
+<h2>8. What's deployed today</h2>
+
+<table>
+<tr><th>Object</th><th>Count</th></tr>
+<tr><td>Windfarms with full pipeline data</td><td>360</td></tr>
+<tr><td><code>power_curve_bins</code></td><td>~40,000</td></tr>
+<tr><td><code>performance_anomalies</code></td><td>~954,000</td></tr>
+<tr><td><code>performance_summaries</code></td><td>~15,000</td></tr>
+<tr><td><code>degradation_results</code></td><td>253</td></tr>
+<tr><td><code>opportunities</code> (active)</td><td>404 (CONFIRMED 7, INDICATIVE 85, WATCH 312)</td></tr>
+</table>
+
+<p><strong>Country coverage:</strong> Norway 61, UK 18, Denmark 7, Taiwan 6, Belgium 5, Netherlands 1
+&mdash; concentrated on Europe because of an upstream ERA5 weather data gap covered in
+the companion <em>Remaining Work &amp; Test Plan</em> document.</p>
+
+<p><strong>Backend brain agent</strong> was also taught about the four new tables
+(<code>app/prompts/brain_agent_system.md</code> +
+<code>app/services/brain_agent_skill_files.py</code>) so users can ask conversational
+questions like <em>"which assets in NO1 had &gt;3% lost MWh last year?"</em> and the agent
+will know which tables to query.</p>
+
+<div class="callout note">
+<strong>Reading list for engineers joining this area:</strong><br>
+1. <code>app/services/performance_pipeline_service.py</code> &mdash; orchestrator (start here)<br>
+2. <code>app/services/power_curve_service.py</code> &mdash; data load + Modules 1&ndash;2<br>
+3. <code>app/services/opportunity_detection_service.py</code> &mdash; all 6 detector schemas<br>
+4. <code>docs/pipeline_backfill_investigation_2026-04-16.md</code> &mdash; the full debugging log
+</div>
+
+</body>
+</html>
