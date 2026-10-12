@@ -2102,28 +2102,15 @@ class BrainAgentService:
         )
         prompt = prompt.replace("{{USER_ID}}", str(user_id) if user_id is not None else "")
 
-        # Inject the actual absolute repo paths so the agent knows where to look
+        # Inject the actual absolute repo path so the agent knows where to look.
+        # Backend only: the frontend repos are no longer exposed (2026-10-12).
         if repo_dirs:
-            repo_lines = []
-            for d in repo_dirs:
-                name = Path(d).name
-                # In Docker the backend is at /app/ — label it clearly
-                if name == "app" or d.endswith("energyexe-core-backend"):
-                    repo_lines.append(
-                        f"- **Backend**: `{d}` — FastAPI backend (Python). "
-                        f"Key dirs: `{d}/app/api/`, `{d}/app/services/`, `{d}/app/models/`, `{d}/app/core/`"
-                    )
-                elif "admin-ui" in name:
-                    repo_lines.append(
-                        f"- **Admin UI**: `{d}` — Admin dashboard (React + TypeScript). "
-                        f"Key dirs: `{d}/src/routes/`, `{d}/src/components/`, `{d}/src/lib/`, `{d}/src/hooks/`"
-                    )
-                elif "client-ui" in name:
-                    repo_lines.append(
-                        f"- **Client UI**: `{d}` — Client-facing UI (React + TypeScript). "
-                        f"Key dirs: `{d}/src/routes/`, `{d}/src/components/`, `{d}/src/lib/`"
-                    )
-            repo_block = "\n".join(repo_lines) if repo_lines else "No repositories available."
+            repo_lines = [
+                f"- **Backend**: `{d}` — FastAPI backend (Python). "
+                f"Key dirs: `{d}/app/api/`, `{d}/app/services/`, `{d}/app/models/`, `{d}/app/core/`"
+                for d in repo_dirs
+            ]
+            repo_block = "\n".join(repo_lines)
         else:
             repo_block = (
                 "No repositories available — code exploration is not possible in this session."
