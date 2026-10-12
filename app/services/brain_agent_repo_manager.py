@@ -18,9 +18,11 @@ from app.core.config import get_settings
 logger = structlog.get_logger(__name__)
 
 # Repos to clone in production (backend is already in the container)
+# The UI repos moved to the Energy-Exe org on 2026-10-12 (the faisal-energyexe
+# copies are archived). GITHUB_TOKEN must be able to read the org repos.
 _FRONTEND_REPOS = [
-    ("faisal-energyexe/energyexe-admin-ui", "energyexe-admin-ui"),
-    ("faisal-energyexe/energyexe-client-ui", "energyexe-client-ui"),
+    ("Energy-Exe/energyexe-admin-ui", "energyexe-admin-ui"),
+    ("Energy-Exe/energyexe-client-ui", "energyexe-client-ui"),
 ]
 
 # Backend repo directory name (for sibling detection in dev)
@@ -45,10 +47,9 @@ def _is_dev_mode() -> bool:
     backend_root = _find_backend_root()
     parent = backend_root.parent
     # In dev, the parent contains all three repos as siblings
-    return (
-        (parent / "energyexe-admin-ui" / "src").exists()
-        and (parent / "energyexe-client-ui" / "src").exists()
-    )
+    return (parent / "energyexe-admin-ui" / "src").exists() and (
+        parent / "energyexe-client-ui" / "src"
+    ).exists()
 
 
 def ensure_repos() -> None:
@@ -89,7 +90,11 @@ def ensure_repos() -> None:
             if dest.exists():
                 # Verify checkout is healthy (src/ should exist for frontend repos)
                 if not (dest / "src").exists():
-                    logger.warning("brain_agent_repo_broken", repo=dir_name, msg="Missing src/ — removing and re-cloning")
+                    logger.warning(
+                        "brain_agent_repo_broken",
+                        repo=dir_name,
+                        msg="Missing src/ — removing and re-cloning",
+                    )
                     shutil.rmtree(dest, ignore_errors=True)
                 else:
                     logger.info("brain_agent_repo_exists", repo=dir_name, path=str(dest))
@@ -109,8 +114,10 @@ def ensure_repos() -> None:
             try:
                 subprocess.run(
                     [
-                        "git", "clone",
-                        "--depth", "1",
+                        "git",
+                        "clone",
+                        "--depth",
+                        "1",
                         "--single-branch",
                         clone_url,
                         str(dest),
