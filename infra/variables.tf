@@ -191,11 +191,11 @@ variable "frontend_certificate_arn" {
 variable "github_admin_ui_repo" {
   description = "owner/repo of the admin-ui; its master branch may deploy to the prod admin bucket + invalidate its CloudFront dist."
   type        = string
-  default     = "faisal-energyexe/energyexe-admin-ui"
+  default     = "Energy-Exe/energyexe-admin-ui"
 }
 
 variable "github_client_ui_repo" {
   description = "owner/repo of the client-ui; its main branch may deploy to the prod client bucket + invalidate its CloudFront dist."
   type        = string
-  default     = "faisal-energyexe/energyexe-client-ui"
+  default     = "Energy-Exe/energyexe-client-ui"
 }

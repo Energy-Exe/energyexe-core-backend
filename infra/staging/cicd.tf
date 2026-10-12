@@ -74,8 +74,8 @@ resource "aws_iam_role_policy" "backend_deploy" {
 
 # --- Frontends: sync the built SPA to its staging bucket + invalidate CloudFront ---
 # One role per frontend repo, each trust-pinned to that repo's `staging` branch
-# and scoped to ITS bucket + distribution only. The active frontend repos live
-# under faisal-energyexe (the Energy-Exe org copies are stale).
+# and scoped to ITS bucket + distribution only. The frontend repos live under
+# the Energy-Exe org since 2026-10-12 (the faisal-energyexe copies are retired).
 
 locals {
   frontend_repos = {
