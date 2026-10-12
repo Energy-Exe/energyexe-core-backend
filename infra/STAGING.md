@@ -229,7 +229,7 @@ so keep the old digest handy.
   workflows present on the default branch).
 - **Image bootstrap:** the very first staging task ran the **prod image** copied into the staging
   ECR, so staging was live before CI existed.
-- **Frontends:** each repo (`faisal-energyexe/energyexe-{admin,client}-ui`) has its own
+- **Frontends:** each repo (`Energy-Exe/energyexe-{admin,client}-ui`; moved from `faisal-energyexe` on 2026-10-12) has its own
   `deploy-staging.yml` (on push to `staging`): `pnpm build` with
   `VITE_API_URL=https://staging-api.energyexe.com/api/v1` → `aws s3 sync dist/ --delete` →
   CloudFront invalidation. Each assumes its **own** OIDC role (`energyexe-staging-{admin,client}-ui-github-deploy`),
@@ -365,9 +365,9 @@ restore a new instance (don't rely on in-place replace — `snapshot_identifier`
 
 **Tear down staging:** `terraform destroy` in `infra/staging/` (separate state ⇒ prod is untouched).
 
-**Deploy a staging frontend:** push to the `staging` branch of `faisal-energyexe/energyexe-admin-ui`
+**Deploy a staging frontend:** push to the `staging` branch of `Energy-Exe/energyexe-admin-ui`
 or `…-client-ui` → its `deploy-staging.yml` builds + syncs to S3 + invalidates CloudFront. Watch:
-`gh run list --repo faisal-energyexe/energyexe-admin-ui --branch staging`.
+`gh run list --repo Energy-Exe/energyexe-admin-ui --branch staging`.
 
 **Add a new frontend host on AWS:** add the cert ARN var, apply phase 1 (S3 + CloudFront + cert),
 add the validation CNAME at hyp.net, set the cert ARN var + re-apply (phase 2 attaches the alias),
