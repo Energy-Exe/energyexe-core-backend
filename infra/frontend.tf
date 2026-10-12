@@ -1,8 +1,8 @@
 # Production frontends on AWS — private S3 (OAC) + CloudFront, one stack per UI,
 # replacing Vercel. Mirrors the proven staging pilot (infra/staging/frontend.tf):
 #
-#   dashboard.energyexe.com -> admin-ui   (deploys from faisal-energyexe/energyexe-admin-ui, branch master)
-#   app.energyexe.com       -> client-ui  (deploys from faisal-energyexe/energyexe-client-ui, branch main)
+#   dashboard.energyexe.com -> admin-ui   (deploys from Energy-Exe/energyexe-admin-ui, branch master)
+#   app.energyexe.com       -> client-ui  (deploys from Energy-Exe/energyexe-client-ui, branch main)
 #
 # Why Vercel is being replaced: its GitHub push webhooks for production merges
 # are unreliable (missed twice on 2026-08-17 alone, each needing an empty-commit
