@@ -10,9 +10,6 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import structlog
-from sqlalchemy import select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -28,6 +25,8 @@ from claude_agent_sdk import (
     get_session_messages,
 )
 from claude_agent_sdk.types import StreamEvent
+from sqlalchemy import select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.agent_access import require_fresh_agent_access
 from app.core.config import get_settings
@@ -35,11 +34,6 @@ from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
 from app.services.brain_agent_files import attach_run_files, merge_images_by_turn
 from app.services.brain_agent_hooks import make_pre_tool_use_hook
-from app.services.brain_agent_uploads import (
-    UPLOAD_MANIFEST,
-    build_attachment_note,
-    read_upload_manifest,
-)
 from app.services.brain_agent_skill_files import (
     CHART_STYLE_PY,
     REPORT_PDF_PY,
@@ -49,6 +43,11 @@ from app.services.brain_agent_skill_files import (
     SKILL_SCADA_QUERIES,
     SKILL_SCHEMA,
     SKILL_SOURCES,
+)
+from app.services.brain_agent_uploads import (
+    UPLOAD_MANIFEST,
+    build_attachment_note,
+    read_upload_manifest,
 )
 
 logger = structlog.get_logger(__name__)
@@ -193,8 +192,7 @@ def derive_terminal_info(result_message: Any) -> Dict[str, Any]:
         kind = "api_error"
         if api_error_status == 529:
             reason_message = (
-                "The AI service is temporarily overloaded. Please try again "
-                "in a moment."
+                "The AI service is temporarily overloaded. Please try again " "in a moment."
             )
         else:
             reason_message = (
@@ -224,7 +222,18 @@ def derive_terminal_info(result_message: Any) -> Dict[str, Any]:
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif"}
 
 # Files placed in the sandbox at session creation — skip when scanning for agent output
-SANDBOX_SEED_FILES = {"db.py", "eexe_style.py", "report_pdf.py", "skill_schema.md", "skill_queries.md", "skill_domain.md", "skill_sources.md", "skill_methodology.md", "skill_scada.md", "skill_scada_queries.md"}
+SANDBOX_SEED_FILES = {
+    "db.py",
+    "eexe_style.py",
+    "report_pdf.py",
+    "skill_schema.md",
+    "skill_queries.md",
+    "skill_domain.md",
+    "skill_sources.md",
+    "skill_methodology.md",
+    "skill_scada.md",
+    "skill_scada_queries.md",
+}
 
 # Working file extensions — scripts the agent writes to execute, not user-facing output
 WORKING_FILE_EXTENSIONS = {".py", ".sh", ".bash", ".sql"}
@@ -383,9 +392,7 @@ class BrainAgentService:
 
                     existing_cost = (
                         await self.db.execute(
-                            select(AgentThread.total_cost_usd).where(
-                                AgentThread.id == session_id
-                            )
+                            select(AgentThread.total_cost_usd).where(AgentThread.id == session_id)
                         )
                     ).scalar_one_or_none()
                     if existing_cost is not None and float(existing_cost) >= thread_budget:
@@ -546,9 +553,15 @@ class BrainAgentService:
                     yield SSEEvent(
                         event_type="result",
                         data={
-                            "num_turns": result_message.num_turns if hasattr(result_message, "num_turns") else 0,
-                            "duration_ms": result_message.duration_ms if hasattr(result_message, "duration_ms") else 0,
-                            "cost_usd": result_message.total_cost_usd if hasattr(result_message, "total_cost_usd") else None,
+                            "num_turns": result_message.num_turns
+                            if hasattr(result_message, "num_turns")
+                            else 0,
+                            "duration_ms": result_message.duration_ms
+                            if hasattr(result_message, "duration_ms")
+                            else 0,
+                            "cost_usd": result_message.total_cost_usd
+                            if hasattr(result_message, "total_cost_usd")
+                            else None,
                             "session_id": session_id,
                             "messages": final_messages,
                             "subtype": terminal_info["subtype"],
@@ -650,11 +663,7 @@ class BrainAgentService:
             # the lock (started_run False) must not clear another run's state —
             # that was the original EPR-98 hole.
             s = self._sessions.get(session_id)
-            if (
-                started_run
-                and s is not None
-                and (s.detach_task is None or s.detach_task.done())
-            ):
+            if started_run and s is not None and (s.detach_task is None or s.detach_task.done()):
                 s.is_busy = False
                 s.current_message_id = None
                 s.current_prompt = None
@@ -699,12 +708,14 @@ class BrainAgentService:
 
                 content = "\n\n".join(text_parts).strip()
                 if content:
-                    messages.append({
-                        "id": sm.uuid,
-                        "type": "user",
-                        "content": content,
-                        "timestamp": int(time.time() * 1000),
-                    })
+                    messages.append(
+                        {
+                            "id": sm.uuid,
+                            "type": "user",
+                            "content": content,
+                            "timestamp": int(time.time() * 1000),
+                        }
+                    )
 
             elif sm.type == "assistant":
                 # Extract text and tool calls from assistant message
@@ -717,12 +728,14 @@ class BrainAgentService:
                         if block_type == "text":
                             text_parts.append(block.get("text", ""))
                         elif block_type == "tool_use":
-                            tool_calls.append({
-                                "tool_name": block.get("name", ""),
-                                "tool_id": block.get("id", ""),
-                                "input": block.get("input", {}),
-                                "isLoading": False,
-                            })
+                            tool_calls.append(
+                                {
+                                    "tool_name": block.get("name", ""),
+                                    "tool_id": block.get("id", ""),
+                                    "input": block.get("input", {}),
+                                    "isLoading": False,
+                                }
+                            )
 
                 # Double newline: single "\n" is a markdown soft-break and the
                 # blocks are separate paragraphs (typically split by tool use).
@@ -773,7 +786,11 @@ class BrainAgentService:
                                 if tc.get("tool_id") == tool_use_id:
                                     full_length = len(str(result_content))
                                     is_truncated = full_length > 2000
-                                    tc["result"] = (str(result_content)[:2000] + "...") if is_truncated else str(result_content)
+                                    tc["result"] = (
+                                        (str(result_content)[:2000] + "...")
+                                        if is_truncated
+                                        else str(result_content)
+                                    )
                                     tc["isError"] = is_error
                                     tc["isLoading"] = False
 
@@ -826,9 +843,7 @@ class BrainAgentService:
         from app.models.agent_thread import AgentThread
 
         try:
-            result = await self.db.execute(
-                select(AgentThread).where(AgentThread.id == session_id)
-            )
+            result = await self.db.execute(select(AgentThread).where(AgentThread.id == session_id))
             thread = result.scalar_one_or_none()
 
             # Derive title from first user message
@@ -837,11 +852,7 @@ class BrainAgentService:
             if first_user:
                 title = first_user.get("content", "")[:80]
 
-            delta = (
-                Decimal(str(round(cost_delta_usd, 4)))
-                if cost_delta_usd is not None
-                else None
-            )
+            delta = Decimal(str(round(cost_delta_usd, 4))) if cost_delta_usd is not None else None
 
             if thread:
                 thread.messages = messages
@@ -917,9 +928,7 @@ class BrainAgentService:
         # Use the SDK's internal session_id (from ResultMessage), NOT our
         # session_id — they are different.
         sdk_session_id = (
-            result_message.session_id
-            if hasattr(result_message, "session_id")
-            else session_id
+            result_message.session_id if hasattr(result_message, "session_id") else session_id
         )
         work_dir = Path(f"/tmp/brain-agent/{user_id}/{session_id}")
         final_messages: List[Dict[str, Any]] = []
@@ -962,7 +971,9 @@ class BrainAgentService:
                 )
                 final_messages = self._convert_sdk_messages(sdk_messages)
             except Exception as e:
-                logger.error("brain_agent_get_session_messages_error", error=str(e), session_id=session_id)
+                logger.error(
+                    "brain_agent_get_session_messages_error", error=str(e), session_id=session_id
+                )
                 final_messages = []
             if _tail_has_answer(final_messages):
                 tail_ok = True
@@ -1024,7 +1035,22 @@ class BrainAgentService:
                 # marker to whatever is already saved (or create the thread
                 # with just the marker on a failed very first turn). Saving
                 # also clears the advisory is_streaming flag.
-                carrier = attach_run_files([{"type": "assistant", "content": "", "id": f"files-{uuid.uuid4()}", "timestamp": now_ms}], run_files, now_ms=now_ms) if run_files else []
+                carrier = (
+                    attach_run_files(
+                        [
+                            {
+                                "type": "assistant",
+                                "content": "",
+                                "id": f"files-{uuid.uuid4()}",
+                                "timestamp": now_ms,
+                            }
+                        ],
+                        run_files,
+                        now_ms=now_ms,
+                    )
+                    if run_files
+                    else []
+                )
                 final_messages = [*await _stored(), *carrier, marker]
         else:
             final_messages = attach_run_files(final_messages, run_files, now_ms=now_ms)
@@ -1090,9 +1116,7 @@ class BrainAgentService:
             return []
 
     @staticmethod
-    def _terminal_marker(
-        result_message: Any, terminal_info: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _terminal_marker(result_message: Any, terminal_info: Dict[str, Any]) -> Dict[str, Any]:
         """Build the terminal marker appended as a thread's final message.
 
         Shape notes (coordinated with both frontend twins):
@@ -1120,7 +1144,9 @@ class BrainAgentService:
             },
         }
 
-    async def _finish_orphaned_run(self, session: AgentSession, model: Optional[str] = None) -> None:
+    async def _finish_orphaned_run(
+        self, session: AgentSession, model: Optional[str] = None
+    ) -> None:
         """Consume a disconnected turn to completion and persist the result.
 
         Runs as a background task after the SSE consumer vanished mid-run
@@ -1206,9 +1232,7 @@ class BrainAgentService:
             from app.models.agent_thread import AgentThread
 
             await self.db.execute(
-                update(AgentThread)
-                .where(AgentThread.id == session_id)
-                .values(is_streaming=value)
+                update(AgentThread).where(AgentThread.id == session_id).values(is_streaming=value)
             )
             await self.db.commit()
         except Exception:
@@ -1255,9 +1279,7 @@ class BrainAgentService:
         session = self._sessions.get(session_id)
         if not session or session.user_id != user_id:
             return {"ended": False, "busy": False}
-        if session.is_busy or (
-            session.detach_task is not None and not session.detach_task.done()
-        ):
+        if session.is_busy or (session.detach_task is not None and not session.detach_task.done()):
             logger.info("brain_agent_end_session_deferred_busy", session_id=session_id)
             return {"ended": False, "busy": True}
         self._sessions.pop(session_id, None)
@@ -1418,6 +1440,7 @@ class BrainAgentService:
         # EPR-59: the client surface gets NO codebase access — clients must not
         # be able to read source and thereby reconstruct DB schema / internals.
         from app.services.brain_agent_repo_manager import get_repo_dirs
+
         repo_dirs_str = [] if source == "client" else get_repo_dirs()
 
         # SCADA gold layer (schema `scada`): admin surface only, and only when
@@ -1505,7 +1528,8 @@ class BrainAgentService:
         # the 2.1.220 bundled CLI: Sonnet 5, Opus 5, Sonnet 4.6 and Opus 4.6 all
         # succeed on adaptive, and Sonnet 5 / Opus 5 emit thinking blocks on a
         # multi-step analysis prompt (and skip them on trivial ones — that's the
-        # point of adaptive).
+        # point of adaptive). Sonnet 5.5 / Opus 5.5 (the current pair, 2026-10-12)
+        # cannot have thinking disabled at all, so adaptive is the only option.
         #
         # display="summarized" is what makes the reasoning readable — without it
         # the thinking blocks still arrive but their text is encrypted (verified
@@ -1737,12 +1761,12 @@ class BrainAgentService:
                 )
 
         if restored:
-            logger.info(
-                "brain_agent_uploads_restored", session_id=session_id, files=restored
-            )
+            logger.info("brain_agent_uploads_restored", session_id=session_id, files=restored)
         return restored
 
-    async def _process_message(self, message, session: AgentSession = None) -> AsyncGenerator[SSEEvent, None]:
+    async def _process_message(
+        self, message, session: AgentSession = None
+    ) -> AsyncGenerator[SSEEvent, None]:
         """Convert an Agent SDK message into SSE events."""
 
         # Handle StreamEvent for partial message streaming (character-by-character)
@@ -1877,7 +1901,10 @@ class BrainAgentService:
                     # Scan for new files after tool execution (images, CSVs, etc.)
                     if session:
                         for fname in self._scan_for_new_files(session):
-                            file_path = Path(f"/tmp/brain-agent/{session.user_id}/{session.session_id}") / fname
+                            file_path = (
+                                Path(f"/tmp/brain-agent/{session.user_id}/{session.session_id}")
+                                / fname
+                            )
                             await self._upload_file_to_s3(
                                 session.user_id, session.session_id, fname, file_path
                             )
@@ -1958,7 +1985,9 @@ class BrainAgentService:
         MAX_HISTORY_MESSAGES = 50
         MAX_HISTORY_CHARS = 100_000
 
-        trimmed = history[-MAX_HISTORY_MESSAGES:] if len(history) > MAX_HISTORY_MESSAGES else history
+        trimmed = (
+            history[-MAX_HISTORY_MESSAGES:] if len(history) > MAX_HISTORY_MESSAGES else history
+        )
 
         parts: list[str] = [
             "<conversation_history>",
@@ -2096,7 +2125,9 @@ class BrainAgentService:
                     )
             repo_block = "\n".join(repo_lines) if repo_lines else "No repositories available."
         else:
-            repo_block = "No repositories available — code exploration is not possible in this session."
+            repo_block = (
+                "No repositories available — code exploration is not possible in this session."
+            )
 
         prompt = prompt.replace("{{REPO_PATHS}}", repo_block)
         return prompt
@@ -2139,9 +2170,7 @@ async def sweep_stuck_agent_threads() -> int:
 
     factory = get_session_factory()
     async with factory() as db:
-        result = await db.execute(
-            select(AgentThread).where(AgentThread.is_streaming.is_(True))
-        )
+        result = await db.execute(select(AgentThread).where(AgentThread.is_streaming.is_(True)))
         threads = list(result.scalars().all())
         for thread in threads:
             # JSONB without MutableList: build a NEW list and reassign, an

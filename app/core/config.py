@@ -154,15 +154,15 @@ class Settings(BaseSettings):
     # Reports platform narratives (EPR-81) — deliberately independent of the
     # legacy LLM_PROVIDER/LLM_MODEL above (those default to OpenAI for the
     # retired commentary system). Reports always use Anthropic.
-    REPORTS_LLM_MODEL_SECTION: str = "claude-sonnet-5"  # per-section narratives
-    REPORTS_LLM_MODEL_SUMMARY: str = "claude-opus-5"  # action plan + exec summary
+    REPORTS_LLM_MODEL_SECTION: str = "claude-sonnet-5-5"  # per-section narratives
+    REPORTS_LLM_MODEL_SUMMARY: str = "claude-opus-5-5"  # action plan + exec summary
     REPORTS_MAX_COST_USD: float = 0.50  # hard budget per report generation run
 
     # Brain Agent default model (used as fallback when caller omits one)
     SCADA_INGESTION_ENABLED: bool = False
     BRAIN_AGENT_ACCESS_POLICY: Literal["authenticated", "superusers"] = "authenticated"
 
-    BRAIN_MODEL: str = "claude-sonnet-5"
+    BRAIN_MODEL: str = "claude-sonnet-5-5"
 
     # Brain Agent — Postgres read-only role.
     # When the password is set, the agent's bash env uses these credentials so
