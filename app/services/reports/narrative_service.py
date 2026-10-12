@@ -30,19 +30,35 @@ _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "reports"
 
 # USD per million tokens (input, output), matched by model-id prefix. Update
 # alongside model changes; per-section actuals are persisted either way.
+# Longest prefix first: "claude-opus-5" would otherwise also match "claude-opus-5-5".
 _PRICING: dict = {
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
     "claude-opus-5": (5.00, 25.00),
-    "claude-sonnet-5": (3.00, 15.00),
+    "claude-sonnet-5": (2.00, 10.00),
     "claude-haiku-4-5": (1.00, 5.00),
 }
 _DEFAULT_PRICING: Tuple[float, float] = (5.00, 25.00)
 
 _REQUEST_TIMEOUT_S = 120.0
 _MAX_ATTEMPTS = 2  # one retry on schema-invalid output
+# Adaptive thinking is always on for Opus 5.5 / Sonnet 5.5 and its tokens share
+# ``max_tokens`` with the tool call, so the per-section ceiling (which sizes the
+# narrative, not the reasoning) gets fixed headroom on top.
+_THINKING_HEADROOM_TOKENS = 4000
 
 
 class NarrativeError(Exception):
     """Generation failed for a reason worth surfacing on the section row."""
+
+
+class _NoStructuredOutput(NarrativeError):
+    """The model answered in prose instead of calling the tool (retried once)."""
+
+    def __init__(self, input_tokens: int, output_tokens: int):
+        super().__init__("Model returned no structured output")
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
 
 # ── output schemas ──────────────────────────────────────────────────────
@@ -147,22 +163,34 @@ async def _call_structured(
     input_schema: dict,
     max_tokens: int,
 ) -> Tuple[dict, int, int]:
-    """Force one tool call and return (payload, input_tokens, output_tokens)."""
+    """Ask for one tool call and return (payload, input_tokens, output_tokens).
+
+    Opus 5.5 / Sonnet 5.5 reject a forced ``tool_choice`` (``tool`` / ``any``)
+    with a 400 (verified live 2026-10-12), so the call runs with ``auto`` and the
+    instruction to call the tool is appended to the system prompt. A prose-only
+    answer raises :class:`_NoStructuredOutput` so the caller can retry once.
+    """
     client = _client()
     response = await client.messages.create(
         model=model,
-        max_tokens=max_tokens,
-        system=system,
+        max_tokens=max_tokens + _THINKING_HEADROOM_TOKENS,
+        system=(
+            system + f"\n\nRespond only by calling the `{tool_name}` tool exactly once. "
+            "Do not answer in prose."
+        ),
         messages=[{"role": "user", "content": user_content}],
         tools=[{"name": tool_name, "description": tool_description, "input_schema": input_schema}],
-        tool_choice={"type": "tool", "name": tool_name},
+        tool_choice={"type": "auto"},
     )
+    usage_in, usage_out = response.usage.input_tokens, response.usage.output_tokens
     if response.stop_reason == "max_tokens":
-        raise NarrativeError(f"Narrative truncated at {max_tokens} tokens")
+        raise NarrativeError(
+            f"Narrative truncated at {max_tokens + _THINKING_HEADROOM_TOKENS} tokens"
+        )
     block = next((b for b in response.content if b.type == "tool_use"), None)
     if block is None:
-        raise NarrativeError("Model returned no structured output")
-    return dict(block.input), response.usage.input_tokens, response.usage.output_tokens
+        raise _NoStructuredOutput(usage_in, usage_out)
+    return dict(block.input), usage_in, usage_out
 
 
 # ── section input assembly ──────────────────────────────────────────────
@@ -413,15 +441,29 @@ async def _call_with_validation(
             attempt_system += (
                 "\n\nYour previous output failed validation — fix this and try again: " + last_error
             )
-        payload, tokens_in, tokens_out = await _call_structured(
-            model,
-            attempt_system,
-            user_content,
-            tool_name,
-            tool_description,
-            input_schema,
-            max_tokens,
-        )
+        try:
+            payload, tokens_in, tokens_out = await _call_structured(
+                model,
+                attempt_system,
+                user_content,
+                tool_name,
+                tool_description,
+                input_schema,
+                max_tokens,
+            )
+        except _NoStructuredOutput as exc:
+            total_in += exc.input_tokens
+            total_out += exc.output_tokens
+            if attempt + 1 < _MAX_ATTEMPTS:
+                last_error = f"you answered in prose instead of calling the `{tool_name}` tool"
+                logger.warning(
+                    "report_narrative_no_tool_call",
+                    tool=tool_name,
+                    attempt=attempt + 1,
+                    **context,
+                )
+                continue
+            raise
         total_in += tokens_in
         total_out += tokens_out
         try:
