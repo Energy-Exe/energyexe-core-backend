@@ -179,10 +179,6 @@ class Settings(BaseSettings):
     BRAIN_AGENT_CLIENT_RO_USER: str = "brain_agent_client_ro"
     BRAIN_AGENT_CLIENT_RO_PASSWORD: str = ""
 
-    # Brain Agent — source code access for codebase exploration
-    CODE_REPOS_DIR: str = "/tmp/energyexe-repos"
-    GITHUB_TOKEN: str = ""  # PAT for cloning private repos at startup
-
     # AWS S3 for brain agent image persistence
     S3_BUCKET_NAME: str = ""  # Empty = S3 disabled (local dev)
     S3_REGION: str = "eu-north-1"  # Same region as RDS

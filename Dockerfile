@@ -68,7 +68,6 @@ COPY --chown=app:app . .
 RUN mkdir -p /app/generation_processing_logs && chown app:app /app/generation_processing_logs
 
 # Create directory for brain agent repo clones
-RUN mkdir -p /tmp/energyexe-repos && chown app:app /tmp/energyexe-repos
 
 # Switch to non-root user
 USER app
