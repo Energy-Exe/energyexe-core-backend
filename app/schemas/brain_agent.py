@@ -6,20 +6,26 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_serializer
 
-# Current pair: Sonnet 5 (default, "balanced") and Opus 5 ("most capable").
+# Current pair: Sonnet 5.5 (default, "balanced") and Opus 5.5 ("most capable").
 # The older model strings stay accepted-but-legacy so a stale frontend bundle, a
 # persisted browser session, or a thread saved under an old model string doesn't
-# 422 during a deploy rollout.
+# 422 during a deploy rollout. A thread that switches model mid-conversation
+# loses its earlier thinking blocks (they are bound to the producing model), so
+# the UIs map legacy strings onto the current pair before the first send.
 ALLOWED_BRAIN_MODELS = (
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    # legacy
     "claude-sonnet-5",
     "claude-opus-5",
-    # legacy
     "claude-sonnet-4-6",
     "claude-opus-4-8",
     "claude-opus-4-6",
 )
 
 BrainModelType = Literal[
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
     "claude-sonnet-5",
     "claude-opus-5",
     "claude-sonnet-4-6",
@@ -27,7 +33,7 @@ BrainModelType = Literal[
     "claude-opus-4-6",
 ]
 
-DEFAULT_BRAIN_MODEL = "claude-sonnet-5"
+DEFAULT_BRAIN_MODEL = "claude-sonnet-5-5"
 
 AgentSourceType = Literal["admin", "client"]
 
@@ -50,7 +56,7 @@ class AgentChatRequest(BaseModel):
     )
     model: Optional[BrainModelType] = Field(
         default=None,
-        description="Claude model to use. Defaults to claude-sonnet-5.",
+        description="Claude model to use. Defaults to claude-sonnet-5-5.",
     )
     conversation_history: Optional[List[Any]] = Field(
         default=None,
@@ -78,8 +84,12 @@ class ThreadUpsertRequest(BaseModel):
     """Request body for creating or updating an agent thread."""
 
     title: Optional[str] = Field(default=None, max_length=255, description="Thread title")
-    model: Optional[str] = Field(default=None, max_length=50, description="Model used for this thread")
-    messages: List[Any] = Field(default_factory=list, description="Full message history (JSON array)")
+    model: Optional[str] = Field(
+        default=None, max_length=50, description="Model used for this thread"
+    )
+    messages: List[Any] = Field(
+        default_factory=list, description="Full message history (JSON array)"
+    )
     message_count: int = Field(default=0, ge=0, description="Number of messages")
     total_cost_usd: Optional[Decimal] = Field(default=None, description="Cumulative cost in USD")
     total_turns: int = Field(default=0, ge=0, description="Number of agent turns")
