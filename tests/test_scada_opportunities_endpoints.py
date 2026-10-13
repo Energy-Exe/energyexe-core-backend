@@ -435,3 +435,172 @@ def test_action_tables_absent_returns_503(app_client, monkeypatch):
     monkeypatch.setattr(endpoint_module, "scada_opportunities_present", _absent)
     resp = app_client.put("/scada/opportunities/actions", json=_ACTION_BODY)
     assert resp.status_code == 503
+
+
+# --- EPR-181 / EPR-182: interpretation text, conditions and the asset statement --------------------------------
+
+_LINE_REC = {
+    "record_kind": "line",
+    "record_key": "MKT_03",
+    "run_id": "r5",
+    "trigger": "MKT_03",
+    "name": "Curtailment Value Recovery",
+    "scope_kind": "FLEET",
+    "scope_id": "FLEET",
+    "cls": "CURTAILMENT",
+    "additive": True,
+    "status": "LOADED",
+    "value_gbp_per_year": 378426.0,
+    "value_basis": "PER_YEAR",
+    "withheld": False,
+    "evidence": "GBP 378,426 per year",
+    "wording_status": "full",
+}
+_FINDING_REC = {
+    "record_kind": "finding",
+    "record_key": "MKT_03|TURB_YR|T03|2021",
+    "run_id": "r5",
+    "trigger": "MKT_03",
+    "scope_kind": "TURB_YR",
+    "scope_id": "T03|2021",
+    "parent_line": "MKT_03",
+    "cls": "CURTAILMENT",
+    "applicability": "APPLICABLE",
+    "tier": "INDICATIVE",
+    "magnitude_tier": "MATERIAL",
+    "value_gbp": 21000.0,
+    "value_gbp_per_year": 21000.0,
+    "value_basis": "PER_YEAR",
+    "withheld": False,
+    "period_start": "2021-01-01",
+    "period_end": "2022-01-01",
+    "period_basis": "YEAR",
+    "issue": "Curtailed output on T03 in 2021.",
+    "evidence": "21 MWh.",
+    "action_operational": "Check the setpoints.",
+    "action_commercial": None,
+    "rank": 3,
+}
+_HELD_REC = {
+    **_FINDING_REC,
+    "record_key": "MKT_03|TURB_YR|T03|2025",
+    "scope_id": "T03|2025",
+    "value_gbp": None,
+    "value_gbp_per_year": None,
+    "withheld": True,
+    "rank": None,
+}
+_COND_REC = {
+    "record_kind": "condition",
+    "record_key": "DIAG_01|T03|gearbox_oil",
+    "run_id": "r5",
+    "trigger": "DIAG_01",
+    "scope_kind": "TURB",
+    "scope_id": "T03|gearbox_oil",
+    "cls": "CONDITIONAL",
+    "status": "DRIFTING_UP",
+    "withheld": True,
+    "issue": "If this fault is realised, the modelled exposure is ...",
+    "lifecycle_status": None,
+}
+_STATEMENT = {
+    "farm": "hill_of_towie",
+    "run_id": "r5",
+    "asset_code": "HOT",
+    "currency": "GBP",
+    "statement": {"schema": "scada-asset-statement/v1", "by_value_class": {}},
+    "rendered_md": "# Asset statement",
+}
+
+
+@pytest.fixture
+def records(monkeypatch, service):
+    svc = scada_opportunity_service.ScadaOpportunityService
+
+    async def _present(_db):
+        return True
+
+    async def _text(self, farm, id, limit=50):
+        if id != 0:
+            return None
+        return {
+            "register_id": 0,
+            "line": _LINE_REC,
+            "findings": [_FINDING_REC, _HELD_REC][:limit],
+            "findings_total": 2,
+            "conditions": [],
+        }
+
+    async def _conditions(self, farm):
+        return [_COND_REC]
+
+    async def _statement(self, farm):
+        return _STATEMENT
+
+    monkeypatch.setattr(endpoint_module, "scada_records_present", _present)
+    monkeypatch.setattr(svc, "text_for", _text)
+    monkeypatch.setattr(svc, "conditions", _conditions)
+    monkeypatch.setattr(svc, "statement", _statement)
+
+
+def test_text_returns_the_line_and_its_ranked_findings(app_client, records):
+    resp = app_client.get("/scada/opportunities/0/text", params={"farm": "hill_of_towie"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["line"]["record_key"] == "MKT_03" and body["findings_total"] == 2
+    assert [f["withheld"] for f in body["findings"]] == [False, True]
+    assert body["findings"][1]["value_gbp"] is None
+
+
+def test_text_limit_is_passed_through(app_client, records):
+    body = app_client.get("/scada/opportunities/0/text", params={"limit": 1}).json()
+    assert len(body["findings"]) == 1 and body["findings_total"] == 2
+
+
+def test_text_unknown_id_404(app_client, records):
+    assert app_client.get("/scada/opportunities/9/text").status_code == 404
+
+
+def test_conditions_and_statement(app_client, records):
+    conds = app_client.get("/scada/opportunities/conditions").json()
+    assert conds[0]["cls"] == "CONDITIONAL" and conds[0]["withheld"] is True
+    st = app_client.get("/scada/opportunities/statement").json()
+    assert st["currency"] == "GBP" and st["statement"]["schema"] == "scada-asset-statement/v1"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/scada/opportunities/statement",
+        "/scada/opportunities/conditions",
+        "/scada/opportunities/0/text",
+    ],
+)
+def test_interpretation_tables_absent_is_404_not_503(app_client, service, monkeypatch, path):
+    async def _absent(_db):
+        return False
+
+    monkeypatch.setattr(endpoint_module, "scada_records_present", _absent)
+    resp = app_client.get(path)
+    assert resp.status_code == 404 and "not published" in resp.json()["detail"]
+
+
+def test_statement_missing_for_farm_404(app_client, records, monkeypatch):
+    async def _none(self, farm):
+        return None
+
+    monkeypatch.setattr(scada_opportunity_service.ScadaOpportunityService, "statement", _none)
+    assert app_client.get("/scada/opportunities/statement").status_code == 404
+
+
+def test_parse_statement_reads_the_json_text():
+    out = scada_opportunity_service.parse_statement(
+        {
+            "farm": "f",
+            "run_id": "r",
+            "currency": "GBP",
+            "statement_json": '{"a": 1}',
+            "rendered_md": "x",
+        }
+    )
+    assert out["statement"] == {"a": 1} and "statement_json" not in out

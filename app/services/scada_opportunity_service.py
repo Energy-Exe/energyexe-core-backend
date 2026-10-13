@@ -11,6 +11,7 @@ The £ headline sums only the additive class totals (REALIZED + RECOVERABLE + CU
 are never cross-summed — CONDITIONAL is a per-event exposure, ALERT/CONTEXT carry no additive £.
 """
 
+import json
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -45,10 +46,31 @@ _LIFECYCLE_JOIN = """
     LEFT JOIN users u ON u.id = fa.updated_by
 """
 
+# The interpretation records (pipeline migration a7d3e9c51b20, EPR-182): one row per line, finding and condition
+# of the persisted run, in the export form (a reserved-window value is null with withheld = true). The lifecycle
+# key a record shows is (farm, action_trigger, action_scope, action_cls): a line's and a condition's own register
+# key, a finding's parent line key; actions are never transferred to findings.
+_RECORD_SELECT = """
+    x.record_kind, x.record_key, x.run_id, x.trigger, x.name, x.scope_kind, x.scope_id, x.parent_line,
+    x.cls, x.additive, x.applicability, x.tier, x.magnitude_tier, x.branch, x.status, x.resolved, x.confounded,
+    x.value_gbp, x.value_gbp_per_year, x.energy_mwh, x.value_basis, x.withheld,
+    x.period_start, x.period_end, x.period_basis, x.issue, x.evidence, x.action_operational,
+    x.action_commercial, x.wording_status, x.rank
+"""
+_RECORD_LIFECYCLE_JOIN = """
+    LEFT JOIN scada_finding_action fa
+      ON fa.farm = x.farm AND fa.trigger = x.action_trigger
+      AND fa.scope = x.action_scope AND fa.cls = x.action_cls
+"""
+_RECORD_ORDER = (
+    "ORDER BY x.rank ASC NULLS LAST, ABS(COALESCE(x.value_gbp_per_year, 0)) DESC, x.record_key ASC"
+)
+
 # Once the findings tables are seen they never disappear mid-process; absence is rechecked per call
 # so a fresh persist / migration lights the feature up without a backend restart.
 _tables_seen = False
 _by_year_seen = False
+_records_seen = False
 
 _CLASS_SLOT = {"REALIZED": "realized", "RECOVERABLE": "recoverable", "CURTAILMENT": "curtailment"}
 _BY_YEAR_SERIES = (("real", "gbp_real"), ("constant_price", "gbp_constant_price"))
@@ -108,6 +130,38 @@ async def scada_by_year_present(db: AsyncSession) -> bool:
     if present:
         _by_year_seen = True
     return present
+
+
+async def scada_records_present(db: AsyncSession) -> bool:
+    """True when the interpretation tables (pipeline migration a7d3e9c51b20, EPR-182) exist here.
+
+    Checked separately from the base register, like the per-year tables: the client renders absence as
+    'not yet published' and never reports it."""
+    global _records_seen
+    if _records_seen:
+        return True
+    try:
+        present = (
+            await db.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'scada' AND table_name = 'opportunity_statement' LIMIT 1"
+                )
+            )
+        ).scalar() is not None
+    except Exception:
+        logger.warning("scada_records_check_failed", exc_info=True)
+        return False
+    if present:
+        _records_seen = True
+    return present
+
+
+def parse_statement(row: Dict[str, Any]) -> Dict[str, Any]:
+    """The statement row with its JSON text parsed (stored as text so the pipeline writes it verbatim)."""
+    out = dict(row)
+    out["statement"] = json.loads(out.pop("statement_json") or "{}")
+    return out
 
 
 def split_csv(value: Optional[str]) -> List[str]:
@@ -318,3 +372,93 @@ class ScadaOpportunityService:
             )
         )
         return [dict(row._mapping) for row in rows.fetchall()]
+
+    async def statement(self, farm: str) -> Optional[Dict[str, Any]]:
+        """The asset statement (EPR-181): per value class sums, the overlap adjustment, the reporting floor, the
+        ranked findings, the coverage section. None when this farm has none persisted."""
+        row = (
+            await self.db.execute(
+                text(
+                    "SELECT farm, run_id, asset_code, currency, statement_json, rendered_md, computed_at "
+                    "FROM scada.opportunity_statement WHERE farm = :farm"
+                ),
+                {"farm": farm},
+            )
+        ).fetchone()
+        return parse_statement(dict(row._mapping)) if row else None
+
+    async def text_for(self, farm: str, id: int, *, limit: int = 50) -> Optional[Dict[str, Any]]:
+        """The interpretation text of one register row: a FLEET line's own record and its findings (ranked as the
+        statement ranks them), or a turbine row's condition records (one register key can carry several).
+        """
+        reg = await self.get(farm, id)
+        if reg is None:
+            return None
+        key = {
+            "farm": farm,
+            "trigger": reg.get("trigger") or "",
+            "scope": reg["scope"],
+            "cls": reg["cls"],
+        }
+        match = "x.farm = :farm AND x.action_trigger = :trigger AND x.action_scope = :scope AND x.action_cls = :cls"
+        out: Dict[str, Any] = {
+            "register_id": id,
+            "line": None,
+            "findings": [],
+            "findings_total": 0,
+            "conditions": [],
+        }
+        if reg["scope"] == "FLEET":
+            line = (
+                await self.db.execute(
+                    text(
+                        f"SELECT {_RECORD_SELECT} FROM scada.opportunity_record x "
+                        f"WHERE {match} AND x.record_kind = 'line'"
+                    ),
+                    key,
+                )
+            ).fetchone()
+            out["line"] = dict(line._mapping) if line else None
+            rows = await self.db.execute(
+                text(
+                    f"SELECT {_RECORD_SELECT} FROM scada.opportunity_record x "
+                    f"WHERE {match} AND x.record_kind = 'finding' {_RECORD_ORDER} LIMIT :limit"
+                ),
+                {**key, "limit": limit},
+            )
+            out["findings"] = [dict(r._mapping) for r in rows.fetchall()]
+            out["findings_total"] = int(
+                (
+                    await self.db.execute(
+                        text(
+                            f"SELECT COUNT(*) FROM scada.opportunity_record x "
+                            f"WHERE {match} AND x.record_kind = 'finding'"
+                        ),
+                        key,
+                    )
+                ).scalar()
+                or 0
+            )
+        else:
+            rows = await self.db.execute(
+                text(
+                    f"SELECT {_RECORD_SELECT} FROM scada.opportunity_record x "
+                    f"WHERE {match} AND x.record_kind = 'condition' ORDER BY x.record_key"
+                ),
+                key,
+            )
+            out["conditions"] = [dict(r._mapping) for r in rows.fetchall()]
+        return out
+
+    async def conditions(self, farm: str) -> List[Dict[str, Any]]:
+        """Every condition record of the farm with the lifecycle state of its register key."""
+        rows = await self.db.execute(
+            text(
+                f"SELECT {_RECORD_SELECT}, x.action_trigger, x.action_scope, x.action_cls, "
+                "fa.status AS lifecycle_status FROM scada.opportunity_record x "
+                f"{_RECORD_LIFECYCLE_JOIN} WHERE x.farm = :farm AND x.record_kind = 'condition' "
+                "ORDER BY x.cls, x.action_scope, x.record_key"
+            ),
+            {"farm": farm},
+        )
+        return [dict(r._mapping) for r in rows.fetchall()]
