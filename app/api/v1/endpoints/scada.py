@@ -63,7 +63,7 @@ async def get_farms(
 ) -> Any:
     """Farm metadata + data-through dates for the freshness header."""
     service = await _service(db)
-    result = await service.farms()
+    result = await service.farms(include_internal=is_internal_staff(current_user))
     # The measured profile is merged for internal staff only; every other caller sees the
     # legacy farm list unchanged (no `ingestion` key, so the client never renders it).
     if is_internal_staff(current_user) and get_settings().SCADA_INGESTION_ENABLED:
