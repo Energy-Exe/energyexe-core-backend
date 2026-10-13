@@ -22,6 +22,7 @@ from app.core.deps import get_current_active_user, get_db
 from app.models.scada_finding_action import SCADA_FINDING_WRITABLE_STATUSES
 from app.models.user import User
 from app.schemas.scada_opportunity import (
+    ScadaAsset,
     ScadaAssetStatement,
     ScadaFindingActionResult,
     ScadaFindingActionUpdate,
@@ -153,6 +154,18 @@ async def list_opportunities(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/assets", response_model=List[ScadaAsset])
+async def list_assets(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """The assets a farm publishes (code, currency, site name), for the phase selector (D-081)."""
+    service = await _service(db, current_user)
+    await _validated_farm(service, farm)
+    return await service.assets(farm)
 
 
 @router.get("/summary", response_model=ScadaOpportunitySummary)

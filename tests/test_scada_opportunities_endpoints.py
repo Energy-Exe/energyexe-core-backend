@@ -744,3 +744,15 @@ def test_action_resolves_a_single_asset_farm(app_client, finding):
 )
 def test_class_summary_never_books_not_assessed_as_zero(n, gbp, na, expected):
     assert scada_opportunity_service.class_summary(n, gbp, na) == expected
+
+
+def test_assets_lists_the_farm_assets(staff_client, service):
+    body = staff_client.get("/scada/opportunities/assets", params={"farm": "raggovidda"}).json()
+    assert [a["asset_code"] for a in body] == ["RG1", "RG2"] and body[0]["currency"] == "NOK"
+
+
+def test_assets_of_an_internal_farm_is_403_for_non_staff(app_client, service):
+    assert (
+        app_client.get("/scada/opportunities/assets", params={"farm": "raggovidda"}).status_code
+        == 403
+    )
