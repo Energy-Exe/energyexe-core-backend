@@ -5,8 +5,8 @@ typing — it mirrors the core /opportunities envelope ({items, total, summary})
 (rank_gbp), which the core feature has no column for.
 """
 
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -214,3 +214,67 @@ class ScadaFindingActionResult(BaseModel):
     resolved_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     actor: Optional[str] = None
+
+
+class ScadaInterpretationRecord(BaseModel):
+    """One interpretation record (EPR-182): a line, a finding or a condition, with its ISSUE / EVIDENCE / ACTION
+    text. Export form: inside a reserved window the value fields are null and ``withheld`` is true.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    record_kind: str
+    record_key: str
+    run_id: str
+    trigger: str
+    name: Optional[str] = None
+    scope_kind: str
+    scope_id: str
+    parent_line: Optional[str] = None
+    cls: str
+    additive: Optional[bool] = None
+    applicability: Optional[str] = None
+    tier: Optional[str] = None
+    magnitude_tier: Optional[str] = None
+    branch: Optional[str] = None
+    status: Optional[str] = None
+    resolved: Optional[bool] = None
+    confounded: Optional[bool] = None
+    value_gbp: Optional[float] = None
+    value_gbp_per_year: Optional[float] = None
+    energy_mwh: Optional[float] = None
+    value_basis: Optional[str] = None
+    withheld: bool = False
+    period_start: Optional[date] = None
+    period_end: Optional[date] = None
+    period_basis: Optional[str] = None
+    issue: Optional[str] = None
+    evidence: Optional[str] = None
+    action_operational: Optional[str] = None
+    action_commercial: Optional[str] = None
+    wording_status: Optional[str] = None
+    rank: Optional[int] = None
+    lifecycle_status: Optional[str] = None
+
+
+class ScadaOpportunityText(BaseModel):
+    """The interpretation of one register row: a FLEET line's own record and its ranked findings, or the
+    condition records of a turbine row."""
+
+    register_id: int
+    line: Optional[ScadaInterpretationRecord] = None
+    findings: List[ScadaInterpretationRecord] = []
+    findings_total: int = 0
+    conditions: List[ScadaInterpretationRecord] = []
+
+
+class ScadaAssetStatement(BaseModel):
+    """The asset statement (EPR-181) as the pipeline persisted it; ``statement`` is its export-form JSON."""
+
+    farm: str
+    run_id: str
+    asset_code: Optional[str] = None
+    currency: str
+    statement: Dict[str, Any]
+    rendered_md: str
+    computed_at: Optional[datetime] = None

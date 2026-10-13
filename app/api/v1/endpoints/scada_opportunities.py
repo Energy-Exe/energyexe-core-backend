@@ -16,12 +16,15 @@ from app.core.deps import get_current_active_user, get_db
 from app.models.scada_finding_action import SCADA_FINDING_WRITABLE_STATUSES
 from app.models.user import User
 from app.schemas.scada_opportunity import (
+    ScadaAssetStatement,
     ScadaFindingActionResult,
+    ScadaInterpretationRecord,
     ScadaFindingActionUpdate,
     ScadaOpportunity,
     ScadaOpportunityByYear,
     ScadaOpportunityListResponse,
     ScadaOpportunitySummary,
+    ScadaOpportunityText,
     ScadaTrigger,
 )
 from app.services.scada_finding_service import ScadaFindingService
@@ -29,6 +32,7 @@ from app.services.scada_opportunity_service import (
     ScadaOpportunityService,
     scada_by_year_present,
     scada_opportunities_present,
+    scada_records_present,
 )
 
 logger = structlog.get_logger(__name__)
@@ -47,6 +51,19 @@ async def _validated_farm(service: ScadaOpportunityService, farm: str) -> str:
     if farm not in await service.farm_slugs():
         raise HTTPException(status_code=404, detail=f"No SCADA opportunities for farm: {farm}")
     return farm
+
+
+_NOT_PUBLISHED = (
+    "Interpretation not published on this environment "
+    "(scada.opportunity_record / opportunity_statement not materialised)"
+)
+
+
+async def _records_or_404(db: AsyncSession) -> None:
+    """404 (not 503) until the interpretation tables exist: the client renders 'not yet published' and never
+    reports it, as for the per-year view."""
+    if not await scada_records_present(db):
+        raise HTTPException(status_code=404, detail=_NOT_PUBLISHED)
 
 
 def _display_name(user: User) -> str:
@@ -145,6 +162,38 @@ async def get_by_year(
     return out
 
 
+@router.get("/statement", response_model=ScadaAssetStatement)
+async def get_statement(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """The asset statement (EPR-181): each value class with its own sum, the overlap adjustment, the
+    reporting floor, the ranked findings and the coverage section. Never a sum across classes or currencies.
+    """
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    await _records_or_404(db)
+    out = await service.statement(farm)
+    if out is None:
+        raise HTTPException(status_code=404, detail=f"No asset statement for farm: {farm}")
+    return out
+
+
+@router.get("/conditions", response_model=List[ScadaInterpretationRecord])
+async def list_conditions(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """The condition records (EPR-180): exposure per event, never a probability or a lead time, with the
+    lifecycle state of each record's register key."""
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    await _records_or_404(db)
+    return await service.conditions(farm)
+
+
 @router.put("/actions", response_model=ScadaFindingActionResult)
 async def set_finding_action(
     payload: ScadaFindingActionUpdate,
@@ -202,3 +251,23 @@ async def get_opportunity(
     if row is None:
         raise HTTPException(status_code=404, detail=f"No opportunity {id} for farm {farm}")
     return row
+
+
+@router.get("/{id}/text", response_model=ScadaOpportunityText)
+async def get_opportunity_text(
+    id: int,
+    farm: str = Query(DEFAULT_FARM),
+    limit: int = Query(
+        50, ge=1, le=500, description="Findings returned (ranked); findings_total counts all"
+    ),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """ISSUE / EVIDENCE / ACTION for one register row: the line and its findings, or the condition records."""
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    await _records_or_404(db)
+    out = await service.text_for(farm, id, limit=limit)
+    if out is None:
+        raise HTTPException(status_code=404, detail=f"No opportunity {id} for farm {farm}")
+    return out
