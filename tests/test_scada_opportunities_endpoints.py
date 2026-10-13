@@ -100,6 +100,7 @@ def present(monkeypatch):
         return True
 
     monkeypatch.setattr(endpoint_module, "scada_opportunities_present", _present)
+    monkeypatch.setattr(endpoint_module, "scada_asset_keys_present", _present)
 
 
 _BY_YEAR_ROW = {
@@ -170,6 +171,9 @@ _BY_YEAR = {
 }
 
 
+CALLS: list = []
+
+
 @pytest.fixture
 def by_year_present(monkeypatch):
     async def _present(_db):
@@ -190,30 +194,53 @@ def by_year_absent(monkeypatch):
 def service(monkeypatch, present):
     svc = scada_opportunity_service.ScadaOpportunityService
 
-    async def _slugs(self):
-        return ["hill_of_towie"]
+    async def _slugs(self, include_internal=None):
+        every = self.include_internal if include_internal is None else include_internal
+        return ["hill_of_towie", "raggovidda"] if every else ["hill_of_towie"]
 
-    async def _by_year(self, farm):
+    async def _assets(self, farm):
+        if farm == "raggovidda":
+            return [
+                {"asset_code": "RG1", "currency": "NOK", "site_name": "Raggovidda I"},
+                {"asset_code": "RG2", "currency": "NOK", "site_name": "Raggovidda II"},
+            ]
+        return [{"asset_code": "HOT", "currency": "GBP", "site_name": "Hill of Towie"}]
+
+    async def _by_year(self, farm, asset):
         return _BY_YEAR
 
     async def _list(self, farm, **kw):
+        CALLS.append(("list", farm, kw.get("asset")))
         return {"items": [_ITEM], "total": 1, "summary": _SUMMARY}
 
-    async def _summary(self, farm):
+    async def _summary(self, farm, asset):
+        CALLS.append(("summary", farm, asset))
         return _SUMMARY
 
-    async def _get(self, farm, id):
+    async def _get(self, farm, id, asset):
         return _ITEM if id == 0 else None
 
     async def _triggers(self):
         return [{"code": "OPS_01", "name": "Priced Downtime Losses", "domain": "OPS"}]
 
+    CALLS.clear()
     monkeypatch.setattr(svc, "farm_slugs", _slugs)
+    monkeypatch.setattr(svc, "assets", _assets)
     monkeypatch.setattr(svc, "list_opportunities", _list)
     monkeypatch.setattr(svc, "summary", _summary)
     monkeypatch.setattr(svc, "get", _get)
     monkeypatch.setattr(svc, "triggers", _triggers)
     monkeypatch.setattr(svc, "by_year", _by_year)
+
+
+def test_asset_keys_absent_returns_503(app_client, monkeypatch, present):
+    async def _absent(_db):
+        return False
+
+    monkeypatch.setattr(endpoint_module, "scada_asset_keys_present", _absent)
+    resp = app_client.get("/scada/opportunities/")
+    assert resp.status_code == 503
+    assert "per-asset keys" in resp.json()["detail"]
 
 
 def test_tables_absent_returns_503(app_client, monkeypatch):
@@ -354,7 +381,7 @@ def test_by_year_unknown_farm_404(app_client, service, by_year_present):
 
 
 def test_by_year_no_rows_404(app_client, service, by_year_present, monkeypatch):
-    async def _none(self, farm):
+    async def _none(self, farm, asset):
         return None
 
     monkeypatch.setattr(scada_opportunity_service.ScadaOpportunityService, "by_year", _none)
@@ -370,9 +397,10 @@ from types import SimpleNamespace  # noqa: E402
 from app.services import scada_finding_service  # noqa: E402
 
 
-def _fake_action(status="ACKNOWLEDGED", notes="looks real"):
+def _fake_action(status="ACKNOWLEDGED", notes="looks real", asset_code="HOT"):
     return SimpleNamespace(
         farm="hill_of_towie",
+        asset_code=asset_code,
         trigger="DET_aux",
         scope="T03",
         cls="CONDITIONAL",
@@ -385,12 +413,13 @@ def _fake_action(status="ACKNOWLEDGED", notes="looks real"):
 
 
 @pytest.fixture
-def finding(monkeypatch, present):
+def finding(monkeypatch, service):
     """set_action returns a persisted row for the known key, None otherwise."""
 
-    async def _set_action(self, *, farm, trigger, scope, cls, status, notes, user_id):
+    async def _set_action(self, *, farm, asset_code, trigger, scope, cls, status, notes, user_id):
+        CALLS.append(("set_action", farm, asset_code))
         if scope == "T03":
-            return _fake_action(status=status, notes=notes)
+            return _fake_action(status=status, notes=notes, asset_code=asset_code)
         return None
 
     monkeypatch.setattr(scada_finding_service.ScadaFindingService, "set_action", _set_action)
@@ -520,7 +549,7 @@ def records(monkeypatch, service):
     async def _present(_db):
         return True
 
-    async def _text(self, farm, id, limit=50):
+    async def _text(self, farm, id, asset, limit=50):
         if id != 0:
             return None
         return {
@@ -531,10 +560,10 @@ def records(monkeypatch, service):
             "conditions": [],
         }
 
-    async def _conditions(self, farm):
+    async def _conditions(self, farm, asset):
         return [_COND_REC]
 
-    async def _statement(self, farm):
+    async def _statement(self, farm, asset):
         return _STATEMENT
 
     monkeypatch.setattr(endpoint_module, "scada_records_present", _present)
@@ -586,7 +615,7 @@ def test_interpretation_tables_absent_is_404_not_503(app_client, service, monkey
 
 
 def test_statement_missing_for_farm_404(app_client, records, monkeypatch):
-    async def _none(self, farm):
+    async def _none(self, farm, asset):
         return None
 
     monkeypatch.setattr(scada_opportunity_service.ScadaOpportunityService, "statement", _none)
@@ -604,3 +633,114 @@ def test_parse_statement_reads_the_json_text():
         }
     )
     assert out["statement"] == {"a": 1} and "statement_json" not in out
+
+
+# --- D-081 (EPR-183): a second asset, its currency, internal farms -----------------------------------------------
+
+
+class _StaffUser(_FakeUser):
+    is_internal = True
+
+
+def test_an_internal_farm_is_hidden_from_a_non_staff_superuser(app_client, service):
+    resp = app_client.get("/scada/opportunities/", params={"farm": "raggovidda", "asset": "RG1"})
+    assert resp.status_code == 403
+    assert "Internal" in resp.json()["detail"]
+    assert app_client.get("/scada/opportunities/", params={"farm": "nowhere"}).status_code == 404
+
+
+@pytest.fixture
+def staff_client(app_client):
+    app_client.app.dependency_overrides[get_current_active_user] = lambda: _StaffUser()
+    return app_client
+
+
+def test_staff_read_the_named_asset(staff_client, service):
+    resp = staff_client.get("/scada/opportunities/", params={"farm": "raggovidda", "asset": "RG2"})
+    assert resp.status_code == 200
+    assert ("list", "raggovidda", "RG2") in CALLS
+
+
+def test_several_assets_and_none_named_is_400(staff_client, service):
+    resp = staff_client.get("/scada/opportunities/summary", params={"farm": "raggovidda"})
+    assert resp.status_code == 400
+    assert "RG1, RG2" in resp.json()["detail"]
+
+
+def test_an_unknown_asset_is_404(staff_client, service):
+    resp = staff_client.get(
+        "/scada/opportunities/summary", params={"farm": "raggovidda", "asset": "RG9"}
+    )
+    assert resp.status_code == 404
+
+
+def test_a_single_asset_farm_needs_no_asset(app_client, service):
+    assert app_client.get("/scada/opportunities/summary").status_code == 200
+    assert ("summary", "hill_of_towie", "HOT") in CALLS
+
+
+def test_currency_and_asset_reach_the_response(staff_client, service, monkeypatch):
+    nok = {
+        **_SUMMARY,
+        "farm": "raggovidda",
+        "asset_code": "RG1",
+        "currency": "NOK",
+        "by_class": {"REALIZED": {"count": 3, "gbp_year": None, "not_assessed": 3}},
+        "assets": [{"asset_code": "RG1", "currency": "NOK", "site_name": "Raggovidda I"}],
+    }
+    item = {**_ITEM, "farm": "raggovidda", "asset_code": "RG1", "currency": "NOK"}
+
+    async def _list(self, farm, **kw):
+        return {"items": [item], "total": 1, "summary": nok}
+
+    monkeypatch.setattr(
+        scada_opportunity_service.ScadaOpportunityService, "list_opportunities", _list
+    )
+    body = staff_client.get(
+        "/scada/opportunities/", params={"farm": "raggovidda", "asset": "RG1"}
+    ).json()
+    assert body["items"][0]["currency"] == "NOK" and body["items"][0]["asset_code"] == "RG1"
+    assert body["summary"]["currency"] == "NOK"
+    realized = body["summary"]["by_class"]["REALIZED"]
+    assert realized["gbp_year"] is None and realized["not_assessed"] == 3  # never a zero
+    assert body["summary"]["assets"][0]["asset_code"] == "RG1"
+
+
+def test_action_carries_the_asset(staff_client, finding):
+    body = {**_ACTION_BODY, "farm": "raggovidda", "asset_code": "RG2"}
+    resp = staff_client.put("/scada/opportunities/actions", json=body)
+    assert resp.status_code == 200 and resp.json()["asset_code"] == "RG2"
+    assert ("set_action", "raggovidda", "RG2") in CALLS
+
+
+def test_action_on_an_internal_farm_is_403_for_non_staff(app_client, finding):
+    body = {**_ACTION_BODY, "farm": "raggovidda", "asset_code": "RG2"}
+    assert app_client.put("/scada/opportunities/actions", json=body).status_code == 403
+
+
+def test_action_resolves_a_single_asset_farm(app_client, finding):
+    resp = app_client.put("/scada/opportunities/actions", json=_ACTION_BODY)
+    assert resp.status_code == 200 and resp.json()["asset_code"] == "HOT"
+
+
+@pytest.mark.parametrize(
+    ("n", "gbp", "na", "expected"),
+    [
+        (3, 120.0, 0, {"count": 3, "gbp_year": 120.0, "not_assessed": 0}),
+        (
+            3,
+            None,
+            3,
+            {"count": 3, "gbp_year": None, "not_assessed": 3},
+        ),  # every additive line not assessed
+        (4, 50.0, 2, {"count": 4, "gbp_year": 50.0, "not_assessed": 2}),  # the assessed lines only
+        (
+            10,
+            None,
+            0,
+            {"count": 10, "gbp_year": 0.0, "not_assessed": 0},
+        ),  # no additive line (CONDITIONAL)
+    ],
+)
+def test_class_summary_never_books_not_assessed_as_zero(n, gbp, na, expected):
+    assert scada_opportunity_service.class_summary(n, gbp, na) == expected

@@ -17,6 +17,10 @@ class ScadaOpportunity(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     farm: str
+    # D-081: the asset this row belongs to and its reporting currency (the *_gbp* names are legacy: every amount
+    # is in ``currency``). A line the asset declares not assessed carries no amount (gbp_year null), never 0.
+    asset_code: Optional[str] = None
+    currency: Optional[str] = None
     id: int
     run_id: str
     trigger: Optional[str] = None
@@ -63,14 +67,29 @@ class ScadaOpportunity(BaseModel):
 
 
 class ScadaClassSummary(BaseModel):
+    """One class's rollup in the asset's currency. ``gbp_year`` sums the additive lines that carry a figure; it is
+    null when every additive line of the class is declared not assessed (``not_assessed`` counts those lines).
+    """
+
     count: int
-    gbp_year: float
+    gbp_year: Optional[float] = None
+    not_assessed: int = 0
+
+
+class ScadaAsset(BaseModel):
+    """One asset a farm publishes (D-081): its code, reporting currency and site name."""
+
+    asset_code: str
+    currency: str
+    site_name: Optional[str] = None
 
 
 class ScadaOpportunitySummary(BaseModel):
-    """Farm-level register snapshot — run provenance + per-class rollup (filter-independent)."""
+    """Asset-level register snapshot — run provenance + per-class rollup (filter-independent)."""
 
     farm: str
+    asset_code: Optional[str] = None
+    currency: Optional[str] = None
     run_id: str
     site_name: Optional[str] = None
     generated_at: datetime
@@ -84,6 +103,8 @@ class ScadaOpportunitySummary(BaseModel):
     n_rows: int
     register_version: Optional[str] = None
     by_class: Dict[str, ScadaClassSummary]
+    # Every asset this farm publishes (a phase selector when there are several).
+    assets: List[ScadaAsset] = []
 
 
 class ScadaOpportunityListResponse(BaseModel):
@@ -152,16 +173,18 @@ class ScadaByYearTrend(BaseModel):
 
 
 class ScadaOpportunityByYear(BaseModel):
-    """The per-year view for a farm: run provenance + rows + per-(series, year) totals + trend."""
+    """The per-year view for one asset: run provenance + rows + per-(series, year) totals + trend."""
 
     farm: str
+    asset_code: Optional[str] = None
+    currency: Optional[str] = None
     run_id: str
     generated_at: datetime
     window_start_year: Optional[int] = None
     window_end_year: Optional[int] = None
     ann_years: Optional[int] = None
     headline_gbp_year: Optional[float] = None
-    price_basis_gbp_mwh: Optional[float] = None
+    price_basis_gbp_mwh: Optional[float] = None  # in ``currency`` per MWh (legacy name)
     price_basis_note: Optional[str] = None
     decade_only_triggers: List[str]
     years: List[int]
@@ -190,10 +213,12 @@ class ScadaFindingActionUpdate(BaseModel):
 
     The client passes the finding's natural key (already on every register row) rather than the
     volatile register ``id`` — the pipeline reassigns ``id`` on every persist. ``status`` must be one
-    of ACKNOWLEDGED / CONFIRMED / DISMISSED / RESOLVED (validated in the endpoint).
+    of ACKNOWLEDGED / CONFIRMED / DISMISSED / RESOLVED (validated in the endpoint). ``asset_code`` may be
+    omitted when the farm publishes one asset (D-081).
     """
 
     farm: str
+    asset_code: Optional[str] = None
     trigger: Optional[str] = None
     scope: str
     cls: str
@@ -205,6 +230,7 @@ class ScadaFindingActionResult(BaseModel):
     """The persisted lifecycle state returned after a write."""
 
     farm: str
+    asset_code: str
     trigger: str
     scope: str
     cls: str
@@ -225,6 +251,7 @@ class ScadaInterpretationRecord(BaseModel):
 
     record_kind: str
     record_key: str
+    asset_code: Optional[str] = None
     run_id: str
     trigger: str
     name: Optional[str] = None

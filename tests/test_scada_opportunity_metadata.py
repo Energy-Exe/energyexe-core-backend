@@ -27,12 +27,14 @@ async def test_register_queries_return_analysis_metadata(detail, metadata):
     service.summary = AsyncMock(return_value=None)
 
     if detail:
-        actual = await service.get("hill_of_towie", 0)
+        actual = await service.get("hill_of_towie", 0, "HOT")
     else:
-        actual = (await service.list_opportunities("hill_of_towie"))["items"][0]
+        actual = (await service.list_opportunities("hill_of_towie", asset="HOT"))["items"][0]
+        assert actual.pop("currency") is None  # D-081: the run's currency (no run row here)
 
     assert actual == row
     query = str(db.execute.call_args_list[0].args[0])
+    assert "r.asset_code = :asset" in query  # D-081: every read is scoped to one asset
     assert "r.price_basis" in query and "r.offtake_regime" in query
     assert "scada.opportunity_register" in query
     assert "scada_ppa" not in query and "contract_price" not in query
