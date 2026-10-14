@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.services.wind_normalisation_service import NORM_WIND_MIN_MPS, WindNormalisationService
+from app.services.wind_normalisation_service import (
+    MIN_MONTH_HOURS,
+    NORM_WIND_MIN_MPS,
+    WindNormalisationService,
+)
 
 # ─── Fixtures ─────────────────────────────────────────────────
 
@@ -67,7 +71,7 @@ class TestComputeIndices:
         df = pd.DataFrame(rows)
         df["norm_ratio"] = ratios
 
-        monthly, yearly = WindNormalisationService.compute_indices(df)
+        monthly, yearly = WindNormalisationService.compute_indices(df, min_month_hours=1)
         # Monthly avg_norm_ratio for 2020-12 should be 0.50, others 1.00
         dec = monthly[monthly["month"] == 12].iloc[0]
         assert abs(dec["avg_norm_ratio"] - 0.50) < 1e-9
@@ -104,7 +108,7 @@ class TestComputeIndices:
             )
 
         df = pd.DataFrame(rows)
-        monthly, yearly = WindNormalisationService.compute_indices(df)
+        monthly, yearly = WindNormalisationService.compute_indices(df, min_month_hours=1)
 
         # Yearly avg for 2023 = mean of 12 ones = 1.0; for 2024 = mean of [0.80] = 0.80
         y23 = yearly[yearly["year"] == 2023].iloc[0]
@@ -120,6 +124,69 @@ class TestComputeIndices:
 
     def test_empty_input_returns_empty(self):
         df = pd.DataFrame(columns=["hour", "year", "month", "norm_ratio"])
+        monthly, yearly = WindNormalisationService.compute_indices(df)
+        assert monthly.empty
+        assert yearly.empty
+
+
+# ─── MIN_MONTH_HOURS guard ────────────────────────────────────
+
+
+def _month_rows(year: int, month: int, hours: int, ratio: float) -> list:
+    return [
+        {
+            "hour": pd.Timestamp(year, month, 1) + pd.Timedelta(hours=h),
+            "year": year,
+            "month": month,
+            "norm_ratio": ratio,
+        }
+        for h in range(hours)
+    ]
+
+
+class TestMinMonthHoursGuard:
+    """Smøla 2025-12: a confirmed constraint masked all but 2 hours of the year
+    and those 2 hours became a 200-index bar. Under-sampled months must be
+    dropped before the historical mean and must not produce a yearly row."""
+
+    def test_under_sampled_month_is_dropped_and_does_not_skew_history(self):
+        rows = []
+        for month in range(1, 13):
+            rows += _month_rows(2024, month, 200, 1.00)
+        rows += _month_rows(2025, 12, 2, 2.15)  # the stray tail
+        df = pd.DataFrame(rows)
+
+        monthly, yearly = WindNormalisationService.compute_indices(df)
+
+        assert len(monthly) == 12
+        assert not ((monthly["year"] == 2025) & (monthly["month"] == 12)).any()
+        # Historical mean is 1.00 exactly, so every surviving month indexes at 100
+        assert all(abs(v - 100.0) < 1e-9 for v in monthly["index_vs_base"])
+
+    def test_year_with_no_surviving_month_has_no_yearly_row(self):
+        rows = []
+        for month in range(1, 13):
+            rows += _month_rows(2024, month, 200, 1.00)
+        rows += _month_rows(2025, 12, 2, 2.15)
+        df = pd.DataFrame(rows)
+
+        _, yearly = WindNormalisationService.compute_indices(df)
+
+        assert list(yearly["year"]) == [2024]
+        assert abs(yearly.iloc[0]["index_vs_base"] - 100.0) < 1e-9
+
+    def test_threshold_boundary_keeps_exactly_min_hours(self):
+        rows = _month_rows(2024, 1, MIN_MONTH_HOURS, 1.00)
+        rows += _month_rows(2024, 2, MIN_MONTH_HOURS - 1, 1.00)
+        df = pd.DataFrame(rows)
+
+        monthly, yearly = WindNormalisationService.compute_indices(df)
+
+        assert list(monthly["month"]) == [1]
+        assert len(yearly) == 1
+
+    def test_all_months_under_sampled_returns_empty(self):
+        df = pd.DataFrame(_month_rows(2025, 12, 2, 2.15))
         monthly, yearly = WindNormalisationService.compute_indices(df)
         assert monthly.empty
         assert yearly.empty
