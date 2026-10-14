@@ -126,8 +126,12 @@ class ScadaService:
         result = await self.db.execute(text("SELECT farm FROM scada.dim_farm ORDER BY farm"))
         return [row.farm for row in result.fetchall()]
 
-    async def farms(self) -> Dict[str, Any]:
-        """Farm metadata + per-farm data-through for the freshness header."""
+    async def farms(self, include_internal: bool = False) -> Dict[str, Any]:
+        """Farm metadata + per-farm data-through for the freshness header.
+
+        A farm the pipeline marks internal (``dim_farm.internal``, D-081) is listed only when
+        ``include_internal`` (EnergyExe staff); before that column exists every row is listed.
+        """
         dims = await self.db.execute(text("SELECT * FROM scada.dim_farm ORDER BY farm"))
         through = await self.db.execute(
             text(
@@ -148,6 +152,8 @@ class ScadaService:
             entry = {
                 k: (v.isoformat() if isinstance(v, date) else v) for k, v in row._mapping.items()
             }
+            if entry.pop("internal", False) and not include_internal:
+                continue
             entry["n_turbines"] = n_by_farm.get(entry["farm"], 0)
             entry.update(through_by_farm.get(entry["farm"], {}))
             farms.append(entry)

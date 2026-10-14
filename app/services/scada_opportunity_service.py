@@ -7,8 +7,14 @@ session, no separate engine. The register row's ``trigger`` is LEFT-joined to th
 its human name/domain/persona (register rows carry DET_aux / CHANGEPOINT / filename stems that are
 not v7 codes, so it is not an FK).
 
-The £ headline sums only the additive class totals (REALIZED + RECOVERABLE + CURTAILMENT); classes
-are never cross-summed — CONDITIONAL is a per-event exposure, ALERT/CONTEXT carry no additive £.
+The headline sums only the additive class totals (REALIZED + RECOVERABLE + CURTAILMENT); classes
+are never cross-summed — CONDITIONAL is a per-event exposure, ALERT/CONTEXT carry no additive amount.
+
+D-081 (EPR-183): every read is scoped to one asset — ``(farm, asset_code)`` is the key of every gold table, and
+one farm can publish several assets (Raggovidda RG1 and RG2). Amounts are in the asset's reporting currency
+(``opportunity_run.currency``; the ``*_gbp*`` column names are legacy). A farm the pipeline marks ``internal``
+(``scada.dim_farm.internal``) is served to EnergyExe staff only. A line the asset declares not assessed (D-078)
+carries no figure and is never summed as zero.
 """
 
 import json
@@ -25,7 +31,7 @@ _ADDITIVE_CLASSES = ("REALIZED", "RECOVERABLE", "CURTAILMENT")
 # Register row columns returned to the API (dim fields joined on). Deploy pipeline migration
 # f138a6b7c8d9 before this code: price_basis / offtake_regime are nullable on legacy rows.
 _REGISTER_SELECT = """
-    r.farm, r.id, r.run_id, r.trigger, r.scope, r.scope_kind, r.item, r.status, r.cls, r.basis,
+    r.farm, r.asset_code, r.id, r.run_id, r.trigger, r.scope, r.scope_kind, r.item, r.status, r.cls, r.basis,
     r.price_basis, r.offtake_regime,
     r.gbp_year, r.cond_mean_lo, r.cond_mean_hi, r.cond_worst_hi, r.cond_worst_month,
     r.value_of_acting_early, r.additive, r.confidence, r.note, r.now_costing_gbp, r.now_floor_gbp,
@@ -41,7 +47,7 @@ _REGISTER_SELECT = """
 # register's nullable trigger is COALESCE(...,'')-d to match the '' the action table normalises to.
 _LIFECYCLE_JOIN = """
     LEFT JOIN scada_finding_action fa
-      ON fa.farm = r.farm AND fa.trigger = COALESCE(r.trigger, '')
+      ON fa.farm = r.farm AND fa.asset_code = r.asset_code AND fa.trigger = COALESCE(r.trigger, '')
       AND fa.scope = r.scope AND fa.cls = r.cls
     LEFT JOIN users u ON u.id = fa.updated_by
 """
@@ -51,7 +57,7 @@ _LIFECYCLE_JOIN = """
 # key a record shows is (farm, action_trigger, action_scope, action_cls): a line's and a condition's own register
 # key, a finding's parent line key; actions are never transferred to findings.
 _RECORD_SELECT = """
-    x.record_kind, x.record_key, x.run_id, x.trigger, x.name, x.scope_kind, x.scope_id, x.parent_line,
+    x.record_kind, x.record_key, x.asset_code, x.run_id, x.trigger, x.name, x.scope_kind, x.scope_id, x.parent_line,
     x.cls, x.additive, x.applicability, x.tier, x.magnitude_tier, x.branch, x.status, x.resolved, x.confounded,
     x.value_gbp, x.value_gbp_per_year, x.energy_mwh, x.value_basis, x.withheld,
     x.period_start, x.period_end, x.period_basis, x.issue, x.evidence, x.action_operational,
@@ -59,7 +65,7 @@ _RECORD_SELECT = """
 """
 _RECORD_LIFECYCLE_JOIN = """
     LEFT JOIN scada_finding_action fa
-      ON fa.farm = x.farm AND fa.trigger = x.action_trigger
+      ON fa.farm = x.farm AND fa.asset_code = x.asset_code AND fa.trigger = x.action_trigger
       AND fa.scope = x.action_scope AND fa.cls = x.action_cls
 """
 _RECORD_ORDER = (
@@ -71,6 +77,7 @@ _RECORD_ORDER = (
 _tables_seen = False
 _by_year_seen = False
 _records_seen = False
+_asset_keys_seen = False
 
 _CLASS_SLOT = {"REALIZED": "realized", "RECOVERABLE": "recoverable", "CURTAILMENT": "curtailment"}
 _BY_YEAR_SERIES = (("real", "gbp_real"), ("constant_price", "gbp_constant_price"))
@@ -157,6 +164,32 @@ async def scada_records_present(db: AsyncSession) -> bool:
     return present
 
 
+async def scada_asset_keys_present(db: AsyncSession) -> bool:
+    """True when the gold tables carry the per-asset keys (pipeline migration e5b8c2d4f6a1, D-081).
+
+    Every query here filters on ``asset_code`` and reads ``opportunity_run.currency``; before that migration the
+    endpoints answer 503 rather than serve a farm-wide mix of assets."""
+    global _asset_keys_seen
+    if _asset_keys_seen:
+        return True
+    try:
+        present = (
+            await db.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = 'scada' AND table_name = 'opportunity_run' "
+                    "AND column_name = 'currency' LIMIT 1"
+                )
+            )
+        ).scalar() is not None
+    except Exception:
+        logger.warning("scada_asset_keys_check_failed", exc_info=True)
+        return False
+    if present:
+        _asset_keys_seen = True
+    return present
+
+
 def parse_statement(row: Dict[str, Any]) -> Dict[str, Any]:
     """The statement row with its JSON text parsed (stored as text so the pipeline writes it verbatim)."""
     out = dict(row)
@@ -203,22 +236,50 @@ def summarise_by_year(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [acc[k] for k in sorted(acc, key=lambda k: (order[k[0]], k[1]))]
 
 
-class ScadaOpportunityService:
-    def __init__(self, db: AsyncSession):
-        self.db = db
+def class_summary(n: int, gbp: Any, not_assessed: Any) -> Dict[str, Any]:
+    """One class's rollup. ``gbp`` is the SQL SUM over the additive lines that carry a figure (NULL when none
+    does): a class whose additive lines are all declared not assessed has no amount; a class with no additive
+    line (CONDITIONAL, ALERT, CONTEXT) keeps 0, as before D-081."""
+    na = int(not_assessed or 0)
+    amount = float(gbp) if gbp is not None else (None if na else 0.0)
+    return {"count": int(n), "gbp_year": amount, "not_assessed": na}
 
-    async def farm_slugs(self) -> List[str]:
-        """Farms that have a persisted register (the ones this feature can serve)."""
+
+class ScadaOpportunityService:
+    def __init__(self, db: AsyncSession, *, include_internal: bool = False):
+        self.db = db
+        # EnergyExe staff (is_superuser AND is_internal) also see the farms dim_farm marks internal.
+        self.include_internal = include_internal
+
+    async def farm_slugs(self, include_internal: Optional[bool] = None) -> List[str]:
+        """Farms that have a persisted register (the ones this feature can serve), internal farms only for staff."""
+        every = self.include_internal if include_internal is None else include_internal
         result = await self.db.execute(
-            text("SELECT DISTINCT farm FROM scada.opportunity_register ORDER BY farm")
+            text(
+                "SELECT DISTINCT r.farm FROM scada.opportunity_register r "
+                "LEFT JOIN scada.dim_farm d ON d.farm = r.farm "
+                "WHERE :every OR NOT COALESCE(d.internal, false) ORDER BY r.farm"
+            ),
+            {"every": every},
         )
         return [row.farm for row in result.fetchall()]
 
+    async def assets(self, farm: str) -> List[Dict[str, Any]]:
+        """The assets this farm has published, each with its reporting currency (one run row per asset)."""
+        rows = await self.db.execute(
+            text(
+                "SELECT asset_code, currency, site_name FROM scada.opportunity_run "
+                "WHERE farm = :farm ORDER BY asset_code"
+            ),
+            {"farm": farm},
+        )
+        return [dict(r._mapping) for r in rows.fetchall()]
+
     def _filters(
-        self, farm: str, cls, domain, trigger, additive_only, min_gbp
+        self, farm: str, asset: str, cls, domain, trigger, additive_only, min_gbp
     ) -> tuple[str, Dict[str, Any]]:
-        clauses = ["r.farm = :farm"]
-        params: Dict[str, Any] = {"farm": farm}
+        clauses = ["r.farm = :farm", "r.asset_code = :asset"]
+        params: Dict[str, Any] = {"farm": farm, "asset": asset}
         if cls:
             clauses.append("r.cls = :cls")
             params["cls"] = cls
@@ -239,6 +300,7 @@ class ScadaOpportunityService:
         self,
         farm: str,
         *,
+        asset: str,
         cls: Optional[str] = None,
         domain: Optional[str] = None,
         trigger: Optional[str] = None,
@@ -247,7 +309,7 @@ class ScadaOpportunityService:
         limit: int = 100,
         offset: int = 0,
     ) -> Dict[str, Any]:
-        where, params = self._filters(farm, cls, domain, trigger, additive_only, min_gbp)
+        where, params = self._filters(farm, asset, cls, domain, trigger, additive_only, min_gbp)
         join = "scada.opportunity_register r LEFT JOIN scada.dim_opportunity_trigger t ON t.code = r.trigger"
         rows = await self.db.execute(
             text(
@@ -256,24 +318,30 @@ class ScadaOpportunityService:
             ),
             {**params, "limit": limit, "offset": offset},
         )
-        items = [dict(row._mapping) for row in rows.fetchall()]
+        summary = await self.summary(farm, asset)
+        currency = summary["currency"] if summary else None
+        items = [{**dict(row._mapping), "currency": currency} for row in rows.fetchall()]
         # COUNT stays on the base join — the lifecycle LEFT JOIN is 1:1 so it can't change the count.
         total = (
             await self.db.execute(text(f"SELECT COUNT(*) FROM {join} WHERE {where}"), params)
         ).scalar() or 0
-        return {"items": items, "total": int(total), "summary": await self.summary(farm)}
+        return {"items": items, "total": int(total), "summary": summary}
 
-    async def summary(self, farm: str) -> Optional[Dict[str, Any]]:
-        """Farm-level register snapshot: run provenance + per-class counts/£ (filter-independent)."""
+    async def summary(self, farm: str, asset: str) -> Optional[Dict[str, Any]]:
+        """Asset-level register snapshot: run provenance + per-class counts/amounts (filter-independent).
+
+        A class's amount sums its additive lines that carry a figure; a FLEET line with no figure is one the
+        asset declares not assessed (D-078) and is counted in ``not_assessed``, never summed as zero. A class whose
+        every additive line is not assessed has no amount (null)."""
         run = (
             await self.db.execute(
                 text(
-                    "SELECT farm, run_id, site_name, generated_at, window_start_year, window_end_year, "
-                    "ann_years, realized_gbp_year, recoverable_gbp_year, curtailment_gbp_year, "
+                    "SELECT farm, asset_code, currency, run_id, site_name, generated_at, window_start_year, "
+                    "window_end_year, ann_years, realized_gbp_year, recoverable_gbp_year, curtailment_gbp_year, "
                     "headline_gbp_year, n_rows, register_version "
-                    "FROM scada.opportunity_run WHERE farm = :farm"
+                    "FROM scada.opportunity_run WHERE farm = :farm AND asset_code = :asset"
                 ),
-                {"farm": farm},
+                {"farm": farm, "asset": asset},
             )
         ).fetchone()
         if run is None:
@@ -281,46 +349,47 @@ class ScadaOpportunityService:
         by_class_rows = await self.db.execute(
             text(
                 "SELECT cls, COUNT(*) AS n, "
-                "COALESCE(SUM(gbp_year) FILTER (WHERE additive), 0) AS gbp "
-                "FROM scada.opportunity_register WHERE farm = :farm GROUP BY cls ORDER BY cls"
+                "SUM(gbp_year) FILTER (WHERE additive) AS gbp, "
+                "COUNT(*) FILTER (WHERE scope = 'FLEET' AND gbp_year IS NULL) AS not_assessed "
+                "FROM scada.opportunity_register WHERE farm = :farm AND asset_code = :asset "
+                "GROUP BY cls ORDER BY cls"
             ),
-            {"farm": farm},
+            {"farm": farm, "asset": asset},
         )
         by_class = {
-            row.cls: {
-                "count": int(row.n),
-                "gbp_year": float(row.gbp) if row.gbp is not None else 0.0,
-            }
+            row.cls: class_summary(row.n, row.gbp, row.not_assessed)
             for row in by_class_rows.fetchall()
         }
         out = dict(run._mapping)
         out["by_class"] = by_class
+        out["assets"] = await self.assets(farm)
         return out
 
-    async def get(self, farm: str, id: int) -> Optional[Dict[str, Any]]:
+    async def get(self, farm: str, id: int, asset: str) -> Optional[Dict[str, Any]]:
         row = await self.db.execute(
             text(
-                f"SELECT {_REGISTER_SELECT} FROM scada.opportunity_register r "
+                f"SELECT {_REGISTER_SELECT}, run.currency FROM scada.opportunity_register r "
                 "LEFT JOIN scada.dim_opportunity_trigger t ON t.code = r.trigger "
+                "JOIN scada.opportunity_run run ON run.farm = r.farm AND run.asset_code = r.asset_code "
                 f"{_LIFECYCLE_JOIN} "
-                "WHERE r.farm = :farm AND r.id = :id"
+                "WHERE r.farm = :farm AND r.asset_code = :asset AND r.id = :id"
             ),
-            {"farm": farm, "id": id},
+            {"farm": farm, "asset": asset, "id": id},
         )
         found = row.fetchone()
         return dict(found._mapping) if found else None
 
-    async def by_year(self, farm: str) -> Optional[Dict[str, Any]]:
+    async def by_year(self, farm: str, asset: str) -> Optional[Dict[str, Any]]:
         """The per-year view (EPR-131): run provenance + (year, trigger) rows + totals + trend.
         None when the farm has no run or no by-year rows (a v1-only persist)."""
         run = (
             await self.db.execute(
                 text(
-                    "SELECT farm, run_id, generated_at, window_start_year, window_end_year, ann_years, "
-                    "headline_gbp_year, price_basis_gbp_mwh, price_basis_note, decade_only_triggers "
-                    "FROM scada.opportunity_run WHERE farm = :farm"
+                    "SELECT farm, asset_code, currency, run_id, generated_at, window_start_year, "
+                    "window_end_year, ann_years, headline_gbp_year, price_basis_gbp_mwh, price_basis_note, "
+                    "decade_only_triggers FROM scada.opportunity_run WHERE farm = :farm AND asset_code = :asset"
                 ),
-                {"farm": farm},
+                {"farm": farm, "asset": asset},
             )
         ).fetchone()
         if run is None:
@@ -333,10 +402,10 @@ class ScadaOpportunityService:
                         "SELECT farm, year, trigger, run_id, cls, label, gbp_real, basis_real, "
                         "gbp_constant_price, basis_constant_price, energy_mwh, partial_year, "
                         "recon_status, recon_delta_gbp "
-                        "FROM scada.opportunity_register_by_year WHERE farm = :farm "
+                        "FROM scada.opportunity_register_by_year WHERE farm = :farm AND asset_code = :asset "
                         "ORDER BY year, cls, trigger"
                     ),
-                    {"farm": farm},
+                    {"farm": farm, "asset": asset},
                 )
             ).fetchall()
         ]
@@ -349,9 +418,10 @@ class ScadaOpportunityService:
                     text(
                         "SELECT series, cls, n_full_years, slope_gbp_per_year, intercept_gbp, se_slope, "
                         "ci_lo, ci_hi, r2, year_first, year_last, note "
-                        "FROM scada.opportunity_by_year_trend WHERE farm = :farm ORDER BY series, cls"
+                        "FROM scada.opportunity_by_year_trend WHERE farm = :farm AND asset_code = :asset "
+                        "ORDER BY series, cls"
                     ),
-                    {"farm": farm},
+                    {"farm": farm, "asset": asset},
                 )
             ).fetchall()
         ]
@@ -373,34 +443,37 @@ class ScadaOpportunityService:
         )
         return [dict(row._mapping) for row in rows.fetchall()]
 
-    async def statement(self, farm: str) -> Optional[Dict[str, Any]]:
+    async def statement(self, farm: str, asset: str) -> Optional[Dict[str, Any]]:
         """The asset statement (EPR-181): per value class sums, the overlap adjustment, the reporting floor, the
         ranked findings, the coverage section. None when this farm has none persisted."""
         row = (
             await self.db.execute(
                 text(
                     "SELECT farm, run_id, asset_code, currency, statement_json, rendered_md, computed_at "
-                    "FROM scada.opportunity_statement WHERE farm = :farm"
+                    "FROM scada.opportunity_statement WHERE farm = :farm AND asset_code = :asset"
                 ),
-                {"farm": farm},
+                {"farm": farm, "asset": asset},
             )
         ).fetchone()
         return parse_statement(dict(row._mapping)) if row else None
 
-    async def text_for(self, farm: str, id: int, *, limit: int = 50) -> Optional[Dict[str, Any]]:
+    async def text_for(
+        self, farm: str, id: int, *, asset: str, limit: int = 50
+    ) -> Optional[Dict[str, Any]]:
         """The interpretation text of one register row: a FLEET line's own record and its findings (ranked as the
         statement ranks them), or a turbine row's condition records (one register key can carry several).
         """
-        reg = await self.get(farm, id)
+        reg = await self.get(farm, id, asset)
         if reg is None:
             return None
         key = {
             "farm": farm,
+            "asset": asset,
             "trigger": reg.get("trigger") or "",
             "scope": reg["scope"],
             "cls": reg["cls"],
         }
-        match = "x.farm = :farm AND x.action_trigger = :trigger AND x.action_scope = :scope AND x.action_cls = :cls"
+        match = "x.farm = :farm AND x.asset_code = :asset AND x.action_trigger = :trigger AND x.action_scope = :scope AND x.action_cls = :cls"
         out: Dict[str, Any] = {
             "register_id": id,
             "line": None,
@@ -450,15 +523,15 @@ class ScadaOpportunityService:
             out["conditions"] = [dict(r._mapping) for r in rows.fetchall()]
         return out
 
-    async def conditions(self, farm: str) -> List[Dict[str, Any]]:
+    async def conditions(self, farm: str, asset: str) -> List[Dict[str, Any]]:
         """Every condition record of the farm with the lifecycle state of its register key."""
         rows = await self.db.execute(
             text(
                 f"SELECT {_RECORD_SELECT}, x.action_trigger, x.action_scope, x.action_cls, "
                 "fa.status AS lifecycle_status FROM scada.opportunity_record x "
-                f"{_RECORD_LIFECYCLE_JOIN} WHERE x.farm = :farm AND x.record_kind = 'condition' "
-                "ORDER BY x.cls, x.action_scope, x.record_key"
+                f"{_RECORD_LIFECYCLE_JOIN} WHERE x.farm = :farm AND x.asset_code = :asset "
+                "AND x.record_kind = 'condition' ORDER BY x.cls, x.action_scope, x.record_key"
             ),
-            {"farm": farm},
+            {"farm": farm, "asset": asset},
         )
         return [dict(r._mapping) for r in rows.fetchall()]

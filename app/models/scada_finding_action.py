@@ -4,8 +4,9 @@ Phase 7b. The SCADA opportunity register (``scada.opportunity_register``, owned 
 energyexe-scada-pipeline) is read-only detection output; its ``id`` is a volatile per-farm ordinal
 the pipeline truncates+reloads on every persist. This table records the *human* lifecycle a
 superadmin applies to a finding — acknowledge / confirm / dismiss / resolve, plus a note and
-who-acted — and must therefore key on the **stable natural key** ``(farm, trigger, scope, cls)``,
-never the register ``id``.
+who-acted — and must therefore key on the **stable natural key** ``(farm, asset_code, trigger, scope, cls)``,
+never the register ``id``. ``asset_code`` joined the key in D-081 (EPR-183): one farm can publish several assets
+(Raggovidda RG1/RG2), and their actions must never merge.
 
 It is app-authored state written only by the API (never by the pipeline), so it lives in the ordinary
 public schema as a normal core model — same shape as ``DataAnomaly`` (String status + Python-layer
@@ -38,6 +39,8 @@ class ScadaFindingAction(Base):
     # normalised to '' (never NULL) so the unique key and the read-join match — the register's
     # ``trigger`` is COALESCE(...,'')-d on the join side.
     farm: Mapped[str] = mapped_column(String(64), nullable=False)
+    # D-081: the register row's asset (scada.opportunity_register.asset_code); rows from before it are HOT.
+    asset_code: Mapped[str] = mapped_column(String(16), nullable=False)
     trigger: Mapped[str] = mapped_column(String(48), nullable=False, server_default="")
     scope: Mapped[str] = mapped_column(String(32), nullable=False)
     cls: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -61,12 +64,15 @@ class ScadaFindingAction(Base):
     updater = relationship("User", foreign_keys=[updated_by])
 
     __table_args__ = (
-        UniqueConstraint("farm", "trigger", "scope", "cls", name="uq_scada_finding_action_key"),
+        UniqueConstraint(
+            "farm", "asset_code", "trigger", "scope", "cls", name="uq_scada_finding_action_key"
+        ),
     )
 
     def __repr__(self) -> str:
         return (
-            f"<ScadaFindingAction(farm='{self.farm}', trigger='{self.trigger}', "
+            f"<ScadaFindingAction(farm='{self.farm}', asset_code='{self.asset_code}', "
+            f"trigger='{self.trigger}', "
             f"scope='{self.scope}', cls='{self.cls}', status='{self.status}')>"
         )
 

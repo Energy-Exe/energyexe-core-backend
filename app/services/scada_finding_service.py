@@ -1,7 +1,7 @@
 """SCADA finding-lifecycle service (Phase 7b).
 
 Writes the human lifecycle state of a Predict finding into ``scada_finding_action`` (a public core
-table), keyed by the stable natural key ``(farm, trigger, scope, cls)``. Mirrors the DataAnomaly
+table), keyed by the stable natural key ``(farm, asset_code, trigger, scope, cls)`` (asset since D-081). Mirrors the DataAnomaly
 write pattern: load-or-create the ORM row, mutate, ``commit``/``refresh``. The register itself
 (``scada.opportunity_register``) is read via schema-qualified raw SQL only to validate that the
 natural key names a real finding before recording an action against it.
@@ -27,15 +27,23 @@ class ScadaFindingService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def _register_row_exists(self, farm: str, trigger: str, scope: str, cls: str) -> bool:
+    async def _register_row_exists(
+        self, farm: str, asset_code: str, trigger: str, scope: str, cls: str
+    ) -> bool:
         """True when a register row carries this natural key (guards orphan actions)."""
         result = await self.db.execute(
             text(
                 "SELECT 1 FROM scada.opportunity_register "
-                "WHERE farm = :farm AND COALESCE(trigger, '') = :trigger "
+                "WHERE farm = :farm AND asset_code = :asset_code AND COALESCE(trigger, '') = :trigger "
                 "AND scope = :scope AND cls = :cls LIMIT 1"
             ),
-            {"farm": farm, "trigger": trigger, "scope": scope, "cls": cls},
+            {
+                "farm": farm,
+                "asset_code": asset_code,
+                "trigger": trigger,
+                "scope": scope,
+                "cls": cls,
+            },
         )
         return result.scalar() is not None
 
@@ -43,6 +51,7 @@ class ScadaFindingService:
         self,
         *,
         farm: str,
+        asset_code: str,
         trigger: Optional[str],
         scope: str,
         cls: str,
@@ -52,13 +61,14 @@ class ScadaFindingService:
     ) -> Optional[ScadaFindingAction]:
         """Upsert the lifecycle state for one finding. Returns None if the finding doesn't exist."""
         trig = (trigger or "").strip()
-        if not await self._register_row_exists(farm, trig, scope, cls):
+        if not await self._register_row_exists(farm, asset_code, trig, scope, cls):
             return None
 
         existing = (
             await self.db.execute(
                 select(ScadaFindingAction).where(
                     ScadaFindingAction.farm == farm,
+                    ScadaFindingAction.asset_code == asset_code,
                     ScadaFindingAction.trigger == trig,
                     ScadaFindingAction.scope == scope,
                     ScadaFindingAction.cls == cls,
@@ -69,7 +79,12 @@ class ScadaFindingService:
         now = _utcnow()
         if existing is None:
             existing = ScadaFindingAction(
-                farm=farm, trigger=trig, scope=scope, cls=cls, status=status
+                farm=farm,
+                asset_code=asset_code,
+                trigger=trig,
+                scope=scope,
+                cls=cls,
+                status=status,
             )
             self.db.add(existing)
 
@@ -88,6 +103,7 @@ class ScadaFindingService:
         logger.info(
             "scada_finding_action_set",
             farm=farm,
+            asset_code=asset_code,
             trigger=trig,
             scope=scope,
             cls=cls,
