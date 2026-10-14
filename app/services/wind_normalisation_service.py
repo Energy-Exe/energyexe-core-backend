@@ -23,6 +23,12 @@ from app.models.windfarm import Windfarm
 logger = structlog.get_logger(__name__)
 
 NORM_WIND_MIN_MPS = 4.0  # Exclude low wind — too noisy
+# A month needs at least this many qualifying hours before it gets an index.
+# Confirmed structural-constraint periods are masked out of the Module 4
+# sample upstream, so a long confirmed period can leave a handful of stray
+# hours in a month (Smøla 2025-12: 2 hours) — averaging those produced a
+# 200-index bar. Mirrors MIN_FIT_HOURS in degradation_service.
+MIN_MONTH_HOURS = 100
 
 
 class WindNormalisationService:
@@ -72,10 +78,16 @@ class WindNormalisationService:
 
         # Compute monthly and yearly indices
         monthly_idx, yearly_idx = self.compute_indices(hourly)
+        self._log_skipped_months(windfarm_id, hourly, monthly_idx)
 
         # Store to performance_summaries
         await self._store_normalisation(
-            windfarm_id, monthly_idx, yearly_idx, reference, pipeline_run_id
+            windfarm_id,
+            monthly_idx,
+            yearly_idx,
+            reference,
+            pipeline_run_id,
+            span_years=self._span_years(hourly),
         )
 
         return {
@@ -105,8 +117,14 @@ class WindNormalisationService:
             return {"error": "No qualifying hours for normalisation"}
 
         monthly_idx, yearly_idx = self.compute_indices(hourly)
+        self._log_skipped_months(windfarm_id, hourly, monthly_idx)
         await self._store_normalisation(
-            windfarm_id, monthly_idx, yearly_idx, reference, pipeline_run_id
+            windfarm_id,
+            monthly_idx,
+            yearly_idx,
+            reference,
+            pipeline_run_id,
+            span_years=self._span_years(hourly),
         )
 
         return {
@@ -159,8 +177,13 @@ class WindNormalisationService:
     @staticmethod
     def compute_indices(
         hourly: pd.DataFrame,
+        min_month_hours: int = MIN_MONTH_HOURS,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Compute monthly and yearly indices relative to historical mean.
+
+        Months with fewer than ``min_month_hours`` qualifying hours are dropped
+        before the historical mean is taken, and a year with no surviving month
+        gets no yearly row.
 
         Monthly: hourly groupby (year, month).mean() of norm_ratio. Historical
         mean is the mean of those monthly values.
@@ -179,6 +202,9 @@ class WindNormalisationService:
             hours_used=("norm_ratio", "count"),
         )
 
+        # Drop under-sampled months before the historical mean is taken
+        monthly = monthly[monthly["hours_used"] >= min_month_hours].reset_index(drop=True)
+
         # Monthly historical mean and index
         monthly_hist = float(monthly["avg_norm_ratio"].mean()) if len(monthly) > 0 else 1.0
         if monthly_hist <= 0:
@@ -196,6 +222,31 @@ class WindNormalisationService:
         yearly["index_vs_base"] = yearly["avg_norm_ratio"] / yearly_hist * 100
 
         return monthly, yearly
+
+    @staticmethod
+    def _span_years(hourly: pd.DataFrame) -> Optional[Tuple[int, int]]:
+        """Inclusive (min_year, max_year) covered by the hourly sample."""
+        if hourly.empty or "year" not in hourly.columns:
+            return None
+        return int(hourly["year"].min()), int(hourly["year"].max())
+
+    @staticmethod
+    def _log_skipped_months(windfarm_id: int, hourly: pd.DataFrame, monthly: pd.DataFrame) -> None:
+        """Log the (year, month, hours) that fell under MIN_MONTH_HOURS."""
+        if hourly.empty:
+            return
+        counts = hourly.groupby(["year", "month"]).size()
+        kept = set(zip(monthly["year"].astype(int), monthly["month"].astype(int)))
+        skipped = [
+            (int(y), int(m), int(n)) for (y, m), n in counts.items() if (int(y), int(m)) not in kept
+        ]
+        if skipped:
+            logger.info(
+                "normalisation_months_skipped",
+                windfarm_id=windfarm_id,
+                min_month_hours=MIN_MONTH_HOURS,
+                skipped=skipped,
+            )
 
     # ─── Curve lookup ──────────────────────────────────────────
 
@@ -232,11 +283,18 @@ class WindNormalisationService:
         yearly: pd.DataFrame,
         reference: str,
         pipeline_run_id: Optional[int] = None,
+        span_years: Optional[Tuple[int, int]] = None,
     ) -> None:
         """Bulk upsert normalisation columns in performance_summaries.
 
         Uses INSERT ... ON CONFLICT DO UPDATE for monthly rows (unique index exists)
         and raw SQL UPDATE for yearly rows (NULL month defeats ON CONFLICT).
+
+        When ``span_years`` is given, the two normalisation columns are cleared
+        on every month/year row inside that span that this run did NOT compute
+        (under-sampled or fully masked periods), so a value from an earlier run
+        cannot survive next to freshly computed neighbours. Other columns on the
+        same rows (ODI, commercial) are left alone.
         """
         # Map to model column names (q50 -> p50, q90 -> p10)
         if reference == "q50":
@@ -319,3 +377,51 @@ class WindNormalisationService:
                     ),
                     row,
                 )
+
+        # Clear stale values inside the span this run covered but did not compute.
+        if span_years is None:
+            return
+        span_min, span_max = span_years
+        computed_months = [f"({int(r['year'])},{int(r['month'])})" for _, r in monthly.iterrows()]
+        computed_years = [str(int(r["year"])) for _, r in yearly.iterrows()]
+        month_pred = (
+            f"AND (year, month) NOT IN ({', '.join(computed_months)})" if computed_months else ""
+        )
+        year_pred = f"AND year NOT IN ({', '.join(computed_years)})" if computed_years else ""
+        cleared_m = await self.db.execute(
+            text(
+                f"""
+                UPDATE performance_summaries
+                SET {ratio_col} = NULL, {index_col} = NULL, updated_at = NOW()
+                WHERE windfarm_id = :windfarm_id
+                  AND period_type = 'month'
+                  AND year BETWEEN :span_min AND :span_max
+                  AND {index_col} IS NOT NULL
+                  {month_pred}
+            """
+            ),
+            {"windfarm_id": windfarm_id, "span_min": span_min, "span_max": span_max},
+        )
+        cleared_y = await self.db.execute(
+            text(
+                f"""
+                UPDATE performance_summaries
+                SET {ratio_col} = NULL, {index_col} = NULL, updated_at = NOW()
+                WHERE windfarm_id = :windfarm_id
+                  AND period_type = 'year'
+                  AND month IS NULL
+                  AND year BETWEEN :span_min AND :span_max
+                  AND {index_col} IS NOT NULL
+                  {year_pred}
+            """
+            ),
+            {"windfarm_id": windfarm_id, "span_min": span_min, "span_max": span_max},
+        )
+        if cleared_m.rowcount or cleared_y.rowcount:
+            logger.info(
+                "normalisation_stale_cleared",
+                windfarm_id=windfarm_id,
+                reference=reference,
+                month_rows=cleared_m.rowcount,
+                year_rows=cleared_y.rowcount,
+            )

@@ -73,3 +73,12 @@ outcome is frozen in [`HANDOFF-2026-05-25.md`](HANDOFF-2026-05-25.md).
   threshold was the fix.
 - Keep laptops awake (`caffeinate`) and `tee` the log for multi-hour runs; two
   of eight runs were lost to sleep/restart.
+
+## 2026-10-14 — Module 4 averaged two stray hours into a 200 index (EPR-184)
+
+Confirmed structural-constraint periods are masked out of the Module 3/4/5 sample. A confirmed period that ended at
+2025-12-31 21:00 on Smøla left two hours in December 2025; `WindNormalisationService` averaged them, wrote a 200
+monthly index and, because the yearly index is the mean of monthly means, a 191 yearly index. Fix: a month needs
+`MIN_MONTH_HOURS` (100) qualifying hours, and the run now NULLs normalisation values on rows inside its span that it
+did not compute, so values from an earlier run cannot survive next to fresh ones. Related: when a windfarm's COD moves,
+the stale-row rule is "period ends before the first non-ramp-up hour", not "year < COD year".
