@@ -245,8 +245,9 @@ class _IngestionOn:
 def ingestion_on(monkeypatch):
     monkeypatch.setattr(endpoint_module, "get_settings", lambda: _IngestionOn())
 
-    async def _legacy_farms(self):
-        return {"farms": [{"farm": "hill_of_towie", "name": "Hill of Towie"}]}
+    async def _legacy_farms(self, include_internal=False):
+        rows = [{"farm": "hill_of_towie", "name": "Hill of Towie"}]
+        return {"farms": rows + ([{"farm": "raggovidda"}] if include_internal else [])}
 
     async def _measured_farms(self):
         return {"farms": [{"farm": "lutelandet", "ingestion": {"profile": "measured_native"}}]}
@@ -291,6 +292,32 @@ def test_farms_merge_measured_profile_for_internal_staff_only(schema_present, in
     with _client_as(_FakeUser) as c:
         farms = {row["farm"]: row for row in c.get("/scada/farms").json()["farms"]}
     assert list(farms) == ["hill_of_towie"]
+
+
+def test_internal_farms_reach_internal_staff_only(schema_present, ingestion_on):
+    with _client_as(_InternalSuperuser) as c:
+        assert "raggovidda" in {r["farm"] for r in c.get("/scada/farms").json()["farms"]}
+    for user in (_Superuser, _FakeUser):
+        with _client_as(user) as c:
+            assert "raggovidda" not in {r["farm"] for r in c.get("/scada/farms").json()["farms"]}
+
+
+@pytest.mark.parametrize("include_internal", [False, True])
+async def test_service_farms_drops_internal_rows_unless_asked(include_internal):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    def _result(rows):
+        r = Mock()
+        r.fetchall.return_value = [SimpleNamespace(_mapping=m, **m) for m in rows]
+        return r
+
+    dims = [{"farm": "hill_of_towie", "internal": False}, {"farm": "raggovidda", "internal": True}]
+    db = SimpleNamespace(execute=AsyncMock(side_effect=[_result(dims), _result([]), _result([])]))
+    out = await scada_service.ScadaService(db).farms(include_internal=include_internal)
+    farms = [f["farm"] for f in out["farms"]]
+    assert farms == (["hill_of_towie", "raggovidda"] if include_internal else ["hill_of_towie"])
+    assert all("internal" not in f for f in out["farms"])
 
 
 def test_ingestion_summary_requires_internal_staff(ingestion_on):

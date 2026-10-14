@@ -2,8 +2,13 @@
 
 Thin wrappers over ScadaOpportunityService. 503 gracefully until the findings tables exist (before
 the pipeline's persist step lands on this env) and 404 on unknown farm slugs. Same auth posture as
-the rest of /scada — any authenticated (active, approved) user may read, no farm-level ACL yet
-(D-014). The client surfaces this only inside the superadmin-gated SCADA portal (D-022).
+the rest of /scada — any authenticated (active, approved) user may read (D-014) — except a farm the
+pipeline marks internal (``scada.dim_farm.internal``, D-081), which only EnergyExe staff (superuser and
+``is_internal``) may read: hidden from the farm list and 403 on a direct request. The client surfaces this
+only inside the superadmin-gated SCADA portal (D-022).
+
+D-081 (EPR-183): every route takes ``asset``; it may be omitted when the farm publishes one asset and is
+required when it publishes several (Raggovidda RG1/RG2).
 """
 
 from typing import Any, List, Optional
@@ -12,14 +17,16 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.agent_access import is_internal_staff
 from app.core.deps import get_current_active_user, get_db
 from app.models.scada_finding_action import SCADA_FINDING_WRITABLE_STATUSES
 from app.models.user import User
 from app.schemas.scada_opportunity import (
+    ScadaAsset,
     ScadaAssetStatement,
     ScadaFindingActionResult,
-    ScadaInterpretationRecord,
     ScadaFindingActionUpdate,
+    ScadaInterpretationRecord,
     ScadaOpportunity,
     ScadaOpportunityByYear,
     ScadaOpportunityListResponse,
@@ -30,6 +37,7 @@ from app.schemas.scada_opportunity import (
 from app.services.scada_finding_service import ScadaFindingService
 from app.services.scada_opportunity_service import (
     ScadaOpportunityService,
+    scada_asset_keys_present,
     scada_by_year_present,
     scada_opportunities_present,
     scada_records_present,
@@ -41,16 +49,55 @@ router = APIRouter()
 DEFAULT_FARM = "hill_of_towie"
 
 
-async def _service(db: AsyncSession) -> ScadaOpportunityService:
+_ASSET_QUERY = Query(
+    None, description="Asset code (e.g. RG1); required when the farm publishes several assets"
+)
+
+
+async def _service(db: AsyncSession, user: User) -> ScadaOpportunityService:
     if not await scada_opportunities_present(db):
         raise HTTPException(status_code=503, detail="SCADA opportunities not available")
-    return ScadaOpportunityService(db)
+    if not await scada_asset_keys_present(db):
+        raise HTTPException(
+            status_code=503,
+            detail="SCADA opportunities schema predates per-asset keys (pipeline migration e5b8c2d4f6a1)",
+        )
+    return ScadaOpportunityService(db, include_internal=is_internal_staff(user))
 
 
 async def _validated_farm(service: ScadaOpportunityService, farm: str) -> str:
-    if farm not in await service.farm_slugs():
-        raise HTTPException(status_code=404, detail=f"No SCADA opportunities for farm: {farm}")
-    return farm
+    if farm in await service.farm_slugs():
+        return farm
+    if not service.include_internal and farm in await service.farm_slugs(include_internal=True):
+        raise HTTPException(status_code=403, detail="Internal EnergyExe access required")
+    raise HTTPException(status_code=404, detail=f"No SCADA opportunities for farm: {farm}")
+
+
+async def _validated_asset(
+    service: ScadaOpportunityService, farm: str, asset: Optional[str]
+) -> str:
+    """The asset to serve: the one named, or the farm's only asset. Several assets and none named is a 400."""
+    codes = [a["asset_code"] for a in await service.assets(farm)]
+    if asset is None:
+        if len(codes) == 1:
+            return codes[0]
+        if not codes:
+            raise HTTPException(status_code=404, detail=f"No register run for farm: {farm}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"farm {farm} publishes several assets ({', '.join(codes)}); pass asset",
+        )
+    if asset not in codes:
+        raise HTTPException(status_code=404, detail=f"No asset {asset} for farm {farm}")
+    return asset
+
+
+async def _scoped(
+    db: AsyncSession, user: User, farm: str, asset: Optional[str]
+) -> tuple[ScadaOpportunityService, str]:
+    service = await _service(db, user)
+    await _validated_farm(service, farm)
+    return service, await _validated_asset(service, farm, asset)
 
 
 _NOT_PUBLISHED = (
@@ -86,18 +133,19 @@ async def list_opportunities(
         False, description="Only the priced lines that sum into a class total"
     ),
     min_gbp: Optional[float] = Query(
-        None, description="Minimum rank £ (|gbp/yr| or conditional exposure)"
+        None, description="Minimum rank amount (|gbp/yr| or conditional exposure), asset currency"
     ),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    asset: Optional[str] = _ASSET_QUERY,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """The ranked Revenue-at-Risk register for a farm (£-desc). Summary is the farm-level snapshot."""
-    service = await _service(db)
-    await _validated_farm(service, farm)
+    """The ranked Revenue-at-Risk register for one asset (amount-desc). Summary is the asset-level snapshot."""
+    service, code = await _scoped(db, current_user, farm, asset)
     return await service.list_opportunities(
         farm,
+        asset=code,
         cls=cls,
         domain=domain,
         trigger=trigger,
@@ -108,16 +156,28 @@ async def list_opportunities(
     )
 
 
-@router.get("/summary", response_model=ScadaOpportunitySummary)
-async def get_summary(
+@router.get("/assets", response_model=List[ScadaAsset])
+async def list_assets(
     farm: str = Query(DEFAULT_FARM),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """Headline £, per-class rollup, and run provenance (as-of) for a farm."""
-    service = await _service(db)
+    """The assets a farm publishes (code, currency, site name), for the phase selector (D-081)."""
+    service = await _service(db, current_user)
     await _validated_farm(service, farm)
-    summary = await service.summary(farm)
+    return await service.assets(farm)
+
+
+@router.get("/summary", response_model=ScadaOpportunitySummary)
+async def get_summary(
+    farm: str = Query(DEFAULT_FARM),
+    asset: Optional[str] = _ASSET_QUERY,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Headline amount, per-class rollup, currency and run provenance (as-of) for one asset."""
+    service, code = await _scoped(db, current_user, farm, asset)
+    summary = await service.summary(farm, code)
     if summary is None:
         raise HTTPException(status_code=404, detail=f"No register run for farm: {farm}")
     return summary
@@ -129,13 +189,14 @@ async def list_triggers(
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     """The schema-v7 trigger catalog (labels/domain/persona/action for filter chips)."""
-    service = await _service(db)
+    service = await _service(db, current_user)
     return await service.triggers()
 
 
 @router.get("/by-year", response_model=ScadaOpportunityByYear)
 async def get_by_year(
     farm: str = Query(DEFAULT_FARM),
+    asset: Optional[str] = _ASSET_QUERY,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -146,8 +207,7 @@ async def get_by_year(
     are materialised on this environment — the client renders that as 'not yet loaded' and never
     reports it, whereas a 503 would page the error tracker.
     """
-    service = await _service(db)
-    await _validated_farm(service, farm)
+    service, code = await _scoped(db, current_user, farm, asset)
     if not await scada_by_year_present(db):
         raise HTTPException(
             status_code=404,
@@ -156,7 +216,7 @@ async def get_by_year(
                 "(scada.opportunity_register_by_year not materialised)"
             ),
         )
-    out = await service.by_year(farm)
+    out = await service.by_year(farm, code)
     if out is None:
         raise HTTPException(status_code=404, detail=f"No per-year register for farm: {farm}")
     return out
@@ -165,16 +225,16 @@ async def get_by_year(
 @router.get("/statement", response_model=ScadaAssetStatement)
 async def get_statement(
     farm: str = Query(DEFAULT_FARM),
+    asset: Optional[str] = _ASSET_QUERY,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     """The asset statement (EPR-181): each value class with its own sum, the overlap adjustment, the
     reporting floor, the ranked findings and the coverage section. Never a sum across classes or currencies.
     """
-    service = await _service(db)
-    await _validated_farm(service, farm)
+    service, code = await _scoped(db, current_user, farm, asset)
     await _records_or_404(db)
-    out = await service.statement(farm)
+    out = await service.statement(farm, code)
     if out is None:
         raise HTTPException(status_code=404, detail=f"No asset statement for farm: {farm}")
     return out
@@ -183,15 +243,15 @@ async def get_statement(
 @router.get("/conditions", response_model=List[ScadaInterpretationRecord])
 async def list_conditions(
     farm: str = Query(DEFAULT_FARM),
+    asset: Optional[str] = _ASSET_QUERY,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     """The condition records (EPR-180): exposure per event, never a probability or a lead time, with the
     lifecycle state of each record's register key."""
-    service = await _service(db)
-    await _validated_farm(service, farm)
+    service, code = await _scoped(db, current_user, farm, asset)
     await _records_or_404(db)
-    return await service.conditions(farm)
+    return await service.conditions(farm, code)
 
 
 @router.put("/actions", response_model=ScadaFindingActionResult)
@@ -202,18 +262,21 @@ async def set_finding_action(
 ) -> Any:
     """Record the human lifecycle state of a finding (Phase 7b).
 
-    Keyed by the finding's stable natural key ``(farm, trigger, scope, cls)`` — never the volatile
-    register ``id``. Upserts the ``scada_finding_action`` row and attributes it to the caller. The
-    lifecycle then rides on the register rows via the list/detail read joins.
+    Keyed by the finding's stable natural key ``(farm, asset_code, trigger, scope, cls)`` — never the
+    volatile register ``id``; ``asset_code`` may be omitted when the farm publishes one asset (D-081).
+    Upserts the ``scada_finding_action`` row and attributes it to the caller. The lifecycle then rides
+    on the register rows via the list/detail read joins.
     """
     if payload.status not in SCADA_FINDING_WRITABLE_STATUSES:
         raise HTTPException(
             status_code=400,
             detail=f"status must be one of {sorted(SCADA_FINDING_WRITABLE_STATUSES)}",
         )
-    await _service(db)  # 503 until the register exists on this env
+    # 503 until the register exists on this env; 403/404 on a farm the caller may not read
+    _, code = await _scoped(db, current_user, payload.farm, payload.asset_code)
     action = await ScadaFindingService(db).set_action(
         farm=payload.farm,
+        asset_code=code,
         trigger=payload.trigger,
         scope=payload.scope,
         cls=payload.cls,
@@ -225,6 +288,7 @@ async def set_finding_action(
         raise HTTPException(status_code=404, detail="No SCADA finding matches that key")
     return ScadaFindingActionResult(
         farm=action.farm,
+        asset_code=action.asset_code,
         trigger=action.trigger,
         scope=action.scope,
         cls=action.cls,
@@ -241,13 +305,13 @@ async def set_finding_action(
 async def get_opportunity(
     id: int,
     farm: str = Query(DEFAULT_FARM),
+    asset: Optional[str] = _ASSET_QUERY,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """One register line by (farm, id) — evidence for the detail drawer."""
-    service = await _service(db)
-    await _validated_farm(service, farm)
-    row = await service.get(farm, id)
+    """One register line by (farm, asset, id) — evidence for the detail drawer."""
+    service, code = await _scoped(db, current_user, farm, asset)
+    row = await service.get(farm, id, code)
     if row is None:
         raise HTTPException(status_code=404, detail=f"No opportunity {id} for farm {farm}")
     return row
@@ -260,14 +324,14 @@ async def get_opportunity_text(
     limit: int = Query(
         50, ge=1, le=500, description="Findings returned (ranked); findings_total counts all"
     ),
+    asset: Optional[str] = _ASSET_QUERY,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     """ISSUE / EVIDENCE / ACTION for one register row: the line and its findings, or the condition records."""
-    service = await _service(db)
-    await _validated_farm(service, farm)
+    service, code = await _scoped(db, current_user, farm, asset)
     await _records_or_404(db)
-    out = await service.text_for(farm, id, limit=limit)
+    out = await service.text_for(farm, id, asset=code, limit=limit)
     if out is None:
         raise HTTPException(status_code=404, detail=f"No opportunity {id} for farm {farm}")
     return out
