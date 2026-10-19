@@ -32,6 +32,7 @@ from app.api.v1.endpoints import (
     opportunities,
     owners,
     p50_targets,
+    performance_analytics,
     performance_pipeline,
     platform_updates,
     portfolio,
@@ -148,6 +149,13 @@ api_router.include_router(opportunities.router, prefix="/opportunities", tags=["
 # Performance analysis pipeline endpoints
 api_router.include_router(
     performance_pipeline.router, prefix="/performance-pipeline", tags=["performance-pipeline"]
+)
+
+# Client Performance Analytics section (EPR-186)
+api_router.include_router(
+    performance_analytics.router,
+    prefix="/performance-analytics",
+    tags=["performance-analytics"],
 )
 
 # Structural-constraint flags (Module 1b)
