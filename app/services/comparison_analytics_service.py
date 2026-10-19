@@ -10,9 +10,10 @@ in the browser, so one cached payload serves every filter combination.
   over sources, hours covered = the best single source's hour count; a
   monthly-only source covers its whole month), as on the Generation page.
 - Capacity factor = MWh / (current nameplate MW x hours covered).
-- A month is left out (null) when its sources cover under half of it, or when
-  the capacity factor falls outside 0-100 %: partial months and data glitches
-  would otherwise pull the market average around.
+- A month is left out (null) when its sources cover under half of it, when
+  it reports no net generation, or when the capacity factor exceeds 100 %:
+  partial months, gaps stored as zeros and data glitches would otherwise pull
+  the market average around.
 """
 
 from datetime import date
@@ -41,7 +42,7 @@ def month_cf(
     if hours < MIN_MONTH_COVERAGE * hours_in_month(y, m):
         return None
     cf = GenerationAnalyticsService.capacity_factor(mwh, capacity_mw, hours)
-    if cf is None or cf < 0 or cf > 1:
+    if cf is None or cf <= 0 or cf > 1:
         return None
     return round(cf * 100, 1)
 
