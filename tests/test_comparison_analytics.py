@@ -16,6 +16,7 @@ def test_month_cf_drops_poorly_covered_month():
 
 def test_month_cf_drops_out_of_range_values():
     assert month_cf(-5.0, 10.0, 744, "2025-01") is None
+    assert month_cf(0.0, 10.0, 744, "2025-01") is None
     assert month_cf(8000.0, 10.0, 744, "2025-01") is None
     assert month_cf(100.0, None, 744, "2025-01") is None
 
