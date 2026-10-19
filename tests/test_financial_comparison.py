@@ -219,7 +219,7 @@ async def test_payload_one_entry_per_entity_aligned_to_years():
     assert fosen["name"] == "Fosen Vind DA" and fosen["combined"] is True
     assert fosen["capacity_mw"] == 150.0 and fosen["type"] == "mixed"
     assert [f["id"] for f in fosen["farms"]] == [11, 12]
-    assert fosen["owners"] == ["Statkraft"]
+    assert fosen["owners"] == [{"name": "Statkraft"}]
     assert fosen["rev"]["EUR"] == [100.0, None] and fosen["periods"] == ["2022-01/2022-12", None]
     assert solo["name"] == "Solo" and solo["combined"] is False and solo["zone"] == "NO2"
     # NOK filing: 1,000,000 NOK × 0.1 / 1,000 MWh in EUR; native NOK at rate 1.

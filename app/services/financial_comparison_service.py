@@ -294,7 +294,11 @@ class FinancialComparisonService:
                     "country": most_common([f.country_code for f in farms]),
                     "zone": most_common([f.bidzone_name for f in farms]),
                     "type": types.pop() if len(types) == 1 else ("mixed" if types else None),
-                    "owners": sorted({o["name"] for f in farms for o in owners.get(f.id, [])}),
+                    # Same shape as the Comparison payload, so the page reuses its filters.
+                    "owners": [
+                        {"name": n}
+                        for n in sorted({o["name"] for f in farms for o in owners.get(f.id, [])})
+                    ],
                     "rev": {
                         c: [cell["rev"][c] if cell else None for cell in cells] for c in CURRENCIES
                     },
