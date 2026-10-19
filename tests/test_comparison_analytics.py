@@ -25,3 +25,7 @@ def test_cf_series_aligns_to_months():
     months = ["2025-01", "2025-02", "2025-03"]
     by_month = {"2025-03": (2232.0, 744), "2025-01": (744.0, 744)}
     assert cf_series(months, by_month, 10.0) == [10.0, None, 30.0]
+
+
+def test_month_cf_keeps_exactly_full_output():
+    assert month_cf(7440.0, 10.0, 744, "2025-01") == 100.0

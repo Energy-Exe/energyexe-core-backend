@@ -25,6 +25,11 @@ _SOURCE_CURRENCY = {"ELEXON": "GBP", "ENTSOE": "EUR"}
 GB_BIDZONE_CODE = "10YGB----------A"
 
 
+def price_source_for(bidzone_code: Optional[str]) -> str:
+    """Day-ahead price source of a zone: ELEXON for GB, ENTSOE elsewhere."""
+    return "ELEXON" if bidzone_code == GB_BIDZONE_CODE else "ENTSOE"
+
+
 def _bucket_bounds(
     period_iso: str, aggregation: str, range_start: date, range_end: date
 ) -> Tuple[date, date]:
@@ -839,7 +844,7 @@ class PriceAnalyticsService:
 
         # Determine price source for this bidzone
         bidzone_code = bidzone.code if bidzone else None
-        price_source = "ELEXON" if bidzone_code == GB_BIDZONE_CODE else "ENTSOE"
+        price_source = price_source_for(bidzone_code)
 
         query = text(
             f"""
@@ -954,7 +959,7 @@ class PriceAnalyticsService:
         """
         bidzone = await self._get_bidzone(bidzone_id)
         bidzone_code = bidzone.code if bidzone else None
-        price_source = "ELEXON" if bidzone_code == GB_BIDZONE_CODE else "ENTSOE"
+        price_source = price_source_for(bidzone_code)
 
         query = text(
             f"""

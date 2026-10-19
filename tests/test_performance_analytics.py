@@ -1,6 +1,8 @@
 """Unit tests for the Performance Analytics payload maths (EPR-186, EPR-198)."""
 
 from datetime import date
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -145,3 +147,70 @@ def test_fallback_targets_are_detected():
     assert is_fallback_target(None, "fallback computed (3-yr historical mean)")
     assert not is_fallback_target("Original target before repowering", "https://x")
     assert not is_fallback_target(None, None)
+
+
+def test_hours_in_year_leap():
+    assert hours_in_year(2024) == 8784
+    assert hours_in_year(2023) == 8760
+
+
+def test_annual_waterfall_lists_p50_only_year():
+    p50 = {(2022, m): 10.0 for m in range(1, 13)}
+    (w,) = S.annual_waterfalls({}, {}, {}, p50)
+    assert w["year"] == 2022 and w["months_with_ratio"] == 0
+    assert w["reason"] == "0 of 12 monthly performance ratios"
+
+
+def test_monthly_p50_latest_start_wins_on_overlap():
+    targets = [
+        {"start": date(2020, 1, 1), "end": None, "annual_gwh": 120.0, "source": "old"},
+        {"start": date(2023, 1, 1), "end": None, "annual_gwh": 240.0, "source": "new"},
+    ]
+    by_month, used = S.monthly_p50(targets, [(2023, 5)])
+    assert by_month[(2023, 5)] == 20.0 and [t["source"] for t in used] == ["new"]
+
+
+def _service_with(targets, gen_history):
+    svc = S(AsyncMock())
+    wf = SimpleNamespace(
+        id=1,
+        name="Farm",
+        nameplate_capacity_mw=10.0,
+        bidzone_id=None,
+        bidzone_code=None,
+        bidzone_name=None,
+        country_id=1,
+        country_name="Norway",
+    )
+    svc._windfarm = AsyncMock(return_value=wf)
+    svc._summary_history = AsyncMock(return_value=({}, {}))
+    svc._monthly_prices = AsyncMock(return_value=({}, None))
+    svc._generation_history = AsyncMock(return_value=gen_history)
+    svc._p50_targets = AsyncMock(return_value=targets)
+    return svc
+
+
+@pytest.mark.asyncio
+async def test_waterfall_kept_when_window_has_no_p50_months():
+    """EPR-198 waterfalls are window-independent: a window before the target
+    still returns the block, with an empty window analysis."""
+    targets = [{"start": date(2023, 1, 1), "end": None, "annual_gwh": 120.0, "source": "s"}]
+    gen = ({(2023, m): 10.0 for m in range(1, 13)}, {(2023, m): 700 for m in range(1, 13)})
+    data = await _service_with(targets, gen).get_performance(1, (2021, 1), (2021, 12))
+    p50 = data["p50"]
+    assert p50["months_used"] == 0 and p50["cumulative"] == []
+    assert p50["annual_target_gwh"] == 120.0
+    assert [w["year"] for w in p50["annual_waterfalls"]] == [2023]
+
+
+@pytest.mark.asyncio
+async def test_no_targets_gives_no_p50_block():
+    data = await _service_with([], ({}, {})).get_performance(1, (2021, 1), (2021, 12))
+    assert data["p50"] is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_windfarm_returns_none():
+    svc = S(AsyncMock())
+    svc._windfarm = AsyncMock(return_value=None)
+    assert await svc.get_performance(1, (2021, 1), (2021, 2)) is None

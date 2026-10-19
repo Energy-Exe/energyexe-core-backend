@@ -37,6 +37,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.generation_analytics_service import GenerationAnalyticsService, utc_midnight
+from app.services.price_analytics_service import price_source_for
+
 # Seeded fallback targets (3-yr historical mean) are not operator P50s; the
 # page treats them as "no P50" (scripts/seeds/p50/import_p50_targets.py).
 FALLBACK_P50_MARKER = "auto-computed"
@@ -48,9 +51,17 @@ ROLLING_MIN_VALUES = 9
 # handful of missing hours without letting a short year through.
 FULL_YEAR_HOURS_SHARE = 0.99
 
-GB_BIDZONE_CODE = "10YGB----------A"
-
 Month = Tuple[int, int]
+
+# P50 block fields when the window has no month with both P50 and generation.
+EMPTY_P50_ANALYSIS: Dict[str, Any] = {
+    "months_used": 0,
+    "first_month": None,
+    "last_month": None,
+    "avg_annual_generation_gwh": None,
+    "gap_gwh": None,
+    "cumulative": [],
+}
 
 
 def month_key(year: int, month: int) -> str:
@@ -285,25 +296,25 @@ class PerformanceAnalyticsService:
         result = await self.db.execute(
             text(
                 """
-                SELECT EXTRACT(YEAR FROM hour)::int AS y, EXTRACT(MONTH FROM hour)::int AS m,
+                SELECT (date_trunc('month', hour AT TIME ZONE 'UTC'))::date AS p,
                        AVG(day_ahead_price) AS price, MAX(currency) AS currency
                 FROM price_data
                 WHERE windfarm_id = :id AND source = :source
                   AND day_ahead_price IS NOT NULL
                   AND hour >= :start AND hour < :end
-                GROUP BY 1, 2
+                GROUP BY 1
                 """
             ),
             {
                 "id": windfarm_id,
                 "source": source,
-                "start": date(start[0], start[1], 1),
-                "end": date(*add_months(end, 1), 1),
+                "start": utc_midnight(date(start[0], start[1], 1)),
+                "end": utc_midnight(date(*add_months(end, 1), 1)),
             },
         )
         rows = result.all()
         currency = next((r.currency for r in rows if r.currency), None)
-        return {(r.y, r.m): round(float(r.price), 2) for r in rows}, currency
+        return {(r.p.year, r.p.month): round(float(r.price), 2) for r in rows}, currency
 
     async def _benchmark(
         self, wf: Any, kind: str, start: Month, end: Month
@@ -345,28 +356,14 @@ class PerformanceAnalyticsService:
     async def _generation_history(
         self, windfarm_id: int
     ) -> Tuple[Dict[Month, float], Dict[Month, int]]:
-        """Full monthly history: (net GWh summed over sources, hours covered).
-
-        Hours covered is the best single source's count, so overlapping
-        sources never push a short month over a full one.
-        """
-        result = await self.db.execute(
-            text(
-                """
-                SELECT EXTRACT(YEAR FROM month)::int AS y, EXTRACT(MONTH FROM month)::int AS m,
-                       SUM(net_mwh) / 1000.0 AS gwh, MAX(hours_with_data) AS hours
-                FROM mv_generation_monthly_by_windfarm
-                WHERE windfarm_id = :id AND hours_with_data > 0
-                GROUP BY 1, 2
-                """
-            ),
-            {"id": windfarm_id},
-        )
+        """Full monthly history: (net GWh, hours covered), best source per month."""
+        monthly = await GenerationAnalyticsService(self.db)._monthly_generation([windfarm_id])
         gwh: Dict[Month, float] = {}
         hours: Dict[Month, int] = {}
-        for r in result.all():
-            gwh[(r.y, r.m)] = float(r.gwh or 0)
-            hours[(r.y, r.m)] = int(r.hours or 0)
+        for key, (mwh, h) in monthly.get(windfarm_id, {}).items():
+            m = parse_month(key)
+            gwh[m] = mwh / 1000.0
+            hours[m] = h
         return gwh, hours
 
     async def _p50_targets(self, windfarm_id: int) -> List[Dict[str, Any]]:
@@ -402,17 +399,16 @@ class PerformanceAnalyticsService:
         end: Month,
         benchmark: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
+        await self.db.execute(text("SET LOCAL statement_timeout = '30s'"))
         wf = await self._windfarm(windfarm_id)
         if wf is None:
             return None
-
-        await self.db.execute(text("SET LOCAL statement_timeout = '30s'"))
 
         months = month_range(start, end)
         index_by_month, ratio_by_month = await self._summary_history(windfarm_id)
         rolling = self.rolling_mean(index_by_month, months)
 
-        price_source = "ELEXON" if wf.bidzone_code == GB_BIDZONE_CODE else "ENTSOE"
+        price_source = price_source_for(wf.bidzone_code)
         prices, currency = await self._monthly_prices(windfarm_id, price_source, start, end)
 
         bench: Dict[Month, float] = {}
@@ -428,19 +424,24 @@ class PerformanceAnalyticsService:
         p50_by_month, used_targets = self.monthly_p50(targets, months)
 
         p50_block: Optional[Dict[str, Any]] = None
-        analysis = self.p50_analysis(months, generation, p50_by_month)
-        if analysis is not None:
-            latest = used_targets[-1]
+        if targets:
             # The waterfall is per calendar year across the farm's whole history,
-            # independent of the window (EPR-198).
-            history_years = sorted({m[0] for m in gen_history} | {m[0] for m in ratio_by_month})
+            # independent of the window (EPR-198), so it is built even when the
+            # window itself has no P50 months (months_used = 0).
+            history_years = sorted(
+                {m[0] for m in gen_history} | {m[0] for m in ratio_by_month}
+            ) or [
+                start[0],
+                end[0],
+            ]
             history_p50, _ = self.monthly_p50(
                 targets, month_range((history_years[0], 1), (history_years[-1], 12))
             )
+            latest = (used_targets or targets)[-1]
             p50_block = {
                 "annual_target_gwh": round(latest["annual_gwh"], 3),
                 "sources": [t["source"] for t in used_targets if t["source"]],
-                **analysis,
+                **(self.p50_analysis(months, generation, p50_by_month) or EMPTY_P50_ANALYSIS),
                 "annual_waterfalls": self.annual_waterfalls(
                     ratio_by_month, gen_history, hours_history, history_p50
                 ),

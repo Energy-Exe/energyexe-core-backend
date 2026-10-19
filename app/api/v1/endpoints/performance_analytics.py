@@ -1,8 +1,7 @@
 """Performance Analytics section of the client portal (EPR-186)."""
 
-import calendar
 from datetime import date
-from typing import Literal, Optional
+from typing import Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,13 +15,34 @@ from app.services.generation_analytics_service import (
     MAX_FARMS,
     GenerationAnalyticsService,
 )
-from app.services.performance_analytics_service import PerformanceAnalyticsService, parse_month
+from app.services.performance_analytics_service import (
+    Month,
+    PerformanceAnalyticsService,
+    add_months,
+    month_key,
+    parse_month,
+)
 
 router = APIRouter()
 
 # The inputs only change with the nightly pipeline / view refresh.
 CACHE_TTL_SECONDS = 6 * 3600
 MAX_WINDOW_MONTHS = 360
+
+
+def _month_window(start: str, end: str) -> Tuple[Month, Month]:
+    """Parse and check a YYYY-MM window; raises 400 on bad input."""
+    try:
+        start_m, end_m = parse_month(start), parse_month(end)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="start and end must be YYYY-MM")
+    if end_m < start_m:
+        raise HTTPException(status_code=400, detail="end must be on or after start")
+    if add_months(start_m, MAX_WINDOW_MONTHS) <= end_m:
+        raise HTTPException(
+            status_code=400, detail=f"The window covers at most {MAX_WINDOW_MONTHS} months"
+        )
+    return start_m, end_m
 
 
 @router.get("/windfarms/{windfarm_id}/performance")
@@ -35,18 +55,11 @@ async def get_windfarm_performance(
     db: AsyncSession = Depends(get_db),
 ):
     """Monthly wind-normalised index, spot price, benchmark and P50 analysis."""
-    try:
-        start_m, end_m = parse_month(start), parse_month(end)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="start and end must be YYYY-MM")
-    span = (end_m[0] - start_m[0]) * 12 + (end_m[1] - start_m[1]) + 1
-    if span < 1 or span > MAX_WINDOW_MONTHS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"end must be on or after start, at most {MAX_WINDOW_MONTHS} months",
-        )
-
-    cache_key = f"perf-analytics:v2:{windfarm_id}:{start}:{end}:{benchmark or '-'}"
+    start_m, end_m = _month_window(start, end)
+    cache_key = (
+        f"perf-analytics:v3:{windfarm_id}:{month_key(*start_m)}:{month_key(*end_m)}:"
+        f"{benchmark or '-'}"
+    )
     cached = await get_cached_report(cache_key)
     if cached is not None:
         return cached
@@ -82,15 +95,19 @@ async def get_generation(
     except ValueError:
         raise HTTPException(status_code=400, detail="start and end must be YYYY-MM-DD")
     span_days = (end_d - start_d).days + 1
-    if span_days < 1 or span_days > MAX_WINDOW_MONTHS * 31:
+    if span_days < 1:
         raise HTTPException(status_code=400, detail="end must be on or after start")
+    if span_days > MAX_WINDOW_MONTHS * 31:
+        raise HTTPException(
+            status_code=400, detail=f"The window covers at most {MAX_WINDOW_MONTHS} months"
+        )
     if granularity == "day" and span_days > MAX_DAY_WINDOW_DAYS:
         raise HTTPException(
             status_code=400,
             detail=f"The day view covers at most {MAX_DAY_WINDOW_DAYS} days",
         )
 
-    cache_key = f"perf-analytics:gen:v1:{','.join(map(str, ids))}:{granularity}:{start_d}:{end_d}"
+    cache_key = f"perf-analytics:gen:v2:{','.join(map(str, ids))}:{granularity}:{start_d}:{end_d}"
     cached = await get_cached_report(cache_key)
     if cached is not None:
         return cached
@@ -108,25 +125,15 @@ async def get_comparison(
     db: AsyncSession = Depends(get_db),
 ):
     """Monthly capacity factor of every compared wind farm (EPR-188)."""
-    try:
-        start_m, end_m = parse_month(start), parse_month(end)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="start and end must be YYYY-MM")
-    span = (end_m[0] - start_m[0]) * 12 + (end_m[1] - start_m[1]) + 1
-    if span < 1 or span > MAX_WINDOW_MONTHS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"end must be on or after start, at most {MAX_WINDOW_MONTHS} months",
-        )
-
-    cache_key = f"perf-analytics:cmp:v1:{start}:{end}"
+    start_m, end_m = _month_window(start, end)
+    cache_key = f"perf-analytics:cmp:v2:{month_key(*start_m)}:{month_key(*end_m)}"
     cached = await get_cached_report(cache_key)
     if cached is not None:
         return cached
 
-    last_day = calendar.monthrange(end_m[0], end_m[1])[1]
+    # The monthly view is keyed by each month's first day.
     data = await ComparisonAnalyticsService(db).get_comparison(
-        date(start_m[0], start_m[1], 1), date(end_m[0], end_m[1], last_day)
+        date(start_m[0], start_m[1], 1), date(end_m[0], end_m[1], 1)
     )
     await cache_report(cache_key, data, ttl_seconds=CACHE_TTL_SECONDS)
     return data
