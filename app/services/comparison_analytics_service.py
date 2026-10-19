@@ -6,9 +6,9 @@ the UK and Denmark), with the metadata the page filters on: country, price
 zone, onshore/offshore and owners. Filtering, averages and highlighting happen
 in the browser, so one cached payload serves every filter combination.
 
-- Generation comes from `mv_generation_monthly_by_windfarm` (net MWh summed
-  over sources, hours covered = the best single source's hour count; a
-  monthly-only source covers its whole month), as on the Generation page.
+- Generation comes from `mv_generation_monthly_by_windfarm` through the
+  Generation page's reader (best single source per farm-month; a monthly-only
+  source covers its whole month).
 - Capacity factor = MWh / (current nameplate MW x hours covered).
 - A month is left out (null) when its sources cover under half of it, when
   it reports no net generation, or when the capacity factor exceeds 100 %:
@@ -22,7 +22,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.generation_data import MONTHLY_SOURCES
 from app.services.generation_analytics_service import (
     GenerationAnalyticsService,
     hours_in_month,
@@ -82,20 +81,18 @@ class ComparisonAnalyticsService:
         )
         return list(result.fetchall())
 
-    async def _owners(self) -> Dict[int, List[Dict[str, Any]]]:
+    async def _owners(self, ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
         result = await self.db.execute(
             text(
                 """
                 SELECT wo.windfarm_id, o.name, wo.ownership_percentage AS pct
                 FROM windfarm_owners wo
                 JOIN owners o ON o.id = wo.owner_id
-                JOIN windfarms w ON w.id = wo.windfarm_id
-                JOIN countries c ON c.id = w.country_id
-                WHERE w.is_deleted = false AND c.code IN :countries
+                WHERE wo.windfarm_id IN :ids
                 ORDER BY wo.windfarm_id, wo.ownership_percentage DESC, o.name
                 """
-            ).bindparams(bindparam("countries", expanding=True)),
-            {"countries": list(COUNTRIES)},
+            ).bindparams(bindparam("ids", expanding=True)),
+            {"ids": ids},
         )
         out: Dict[int, List[Dict[str, Any]]] = {}
         for r in result.all():
@@ -104,56 +101,14 @@ class ComparisonAnalyticsService:
             )
         return out
 
-    async def _monthly_generation(
-        self, start: date, end: date
-    ) -> Dict[int, Dict[str, Tuple[float, int]]]:
-        """{windfarm_id: {'YYYY-MM': (net MWh over sources, hours covered)}}."""
-        result = await self.db.execute(
-            text(
-                """
-                SELECT mv.windfarm_id, EXTRACT(YEAR FROM mv.month)::int AS y,
-                       EXTRACT(MONTH FROM mv.month)::int AS m,
-                       SUM(mv.net_mwh) AS mwh,
-                       MAX(CASE WHEN mv.source IN :monthly THEN -1
-                                ELSE mv.hours_with_data END) AS hours
-                FROM mv_generation_monthly_by_windfarm mv
-                JOIN windfarms w ON w.id = mv.windfarm_id
-                JOIN countries c ON c.id = w.country_id
-                WHERE c.code IN :countries AND w.is_deleted = false
-                  AND mv.hours_with_data > 0
-                  AND mv.month >= :start AND mv.month <= :end
-                GROUP BY 1, 2, 3
-                """
-            ).bindparams(
-                bindparam("monthly", expanding=True),
-                bindparam("countries", expanding=True),
-            ),
-            {
-                "monthly": list(MONTHLY_SOURCES),
-                "countries": list(COUNTRIES),
-                "start": start,
-                "end": end,
-            },
-        )
-        out: Dict[int, Dict[str, Tuple[float, int]]] = {}
-        for r in result.all():
-            # -1 marks a monthly-only source: it covers the whole month.
-            hours = int(r.hours or 0)
-            if hours < 0:
-                hours = hours_in_month(r.y, r.m)
-            out.setdefault(r.windfarm_id, {})[f"{r.y:04d}-{r.m:02d}"] = (
-                float(r.mwh or 0),
-                hours,
-            )
-        return out
-
     async def get_comparison(self, start: date, end: date) -> Dict[str, Any]:
-        """`start` is the first day of the first month, `end` the last month's last day."""
+        """`start` and `end` are days inside the first and last months."""
         await self.db.execute(text("SET LOCAL statement_timeout = '30s'"))
         months = period_keys(start, end, "month")
         farms = await self._windfarms()
-        owners = await self._owners()
-        gen = await self._monthly_generation(start, end)
+        ids = [f.id for f in farms]
+        owners = await self._owners(ids)
+        gen = await GenerationAnalyticsService(self.db)._monthly_generation(ids, start, end)
 
         rows = []
         for f in farms:

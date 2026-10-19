@@ -10,23 +10,24 @@ of every price zone the farms sit in.
 - The day view reads hourly `generation_data` directly, so its window is
   capped (MAX_DAY_WINDOW_DAYS). Monthly-only sources (EIA, Energistyrelsen)
   store one row per month and are left out of the day view.
-- Capacity factor = MWh / (nameplate MW x hours covered). Hours covered is the
-  best single source's hour count; a monthly-only source covers its whole
-  month. Current nameplate is used, so a farm that expanded inside the window
+- Each farm-month uses its single best-covered source (sources are never
+  added together, so a farm reported by two sources is not double counted);
+  a monthly-only source covers its whole month.
+- Capacity factor = MWh / (nameplate MW x hours covered). Current nameplate is used, so a farm that expanded inside the window
   reads slightly low before the expansion.
 - Prices are `AVG(day_ahead_price)` per period, ELEXON for GB and ENTSOE
   elsewhere, in the zone's native currency (as on the Performance page).
 """
 
 import calendar
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.generation_data import MONTHLY_SOURCES
-from app.services.performance_analytics_service import GB_BIDZONE_CODE
+from app.services.price_analytics_service import price_source_for
 
 Granularity = Literal["day", "month", "year"]
 
@@ -62,6 +63,30 @@ def period_keys(start: date, end: date, granularity: Granularity) -> List[str]:
 
 def hours_in_month(year: int, month: int) -> int:
     return calendar.monthrange(year, month)[1] * 24
+
+
+def utc_midnight(d: date) -> datetime:
+    """`hour` is timestamptz; a bare `date` would bind as process-local midnight."""
+    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+
+
+def best_source_month(rows: Iterable[Any]) -> Dict[int, Dict[str, Tuple[float, int]]]:
+    """{windfarm_id: {'YYYY-MM': (MWh, hours)}} keeping one source per farm-month.
+
+    `rows` carry windfarm_id, y, m, source, mwh, hours (one per source). The
+    source covering the most hours wins (ties: more MWh); a monthly-only source
+    covers its whole month. Sources are never summed, as in
+    financial_opex_metrics.pick_best_generation.
+    """
+    out: Dict[int, Dict[str, Tuple[float, int]]] = {}
+    for r in rows:
+        hours = hours_in_month(r.y, r.m) if r.source in MONTHLY_SOURCES else int(r.hours or 0)
+        cell = (float(r.mwh or 0), hours)
+        farm = out.setdefault(r.windfarm_id, {})
+        key = f"{r.y:04d}-{r.m:02d}"
+        if key not in farm or (cell[1], cell[0]) > (farm[key][1], farm[key][0]):
+            farm[key] = cell
+    return out
 
 
 class GenerationAnalyticsService:
@@ -162,41 +187,31 @@ class GenerationAnalyticsService:
         return [by_id[i] for i in ids if i in by_id]
 
     async def _monthly_generation(
-        self, ids: List[int], start: date, end: date
+        self, ids: List[int], start: Optional[date] = None, end: Optional[date] = None
     ) -> Dict[int, Dict[str, Tuple[float, int]]]:
-        """{windfarm_id: {'YYYY-MM': (net MWh over sources, hours covered)}}."""
+        """{windfarm_id: {'YYYY-MM': (net MWh, hours covered)}}, best source per month.
+
+        Shared by the Performance, Generation and Comparison pages; no bounds
+        means the farm's whole history.
+        """
         result = await self.db.execute(
             text(
                 """
-                SELECT windfarm_id, EXTRACT(YEAR FROM month)::int AS y,
+                SELECT windfarm_id, source, EXTRACT(YEAR FROM month)::int AS y,
                        EXTRACT(MONTH FROM month)::int AS m,
-                       SUM(net_mwh) AS mwh,
-                       MAX(CASE WHEN source IN :monthly THEN -1 ELSE hours_with_data END)
-                           AS hours
+                       net_mwh AS mwh, hours_with_data AS hours
                 FROM mv_generation_monthly_by_windfarm
                 WHERE windfarm_id IN :ids AND hours_with_data > 0
                   AND month >= :start AND month <= :end
-                GROUP BY 1, 2, 3
                 """
-            ).bindparams(bindparam("ids", expanding=True), bindparam("monthly", expanding=True)),
+            ).bindparams(bindparam("ids", expanding=True)),
             {
                 "ids": ids,
-                "monthly": list(MONTHLY_SOURCES),
-                "start": date(start.year, start.month, 1),
-                "end": end,
+                "start": date(start.year, start.month, 1) if start else date.min,
+                "end": end or date.max,
             },
         )
-        out: Dict[int, Dict[str, Tuple[float, int]]] = {}
-        for r in result.all():
-            # -1 marks a monthly-only source: it covers the whole month.
-            hours = int(r.hours or 0)
-            if hours < 0:
-                hours = hours_in_month(r.y, r.m)
-            out.setdefault(r.windfarm_id, {})[f"{r.y:04d}-{r.m:02d}"] = (
-                float(r.mwh or 0),
-                hours,
-            )
-        return out
+        return best_source_month(result.all())
 
     async def _daily_generation(
         self, ids: List[int], start: date, end: date
@@ -222,8 +237,8 @@ class GenerationAnalyticsService:
             {
                 "ids": ids,
                 "monthly": list(MONTHLY_SOURCES),
-                "start": start,
-                "end": end + timedelta(days=1),
+                "start": utc_midnight(start),
+                "end": utc_midnight(end + timedelta(days=1)),
             },
         )
         out: Dict[int, Dict[str, Tuple[float, int]]] = {}
@@ -236,7 +251,7 @@ class GenerationAnalyticsService:
 
     async def _zone_prices(
         self,
-        windfarm_ids: List[int],
+        windfarm_id: int,
         source: str,
         granularity: Granularity,
         start: date,
@@ -244,27 +259,26 @@ class GenerationAnalyticsService:
     ) -> Tuple[Dict[str, float], Optional[str]]:
         """Mean day-ahead price per period for one zone.
 
-        `price_data` is keyed by wind farm; farms in one zone carry the same
-        zone price, so averaging across them is the zone price.
+        `price_data` is keyed by wind farm and every farm in a zone carries the
+        zone price, so one farm's series is the zone's.
         """
-        unit = {"day": "day", "month": "month", "year": "year"}[granularity]
         result = await self.db.execute(
             text(
                 f"""
-                SELECT (date_trunc('{unit}', hour AT TIME ZONE 'UTC'))::date AS p,
+                SELECT (date_trunc('{granularity}', hour AT TIME ZONE 'UTC'))::date AS p,
                        AVG(day_ahead_price) AS price, MAX(currency) AS currency
                 FROM price_data
-                WHERE windfarm_id IN :ids AND source = :source
+                WHERE windfarm_id = :id AND source = :source
                   AND day_ahead_price IS NOT NULL
                   AND hour >= :start AND hour < :end
                 GROUP BY 1
                 """
-            ).bindparams(bindparam("ids", expanding=True)),
+            ),
             {
-                "ids": windfarm_ids,
+                "id": windfarm_id,
                 "source": source,
-                "start": start,
-                "end": end + timedelta(days=1),
+                "start": utc_midnight(start),
+                "end": utc_midnight(end + timedelta(days=1)),
             },
         )
         rows = result.all()
@@ -317,10 +331,8 @@ class GenerationAnalyticsService:
         prices = []
         for zone_farms in zones.values():
             head = zone_farms[0]
-            source = "ELEXON" if head.bidzone_code == GB_BIDZONE_CODE else "ENTSOE"
-            by_period, currency = await self._zone_prices(
-                [f.id for f in zone_farms], source, granularity, start, end
-            )
+            source = price_source_for(head.bidzone_code)
+            by_period, currency = await self._zone_prices(head.id, source, granularity, start, end)
             if not by_period:
                 continue
             prices.append(
