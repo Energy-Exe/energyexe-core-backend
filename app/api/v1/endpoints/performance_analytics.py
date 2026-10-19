@@ -1,5 +1,6 @@
 """Performance Analytics section of the client portal (EPR-186)."""
 
+from datetime import date
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,10 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_active_user, get_db
 from app.core.redis import cache_report, get_cached_report
 from app.models.user import User
-from app.services.performance_analytics_service import (
-    PerformanceAnalyticsService,
-    parse_month,
+from app.services.generation_analytics_service import (
+    MAX_DAY_WINDOW_DAYS,
+    MAX_FARMS,
+    GenerationAnalyticsService,
 )
+from app.services.performance_analytics_service import PerformanceAnalyticsService, parse_month
 
 router = APIRouter()
 
@@ -52,5 +55,44 @@ async def get_windfarm_performance(
     if data is None:
         raise HTTPException(status_code=404, detail="Wind farm not found")
 
+    await cache_report(cache_key, data, ttl_seconds=CACHE_TTL_SECONDS)
+    return data
+
+
+@router.get("/generation")
+async def get_generation(
+    windfarm_ids: str = Query(..., description="Comma-separated wind farm ids (1-6)"),
+    granularity: Literal["day", "month", "year"] = Query("month"),
+    start: str = Query(..., description="First day, YYYY-MM-DD"),
+    end: str = Query(..., description="Last day (inclusive), YYYY-MM-DD"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generation, capacity factor and zone spot price per period (EPR-187)."""
+    try:
+        ids = list(dict.fromkeys(int(x) for x in windfarm_ids.split(",") if x.strip()))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="windfarm_ids must be integers")
+    if not 1 <= len(ids) <= MAX_FARMS:
+        raise HTTPException(status_code=400, detail=f"Pick 1 to {MAX_FARMS} wind farms")
+    try:
+        start_d, end_d = date.fromisoformat(start), date.fromisoformat(end)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="start and end must be YYYY-MM-DD")
+    span_days = (end_d - start_d).days + 1
+    if span_days < 1 or span_days > MAX_WINDOW_MONTHS * 31:
+        raise HTTPException(status_code=400, detail="end must be on or after start")
+    if granularity == "day" and span_days > MAX_DAY_WINDOW_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The day view covers at most {MAX_DAY_WINDOW_DAYS} days",
+        )
+
+    cache_key = f"perf-analytics:gen:v1:{','.join(map(str, ids))}:{granularity}:{start_d}:{end_d}"
+    cached = await get_cached_report(cache_key)
+    if cached is not None:
+        return cached
+
+    data = await GenerationAnalyticsService(db).get_generation(ids, granularity, start_d, end_d)
     await cache_report(cache_key, data, ttl_seconds=CACHE_TTL_SECONDS)
     return data
