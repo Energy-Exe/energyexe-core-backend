@@ -10,6 +10,7 @@ from app.core.deps import get_current_active_user, get_db
 from app.core.redis import cache_report, get_cached_report
 from app.models.user import User
 from app.services.comparison_analytics_service import ComparisonAnalyticsService
+from app.services.financial_comparison_service import FinancialComparisonService
 from app.services.generation_analytics_service import (
     MAX_DAY_WINDOW_DAYS,
     MAX_FARMS,
@@ -135,5 +136,21 @@ async def get_comparison(
     data = await ComparisonAnalyticsService(db).get_comparison(
         date(start_m[0], start_m[1], 1), date(end_m[0], end_m[1], 1)
     )
+    await cache_report(cache_key, data, ttl_seconds=CACHE_TTL_SECONDS)
+    return data
+
+
+@router.get("/financial")
+async def get_financial(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Annual revenue / OPEX per MWh and EBITDA margin per financial entity (EPR-189)."""
+    cache_key = "perf-analytics:fin:v1"
+    cached = await get_cached_report(cache_key)
+    if cached is not None:
+        return cached
+
+    data = await FinancialComparisonService(db).get_financial()
     await cache_report(cache_key, data, ttl_seconds=CACHE_TTL_SECONDS)
     return data
