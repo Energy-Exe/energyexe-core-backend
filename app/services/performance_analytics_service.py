@@ -11,20 +11,24 @@ window, and each is one indexed, month-grouped query:
 3. Optionally, the mean index of the other farms in the same price zone or
    country, as a benchmark.
 4. Monthly net generation (`mv_generation_monthly_by_windfarm`, refreshed
-   nightly) against the operator-published P50 target, with a waterfall that
-   splits the gap into wind resource and the farm's own performance.
+   nightly) against the operator-published P50 target, plus one waterfall per
+   calendar year that splits the gap into wind resource and the farm's own
+   performance (EPR-198).
 
 Generation comes from the monthly materialised view rather than the hourly
 table: one farm's full history is ~7 ms there versus tens of seconds cold on
 `generation_data`. The view does not drop ramp-up hours, so totals can differ
 slightly from the wind-farm page's P50 card in a farm's first months.
 
-Waterfall (per month with an index):
-    expected = actual / (index / 100)   # output at the farm's normal performance
-    wind     = expected - p50_month
-    perf     = actual - expected
-A month without an index puts its whole gap on wind (perf = 0). The totals
-therefore always reconcile: p50 + wind + perf = actual.
+Waterfall (EPR-198, one per calendar year):
+    R        = unweighted mean of the year's 12 monthly norm_ratio_p50
+               (actual / output the farm's own power curve implies for the wind)
+    expected = actual / R
+    perf     = actual - expected       # > 0: the farm beat its own curve
+    wind     = expected - p50          # the wind year versus the P50 target
+so p50 + wind + perf = actual. A year counts only with all 12 ratios, a full
+year of generation hours and P50 cover for every month. Wind is the remainder,
+so it also absorbs any error in the P50 target and in the wind data.
 """
 
 from datetime import date
@@ -39,6 +43,10 @@ FALLBACK_P50_MARKER = "auto-computed"
 
 ROLLING_WINDOW_MONTHS = 12
 ROLLING_MIN_VALUES = 9
+
+# A "full year" of generation: covered hours / hours in the year. Tolerates a
+# handful of missing hours without letting a short year through.
+FULL_YEAR_HOURS_SHARE = 0.99
 
 GB_BIDZONE_CODE = "10YGB----------A"
 
@@ -70,6 +78,10 @@ def month_range(start: Month, end: Month) -> List[Month]:
         out.append(cur)
         cur = add_months(cur, 1)
     return out
+
+
+def hours_in_year(year: int) -> int:
+    return (date(year + 1, 1, 1) - date(year, 1, 1)).days * 24
 
 
 def is_fallback_target(comment: Optional[str], source: Optional[str]) -> bool:
@@ -111,9 +123,8 @@ class PerformanceAnalyticsService:
         months: List[Month],
         actual_gwh: Dict[Month, float],
         p50_gwh: Dict[Month, float],
-        index_by_month: Dict[Month, float],
     ) -> Optional[Dict[str, Any]]:
-        """Cumulative P50 vs actual and the wind/performance waterfall.
+        """Cumulative P50 vs actual over the window.
 
         Only months that have both a P50 target and generation data count.
         """
@@ -123,8 +134,6 @@ class PerformanceAnalyticsService:
 
         cumulative: List[Dict[str, Any]] = []
         cum_p50 = cum_actual = 0.0
-        wind = perf = 0.0
-        without_index = 0
         for m in used:
             actual = actual_gwh[m]
             target = p50_gwh[m]
@@ -138,14 +147,6 @@ class PerformanceAnalyticsService:
                     "cumulative_gap_gwh": round(cum_actual - cum_p50, 3),
                 }
             )
-            index = index_by_month.get(m)
-            if index is not None and index > 0:
-                expected = actual / (index / 100.0)
-                wind += expected - target
-                perf += actual - expected
-            else:
-                without_index += 1
-                wind += actual - target
 
         n = len(used)
         return {
@@ -155,14 +156,60 @@ class PerformanceAnalyticsService:
             "avg_annual_generation_gwh": round(cum_actual / n * 12, 3),
             "gap_gwh": round(cum_actual - cum_p50, 3),
             "cumulative": cumulative,
-            "waterfall": {
-                "p50_gwh": round(cum_p50, 3),
-                "wind_resource_gwh": round(wind, 3),
-                "performance_gwh": round(perf, 3),
-                "actual_gwh": round(cum_actual, 3),
-                "months_without_index": without_index,
-            },
         }
+
+    @staticmethod
+    def annual_waterfalls(
+        ratio_by_month: Dict[Month, float],
+        gen_by_month: Dict[Month, float],
+        hours_by_month: Dict[Month, int],
+        p50_by_month: Dict[Month, float],
+    ) -> List[Dict[str, Any]]:
+        """One P50 gap waterfall per calendar year, newest first (EPR-198).
+
+        Years with any generation or P50 cover are listed; an incomplete one
+        carries a `reason` and null numbers so the client can show why.
+        """
+        years = sorted({m[0] for m in gen_by_month} | {m[0] for m in p50_by_month}, reverse=True)
+        out: List[Dict[str, Any]] = []
+        for year in years:
+            months = [(year, mo) for mo in range(1, 13)]
+            ratios = [ratio_by_month[m] for m in months if ratio_by_month.get(m, 0) > 0]
+            hours = sum(hours_by_month.get(m, 0) for m in months)
+            row: Dict[str, Any] = {
+                "year": year,
+                "complete": False,
+                "reason": None,
+                "months_with_ratio": len(ratios),
+                "p50_gwh": None,
+                "actual_gwh": None,
+                "ratio_mean": None,
+                "expected_gwh": None,
+                "wind_resource_gwh": None,
+                "performance_gwh": None,
+            }
+            if len(ratios) < 12:
+                row["reason"] = f"{len(ratios)} of 12 monthly performance ratios"
+            elif hours < FULL_YEAR_HOURS_SHARE * hours_in_year(year):
+                row["reason"] = "incomplete generation data"
+            elif any(m not in p50_by_month for m in months):
+                row["reason"] = "no P50 target for the full year"
+            else:
+                p50 = sum(p50_by_month[m] for m in months)
+                actual = sum(gen_by_month.get(m, 0.0) for m in months)
+                r = sum(ratios) / 12.0
+                expected = actual / r
+                row.update(
+                    complete=True,
+                    p50_gwh=round(p50, 3),
+                    actual_gwh=round(actual, 3),
+                    ratio_mean=round(r, 4),
+                    expected_gwh=round(expected, 3),
+                    wind_resource_gwh=round(expected - p50, 3),
+                    performance_gwh=round(actual - expected, 3),
+                )
+            out.append(row)
+        return out
 
     @staticmethod
     def monthly_p50(
@@ -208,19 +255,29 @@ class PerformanceAnalyticsService:
         )
         return result.fetchone()
 
-    async def _index_history(self, windfarm_id: int) -> Dict[Month, float]:
+    async def _summary_history(
+        self, windfarm_id: int
+    ) -> Tuple[Dict[Month, float], Dict[Month, float]]:
+        """Full monthly history: (norm_index_p50, norm_ratio_p50) by month."""
         result = await self.db.execute(
             text(
                 """
-                SELECT year, month, norm_index_p50
+                SELECT year, month, norm_index_p50, norm_ratio_p50
                 FROM performance_summaries
-                WHERE windfarm_id = :id AND period_type = 'month'
-                  AND month IS NOT NULL AND norm_index_p50 IS NOT NULL
+                WHERE windfarm_id = :id AND period_type = 'month' AND month IS NOT NULL
+                  AND (norm_index_p50 IS NOT NULL OR norm_ratio_p50 IS NOT NULL)
                 """
             ),
             {"id": windfarm_id},
         )
-        return {(r.year, r.month): float(r.norm_index_p50) for r in result.all()}
+        index: Dict[Month, float] = {}
+        ratio: Dict[Month, float] = {}
+        for r in result.all():
+            if r.norm_index_p50 is not None:
+                index[(r.year, r.month)] = float(r.norm_index_p50)
+            if r.norm_ratio_p50 is not None:
+                ratio[(r.year, r.month)] = float(r.norm_ratio_p50)
+        return index, ratio
 
     async def _monthly_prices(
         self, windfarm_id: int, source: str, start: Month, end: Month
@@ -285,27 +342,32 @@ class PerformanceAnalyticsService:
         peer_count = int(rows[0].peers) if rows else 0
         return {(r.year, r.month): round(float(r.idx), 2) for r in rows}, peer_count, name
 
-    async def _monthly_generation(
-        self, windfarm_id: int, start: Month, end: Month
-    ) -> Dict[Month, float]:
+    async def _generation_history(
+        self, windfarm_id: int
+    ) -> Tuple[Dict[Month, float], Dict[Month, int]]:
+        """Full monthly history: (net GWh summed over sources, hours covered).
+
+        Hours covered is the best single source's count, so overlapping
+        sources never push a short month over a full one.
+        """
         result = await self.db.execute(
             text(
                 """
                 SELECT EXTRACT(YEAR FROM month)::int AS y, EXTRACT(MONTH FROM month)::int AS m,
-                       SUM(net_mwh) / 1000.0 AS gwh
+                       SUM(net_mwh) / 1000.0 AS gwh, MAX(hours_with_data) AS hours
                 FROM mv_generation_monthly_by_windfarm
-                WHERE windfarm_id = :id AND month >= :start AND month <= :end
-                  AND hours_with_data > 0
+                WHERE windfarm_id = :id AND hours_with_data > 0
                 GROUP BY 1, 2
                 """
             ),
-            {
-                "id": windfarm_id,
-                "start": date(start[0], start[1], 1),
-                "end": date(end[0], end[1], 1),
-            },
+            {"id": windfarm_id},
         )
-        return {(r.y, r.m): float(r.gwh or 0) for r in result.all()}
+        gwh: Dict[Month, float] = {}
+        hours: Dict[Month, int] = {}
+        for r in result.all():
+            gwh[(r.y, r.m)] = float(r.gwh or 0)
+            hours[(r.y, r.m)] = int(r.hours or 0)
+        return gwh, hours
 
     async def _p50_targets(self, windfarm_id: int) -> List[Dict[str, Any]]:
         result = await self.db.execute(
@@ -347,7 +409,7 @@ class PerformanceAnalyticsService:
         await self.db.execute(text("SET LOCAL statement_timeout = '30s'"))
 
         months = month_range(start, end)
-        index_by_month = await self._index_history(windfarm_id)
+        index_by_month, ratio_by_month = await self._summary_history(windfarm_id)
         rolling = self.rolling_mean(index_by_month, months)
 
         price_source = "ELEXON" if wf.bidzone_code == GB_BIDZONE_CODE else "ENTSOE"
@@ -360,18 +422,28 @@ class PerformanceAnalyticsService:
             if bench_name:
                 bench_meta = {"kind": benchmark, "name": bench_name, "peer_count": peer_count}
 
-        generation = await self._monthly_generation(windfarm_id, start, end)
+        gen_history, hours_history = await self._generation_history(windfarm_id)
+        generation = {m: gen_history[m] for m in months if m in gen_history}
         targets = await self._p50_targets(windfarm_id)
         p50_by_month, used_targets = self.monthly_p50(targets, months)
 
         p50_block: Optional[Dict[str, Any]] = None
-        analysis = self.p50_analysis(months, generation, p50_by_month, index_by_month)
+        analysis = self.p50_analysis(months, generation, p50_by_month)
         if analysis is not None:
             latest = used_targets[-1]
+            # The waterfall is per calendar year across the farm's whole history,
+            # independent of the window (EPR-198).
+            history_years = sorted({m[0] for m in gen_history} | {m[0] for m in ratio_by_month})
+            history_p50, _ = self.monthly_p50(
+                targets, month_range((history_years[0], 1), (history_years[-1], 12))
+            )
             p50_block = {
                 "annual_target_gwh": round(latest["annual_gwh"], 3),
                 "sources": [t["source"] for t in used_targets if t["source"]],
                 **analysis,
+                "annual_waterfalls": self.annual_waterfalls(
+                    ratio_by_month, gen_history, hours_history, history_p50
+                ),
             }
 
         available = sorted(index_by_month)
@@ -395,6 +467,7 @@ class PerformanceAnalyticsService:
                 {
                     "month": month_key(*m),
                     "index": (round(index_by_month[m], 2) if m in index_by_month else None),
+                    "ratio": (round(ratio_by_month[m], 4) if m in ratio_by_month else None),
                     "rolling_12m": rolling[m],
                     "spot_price": prices.get(m),
                     "benchmark_index": bench.get(m),

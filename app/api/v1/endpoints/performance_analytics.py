@@ -41,7 +41,7 @@ async def get_windfarm_performance(
             detail=f"end must be on or after start, at most {MAX_WINDOW_MONTHS} months",
         )
 
-    cache_key = f"perf-analytics:v1:{windfarm_id}:{start}:{end}:{benchmark or '-'}"
+    cache_key = f"perf-analytics:v2:{windfarm_id}:{start}:{end}:{benchmark or '-'}"
     cached = await get_cached_report(cache_key)
     if cached is not None:
         return cached
