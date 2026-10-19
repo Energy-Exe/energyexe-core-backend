@@ -2,7 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import structlog
 from sqlalchemy import and_, func, select
@@ -134,6 +134,67 @@ class ExchangeRateService:
             )
 
         return rate
+
+    async def rates_for_periods(
+        self,
+        periods: Iterable[Tuple[str, date, date]],
+        to_currencies: Iterable[str],
+    ) -> Dict[Tuple[str, date, date, str], Optional[Decimal]]:
+        """``get_rate_for_period`` for many ``(from, start, end)`` periods and targets
+        from one read of the daily rates (same averages, same rounding).
+
+        Keyed ``(from, start, end, to)``; ``None`` where a period has no rates.
+        """
+        periods = set(periods)
+        targets = set(to_currencies)
+        out: Dict[Tuple[str, date, date, str], Optional[Decimal]] = {}
+        if not periods or not targets:
+            return out
+        quotes = ({c for c, _, _ in periods} | targets) - {"EUR"}
+        daily: Dict[str, Dict[date, Tuple[Decimal, Decimal]]] = {c: {} for c in quotes}
+        if quotes:
+            result = await self.db.execute(
+                select(
+                    ExchangeRate.quote_currency,
+                    ExchangeRate.rate_date,
+                    ExchangeRate.rate,
+                    ExchangeRate.inverse_rate,
+                ).where(
+                    and_(
+                        ExchangeRate.base_currency == "EUR",
+                        ExchangeRate.quote_currency.in_(sorted(quotes)),
+                        ExchangeRate.rate_date >= min(s for _, s, _ in periods),
+                        ExchangeRate.rate_date <= max(e for _, _, e in periods),
+                    )
+                )
+            )
+            for q, d, rate, inverse in result.all():
+                daily[q][d] = (Decimal(str(rate)), Decimal(str(inverse)))
+
+        def avg(values: List[Decimal]) -> Optional[Decimal]:
+            if not values:
+                return None
+            return (sum(values, Decimal("0")) / len(values)).quantize(Decimal("0.000001"))
+
+        for frm, start, end in periods:
+            for to in targets:
+                if frm == to:
+                    rate: Optional[Decimal] = Decimal("1")
+                elif frm == "EUR":
+                    rate = avg([r for d, (r, _) in daily[to].items() if start <= d <= end])
+                elif to == "EUR":
+                    rate = avg([i for d, (_, i) in daily[frm].items() if start <= d <= end])
+                else:
+                    to_days = daily[to]
+                    rate = avg(
+                        [
+                            i * to_days[d][0]
+                            for d, (_, i) in daily[frm].items()
+                            if start <= d <= end and d in to_days
+                        ]
+                    )
+                out[(frm, start, end, to)] = rate
+        return out
 
     async def convert_amount(
         self,

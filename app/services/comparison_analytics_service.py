@@ -81,7 +81,8 @@ class ComparisonAnalyticsService:
         )
         return list(result.fetchall())
 
-    async def _owners(self, ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+    async def owners(self, ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+        """Owners per farm id, largest stake first."""
         result = await self.db.execute(
             text(
                 """
@@ -107,7 +108,7 @@ class ComparisonAnalyticsService:
         months = period_keys(start, end, "month")
         farms = await self._windfarms()
         ids = [f.id for f in farms]
-        owners = await self._owners(ids)
+        owners = await self.owners(ids)
         gen = await GenerationAnalyticsService(self.db)._monthly_generation(ids, start, end)
 
         rows = []
