@@ -1,12 +1,13 @@
-"""Unit tests for the Performance Analytics payload maths (EPR-186)."""
+"""Unit tests for the Performance Analytics payload maths (EPR-186, EPR-198)."""
 
 from datetime import date
 
 import pytest
 
+from app.services.performance_analytics_service import PerformanceAnalyticsService as S
 from app.services.performance_analytics_service import (
-    PerformanceAnalyticsService as S,
     add_months,
+    hours_in_year,
     is_fallback_target,
     month_range,
     parse_month,
@@ -42,24 +43,12 @@ def test_rolling_mean_needs_nine_of_twelve_months():
     assert S.rolling_mean(history, [(2024, 9)])[(2024, 9)] == 100.0
 
 
-def test_waterfall_reconciles_and_splits_by_index():
+def test_cumulative_p50_analysis():
     months = [(2024, 1), (2024, 2), (2024, 3)]
     actual = {(2024, 1): 11.0, (2024, 2): 8.0, (2024, 3): 9.0}
     p50 = {m: 10.0 for m in months}
-    # Mar has no index: its whole gap goes to wind.
-    index = {(2024, 1): 110.0, (2024, 2): 80.0}
-    out = S.p50_analysis(months, actual, p50, index)
+    out = S.p50_analysis(months, actual, p50)
 
-    w = out["waterfall"]
-    assert w["p50_gwh"] == 30.0
-    assert w["actual_gwh"] == 28.0
-    assert w["months_without_index"] == 1
-    # Jan: expected 10 -> wind 0, perf +1. Feb: expected 10 -> wind 0, perf -2.
-    assert w["performance_gwh"] == pytest.approx(-1.0)
-    assert w["wind_resource_gwh"] == pytest.approx(-1.0)
-    assert w["p50_gwh"] + w["wind_resource_gwh"] + w["performance_gwh"] == pytest.approx(
-        w["actual_gwh"]
-    )
     assert out["gap_gwh"] == -2.0
     assert out["avg_annual_generation_gwh"] == pytest.approx(28.0 / 3 * 12, abs=1e-3)
     assert out["cumulative"][-1] == {
@@ -70,14 +59,73 @@ def test_waterfall_reconciles_and_splits_by_index():
     }
 
 
-def test_zero_index_treated_as_missing():
-    out = S.p50_analysis([(2024, 1)], {(2024, 1): 5.0}, {(2024, 1): 10.0}, {(2024, 1): 0.0})
-    assert out["waterfall"]["months_without_index"] == 1
-    assert out["waterfall"]["wind_resource_gwh"] == -5.0
-
-
 def test_no_p50_months_gives_none():
-    assert S.p50_analysis([(2024, 1)], {(2024, 1): 5.0}, {}, {}) is None
+    assert S.p50_analysis([(2024, 1)], {(2024, 1): 5.0}, {}) is None
+
+
+def _full_year(year, gwh=10.0, ratio=1.0, p50_annual=120.0):
+    months = [(year, mo) for mo in range(1, 13)]
+    hours = {m: hours_in_year(year) // 12 + 1 for m in months}
+    return (
+        {m: ratio for m in months},
+        {m: gwh for m in months},
+        hours,
+        {m: p50_annual / 12 for m in months},
+    )
+
+
+def test_annual_waterfall_reconciles():
+    ratio, gen, hours, p50 = _full_year(2024, gwh=10.0, ratio=1.2, p50_annual=110.0)
+    (w,) = S.annual_waterfalls(ratio, gen, hours, p50)
+
+    assert w["complete"] and w["reason"] is None
+    assert w["actual_gwh"] == 120.0
+    assert w["expected_gwh"] == pytest.approx(100.0)
+    assert w["performance_gwh"] == pytest.approx(20.0)  # beat its own curve
+    assert w["wind_resource_gwh"] == pytest.approx(-10.0)  # weak wind year
+    assert w["p50_gwh"] + w["wind_resource_gwh"] + w["performance_gwh"] == pytest.approx(
+        w["actual_gwh"]
+    )
+
+
+def test_annual_ratio_is_unweighted_mean():
+    ratio, gen, hours, p50 = _full_year(2024)
+    # A big month at 1.5 and a small one at 0.5 average to 1.0, not output-weighted.
+    ratio[(2024, 1)], gen[(2024, 1)] = 1.5, 100.0
+    ratio[(2024, 7)], gen[(2024, 7)] = 0.5, 1.0
+    (w,) = S.annual_waterfalls(ratio, gen, hours, p50)
+    assert w["ratio_mean"] == 1.0
+    assert w["performance_gwh"] == pytest.approx(0.0)
+
+
+def test_annual_waterfall_guards():
+    ratio, gen, hours, p50 = _full_year(2021)
+    del ratio[(2021, 3)]
+    (w,) = S.annual_waterfalls(ratio, gen, hours, p50)
+    assert not w["complete"] and w["reason"] == "11 of 12 monthly performance ratios"
+    assert w["performance_gwh"] is None
+
+    ratio, gen, hours, p50 = _full_year(2022)
+    hours[(2022, 2)] = 100
+    (w,) = S.annual_waterfalls(ratio, gen, hours, p50)
+    assert w["reason"] == "incomplete generation data"
+
+    ratio, gen, hours, p50 = _full_year(2023)
+    del p50[(2023, 12)]
+    (w,) = S.annual_waterfalls(ratio, gen, hours, p50)
+    assert w["reason"] == "no P50 target for the full year"
+
+    ratio, gen, hours, p50 = _full_year(2024)
+    ratio[(2024, 5)] = 0.0  # a zero ratio counts as missing
+    (w,) = S.annual_waterfalls(ratio, gen, hours, p50)
+    assert w["months_with_ratio"] == 11 and not w["complete"]
+
+
+def test_annual_waterfalls_newest_first():
+    a = _full_year(2023)
+    b = _full_year(2024)
+    merged = [{**x, **y} for x, y in zip(a, b)]
+    assert [w["year"] for w in S.annual_waterfalls(*merged)] == [2024, 2023]
 
 
 def test_monthly_p50_picks_covering_target():
