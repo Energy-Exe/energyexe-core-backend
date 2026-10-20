@@ -178,14 +178,17 @@ class FinancialComparisonService:
         return list(result.fetchall())
 
     async def _linked_farm_counts(self, entity_ids: List[int]) -> Dict[int, int]:
-        """Every farm linked to each entity: the generation query pools all of them."""
+        """Live farms linked to each entity, the coverage denominator. A deleted
+        placeholder (e.g. Raggovidda 2, 0 MW, no data) would halve the coverage
+        of the farm that does report."""
         result = await self.db.execute(
             text(
                 """
-                SELECT financial_entity_id, COUNT(DISTINCT windfarm_id) AS n
-                FROM windfarm_financial_entities
-                WHERE financial_entity_id IN :ids
-                GROUP BY financial_entity_id
+                SELECT wfe.financial_entity_id, COUNT(DISTINCT wfe.windfarm_id) AS n
+                FROM windfarm_financial_entities wfe
+                JOIN windfarms w ON w.id = wfe.windfarm_id
+                WHERE wfe.financial_entity_id IN :ids AND w.is_deleted = false
+                GROUP BY wfe.financial_entity_id
                 """
             ).bindparams(bindparam("ids", expanding=True)),
             {"ids": entity_ids},

@@ -261,7 +261,7 @@ def test_financial_caches_the_payload(api):
     ) as svc:
         assert api.get("/api/v1/performance-analytics/financial").json() == {"years": []}
     svc.assert_awaited_once()
-    assert ep.cache_report.await_args.args[0] == "perf-analytics:fin:v1"
+    assert ep.cache_report.await_args.args[0] == "perf-analytics:fin:v2"
 
     ep.get_cached_report.return_value = {"cached": True}
     with patch.object(ep.FinancialComparisonService, "get_financial", new=AsyncMock()) as svc:
