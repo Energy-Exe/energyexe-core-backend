@@ -146,7 +146,7 @@ async def get_financial(
     db: AsyncSession = Depends(get_db),
 ):
     """Annual revenue / OPEX per MWh and EBITDA margin per financial entity (EPR-189)."""
-    cache_key = "perf-analytics:fin:v1"
+    cache_key = "perf-analytics:fin:v2"
     cached = await get_cached_report(cache_key)
     if cached is not None:
         return cached
