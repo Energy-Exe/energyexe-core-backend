@@ -10,8 +10,9 @@ cached payload serves every view.
   farms, e.g. Fosen Vind DA) is one entry: combined MW, combined generation,
   one vote in every average.
 - A filing counts when it covers a full 12-month year (calendar or not), is
-  not synthetic, reports revenue and starts at least a year after the latest
-  COD of the entity's farms (the ratios endpoint's ramp-up rule). It belongs
+  not synthetic, reports revenue and starts on or after the latest COD of the
+  entity's farms: the year a farm started (a part year) and earlier years are
+  left out, the first full year counts (EPR-199). It belongs
   to the financial year in which most of its months fall; when a year-end
   change puts two filings in one year the later-ending one wins.
 - Per-MWh uses metered generation (best single source, pooled over every
@@ -27,7 +28,7 @@ source, so multi-source farms can differ there.
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -40,7 +41,6 @@ from app.services.exchange_rate_service import ExchangeRateService
 from app.services.financial_opex_metrics import (
     OPEX_MIN_COVERAGE_PCT,
     OPEX_PLAUSIBLE_EUR_PER_MWH,
-    RAMP_UP_DAYS,
     GenerationStat,
     expected_months,
     generation_for_filings,
@@ -87,7 +87,7 @@ def eligible_filings(
             dropped["not_12_months"] += 1
             continue
         cod = latest_cod.get(f.entity_id)
-        if cod is not None and f.period_start < cod + timedelta(days=RAMP_UP_DAYS):
+        if cod is not None and f.period_start < cod:
             dropped["ramp_up"] += 1
             continue
         key = (f.entity_id, financial_year(f.period_start))

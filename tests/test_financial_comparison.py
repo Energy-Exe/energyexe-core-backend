@@ -69,11 +69,27 @@ def test_duplicate_year_keeps_the_later_ending_filing_and_counts_drops():
     assert dropped == {"duplicate_year": 1, "not_12_months": 1}
 
 
+def test_ramp_up_drops_only_the_start_year_and_earlier():
+    """COD 2020-06-18: 2020 is a part year (dropped), 2021 is the first full year."""
+    cod = {10: date(2020, 6, 18)}
+    before = filing(1, start=date(2019, 1, 1), end=date(2019, 12, 31))
+    start_year = filing(2, start=date(2020, 1, 1), end=date(2020, 12, 31))
+    first_full = filing(3, start=date(2021, 1, 1), end=date(2021, 12, 31))
+    kept, dropped = eligible_filings([before, start_year, first_full], cod)
+    assert {k: f.fd_id for k, f in kept.items()} == {(10, 2021): 3}
+    assert dropped == {"ramp_up": 2}
+    # A UK year starting the day of COD counts.
+    kept, _ = eligible_filings(
+        [filing(4, start=date(2020, 7, 1), end=date(2021, 6, 30))], {10: date(2020, 7, 1)}
+    )
+    assert kept
+
+
 def test_ramp_up_uses_the_latest_cod_of_the_entity():
     f = filing(start=date(2023, 1, 1))
-    kept, dropped = eligible_filings([f], {10: date(2022, 6, 1)})
+    kept, dropped = eligible_filings([f], {10: date(2023, 2, 1)})
     assert not kept and dropped == {"ramp_up": 1}
-    kept, _ = eligible_filings([f], {10: date(2021, 12, 31)})
+    kept, _ = eligible_filings([f], {10: date(2022, 6, 1)})
     assert kept
 
 
@@ -261,7 +277,7 @@ def test_financial_caches_the_payload(api):
     ) as svc:
         assert api.get("/api/v1/performance-analytics/financial").json() == {"years": []}
     svc.assert_awaited_once()
-    assert ep.cache_report.await_args.args[0] == "perf-analytics:fin:v2"
+    assert ep.cache_report.await_args.args[0] == "perf-analytics:fin:v3"
 
     ep.get_cached_report.return_value = {"cached": True}
     with patch.object(ep.FinancialComparisonService, "get_financial", new=AsyncMock()) as svc:
