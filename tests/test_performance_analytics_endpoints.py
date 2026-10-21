@@ -52,7 +52,7 @@ def test_comparison_passes_first_days_of_months(api):
     start, end = svc.await_args.args
     assert (start.isoformat(), end.isoformat()) == ("2024-01-01", "2024-03-01")
     # Unpadded and padded months share one cache entry.
-    assert ep.cache_report.await_args.args[0] == "perf-analytics:cmp:v2:2024-01:2024-03"
+    assert ep.cache_report.await_args.args[0] == "perf-analytics:cmp:v3:2024-01:2024-03"
 
 
 def test_cache_hit_skips_service(api):

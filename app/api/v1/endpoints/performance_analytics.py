@@ -58,7 +58,7 @@ async def get_windfarm_performance(
     """Monthly wind-normalised index, spot price, benchmark and P50 analysis."""
     start_m, end_m = _month_window(start, end)
     cache_key = (
-        f"perf-analytics:v3:{windfarm_id}:{month_key(*start_m)}:{month_key(*end_m)}:"
+        f"perf-analytics:v4:{windfarm_id}:{month_key(*start_m)}:{month_key(*end_m)}:"
         f"{benchmark or '-'}"
     )
     cached = await get_cached_report(cache_key)
@@ -108,7 +108,7 @@ async def get_generation(
             detail=f"The day view covers at most {MAX_DAY_WINDOW_DAYS} days",
         )
 
-    cache_key = f"perf-analytics:gen:v2:{','.join(map(str, ids))}:{granularity}:{start_d}:{end_d}"
+    cache_key = f"perf-analytics:gen:v3:{','.join(map(str, ids))}:{granularity}:{start_d}:{end_d}"
     cached = await get_cached_report(cache_key)
     if cached is not None:
         return cached
@@ -127,7 +127,7 @@ async def get_comparison(
 ):
     """Monthly capacity factor of every compared wind farm (EPR-188)."""
     start_m, end_m = _month_window(start, end)
-    cache_key = f"perf-analytics:cmp:v2:{month_key(*start_m)}:{month_key(*end_m)}"
+    cache_key = f"perf-analytics:cmp:v3:{month_key(*start_m)}:{month_key(*end_m)}"
     cached = await get_cached_report(cache_key)
     if cached is not None:
         return cached
@@ -146,7 +146,7 @@ async def get_financial(
     db: AsyncSession = Depends(get_db),
 ):
     """Annual revenue / OPEX per MWh and EBITDA margin per financial entity (EPR-189)."""
-    cache_key = "perf-analytics:fin:v2"
+    cache_key = "perf-analytics:fin:v3"
     cached = await get_cached_report(cache_key)
     if cached is not None:
         return cached
