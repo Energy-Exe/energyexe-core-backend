@@ -298,14 +298,22 @@ def filing_from_row(row: Any) -> FilingRow:
 
 
 def pick_best_generation(
-    gen_rows: Iterable[Any], filings: Dict[int, FilingRow]
+    gen_rows: Iterable[Any],
+    filings: Dict[int, Any],
+    farms_per_filing: Optional[Dict[int, int]] = None,
 ) -> Dict[int, GenerationStat]:
     """Per filing, choose the single source with the best coverage.
 
     ``gen_rows`` are ``(fd_id, source, gen_mwh, hours_with_data, months_with_data)``
-    rows (attribute access). Sources are never summed together: a farm with
-    ELEXON + ENTSOE (or NVE + OTHER) units would otherwise count twice.
-    Coverage for ``MONTHLY_SOURCES`` is month-based.
+    rows (attribute access); ``filings`` maps fd_id to anything with
+    ``period_start`` / ``period_end``. Sources are never summed together: a
+    farm with ELEXON + ENTSOE (or NVE + OTHER) units would otherwise count
+    twice. Coverage for ``MONTHLY_SOURCES`` is month-based.
+
+    ``farms_per_filing`` (fd_id -> farms linked to the entity) measures
+    coverage against every linked farm, so a combined report whose farms only
+    partly have data is not treated as fully covered. Omitted, each filing
+    counts as one farm (the FIN-02/03 behaviour).
     """
     best: Dict[int, GenerationStat] = {}
     for r in gen_rows:
@@ -323,6 +331,7 @@ def pick_best_generation(
         else:
             have = int(r.hours_with_data or 0)
             expected = expected_hours(filing.period_start, filing.period_end)
+        expected *= (farms_per_filing or {}).get(fd_id, 1)
         coverage = min(100.0, have / expected * 100.0) if expected > 0 else 0.0
         candidate = GenerationStat(gen_mwh=gen, coverage_pct=round(coverage, 1), source=source)
         current = best.get(fd_id)
@@ -586,6 +595,22 @@ async def _fetch_rates(
 # ─── Async entry points ───────────────────────────────────────────────────────
 
 
+async def generation_for_filings(
+    db: AsyncSession,
+    filings: Dict[int, Any],
+    farms_per_filing: Optional[Dict[int, int]] = None,
+) -> Dict[int, GenerationStat]:
+    """Best-source metered generation over each filing's period, pooled across
+    every farm linked to its entity (see ``pick_best_generation``)."""
+    gen_rows: List[Any] = []
+    fd_ids = list(filings.keys())
+    for i in range(0, len(fd_ids), GENERATION_QUERY_CHUNK):
+        chunk = fd_ids[i:][:GENERATION_QUERY_CHUNK]
+        gen_result = await db.execute(text(_GENERATION_SQL), {"fd_ids": chunk})
+        gen_rows.extend(gen_result.fetchall())
+    return pick_best_generation(gen_rows, filings, farms_per_filing)
+
+
 async def _compute(
     db: AsyncSession,
     *,
@@ -610,15 +635,7 @@ async def _compute(
     if not filing_rows:
         return {}
     filings = [filing_from_row(r) for r in filing_rows]
-    by_id = {f.fd_id: f for f in filings}
-
-    gen_rows: List[Any] = []
-    fd_ids = list(by_id.keys())
-    for i in range(0, len(fd_ids), GENERATION_QUERY_CHUNK):
-        chunk = fd_ids[i:][:GENERATION_QUERY_CHUNK]
-        gen_result = await db.execute(text(_GENERATION_SQL), {"fd_ids": chunk})
-        gen_rows.extend(gen_result.fetchall())
-    generation = pick_best_generation(gen_rows, by_id)
+    generation = await generation_for_filings(db, {f.fd_id: f for f in filings})
 
     rates = None
     if display_currency is not None:
@@ -721,6 +738,7 @@ __all__ = [
     "expected_hours",
     "expected_months",
     "filing_from_row",
+    "generation_for_filings",
     "opex_metrics_for_cohort",
     "opex_metrics_for_windfarms",
     "pick_best_generation",
