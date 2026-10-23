@@ -109,6 +109,22 @@ class PerformanceAnalyticsService:
     # ─── Pure computation (unit-tested without a DB) ─────────────────────
 
     @staticmethod
+    def anchor_window(start: Month, end: Month, index_months: List[Month]) -> Tuple[Month, Month]:
+        """Count the same number of months back from the farm's last index month.
+
+        A relative preset ("24 months") ends at the last complete calendar month,
+        but the index can stop a year earlier (Norway, EPR-199), leaving most of
+        the window empty. When the last index month is before ``end`` the window
+        keeps its length and ends there instead; otherwise it is unchanged.
+        """
+        if not index_months:
+            return start, end
+        last = max(index_months)
+        if last >= end:
+            return start, end
+        return add_months(last, -(len(month_range(start, end)) - 1)), last
+
+    @staticmethod
     def rolling_mean(
         index_by_month: Dict[Month, float], months: List[Month]
     ) -> Dict[Month, Optional[float]]:
@@ -398,14 +414,17 @@ class PerformanceAnalyticsService:
         start: Month,
         end: Month,
         benchmark: Optional[str] = None,
+        anchor: bool = False,
     ) -> Optional[Dict[str, Any]]:
         await self.db.execute(text("SET LOCAL statement_timeout = '30s'"))
         wf = await self._windfarm(windfarm_id)
         if wf is None:
             return None
 
-        months = month_range(start, end)
         index_by_month, ratio_by_month = await self._summary_history(windfarm_id)
+        if anchor:
+            start, end = self.anchor_window(start, end, list(index_by_month))
+        months = month_range(start, end)
         rolling = self.rolling_mean(index_by_month, months)
 
         price_source = price_source_for(wf.bidzone_code)

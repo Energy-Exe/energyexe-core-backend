@@ -52,21 +52,26 @@ async def get_windfarm_performance(
     start: str = Query(..., description="First month, YYYY-MM"),
     end: str = Query(..., description="Last month (inclusive), YYYY-MM"),
     benchmark: Optional[Literal["zone", "country"]] = Query(None),
+    anchor: bool = Query(
+        False,
+        description="End the window at the farm's last index month when that is earlier "
+        "(same length); the response's `window` is the one used",
+    ),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Monthly wind-normalised index, spot price, benchmark and P50 analysis."""
     start_m, end_m = _month_window(start, end)
     cache_key = (
-        f"perf-analytics:v4:{windfarm_id}:{month_key(*start_m)}:{month_key(*end_m)}:"
-        f"{benchmark or '-'}"
+        f"perf-analytics:v5:{windfarm_id}:{month_key(*start_m)}:{month_key(*end_m)}:"
+        f"{benchmark or '-'}:{'a' if anchor else '-'}"
     )
     cached = await get_cached_report(cache_key)
     if cached is not None:
         return cached
 
     data = await PerformanceAnalyticsService(db).get_performance(
-        windfarm_id, start_m, end_m, benchmark
+        windfarm_id, start_m, end_m, benchmark, anchor
     )
     if data is None:
         raise HTTPException(status_code=404, detail="Wind farm not found")
@@ -108,7 +113,7 @@ async def get_generation(
             detail=f"The day view covers at most {MAX_DAY_WINDOW_DAYS} days",
         )
 
-    cache_key = f"perf-analytics:gen:v3:{','.join(map(str, ids))}:{granularity}:{start_d}:{end_d}"
+    cache_key = f"perf-analytics:gen:v4:{','.join(map(str, ids))}:{granularity}:{start_d}:{end_d}"
     cached = await get_cached_report(cache_key)
     if cached is not None:
         return cached

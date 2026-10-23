@@ -63,6 +63,16 @@ def test_cache_hit_skips_service(api):
     svc.assert_not_called()
 
 
+def test_performance_anchor_reaches_the_service_and_the_cache_key(api):
+    with patch.object(
+        ep.PerformanceAnalyticsService, "get_performance", new=AsyncMock(return_value={"ok": 1})
+    ) as svc:
+        resp = api.get(f"{BASE}/windfarms/5/performance?start=2024-10&end=2026-09&anchor=true")
+    assert resp.status_code == 200
+    assert svc.await_args.args == (5, (2024, 10), (2026, 9), None, True)
+    assert ep.cache_report.await_args.args[0] == "perf-analytics:v5:5:2024-10:2026-09:-:a"
+
+
 def test_performance_404_when_farm_missing(api):
     with patch.object(
         ep.PerformanceAnalyticsService, "get_performance", new=AsyncMock(return_value=None)
