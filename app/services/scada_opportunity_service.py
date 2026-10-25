@@ -236,6 +236,38 @@ def summarise_by_year(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [acc[k] for k in sorted(acc, key=lambda k: (order[k[0]], k[1]))]
 
 
+def attach_condition_labels(
+    items: List[Dict[str, Any]], labels: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Give each per-turbine register row the code or signal it is about and that code's text.
+
+    ``labels`` are the persisted condition records reduced to their lifecycle key, the register item they were built
+    from, the component (an alarm code, a component or a signal) and, where the pipeline read the asset's code legend
+    (D-088: DIAG_33's alarm codes), the legend's text and the legend concept. A register row matches the record built
+    from it: same (trigger, scope, cls) and the same item string — one register key can carry several rows (one per
+    alarm code), so the item is what tells them apart. FLEET lines and rows with no record get nulls. ``component_legend``
+    set with no text means the legend does not describe the code."""
+    by_key = {
+        (
+            lab.get("action_trigger") or "",
+            lab.get("action_scope"),
+            lab.get("action_cls"),
+            lab.get("register_item"),
+        ): lab
+        for lab in labels
+    }
+    for item in items:
+        hit = None
+        if item.get("scope") != "FLEET":
+            hit = by_key.get(
+                (item.get("trigger") or "", item.get("scope"), item.get("cls"), item.get("item"))
+            )
+        item["component"] = (hit or {}).get("component")
+        item["component_text"] = (hit or {}).get("component_text")
+        item["component_legend"] = (hit or {}).get("component_legend")
+    return items
+
+
 def class_summary(n: int, gbp: Any, not_assessed: Any) -> Dict[str, Any]:
     """One class's rollup. ``gbp`` is the SQL SUM over the additive lines that carry a figure (NULL when none
     does): a class whose additive lines are all declared not assessed has no amount; a class with no additive
@@ -321,11 +353,33 @@ class ScadaOpportunityService:
         summary = await self.summary(farm, asset)
         currency = summary["currency"] if summary else None
         items = [{**dict(row._mapping), "currency": currency} for row in rows.fetchall()]
+        labels = (
+            await self.condition_labels(farm, asset) if await scada_records_present(self.db) else []
+        )
+        attach_condition_labels(items, labels)
         # COUNT stays on the base join — the lifecycle LEFT JOIN is 1:1 so it can't change the count.
         total = (
             await self.db.execute(text(f"SELECT COUNT(*) FROM {join} WHERE {where}"), params)
         ).scalar() or 0
         return {"items": items, "total": int(total), "summary": summary}
+
+    async def condition_labels(self, farm: str, asset: str) -> List[Dict[str, Any]]:
+        """The condition records' lifecycle key, source register item, component and legend text (see
+        ``attach_condition_labels``), read from the export record the pipeline persisted as JSON text.
+        """
+        rows = await self.db.execute(
+            text(
+                "SELECT x.action_trigger, x.action_scope, x.action_cls, "
+                "CAST(x.payload_json AS jsonb) #>> '{provenance,register_item}' AS register_item, "
+                "CAST(x.payload_json AS jsonb) ->> 'component' AS component, "
+                "CAST(x.payload_json AS jsonb) #>> '{source,label_text}' AS component_text, "
+                "CAST(x.payload_json AS jsonb) #>> '{source,legend}' AS component_legend "
+                "FROM scada.opportunity_record x "
+                "WHERE x.farm = :farm AND x.asset_code = :asset AND x.record_kind = 'condition'"
+            ),
+            {"farm": farm, "asset": asset},
+        )
+        return [dict(r._mapping) for r in rows.fetchall()]
 
     async def summary(self, farm: str, asset: str) -> Optional[Dict[str, Any]]:
         """Asset-level register snapshot: run provenance + per-class counts/amounts (filter-independent).
