@@ -287,6 +287,21 @@ def test_analysis_metadata_is_nullable_and_verbatim(
     assert {"ppa_buyer", "contract_price", "owner_user_id"}.isdisjoint(row)
 
 
+def test_watch_list_rows_carry_the_code_and_its_text(app_client, service, monkeypatch):
+    # D-088: the list serves the code a per-turbine row is about and the legend's text for it
+    monkeypatch.setitem(_ITEM, "component", "103026")
+    monkeypatch.setitem(
+        _ITEM, "component_text", "Pitch A tracking speed/direction error during stop"
+    )
+    monkeypatch.setitem(_ITEM, "component_legend", "alarm_code")
+    row = app_client.get("/scada/opportunities/", params={"farm": "hill_of_towie"}).json()["items"][
+        0
+    ]
+    assert row["component"] == "103026"
+    assert row["component_text"] == "Pitch A tracking speed/direction error during stop"
+    assert row["component_legend"] == "alarm_code"
+
+
 def test_legacy_response_has_null_metadata(app_client, service):
     row = app_client.get("/scada/opportunities/0").json()
     assert row["price_basis"] is None

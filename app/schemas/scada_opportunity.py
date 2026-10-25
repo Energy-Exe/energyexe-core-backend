@@ -55,6 +55,12 @@ class ScadaOpportunity(BaseModel):
     now_available: Optional[bool] = None
     now_confounded: Optional[bool] = None
     rank_gbp: float
+    # D-088: on a per-turbine row, the code or signal the row is about and, where the pipeline read the asset's code
+    # legend (Raggovidda's alarm codes), that code's text; legend set with no text = the legend does not describe it.
+    # Filled on the list endpoint from the persisted condition records; null on FLEET lines and on older persists.
+    component: Optional[str] = None
+    component_text: Optional[str] = None
+    component_legend: Optional[str] = None
 
     # Phase 7b finding lifecycle — LEFT-joined from scada_finding_action by the stable natural key
     # (farm, trigger, scope, cls). Null on an unworked finding (implicit status NEW).
