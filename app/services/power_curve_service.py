@@ -18,6 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.power_curve_bin import PowerCurveBin
 from app.models.windfarm import Windfarm
+from app.utils.capacity import (
+    STATUS_IN_FORCE,
+    attach_capacity,
+    capacity_basis_status,
+    load_unit_windows,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -115,13 +121,19 @@ class PowerCurveService:
         caused by 3-way nested subquery joins (observed >15min query times).
         Each sub-query uses a single windfarm_id index scan.
 
-        ``p_pu`` is always generation / nameplate (``rated_mw``) — unchanged for
-        every caller. When ``include_capacity_norm`` is True the result also
-        carries ``p_pu_cap``: generation normalised by the capacity actually
-        ONLINE that hour (summed only over units that reported, backfilled from
-        each unit's registered capacity, falling back to nameplate only when no
-        capacity is known). Structural-constraint detection uses ``p_pu_cap`` so
-        phased windfarms aren't flagged for capacity that wasn't built yet.
+        ``p_pu`` is generation / **installed capacity in force** that hour
+        (``capacity_mw`` column), derived from ``generation_units`` dates and
+        anchored to nameplate — see ``app/utils/capacity.py``. For a farm whose
+        capacity never changed this equals generation / ``rated_mw`` exactly.
+        ``rated_mw`` is only the fallback when the unit registry is missing or
+        disagrees with nameplate.
+
+        When ``include_capacity_norm`` is True the result also carries
+        ``p_pu_cap``: generation normalised by the capacity actually ONLINE that
+        hour (summed only over units that reported a row, from the capacity
+        stamped at ingestion). Structural-constraint detection (Module 1b) uses
+        ``p_pu_cap`` so a unit that stops reporting is not flagged as a
+        constraint; every other module uses ``p_pu``.
         """
         year_filter_gen = ""
         year_filter_wx = ""
@@ -168,9 +180,7 @@ class PowerCurveService:
             columns=["hour", "generation_mwh", "online_capacity_mw", "any_ramp_up"],
         )
         df_gen["generation_mwh"] = df_gen["generation_mwh"].astype(float)
-        df_gen["online_capacity_mw"] = pd.to_numeric(
-            df_gen["online_capacity_mw"], errors="coerce"
-        )
+        df_gen["online_capacity_mw"] = pd.to_numeric(df_gen["online_capacity_mw"], errors="coerce")
 
         # 2) Weather — AVG across any duplicates (usually 1 row per hour)
         wx_q = text(
@@ -230,27 +240,66 @@ class PowerCurveService:
             return pd.DataFrame()
 
         df["year"] = pd.to_datetime(df["hour"]).dt.year.astype(int)
-        # Nameplate-normalised output — unchanged for all callers.
-        df["p_pu"] = df["generation_mwh"] / float(rated_mw)
         # Defensive dedup (should be unnecessary after SQL GROUP BYs)
         df = df.drop_duplicates(subset=["hour"], keep="first").reset_index(drop=True)
         df = df.sort_values("hour").reset_index(drop=True)
 
-        cols = ["hour", "year", "generation_mwh", "wind_speed", "market_price", "p_pu"]
+        # Installed capacity in force per hour (from generation_units dates,
+        # anchored to nameplate) and the p_pu every module shares.
+        windows = (await load_unit_windows(self.db, [windfarm_id])).get(windfarm_id, [])
+        basis = capacity_basis_status(windows, float(rated_mw))
+        if basis != STATUS_IN_FORCE:
+            logger.warning(
+                "capacity_basis_fallback",
+                windfarm_id=windfarm_id,
+                status=basis,
+                n_units=len(windows),
+                nameplate_mw=float(rated_mw),
+            )
+        attach_capacity(df, windows, float(rated_mw))
+        self._log_ceiling_share(windfarm_id, df)
+
+        cols = [
+            "hour",
+            "year",
+            "generation_mwh",
+            "wind_speed",
+            "market_price",
+            "p_pu",
+            "capacity_mw",
+            "online_capacity_mw",
+        ]
         if include_capacity_norm:
-            # Capacity-aware output: normalise by the capacity online that hour so
-            # a phased windfarm producing normally at partial build-out scores
-            # near 1.0 (not a false low-output constraint), while genuine
-            # suppression still drops p_pu_cap below the per-bin reference. Fall
-            # back to nameplate when online capacity is unknown or implausibly
-            # small (<5% of nameplate) — only farms with no capacity data at all.
+            # Detection-only basis (Module 1b): normalise by the capacity ONLINE
+            # that hour — units that reported a row — so a unit that stops
+            # reporting for months is not flagged as a structural constraint,
+            # while genuine suppression still drops p_pu_cap below the per-bin
+            # reference. Fall back to nameplate when online capacity is unknown
+            # or implausibly small (<5% of nameplate).
             cap_floor = 0.05 * float(rated_mw)
             eff_cap = df["online_capacity_mw"].where(
                 df["online_capacity_mw"] > cap_floor, float(rated_mw)
             )
             df["p_pu_cap"] = df["generation_mwh"] / eff_cap
             cols.append("p_pu_cap")
-        return df[cols]
+        out = df[cols]
+        out.attrs.update(df.attrs)
+        return out
+
+    @staticmethod
+    def _log_ceiling_share(windfarm_id: int, df: pd.DataFrame, warn_above: float = 0.02) -> None:
+        """Log the per-year share of hours above CEILING_PU.
+
+        On the in-force basis a persistent excess means a unit's registered
+        capacity is under-stated (hours are then dropped as over-performance
+        and the curve biases upward), so this is the audit signal for it.
+        """
+        if df.empty or "p_pu" not in df.columns:
+            return
+        share = (df["p_pu"] > CEILING_PU).groupby(df["year"]).mean()
+        high = {int(y): round(float(v), 4) for y, v in share.items() if v > warn_above}
+        if high:
+            logger.warning("p_pu_ceiling_share_high", windfarm_id=windfarm_id, years=high)
 
     # ─── Module 1: Hard plausibility filters ───────────────────
 
