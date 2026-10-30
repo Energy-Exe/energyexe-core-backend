@@ -79,6 +79,7 @@ repos is `../../docs/README.md`.
 | Doc | Frozen at | Replacement / status |
 |---|---|---|
 | [history/lessons.md](history/lessons.md) | rolling | Durable lessons from retired session logs |
+| [reports/2026-10/capacity_audit/README.md](reports/2026-10/capacity_audit/README.md) | 2026-10-31 | Installed-capacity audit behind the capacity-basis fix (EPR-184 follow-up): 12 farms move in the pipeline, 3 blocked, unit records to fix |
 | [history/HANDOFF-2026-05-25.md](history/HANDOFF-2026-05-25.md) | 2026-05-25 | Pipeline correctness handoff → `pipeline/README.md` |
 | [history/spec-vs-implementation.md](history/spec-vs-implementation.md) | 2026-05-25 | Spec comparison; everything shipped |
 | [history/rerun-on-confirm-design.md](history/rerun-on-confirm-design.md) | 2026-05-29 | Design note, not implemented |
