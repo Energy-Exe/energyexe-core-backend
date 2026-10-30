@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -665,6 +667,33 @@ async def get_wind_normalisation_monthly(
     ]
 
 
+def build_wind_normalised_points(
+    hourly: pd.DataFrame, ref_expected_pu: float, rated_mw: float
+) -> List[WindNormalisedHourPoint]:
+    """One chart point per qualifying hour.
+
+    ``wind_normalised_mwh`` is projected onto the capacity in force that hour
+    (``capacity_mw`` from the loader; constant ``rated_mw`` for plain frames) so
+    it sits on the same MW scale as the hour's actual output. Column names
+    must not start with an underscore: ``itertuples`` renames those
+    positionally.
+    """
+    from app.utils.capacity import capacity_col
+
+    frame = hourly.assign(cap_mw=capacity_col(hourly, rated_mw))
+    return [
+        WindNormalisedHourPoint(
+            hour=row.hour,
+            actual_mwh=float(row.actual_mw),
+            expected_mwh=float(row.expected_mw),
+            wind_normalised_mwh=float(row.norm_ratio) * ref_expected_pu * float(row.cap_mw),
+            norm_ratio=float(row.norm_ratio),
+            wind_speed=float(row.wind_speed),
+        )
+        for row in frame.itertuples()
+    ]
+
+
 @router.get(
     "/wind-normalisation/{windfarm_id}/hourly",
     response_model=WindNormalisedHourlyResponse,
@@ -711,7 +740,6 @@ async def get_wind_normalisation_hourly(
     from app.models.windfarm import Windfarm
     from app.services.power_curve_service import PowerCurveService
     from app.services.wind_normalisation_service import WindNormalisationService
-    from app.utils.capacity import capacity_col
 
     # Resolve rated capacity.
     wf_row = (
@@ -771,21 +799,7 @@ async def get_wind_normalisation_hourly(
         ref_bin -= 1.0
     ref_expected_pu = curve_lookup.get(ref_bin, 0.0)
     long_run_norm_ratio = float(hourly["norm_ratio"].mean())
-    # Project onto the capacity in force that hour so the normalised value is
-    # on the same MW scale as that hour's actual output.
-    hourly = hourly.assign(_cap=capacity_col(hourly, rated_mw))
-
-    points = [
-        WindNormalisedHourPoint(
-            hour=row.hour,
-            actual_mwh=float(row.actual_mw),
-            expected_mwh=float(row.expected_mw),
-            wind_normalised_mwh=float(row.norm_ratio) * ref_expected_pu * float(row._cap),
-            norm_ratio=float(row.norm_ratio),
-            wind_speed=float(row.wind_speed),
-        )
-        for row in hourly.itertuples()
-    ]
+    points = build_wind_normalised_points(hourly, ref_expected_pu, rated_mw)
 
     return WindNormalisedHourlyResponse(
         windfarm_id=windfarm_id,
