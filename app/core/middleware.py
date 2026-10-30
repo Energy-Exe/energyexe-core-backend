@@ -1,13 +1,16 @@
 """Application middleware."""
 
+import gzip
 import time
 import uuid
-from typing import Callable
+from typing import Callable, Optional
 
 import sentry_sdk
 import structlog
 from fastapi import FastAPI, Request, Response
+from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.request_utils import get_client_ip
 
@@ -95,6 +98,65 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers["X-Frame-Options"] = "DENY"
 
         return response
+
+
+class GZipWholeResponseMiddleware:
+    """Gzip complete responses; pass streamed ones through untouched.
+
+    The wind farm list is ~1.7 MB of JSON and ~130 KB gzipped, and the ALB does
+    not compress. Starlette 0.37's GZipMiddleware also compresses streaming
+    responses, where zlib holds small chunks back and would stall the brain
+    agent's and the map's server-sent events, so this only touches responses
+    sent as a single body message (every JSONResponse).
+
+    Must sit inside the BaseHTTPMiddleware layers: those re-send every response
+    as a stream, which this middleware would then leave alone.
+    """
+
+    def __init__(self, app: ASGIApp, minimum_size: int = 1024, compresslevel: int = 6) -> None:
+        self.app = app
+        self.minimum_size = minimum_size
+        self.compresslevel = compresslevel
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or "gzip" not in Headers(scope=scope).get("accept-encoding", ""):
+            await self.app(scope, receive, send)
+            return
+
+        start: Optional[Message] = None
+        passthrough = False
+
+        async def send_maybe_gzipped(message: Message) -> None:
+            nonlocal start, passthrough
+            if message["type"] == "http.response.start":
+                # Hold the headers until the first body message shows whether it streams.
+                start = message
+                return
+            if passthrough or start is None or message["type"] != "http.response.body":
+                await send(message)
+                return
+
+            initial, start = start, None
+            headers = MutableHeaders(raw=initial["headers"])
+            body = message.get("body", b"")
+            if (
+                message.get("more_body", False)
+                or "content-encoding" in headers
+                or len(body) < self.minimum_size
+            ):
+                passthrough = True
+                await send(initial)
+                await send(message)
+                return
+
+            body = gzip.compress(body, compresslevel=self.compresslevel)
+            headers["Content-Encoding"] = "gzip"
+            headers["Content-Length"] = str(len(body))
+            headers.add_vary_header("Accept-Encoding")
+            await send(initial)
+            await send({**message, "body": body})
+
+        await self.app(scope, receive, send_maybe_gzipped)
 
 
 def add_middleware(app: FastAPI) -> None:

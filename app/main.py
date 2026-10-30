@@ -12,7 +12,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.core.exceptions import add_exception_handlers
-from app.core.middleware import add_middleware
+from app.core.middleware import GZipWholeResponseMiddleware, add_middleware
 from app.core.observability import init_sentry
 
 # Initialize error tracking (GlitchTip) as early as possible so import-time and
@@ -87,6 +87,11 @@ def create_application() -> FastAPI:
         lifespan=lifespan_context,
         redirect_slashes=False,
     )
+
+    # Gzip goes in first so it sits innermost, next to the routes: the logging
+    # and security-header middlewares re-send every response as a stream, which
+    # the gzip middleware deliberately leaves uncompressed.
+    app.add_middleware(GZipWholeResponseMiddleware)
 
     # Add CORS middleware first (must be before other middleware).
     # Use the configured allowlist, NOT ["*"]: with allow_credentials=True a
