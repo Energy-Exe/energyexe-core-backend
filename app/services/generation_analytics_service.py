@@ -13,26 +13,40 @@ of every price zone the farms sit in.
 - Each farm-month uses its single best-covered source (sources are never
   added together, so a farm reported by two sources is not double counted);
   a monthly-only source covers its whole month.
-- Capacity factor = MWh / (nameplate MW x hours covered). Current nameplate is used, so a farm that expanded inside the window
-  reads slightly low before the expansion.
+- Capacity factor = MWh / (capacity in force x hours covered). Capacity comes
+  from the unit registry per month (`app/utils/capacity.py`), so a farm that
+  expanded or was partly decommissioned inside the window is measured against
+  what was installed at the time. Years weight the monthly capacity by the
+  hours each month covers.
 - Prices are `AVG(day_ahead_price)` per period, ELEXON for GB and ENTSOE
   elsewhere, in the zone's native currency (as on the Performance page).
 """
 
 import calendar
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.generation_data import MONTHLY_SOURCES
 from app.services.price_analytics_service import price_source_for
+from app.utils.capacity import UnitWindow, load_unit_windows, monthly_capacity, weighted_capacity
 
 Granularity = Literal["day", "month", "year"]
 
 MAX_FARMS = 6
 MAX_DAY_WINDOW_DAYS = 400
+
+# A capacity is either one number for the whole window (legacy / tests) or a
+# per-period mapping keyed like the points ('YYYY', 'YYYY-MM' or 'YYYY-MM-DD').
+Capacity = Union[float, Mapping[str, float], None]
+
+
+def capacity_for(capacity: Capacity, period: str) -> Optional[float]:
+    if isinstance(capacity, Mapping):
+        return capacity.get(period)
+    return capacity
 
 
 def period_key(d: date, granularity: Granularity) -> str:
@@ -116,7 +130,39 @@ class GenerationAnalyticsService:
         return mwh / (capacity_mw * hours)
 
     @staticmethod
-    def summarise(points: List[Dict[str, Any]], capacity_mw: Optional[float]) -> Dict[str, Any]:
+    def capacity_by_period(
+        windows: List[UnitWindow],
+        nameplate: Optional[float],
+        keys: List[str],
+        granularity: Granularity,
+        monthly_gen: Dict[str, Tuple[float, int]],
+    ) -> Capacity:
+        """Capacity in force per point key.
+
+        Months use the registry directly; days take their month's value; years
+        weight the months by the hours each one covers (months without data do
+        not count), falling back to the plain mean when a year has no data.
+        """
+        if not nameplate:
+            return None
+        np_ = float(nameplate)
+        if granularity == "month":
+            return monthly_capacity(windows, keys, np_)
+        if granularity == "day":
+            months = sorted({k[:7] for k in keys})
+            mc = monthly_capacity(windows, months, np_)
+            return {k: mc[k[:7]] for k in keys}
+        out: Dict[str, float] = {}
+        for y in keys:
+            months = [f"{y}-{m:02d}" for m in range(1, 13)]
+            mc = monthly_capacity(windows, months, np_)
+            hours = {m: monthly_gen[m][1] for m in months if m in monthly_gen}
+            wc = weighted_capacity(mc, hours)
+            out[y] = wc if wc is not None else sum(mc.values()) / len(mc)
+        return out
+
+    @staticmethod
+    def summarise(points: List[Dict[str, Any]], capacity_mw: Capacity) -> Dict[str, Any]:
         """Window totals over the periods that have data."""
         filled = [p for p in points if p["mwh"] is not None]
         if not filled:
@@ -129,10 +175,17 @@ class GenerationAnalyticsService:
                 "worst": None,
             }
         total = sum(p["mwh"] for p in filled)
-        hours = sum(p["hours"] or 0 for p in filled)
         best = max(filled, key=lambda p: p["mwh"])
         worst = min(filled, key=lambda p: p["mwh"])
-        cf = GenerationAnalyticsService.capacity_factor(total, capacity_mw, hours)
+        # Σ MWh / Σ (hours × capacity in force that period)
+        cap_hours = 0.0
+        for p in filled:
+            cap = capacity_for(capacity_mw, p["period"])
+            if not cap:
+                cap_hours = 0.0
+                break
+            cap_hours += (p["hours"] or 0) * cap
+        cf = total / cap_hours if cap_hours > 0 else None
         return {
             "total_mwh": round(total, 3),
             "avg_mwh": round(total / len(filled), 3),
@@ -147,13 +200,13 @@ class GenerationAnalyticsService:
         cls,
         keys: Iterable[str],
         by_period: Dict[str, Tuple[float, int]],
-        capacity_mw: Optional[float],
+        capacity_mw: Capacity,
     ) -> List[Dict[str, Any]]:
         points = []
         for k in keys:
             if k in by_period:
                 mwh, hours = by_period[k]
-                cf = cls.capacity_factor(mwh, capacity_mw, hours)
+                cf = cls.capacity_factor(mwh, capacity_for(capacity_mw, k), hours)
                 points.append(
                     {
                         "period": k,
@@ -299,18 +352,28 @@ class GenerationAnalyticsService:
         ids = [f.id for f in farms]
         keys = period_keys(start, end, granularity)
 
+        monthly: Dict[int, Dict[str, Tuple[float, int]]] = {}
         if not ids:
             gen: Dict[int, Dict[str, Tuple[float, int]]] = {}
         elif granularity == "day":
             gen = await self._daily_generation(ids, start, end)
         else:
-            gen = await self._monthly_generation(ids, start, end)
+            monthly = await self._monthly_generation(ids, start, end)
+            gen = monthly
             if granularity == "year":
-                gen = {wf: self.roll_up_years(m) for wf, m in gen.items()}
+                gen = {wf: self.roll_up_years(m) for wf, m in monthly.items()}
+        windows = await load_unit_windows(self.db, ids) if ids else {}
 
         farm_rows = []
         for f in farms:
-            points = self.build_points(keys, gen.get(f.id, {}), f.nameplate_capacity_mw)
+            caps = self.capacity_by_period(
+                windows.get(f.id, []),
+                f.nameplate_capacity_mw,
+                keys,
+                granularity,
+                monthly.get(f.id, {}),
+            )
+            points = self.build_points(keys, gen.get(f.id, {}), caps)
             farm_rows.append(
                 {
                     "id": f.id,
@@ -319,7 +382,7 @@ class GenerationAnalyticsService:
                     "price_zone": f.bidzone_name,
                     "country": f.country_code,
                     "points": points,
-                    "summary": self.summarise(points, f.nameplate_capacity_mw),
+                    "summary": self.summarise(points, caps),
                 }
             )
 

@@ -381,6 +381,69 @@ def capacity_col(df: pd.DataFrame, rated_mw: float) -> pd.Series:
 # ─── Period helpers (capacity-factor views) ──────────────────────
 
 
+def _as_utc(value: DateLike) -> pd.Timestamp:
+    """Any date/datetime → tz-aware UTC timestamp (a bare date is UTC midnight)."""
+    ts = pd.Timestamp(value)
+    return ts.tz_localize("UTC") if ts.tz is None else ts.tz_convert("UTC")
+
+
+def _overlap_hours(a_start, a_end, b_start: pd.Timestamp, b_end: pd.Timestamp) -> float:
+    lo = b_start if a_start is None else max(a_start, b_start)
+    hi = b_end if a_end is None else min(a_end, b_end)
+    return max(0.0, (hi - lo).total_seconds() / 3600.0)
+
+
+def in_force_hours(windows: Sequence[UnitWindow], start: pd.Timestamp, end: pd.Timestamp) -> float:
+    """Hours inside [start, end) where at least one unit is in force (interval union)."""
+    spans = []
+    for w in windows:
+        lo = start if w.start is None else max(w.start, start)
+        hi = end if w.end is None else min(w.end, end)
+        if hi > lo:
+            spans.append((lo, hi))
+    if not spans:
+        return 0.0
+    spans.sort()
+    total = 0.0
+    cur_lo, cur_hi = spans[0]
+    for lo, hi in spans[1:]:
+        if lo > cur_hi:
+            total += (cur_hi - cur_lo).total_seconds() / 3600.0
+            cur_lo, cur_hi = lo, hi
+        else:
+            cur_hi = max(cur_hi, hi)
+    total += (cur_hi - cur_lo).total_seconds() / 3600.0
+    return total
+
+
+def capacity_hours(
+    windows: Sequence[UnitWindow],
+    start: DateLike,
+    end: DateLike,
+    nameplate: float,
+    *,
+    today: DateLike = None,
+) -> float:
+    """MW·h of capacity in force over [start, end) — the capacity-factor denominator.
+
+    Exactly the integral of ``capacity_series`` over the window: anchored unit
+    capacity where a unit is in force, nameplate where none is (``S(h) = 0``),
+    constant nameplate when the registry is blocked or empty. Hours-weighted
+    means are therefore consistent between the hourly and the period helpers.
+    """
+    s_ts = _as_utc(start)
+    e_ts = _as_utc(end)
+    window_h = max(0.0, (e_ts - s_ts).total_seconds() / 3600.0)
+    if window_h == 0:
+        return 0.0
+    scale = anchor_scale(windows, nameplate, today) if windows else None
+    if scale is None:
+        return float(nameplate) * window_h
+    raw = sum(w.capacity_mw * _overlap_hours(w.start, w.end, s_ts, e_ts) for w in windows)
+    covered = in_force_hours(windows, s_ts, e_ts)
+    return raw * scale + float(nameplate) * (window_h - covered)
+
+
 def monthly_capacity(
     windows: Sequence[UnitWindow],
     months: Iterable[str],
@@ -399,9 +462,10 @@ def monthly_capacity(
     for m in months:
         start = pd.Timestamp(f"{m}-01", tz="UTC")
         end = start + pd.offsets.MonthBegin(1)
-        hours = pd.date_range(start, end, freq="h", inclusive="left")
-        out[m] = float(
-            capacity_series(windows, hours, nameplate, today=today, windfarm_id=windfarm_id).mean()
+        hours = (end - start).total_seconds() / 3600.0
+        out[m] = (
+            capacity_hours(windows, start, end, nameplate, today=today, windfarm_id=windfarm_id)
+            / hours
         )
     return out
 

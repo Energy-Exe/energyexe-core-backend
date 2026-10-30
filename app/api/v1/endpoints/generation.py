@@ -375,8 +375,10 @@ async def get_windfarm_stats(
     peak_result = await db.execute(peak_query)
     peak_row = peak_result.first()
 
-    # Capacity factor = actual generation / (nameplate capacity × hours in
-    # period). This is the correct calculation and the only one we use.
+    # Capacity factor = actual generation / Σ over covered hours of the
+    # capacity in force that hour (app/utils/capacity.py: unit registry dates,
+    # anchored to nameplate). For a farm whose capacity never changed this is
+    # exactly nameplate × hours.
     #
     # Round-3 fix (#49 in client-ui repo / #49 in this repo): the previous
     # implementation overrode this value with `AVG(capacity_factor) * 100`,
@@ -384,13 +386,15 @@ async def get_windfarm_stats(
     # downtime hours where `capacity_factor` is NULL but `generation_mwh` is
     # 0 (which is the common case for the import pipeline), that override
     # produced inflated CFs (Hamnefjell: 48.88% reported vs 44.25% actual
-    # over 7,023 NULL-CF hours). The nameplate-based formula uses the full
-    # hour count in the denominator and handles NULLs naturally.
+    # over 7,023 NULL-CF hours). Summing capacity over covered hours uses the
+    # full hour count in the denominator and handles NULLs naturally.
     capacity_factor_percent = None
     if windfarm.nameplate_capacity_mw and stats.total_generation and stats.total_hours:
-        max_possible_generation = float(windfarm.nameplate_capacity_mw) * float(stats.total_hours)
-        if max_possible_generation > 0:
-            capacity_factor_percent = (float(stats.total_generation) / max_possible_generation) * 100
+        cap_hours = await _covered_capacity_hours(
+            db, windfarm_id, float(windfarm.nameplate_capacity_mw), start_date, end_date
+        )
+        if cap_hours > 0:
+            capacity_factor_percent = (float(stats.total_generation) / cap_hours) * 100
 
     # Compute avg-hourly from total/hours so multi-unit windfarms aren't
     # halved by AVG(net_gen) running across (windfarm × unit) rows.
@@ -413,6 +417,55 @@ async def get_windfarm_stats(
         'windfarm_name': windfarm.name,
         'windfarm_code': windfarm.code
     }
+
+
+async def _covered_capacity_hours(
+    db: AsyncSession, windfarm_id: int, nameplate: float, start_date: datetime, end_date: datetime
+) -> float:
+    """Σ capacity in force over the hours in [start, end] that carry a reading.
+
+    Hours are aggregated once per calendar hour (multi-unit farms have one row
+    per unit) and each hour picks up the registry capacity in force; the
+    nameplate anchor / tolerance rule is applied in Python so the definition is
+    the single one in app/utils/capacity.py.
+    """
+    from sqlalchemy import text
+    from app.utils.capacity import anchor_scale, load_unit_windows
+
+    windows = (await load_unit_windows(db, [windfarm_id])).get(windfarm_id, [])
+    result = await db.execute(
+        text(
+            """
+            WITH hourly AS (
+                SELECT hour
+                FROM generation_data
+                WHERE windfarm_id = :id AND hour >= :start AND hour <= :end
+                GROUP BY hour
+            )
+            SELECT COUNT(*) AS hours,
+                   COALESCE(SUM(s.cap), 0) AS raw_cap_hours,
+                   COUNT(*) FILTER (WHERE s.cap IS NULL OR s.cap = 0) AS zero_hours
+            FROM hourly h
+            LEFT JOIN LATERAL (
+                SELECT SUM(gu.capacity_mw)::float8 AS cap
+                FROM generation_units gu
+                WHERE gu.windfarm_id = :id
+                  AND gu.capacity_mw > 0
+                  AND (gu.is_active OR gu.end_date IS NOT NULL)
+                  AND (COALESCE(gu.first_power_date, gu.start_date, DATE '1900-01-01')::timestamp
+                       AT TIME ZONE 'UTC') <= h.hour
+                  AND h.hour < (COALESCE(gu.end_date, DATE '9999-12-31')::timestamp AT TIME ZONE 'UTC')
+            ) s ON TRUE
+            """
+        ),
+        {"id": windfarm_id, "start": start_date, "end": end_date},
+    )
+    row = result.one()
+    hours = float(row.hours or 0)
+    scale = anchor_scale(windows, nameplate) if windows else None
+    if scale is None:
+        return nameplate * hours
+    return float(row.raw_cap_hours or 0) * scale + nameplate * float(row.zero_hours or 0)
 
 
 @router.get("/availability")
@@ -682,16 +735,36 @@ async def get_portfolio_generation_stats(
                 'capacity_mw': float(wf.nameplate_capacity_mw) if wf.nameplate_capacity_mw else 0,
             }
 
-    # Calculate capacity factors
+    # Capacity factors divide by capacity-hours in force over the window
+    # (app/utils/capacity_sql.py; = nameplate × hours_in_period for a farm whose
+    # capacity never changed, so those farms read exactly as before).
     hours_in_period = (end_date - start_date).total_seconds() / 3600
+    cap_hours: Dict[int, float] = {}
+    if windfarm_ids and hours_in_period > 0:
+        from sqlalchemy import text
+        from app.utils.capacity_sql import capacity_hours_window_sql
+
+        cap_result = await db.execute(
+            text(capacity_hours_window_sql() + " AND wf.id = ANY(:ids)"),
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "hours": hours_in_period,
+                "ids": windfarm_ids,
+            },
+        )
+        cap_hours = {r.windfarm_id: float(r.cap_hours or 0) for r in cap_result.fetchall()}
+
+    def _cf(row) -> float:
+        ch = cap_hours.get(row.windfarm_id, 0.0)
+        return float(row.total_mwh) / ch * 100 if ch > 0 and row.total_mwh else 0
 
     top_performers = []
     bottom_performers = []
 
     for row in farm_stats[:10]:  # Top 10
         wf = windfarm_details.get(row.windfarm_id, {})
-        capacity = wf.get('capacity_mw', 0)
-        cf = (float(row.total_mwh) / (capacity * hours_in_period) * 100) if capacity and hours_in_period else 0
+        cf = _cf(row)
         top_performers.append({
             'windfarm_id': row.windfarm_id,
             'name': wf.get('name', f'Farm {row.windfarm_id}'),
@@ -702,8 +775,7 @@ async def get_portfolio_generation_stats(
 
     for row in farm_stats[-10:] if len(farm_stats) > 10 else []:  # Bottom 10
         wf = windfarm_details.get(row.windfarm_id, {})
-        capacity = wf.get('capacity_mw', 0)
-        cf = (float(row.total_mwh) / (capacity * hours_in_period) * 100) if capacity and hours_in_period else 0
+        cf = _cf(row)
         bottom_performers.append({
             'windfarm_id': row.windfarm_id,
             'name': wf.get('name', f'Farm {row.windfarm_id}'),
@@ -712,11 +784,13 @@ async def get_portfolio_generation_stats(
             'avg_quality': round(float(row.avg_quality or 0), 2),
         })
 
-    # Calculate portfolio-level capacity factor
+    # Portfolio-level capacity factor: Σ MWh / Σ capacity-hours of the farms
+    # that have data. `total_capacity_mw` stays the nameplate sum (response field).
     total_capacity_mw = sum(wf.get('capacity_mw', 0) for wf in windfarm_details.values())
+    total_cap_hours = sum(cap_hours.get(wf_id, 0.0) for wf_id in windfarm_details)
     avg_capacity_factor = 0
-    if total_capacity_mw and hours_in_period and stats.total_mwh:
-        avg_capacity_factor = (float(stats.total_mwh) / (total_capacity_mw * hours_in_period)) * 100
+    if total_cap_hours > 0 and stats.total_mwh:
+        avg_capacity_factor = (float(stats.total_mwh) / total_cap_hours) * 100
 
     return {
         'total_mwh': round(float(stats.total_mwh or 0), 2),
@@ -953,8 +1027,13 @@ async def get_portfolio_performance(
         else ""
     )
 
-    # Calculate capacity factor for each farm
-    farm_cf_query = text("""
+    # Capacity factor for each farm. The denominator is the farm's
+    # capacity-hours in force over the window (unit registry dates anchored to
+    # nameplate, app/utils/capacity_sql.py) — nameplate × :hours for a farm
+    # whose capacity never changed, less for the years before an extension.
+    from app.utils.capacity_sql import capacity_hours_cte
+
+    farm_cf_query = text("WITH " + capacity_hours_cte(end_param=":cap_end") + """
         SELECT
             wf.id as windfarm_id,
             wf.name as windfarm_name,
@@ -965,18 +1044,20 @@ async def get_portfolio_performance(
             AVG(g.quality_score) as avg_quality,
             COUNT(g.id) as record_count,
             CASE
-                WHEN wf.nameplate_capacity_mw > 0 AND :hours > 0
-                THEN (SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) / (wf.nameplate_capacity_mw * :hours)) * 100
+                WHEN COALESCE(cap.cap_hours, wf.nameplate_capacity_mw * :hours) > 0
+                THEN (SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0))
+                      / COALESCE(cap.cap_hours, wf.nameplate_capacity_mw * :hours)) * 100
                 ELSE 0
             END as capacity_factor
         FROM generation_data g
         JOIN windfarms wf ON g.windfarm_id = wf.id
         LEFT JOIN countries c ON wf.country_id = c.id
+        LEFT JOIN cap ON cap.windfarm_id = wf.id
         WHERE g.hour >= :start_date
           AND g.hour < :end_date
           AND g.generation_mwh IS NOT NULL
     """ + scope_and + """
-        GROUP BY wf.id, wf.name, wf.code, wf.nameplate_capacity_mw, c.name
+        GROUP BY wf.id, wf.name, wf.code, wf.nameplate_capacity_mw, c.name, cap.cap_hours
         HAVING SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
         ORDER BY capacity_factor DESC
     """)
@@ -984,6 +1065,9 @@ async def get_portfolio_performance(
     params = {
         'start_date': start_date,
         'end_date': exclusive_end(end_date),
+        # Capacity window = the same [start, start + :hours) the denominator
+        # always used, so constant-capacity farms are unchanged.
+        'cap_end': end_date,
         'hours': hours_in_period,
     }
 
@@ -1052,8 +1136,15 @@ async def get_portfolio_performance(
     # the period capacity factor by the same factor (a real 35% rendered as
     # ~0.05% — the "divided by 1000" the client reported). Summing nameplate over
     # one row per (period, windfarm) counts it once per farm. (EPR-64)
-    trend_query = text("""
-        WITH monthly_farm AS (
+    #
+    # The denominator per (month, farm) is the capacity-hours in force that
+    # month (unit registry dates anchored to nameplate, app/utils/capacity_sql.py),
+    # so a farm's months before an extension are judged against what was built.
+    from app.utils.capacity_sql import UNIT_CTES, capacity_hours_expr, unit_overlap_lateral
+
+    month_hours = "EXTRACT(EPOCH FROM (mf.period + interval '1 month' - mf.period)) / 3600.0"
+    trend_query = text("WITH " + UNIT_CTES + """,
+        monthly_farm AS (
             SELECT
                 date_trunc('month', g.hour) as period,
                 g.windfarm_id,
@@ -1069,10 +1160,13 @@ async def get_portfolio_performance(
             mf.period as period,
             SUM(mf.wf_mwh) as total_mwh,
             SUM(wf.nameplate_capacity_mw) as total_capacity,
+            SUM(""" + capacity_hours_expr(month_hours) + """) as total_cap_hours,
             COUNT(DISTINCT mf.windfarm_id) as farm_count,
             EXTRACT(EPOCH FROM (mf.period + interval '1 month' - mf.period)) / 3600 as period_hours
         FROM monthly_farm mf
         JOIN windfarms wf ON mf.windfarm_id = wf.id
+        LEFT JOIN unit_today ut ON ut.windfarm_id = wf.id
+        """ + unit_overlap_lateral("mf.period", "mf.period + interval '1 month'", "mf.windfarm_id") + """
         GROUP BY mf.period
         ORDER BY mf.period
     """)
@@ -1094,9 +1188,11 @@ async def get_portfolio_performance(
         # max possible output (Σ nameplate × hours). total_capacity is now the
         # sum of distinct-farm nameplates for the month (see CTE above).
         period_cf = 0
-        total_capacity = float(row.total_capacity or 0)
-        if total_capacity > 0 and row.total_mwh and period_hours > 0:
-            period_cf = (float(row.total_mwh) / (total_capacity * period_hours)) * 100
+        total_cap_hours = float(row.total_cap_hours or 0)
+        if total_cap_hours <= 0:  # no unit rows at all: nameplate × hours
+            total_cap_hours = float(row.total_capacity or 0) * period_hours
+        if total_cap_hours > 0 and row.total_mwh:
+            period_cf = (float(row.total_mwh) / total_cap_hours) * 100
 
         performance_trend.append({
             "period": row.period.isoformat() if row.period else None,

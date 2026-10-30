@@ -770,11 +770,14 @@ async def get_portfolio_weather_summary(
                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY w.wind_speed_100m) as wind_p50,
                 (mode() WITHIN GROUP (ORDER BY (round(w.wind_direction_deg / 22.5)::int % 16))) * 22.5 as prevailing_direction_deg,
                 AVG(w.temperature_2m_c) as avg_temperature,
-                AVG(g.generation_mwh) as avg_generation,
+                -- Farm output per hour, not per unit row: a 2-unit farm has two
+                -- generation rows per hour, so AVG(g.generation_mwh) halves it.
+                SUM(g.generation_mwh) / NULLIF(COUNT(DISTINCT g.hour), 0) as avg_generation,
                 wf.nameplate_capacity_mw,
                 CASE
                     WHEN wf.nameplate_capacity_mw > 0
-                    THEN AVG(g.generation_mwh) / wf.nameplate_capacity_mw * 100
+                    THEN SUM(g.generation_mwh)
+                         / NULLIF(COUNT(DISTINCT g.hour) * wf.nameplate_capacity_mw, 0) * 100
                     ELSE 0
                 END as capacity_factor,
                 CORR(w.wind_speed_100m, g.generation_mwh) as wind_gen_correlation,

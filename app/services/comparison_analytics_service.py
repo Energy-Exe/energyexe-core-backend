@@ -9,7 +9,9 @@ in the browser, so one cached payload serves every filter combination.
 - Generation comes from `mv_generation_monthly_by_windfarm` through the
   Generation page's reader (best single source per farm-month; a monthly-only
   source covers its whole month).
-- Capacity factor = MWh / (current nameplate MW x hours covered).
+- Capacity factor = MWh / (capacity in force that month x hours covered);
+  capacity comes from the unit registry (`app/utils/capacity.py`), so phased
+  or partly decommissioned farms are measured against what was installed.
 - A month is left out (null) when its sources cover under half of it, when
   it reports no net generation, or when the capacity factor exceeds 100 %:
   partial months, gaps stored as zeros and data glitches would otherwise pull
@@ -23,10 +25,13 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.generation_analytics_service import (
+    Capacity,
     GenerationAnalyticsService,
+    capacity_for,
     hours_in_month,
     period_keys,
 )
+from app.utils.capacity import load_unit_windows, monthly_capacity
 
 # ISO alpha-3 codes of the compared markets (user decision, 2026-10-20).
 COUNTRIES = ("NOR", "GBR", "DNK")
@@ -49,13 +54,16 @@ def month_cf(
 def cf_series(
     months: Sequence[str],
     by_month: Dict[str, Tuple[float, int]],
-    capacity_mw: Optional[float],
+    capacity_mw: Capacity,
 ) -> List[Optional[float]]:
-    """One value per month in `months`; None where there is no usable data."""
+    """One value per month in `months`; None where there is no usable data.
+
+    `capacity_mw` is one number or a per-month mapping (capacity in force).
+    """
     out: List[Optional[float]] = []
     for k in months:
         cell = by_month.get(k)
-        out.append(month_cf(cell[0], capacity_mw, cell[1], k) if cell else None)
+        out.append(month_cf(cell[0], capacity_for(capacity_mw, k), cell[1], k) if cell else None)
     return out
 
 
@@ -110,10 +118,12 @@ class ComparisonAnalyticsService:
         ids = [f.id for f in farms]
         owners = await self.owners(ids)
         gen = await GenerationAnalyticsService(self.db)._monthly_generation(ids, start, end)
+        windows = await load_unit_windows(self.db, ids) if ids else {}
 
         rows = []
         for f in farms:
-            cf = cf_series(months, gen.get(f.id, {}), f.nameplate_capacity_mw)
+            caps = monthly_capacity(windows.get(f.id, []), months, float(f.nameplate_capacity_mw))
+            cf = cf_series(months, gen.get(f.id, {}), caps)
             if all(v is None for v in cf):
                 continue
             rows.append(
