@@ -96,3 +96,17 @@ cancelled with `pg_cancel_backend`. Fixes: `statement_timeout = 120s` on the `br
 applies it to every connection the agent opens), and `client_connection_check_interval = 10s` on database
 `energyexe_db` (prod and staging) so a query whose client has gone is stopped. Prod uses the default parameter group,
 so these are role/database settings rather than parameter-group changes (no reboot needed).
+
+## 2026-10-31 — Every pipeline module divided by today's nameplate (EPR-184 follow-up)
+
+`p_pu = generation / nameplate_capacity_mw` for every hour of a farm's history. Installed capacity is not constant: 13 of
+250 farms with performance data changed capacity after ramp-up (Smøla 150.4 → 145.8 MW in Feb 2024, Midtfjellet 12.5 →
+149.6 MW over 2012-2018). The bias reached the power curve, the wind-normalised index, ODI lost MWh, degradation (a
+capacity step read as a trend) and the commercial proxy, and the curve builder's 1.02 ceiling threw away every full-load
+hour on a farm whose real capacity exceeded its nameplate. Two things to remember: (1) the stamped
+`generation_data.capacity_mw` is NOT a usable basis — it is copied from the unit at import time, never refreshed on edit,
+NULL on some paths, and only present for hours where the unit reported a row; capacity must come from `generation_units`
+dates (`app/utils/capacity.py`). (2) The anchor for scaling must be frame-independent (today, not "last hour in the
+frame") — otherwise a one-year load and a full-history load put the same hour on different bases — and must refuse to
+scale when today's units disagree with nameplate beyond rounding (Mailiao: 46 MW of units vs 36 MW nameplate would have
+produced an invented 28.2 MW history).

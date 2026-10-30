@@ -69,8 +69,13 @@ def _synthetic_windfarm_year(year=2024, seed=42, degradation_pct=0.0):
             "wind_speed": wind,
             "market_price": price,
             "p_pu": p_pu,
+            # Constant capacity in force: exercises the per-hour capacity column
+            # path the loader now produces (app/utils/capacity.py) while keeping
+            # every MWh assertion identical to the nameplate case.
+            "capacity_mw": RATED_MW,
         }
     )
+    df.attrs["capacity_basis"] = "in_force"
     return df
 
 
