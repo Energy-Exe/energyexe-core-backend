@@ -31,6 +31,18 @@ def test_parse_month_and_ranges():
     ]
 
 
+def test_anchor_window_ends_at_the_last_index_month():
+    # Norway (EPR-199): "24 months" to Sep 2026 with an index only to Dec 2025.
+    index = month_range((2015, 1), (2025, 12))
+    assert S.anchor_window((2024, 10), (2026, 9), index) == ((2024, 1), (2025, 12))
+    # Data to the end of the window (or past it), or none at all: unchanged.
+    assert S.anchor_window((2024, 10), (2026, 9), month_range((2020, 1), (2026, 9))) == (
+        (2024, 10),
+        (2026, 9),
+    )
+    assert S.anchor_window((2024, 10), (2026, 9), []) == ((2024, 10), (2026, 9))
+
+
 def test_rolling_mean_uses_history_before_window():
     history = {add_months((2023, 1), i): float(90 + i) for i in range(24)}
     out = S.rolling_mean(history, [(2024, 1)])

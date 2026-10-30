@@ -31,6 +31,9 @@ async def test_register_queries_return_analysis_metadata(detail, metadata):
     else:
         actual = (await service.list_opportunities("hill_of_towie", asset="HOT"))["items"][0]
         assert actual.pop("currency") is None  # D-081: the run's currency (no run row here)
+        # D-088: the watch-list code and its text, null when no condition record carries one
+        for key in ("component", "component_text", "component_legend"):
+            assert actual.pop(key) is None
 
     assert actual == row
     query = str(db.execute.call_args_list[0].args[0])
