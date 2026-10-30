@@ -82,3 +82,17 @@ monthly index and, because the yearly index is the mean of monthly means, a 191 
 `MIN_MONTH_HOURS` (100) qualifying hours, and the run now NULLs normalisation values on rows inside its span that it
 did not compute, so values from an earlier run cannot survive next to fresh ones. Related: when a windfarm's COD moves,
 the stale-row rule is "period ends before the first non-ramp-up hour", not "year < COD year".
+
+## 2026-10-30 — A brain-agent query pinned prod RDS CPU for 6 hours
+
+An admin agent session wrote its own psycopg2 script instead of going through `db.py`, so the 30 s guard in `db.py`
+never applied. The query aggregated all of `generation_data` (`COUNT(DISTINCT hour) ... GROUP BY windfarm_id, year`)
+and joined it to `financial_data` on a `make_date(...)` filter the planner estimated at 1 row, so the full 26M-row
+sort ran inside a nested loop once per financial row, spilling to temp files (~330 write IOPS, 7.3 TB of temp files
+in the database's stats). The agent `pkill`ed its script after two minutes, but killing a client does not cancel a
+running query, and nothing noticed the dead socket. CPU sat at 90–96 % from 09:20 to 15:25 UTC until the query was
+cancelled with `pg_cancel_backend`. Fixes: `statement_timeout = 120s` on the `brain_agent_ro` and
+`brain_agent_client_ro` roles (prod and staging), `-c statement_timeout=120000` in the sandbox's `PGOPTIONS` (libpq
+applies it to every connection the agent opens), and `client_connection_check_interval = 10s` on database
+`energyexe_db` (prod and staging) so a query whose client has gone is stopped. Prod uses the default parameter group,
+so these are role/database settings rather than parameter-group changes (no reboot needed).
