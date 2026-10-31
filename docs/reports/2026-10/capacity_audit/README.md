@@ -13,9 +13,9 @@ Produced by `scripts/audit_capacity_basis.py --today 2026-10-31` against the sta
 | | Farms |
 |---|---|
 | With performance data | 253 |
-| Basis applies (units agree with nameplate within 3 %) | 250 |
-| Blocked (units disagree with nameplate by more than 3 %; nameplate kept) | 3 |
-| Capacity changes inside the pipeline years | 12 |
+| Basis applies (units agree with nameplate within 3 %) | 249 |
+| Blocked (units disagree with nameplate by more than 3 %, or the metered output contradicts the unit history; nameplate kept) | 4 |
+| Capacity changes inside the pipeline years | 11 |
 | Capacity changes only in the capacity-factor views (pre-ramp-up years) | 8 |
 
 ## Farms whose pipeline results change
@@ -29,7 +29,6 @@ Capacity range over the years the pipeline analyses (ramp-up excluded).
 | 7238 | Greater Changhua 1 & 2A | 900.2 | 321.671 → 900.2 | 64.3 % | 2022-2025 |
 | 8767 | METCentre Karmøy | 5.9 | 2.3 → 5.9 | 61.0 % | 2009-2025 |
 | 7245 | Aikengall II & IIa | 142.5 | 60.8 → 142.5 | 57.3 % | 2017-2026 |
-| 7434 | Chungwei | 125.1 | 75.9 → 125.1 | 39.3 % | 2020-2025 |
 | 7200 | Mehuken | 25.3 | 18.4 → 29.9 | 38.5 % | 2010-2025 |
 | 7259 | Black Law + Extension | 187.4 | 124.0 → 187.4 | 33.8 % | 2013-2026 |
 | 7190 | Høg-Jæren | 73.6 | 59.8 → 73.6 | 18.8 % | 2011-2025 |
@@ -52,7 +51,7 @@ Their pre-extension years were ramp-up flagged, so the pipeline never saw them, 
 | 7422 | Walney Extension | 659.0 | 356.0 → 659.0 | 46.0 % | 2017-2026 |
 | 7299 | Gordonbush + Extension | 109.75 | 71.75 → 109.75 | 34.6 % | 2021-2026 |
 
-## Blocked: unit records disagree with nameplate
+## Blocked: unit records disagree with nameplate or with the metered output
 
 The new basis is not applied to these farms; they keep today's constant-nameplate behaviour until the records are corrected.
 
@@ -61,6 +60,7 @@ The new basis is not applied to these farms; they keep today's constant-nameplat
 | 7279 | Crossdykes 1 & 2 | 46.0 | 23.0 | -50.0 % | today's unit sum differs from nameplate by > 3% |
 | 7429 | Mailiao | 36.0 | 46.0 | 27.78 % | today's unit sum differs from nameplate by > 3% |
 | 8783 | Douglas West Extension | 66.0 | 68.4 | 3.64 % | today's unit sum differs from nameplate by > 3% |
+| 7434 | Chungwei | 125.1 | 125.1 | 0.0 % | the output contradicts the unit history: the farm metered up to 92 MW in 2020-21 and 132 MW in 2022 while the records say only Phase 2 (75.9 MW) was running (Phase 1 dated as ended 2013-01-31, ChuangWei as started 2023-10-26). On the in-force basis 21-23 % of the 2020 and 2022 hours would sit above the curve ceiling, so the loader reverts the farm to nameplate (`capacity_basis_implausible`). Found on the staging re-run, not by the registry check. |
 
 ## Unit records to fix
 
@@ -72,6 +72,9 @@ The new basis is not applied to these farms; they keep today's constant-nameplat
 | 7279 | Crossdykes 1 & 2 | 10115 | Crossdykes 1 | 23.0 | True | 2021-06-01 | 2121-06-01 |  | start_in_future |
 | 7395 | Moray West | 10302 | Moray Offshore Wind West 2 | 220.5 | True | 2026-06-30 | 0024-07-03 |  | start_before_1980 |
 | 8767 | METCentre Karmøy | 12799 | METCentre Karmøy |  | True | 2009-10-08 |  |  | null_or_zero_capacity |
+| 7434 | Chungwei | 10371 | Zhongwei Da-an Phase 1 | 46.0 | True | 2009-02-01 |  | 2013-01-31 | end date contradicted by output (farm metered 92 MW in 2020-21 against 75.9 MW registered) |
+| 7434 | Chungwei | 10373 | ChuangWei Wind | 49.2 | True | 2023-10-26 |  |  | start date contradicted by output (farm metered 132 MW in 2022 against 75.9 MW registered) |
+| 7245 | Aikengall II & IIa | 12792 | Aikengall IIa | 81.7 | True | 2021-08-31 | 2021-08-31 |  | output above the 60.8 MW phase for 5 % of 2020 hours (max 69 MW): IIa produced before its registered start; minor, basis still applied |
 
 ## Build-out phases without their own ramp-up window (21)
 
