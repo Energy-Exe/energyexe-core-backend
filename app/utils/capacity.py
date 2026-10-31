@@ -423,6 +423,7 @@ def capacity_hours(
     nameplate: float,
     *,
     today: DateLike = None,
+    windfarm_id: Optional[int] = None,
 ) -> float:
     """MW·h of capacity in force over [start, end) — the capacity-factor denominator.
 
@@ -436,7 +437,9 @@ def capacity_hours(
     window_h = max(0.0, (e_ts - s_ts).total_seconds() / 3600.0)
     if window_h == 0:
         return 0.0
-    scale = anchor_scale(windows, nameplate, today) if windows else None
+    scale = None
+    if windows and not registry_blocked(windfarm_id):
+        scale = anchor_scale(windows, nameplate, today)
     if scale is None:
         return float(nameplate) * window_h
     raw = sum(w.capacity_mw * _overlap_hours(w.start, w.end, s_ts, e_ts) for w in windows)

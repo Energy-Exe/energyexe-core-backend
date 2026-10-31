@@ -122,7 +122,9 @@ class ComparisonAnalyticsService:
 
         rows = []
         for f in farms:
-            caps = monthly_capacity(windows.get(f.id, []), months, float(f.nameplate_capacity_mw))
+            caps = monthly_capacity(
+                windows.get(f.id, []), months, float(f.nameplate_capacity_mw), windfarm_id=f.id
+            )
             cf = cf_series(months, gen.get(f.id, {}), caps)
             if all(v is None for v in cf):
                 continue

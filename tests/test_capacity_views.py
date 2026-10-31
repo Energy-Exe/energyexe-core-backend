@@ -161,3 +161,32 @@ class TestViewsAcceptMapping:
             40.0,
         ]
         assert cf_series(["2023-01", "2023-02"], by_month, 30.0) == [20.0, 40.0]
+
+
+class TestRegistryBlockedViews:
+    """Farms whose output contradicts the unit history stay on nameplate in the views too."""
+
+    def test_capacity_hours_and_monthly_capacity_use_nameplate_for_blocked_farm(self):
+        from app.utils.capacity import REGISTRY_BLOCKED_WINDFARM_IDS
+
+        blocked = next(iter(REGISTRY_BLOCKED_WINDFARM_IDS))
+        windows = [_w(75.9, "2013-02-01"), _w(49.2, "2023-10-26")]  # Chungwei as registered
+        start, end = utc_midnight("2020-01-01"), utc_midnight("2021-01-01")
+        assert capacity_hours(windows, start, end, 125.1) == pytest.approx(75.9 * 8784)
+        assert capacity_hours(windows, start, end, 125.1, windfarm_id=blocked) == pytest.approx(
+            125.1 * 8784
+        )
+        assert monthly_capacity(windows, ["2020-06"], 125.1, windfarm_id=blocked) == {
+            "2020-06": pytest.approx(125.1)
+        }
+
+    def test_sql_expression_applies_the_same_fallback(self):
+        from app.utils.capacity import REGISTRY_BLOCKED_WINDFARM_IDS
+        from app.utils.capacity_sql import blocked_windfarm_sql, capacity_hours_expr
+
+        ids = ", ".join(str(i) for i in sorted(REGISTRY_BLOCKED_WINDFARM_IDS))
+        assert blocked_windfarm_sql("wf.id") == f"wf.id IN ({ids})"
+        assert f"AND NOT (wf.id IN ({ids}))" in capacity_hours_expr(":hours")
+        assert "mf.windfarm_id IN" in capacity_hours_expr(
+            ":hours", windfarm_id_expr="mf.windfarm_id"
+        )

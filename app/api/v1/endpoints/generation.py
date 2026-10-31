@@ -2,21 +2,22 @@
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import Integer
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_active_user, get_db
 from app.models.user import User
 from app.services.unified_generation_service import UnifiedGenerationService
-from app.utils.date_bounds import exclusive_end
 from app.services.windfarm_scope_service import (
     PeerScopeParams,
     apply_analytics_work_mem,
     resolve_windfarm_scope_ids,
     windfarm_ids_sql_array,
 )
+from app.utils.date_bounds import exclusive_end
 
 router = APIRouter()
 
@@ -27,32 +28,29 @@ async def import_csv_data(
     file: UploadFile = File(...),
     limit: Optional[int] = Query(None, description="Limit number of rows to import"),
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Import generation data from CSV file."""
-    
+
     # Save uploaded file temporarily
-    import tempfile
     import os
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
         content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
-    
+
     try:
         service = UnifiedGenerationService(db)
-        
-        if source == 'ELEXON':
+
+        if source == "ELEXON":
             result = await service.import_elexon_csv(tmp_path, limit)
         else:
-            return {
-                'success': False,
-                'message': f'CSV import not yet implemented for {source}'
-            }
-        
+            return {"success": False, "message": f"CSV import not yet implemented for {source}"}
+
         return result
-        
+
     finally:
         # Clean up temp file
         os.unlink(tmp_path)
@@ -62,12 +60,12 @@ async def import_csv_data(
 async def store_raw_data(
     source: str,
     data: List[Dict],
-    source_type: str = 'api',
+    source_type: str = "api",
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Store raw generation data from API."""
-    
+
     service = UnifiedGenerationService(db)
     result = await service.store_raw_data(source, data, source_type)
     return result
@@ -82,10 +80,10 @@ async def process_to_hourly(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Process raw data to hourly resolution."""
-    
+
     service = UnifiedGenerationService(db)
     result = await service.process_to_hourly(
         source=source,
@@ -93,7 +91,7 @@ async def process_to_hourly(
         start_date=start_date,
         end_date=end_date,
         generation_unit_id=generation_unit_id,
-        windfarm_id=windfarm_id
+        windfarm_id=windfarm_id,
     )
     return result
 
@@ -108,7 +106,7 @@ async def get_hourly_data(
     min_quality_score: float = 0.0,
     exclude_ramp_up: bool = Query(False, description="Exclude ramp-up period records"),
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> List[Dict[str, Any]]:
     """Get hourly generation data."""
 
@@ -120,24 +118,24 @@ async def get_hourly_data(
         start_date=start_date,
         end_date=end_date,
         min_quality_score=min_quality_score,
-        exclude_ramp_up=exclude_ramp_up
+        exclude_ramp_up=exclude_ramp_up,
     )
-    
+
     # Convert to dict for response
     return [
         {
-            'hour': record.hour.isoformat(),
-            'generation_mwh': float(record.generation_mwh),
-            'consumption_mwh': float(record.consumption_mwh) if record.consumption_mwh else None,
-            'generation_unit_id': record.generation_unit_id,
-            'windfarm_id': record.windfarm_id,
-            'source': record.source,
-            'quality_score': float(record.quality_score) if record.quality_score else None,
-            'quality_flag': record.quality_flag,
+            "hour": record.hour.isoformat(),
+            "generation_mwh": float(record.generation_mwh),
+            "consumption_mwh": float(record.consumption_mwh) if record.consumption_mwh else None,
+            "generation_unit_id": record.generation_unit_id,
+            "windfarm_id": record.windfarm_id,
+            "source": record.source,
+            "quality_score": float(record.quality_score) if record.quality_score else None,
+            "quality_flag": record.quality_flag,
             # is_manual_override is not a real GenerationData column; accessing
             # it raised AttributeError and 500'd this endpoint whenever rows
             # were returned. Default until the column actually exists.
-            'is_manual_override': bool(getattr(record, 'is_manual_override', False))
+            "is_manual_override": bool(getattr(record, "is_manual_override", False)),
         }
         for record in data
     ]
@@ -151,10 +149,10 @@ async def manual_override(
     new_value: float,
     reason: str,
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Manually override a generation value."""
-    
+
     service = UnifiedGenerationService(db)
     result = await service.manual_override(
         hour=hour,
@@ -162,12 +160,12 @@ async def manual_override(
         source=source,
         new_value=new_value,
         reason=reason,
-        user=current_user
+        user=current_user,
     )
-    
-    if not result['success']:
-        raise HTTPException(status_code=404, detail=result['message'])
-    
+
+    if not result["success"]:
+        raise HTTPException(status_code=404, detail=result["message"])
+
     return result
 
 
@@ -180,17 +178,18 @@ async def get_raw_data(
     limit: int = Query(50, le=1000),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Get raw generation data with pagination."""
-    
+
+    from sqlalchemy import func, select
+
     from app.models.generation_data import GenerationDataRaw
-    from sqlalchemy import select, func
-    
+
     # Build query
     query = select(GenerationDataRaw)
     count_query = select(func.count(GenerationDataRaw.id))
-    
+
     # Apply filters
     if source:
         query = query.where(GenerationDataRaw.source == source)
@@ -204,103 +203,106 @@ async def get_raw_data(
     if end_date:
         query = query.where(GenerationDataRaw.period_end <= end_date)
         count_query = count_query.where(GenerationDataRaw.period_end <= end_date)
-    
+
     # Get total count
     total_result = await db.execute(count_query)
     total = total_result.scalar()
-    
+
     # Apply pagination
     query = query.order_by(GenerationDataRaw.period_start.desc()).limit(limit).offset(offset)
-    
+
     result = await db.execute(query)
     records = result.scalars().all()
-    
+
     return {
-        'data': [
+        "data": [
             {
-                'id': record.id,
-                'source': record.source,
-                'identifier': record.identifier,
-                'period_start': record.period_start.isoformat() if record.period_start else None,
-                'period_end': record.period_end.isoformat() if record.period_end else None,
-                'period_type': record.period_type,
-                'value_extracted': float(record.value_extracted) if record.value_extracted else None,
-                'unit': record.unit,
-                'data': record.data,
-                'created_at': record.created_at.isoformat()
+                "id": record.id,
+                "source": record.source,
+                "identifier": record.identifier,
+                "period_start": record.period_start.isoformat() if record.period_start else None,
+                "period_end": record.period_end.isoformat() if record.period_end else None,
+                "period_type": record.period_type,
+                "value_extracted": float(record.value_extracted)
+                if record.value_extracted
+                else None,
+                "unit": record.unit,
+                "data": record.data,
+                "created_at": record.created_at.isoformat(),
             }
             for record in records
         ],
-        'pagination': {
-            'total': total,
-            'limit': limit,
-            'offset': offset,
-            'hasMore': offset + limit < total
-        }
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "hasMore": offset + limit < total,
+        },
     }
 
 
 @router.get("/stats")
 async def get_generation_stats(
-    current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: User = Depends(get_current_active_user), db: AsyncSession = Depends(get_db)
 ) -> Dict[str, Any]:
     """Get generation data statistics for all sources."""
-    
-    from app.models.generation_data import GenerationDataRaw, GenerationData
-    from sqlalchemy import select, func
-    
-    sources = ['ENTSOE', 'ELEXON', 'EIA', 'TAIPOWER', 'NVE', 'ENERGISTYRELSEN']
+
+    from sqlalchemy import func, select
+
+    from app.models.generation_data import GenerationData, GenerationDataRaw
+
+    sources = ["ENTSOE", "ELEXON", "EIA", "TAIPOWER", "NVE", "ENERGISTYRELSEN"]
     source_stats = []
-    
+
     for source in sources:
         # Get raw data stats
         raw_stats = await db.execute(
             select(
-                func.count(GenerationDataRaw.id).label('total_records'),
-                func.min(GenerationDataRaw.period_start).label('min_date'),
-                func.max(GenerationDataRaw.period_end).label('max_date'),
-                func.count(func.distinct(GenerationDataRaw.identifier)).label('identifiers')
+                func.count(GenerationDataRaw.id).label("total_records"),
+                func.min(GenerationDataRaw.period_start).label("min_date"),
+                func.max(GenerationDataRaw.period_end).label("max_date"),
+                func.count(func.distinct(GenerationDataRaw.identifier)).label("identifiers"),
             ).where(GenerationDataRaw.source == source)
         )
         raw_data = raw_stats.first()
-        
+
         # Get processed data quality stats
         quality_stats = await db.execute(
-            select(
-                func.avg(GenerationData.quality_score).label('avg_quality')
-            ).where(GenerationData.source == source)
+            select(func.avg(GenerationData.quality_score).label("avg_quality")).where(
+                GenerationData.source == source
+            )
         )
         quality_data = quality_stats.first()
-        
+
         # Calculate coverage (simplified - days with data / total days in range)
         coverage = 100.0  # Default to 100% if no data
         if raw_data.min_date and raw_data.max_date:
             total_days = (raw_data.max_date - raw_data.min_date).days + 1
             days_with_data = await db.execute(
-                select(func.count(func.distinct(func.date(GenerationDataRaw.period_start))))
-                .where(GenerationDataRaw.source == source)
+                select(func.count(func.distinct(func.date(GenerationDataRaw.period_start)))).where(
+                    GenerationDataRaw.source == source
+                )
             )
             days_count = days_with_data.scalar()
             if total_days > 0:
                 coverage = (days_count / total_days) * 100
-        
-        source_stats.append({
-            'source': source,
-            'totalRecords': raw_data.total_records or 0,
-            'dateRange': {
-                'start': raw_data.min_date.isoformat() if raw_data.min_date else None,
-                'end': raw_data.max_date.isoformat() if raw_data.max_date else None
-            },
-            'coverage': min(coverage, 100.0),
-            'avgQuality': float(quality_data.avg_quality or 0.8),  # Default to 0.8 if no data
-            'lastUpdate': datetime.utcnow().isoformat(),
-            'identifiers': raw_data.identifiers or 0
-        })
-    
-    return {
-        'sources': source_stats
-    }
+
+        source_stats.append(
+            {
+                "source": source,
+                "totalRecords": raw_data.total_records or 0,
+                "dateRange": {
+                    "start": raw_data.min_date.isoformat() if raw_data.min_date else None,
+                    "end": raw_data.max_date.isoformat() if raw_data.max_date else None,
+                },
+                "coverage": min(coverage, 100.0),
+                "avgQuality": float(quality_data.avg_quality or 0.8),  # Default to 0.8 if no data
+                "lastUpdate": datetime.utcnow().isoformat(),
+                "identifiers": raw_data.identifiers or 0,
+            }
+        )
+
+    return {"sources": source_stats}
 
 
 @router.get("/windfarm-stats")
@@ -309,7 +311,7 @@ async def get_windfarm_stats(
     start_date: datetime = Query(..., description="Start date"),
     end_date: datetime = Query(..., description="End date"),
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Get generation statistics for a specific windfarm within a date range.
 
@@ -323,9 +325,10 @@ async def get_windfarm_stats(
         - total_hours: Total hours in the period
         - avg_quality_score: Average data quality score
     """
+    from sqlalchemy import and_, case, func, select
+
     from app.models.generation_data import GenerationData
     from app.models.windfarm import Windfarm
-    from sqlalchemy import select, func, and_, case
 
     # Get windfarm info for nameplate capacity
     windfarm_query = select(Windfarm).where(Windfarm.id == windfarm_id)
@@ -344,16 +347,16 @@ async def get_windfarm_stats(
     # and the reported CF is N× too small. (Round-3 issue #50.)
     net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
     stats_query = select(
-        func.sum(net_gen).label('total_generation'),
-        func.max(net_gen).label('max_generation'),
-        func.avg(GenerationData.quality_score).label('avg_quality_score'),
-        func.count(func.distinct(GenerationData.hour)).label('total_hours'),
-        func.count(case((GenerationData.generation_mwh > 0, 1))).label('operating_hours')
+        func.sum(net_gen).label("total_generation"),
+        func.max(net_gen).label("max_generation"),
+        func.avg(GenerationData.quality_score).label("avg_quality_score"),
+        func.count(func.distinct(GenerationData.hour)).label("total_hours"),
+        func.count(case((GenerationData.generation_mwh > 0, 1))).label("operating_hours"),
     ).where(
         and_(
             GenerationData.windfarm_id == windfarm_id,
             GenerationData.hour >= start_date,
-            GenerationData.hour <= end_date
+            GenerationData.hour <= end_date,
         )
     )
 
@@ -361,16 +364,18 @@ async def get_windfarm_stats(
     stats = result.one()
 
     # Get peak hour
-    peak_query = select(
-        GenerationData.hour,
-        GenerationData.generation_mwh
-    ).where(
-        and_(
-            GenerationData.windfarm_id == windfarm_id,
-            GenerationData.hour >= start_date,
-            GenerationData.hour <= end_date
+    peak_query = (
+        select(GenerationData.hour, GenerationData.generation_mwh)
+        .where(
+            and_(
+                GenerationData.windfarm_id == windfarm_id,
+                GenerationData.hour >= start_date,
+                GenerationData.hour <= end_date,
+            )
         )
-    ).order_by(GenerationData.generation_mwh.desc()).limit(1)
+        .order_by(GenerationData.generation_mwh.desc())
+        .limit(1)
+    )
 
     peak_result = await db.execute(peak_query)
     peak_row = peak_result.first()
@@ -405,17 +410,19 @@ async def get_windfarm_stats(
     )
 
     return {
-        'total_generation_mwh': float(stats.total_generation) if stats.total_generation else 0,
-        'avg_hourly_generation_mwh': avg_hourly,
-        'max_hourly_generation_mwh': float(stats.max_generation) if stats.max_generation else 0,
-        'peak_hour': peak_row.hour.isoformat() if peak_row else None,
-        'capacity_factor_percent': capacity_factor_percent,
-        'operating_hours': stats.operating_hours or 0,
-        'total_hours': stats.total_hours or 0,
-        'avg_quality_score': float(stats.avg_quality_score) if stats.avg_quality_score else 0,
-        'nameplate_capacity_mw': float(windfarm.nameplate_capacity_mw) if windfarm.nameplate_capacity_mw else None,
-        'windfarm_name': windfarm.name,
-        'windfarm_code': windfarm.code
+        "total_generation_mwh": float(stats.total_generation) if stats.total_generation else 0,
+        "avg_hourly_generation_mwh": avg_hourly,
+        "max_hourly_generation_mwh": float(stats.max_generation) if stats.max_generation else 0,
+        "peak_hour": peak_row.hour.isoformat() if peak_row else None,
+        "capacity_factor_percent": capacity_factor_percent,
+        "operating_hours": stats.operating_hours or 0,
+        "total_hours": stats.total_hours or 0,
+        "avg_quality_score": float(stats.avg_quality_score) if stats.avg_quality_score else 0,
+        "nameplate_capacity_mw": float(windfarm.nameplate_capacity_mw)
+        if windfarm.nameplate_capacity_mw
+        else None,
+        "windfarm_name": windfarm.name,
+        "windfarm_code": windfarm.code,
     }
 
 
@@ -430,7 +437,8 @@ async def _covered_capacity_hours(
     the single one in app/utils/capacity.py.
     """
     from sqlalchemy import text
-    from app.utils.capacity import anchor_scale, load_unit_windows
+
+    from app.utils.capacity import anchor_scale, load_unit_windows, registry_blocked
 
     windows = (await load_unit_windows(db, [windfarm_id])).get(windfarm_id, [])
     result = await db.execute(
@@ -462,7 +470,9 @@ async def _covered_capacity_hours(
     )
     row = result.one()
     hours = float(row.hours or 0)
-    scale = anchor_scale(windows, nameplate) if windows else None
+    scale = None
+    if windows and not registry_blocked(windfarm_id):
+        scale = anchor_scale(windows, nameplate)
     if scale is None:
         return nameplate * hours
     return float(row.raw_cap_hours or 0) * scale + nameplate * float(row.zero_hours or 0)
@@ -472,16 +482,20 @@ async def _covered_capacity_hours(
 async def get_availability(
     year: Optional[int] = Query(None, description="Year for availability check"),
     month: Optional[int] = Query(None, description="Month for availability check (1-12)"),
-    sources: Optional[str] = Query(None, description="Comma-separated list of sources or single source"),
+    sources: Optional[str] = Query(
+        None, description="Comma-separated list of sources or single source"
+    ),
     windfarm_id: Optional[int] = None,
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Get data availability for specified month."""
 
-    from app.models.generation_data import GenerationDataRaw, GenerationData
-    from sqlalchemy import select, func, and_
     from calendar import monthrange
+
+    from sqlalchemy import and_, func, select
+
+    from app.models.generation_data import GenerationData, GenerationDataRaw
 
     # Default to current month if not provided
     if year is None or month is None:
@@ -497,16 +511,16 @@ async def get_availability(
     if sources:
         # If it's a comma-separated string, split it
         if isinstance(sources, str):
-            sources_list = [s.strip() for s in sources.split(',') if s.strip()]
+            sources_list = [s.strip() for s in sources.split(",") if s.strip()]
         else:
             sources_list = sources
     else:
         # Default to all sources if none specified
-        sources_list = ['ENTSOE', 'ELEXON', 'EIA', 'TAIPOWER', 'NVE', 'ENERGISTYRELSEN']
-    
+        sources_list = ["ENTSOE", "ELEXON", "EIA", "TAIPOWER", "NVE", "ENERGISTYRELSEN"]
+
     # Get start and end dates for the month
-    from datetime import date
     import logging
+    from datetime import date
 
     logger = logging.getLogger(__name__)
 
@@ -514,23 +528,29 @@ async def get_availability(
     start_date = date(year, month, 1)
     end_date = date(year, month, days_in_month)
 
-    logger.info(f"Availability query: year={year}, month={month}, start={start_date}, end={end_date}, sources={sources_list}")
+    logger.info(
+        f"Availability query: year={year}, month={month}, start={start_date}, end={end_date}, sources={sources_list}"
+    )
 
     availability = {}
 
     # Optimized: Get all data for the month in one query per source
     for source in sources_list:
         # Get daily counts for the entire month in one query
-        daily_query = select(
-            func.date(GenerationDataRaw.period_start).label('date'),
-            func.count(GenerationDataRaw.id).label('count')
-        ).where(
-            and_(
-                GenerationDataRaw.source == source,
-                GenerationDataRaw.period_start >= start_date,
-                GenerationDataRaw.period_start <= end_date
+        daily_query = (
+            select(
+                func.date(GenerationDataRaw.period_start).label("date"),
+                func.count(GenerationDataRaw.id).label("count"),
             )
-        ).group_by(func.date(GenerationDataRaw.period_start))
+            .where(
+                and_(
+                    GenerationDataRaw.source == source,
+                    GenerationDataRaw.period_start >= start_date,
+                    GenerationDataRaw.period_start <= end_date,
+                )
+            )
+            .group_by(func.date(GenerationDataRaw.period_start))
+        )
 
         result = await db.execute(daily_query)
         daily_data = result.all()
@@ -539,32 +559,30 @@ async def get_availability(
 
         # Process results
         for row in daily_data:
-            date_str = row.date.strftime('%Y-%m-%d')
+            date_str = row.date.strftime("%Y-%m-%d")
 
             if date_str not in availability:
-                availability[date_str] = {
-                    'sources': [],
-                    'recordCount': 0,
-                    'quality': None
-                }
+                availability[date_str] = {"sources": [], "recordCount": 0, "quality": None}
 
-            availability[date_str]['sources'].append(source)
-            availability[date_str]['recordCount'] += row.count
-    
+            availability[date_str]["sources"].append(source)
+            availability[date_str]["recordCount"] += row.count
+
     # Calculate summary
     days_with_data = len(availability)
     coverage = (days_with_data / days_in_month) * 100 if days_in_month > 0 else 0
 
-    logger.info(f"Final result: {days_with_data} days with data out of {days_in_month} ({coverage:.1f}% coverage)")
+    logger.info(
+        f"Final result: {days_with_data} days with data out of {days_in_month} ({coverage:.1f}% coverage)"
+    )
 
     return {
-        'availability': availability,
-        'summary': {
-            'totalDays': days_in_month,
-            'daysWithData': days_with_data,
-            'coverage': coverage,
-            'sources': sources_list
-        }
+        "availability": availability,
+        "summary": {
+            "totalDays": days_in_month,
+            "daysWithData": days_with_data,
+            "coverage": coverage,
+            "sources": sources_list,
+        },
     }
 
 
@@ -573,26 +591,27 @@ async def get_quality_stats(
     source: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
-    group_by: str = Query('daily', regex='^(hourly|daily|monthly)$'),
+    group_by: str = Query("daily", regex="^(hourly|daily|monthly)$"),
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Get quality statistics for generation data."""
-    
+
+    from sqlalchemy import func, select
+
     from app.models.generation_data import GenerationData
-    from sqlalchemy import select, func
-    
+
     # Build base query
     query = select(
-        func.date_trunc(group_by, GenerationData.hour).label('period'),
-        func.avg(GenerationData.quality_score).label('avg_quality'),
-        func.min(GenerationData.quality_score).label('min_quality'),
-        func.max(GenerationData.quality_score).label('max_quality'),
-        func.avg(GenerationData.completeness).label('completeness'),
-        func.count(GenerationData.id).label('record_count'),
-        func.sum(func.cast(GenerationData.is_manual_override, Integer)).label('manual_overrides')
+        func.date_trunc(group_by, GenerationData.hour).label("period"),
+        func.avg(GenerationData.quality_score).label("avg_quality"),
+        func.min(GenerationData.quality_score).label("min_quality"),
+        func.max(GenerationData.quality_score).label("max_quality"),
+        func.avg(GenerationData.completeness).label("completeness"),
+        func.count(GenerationData.id).label("record_count"),
+        func.sum(func.cast(GenerationData.is_manual_override, Integer)).label("manual_overrides"),
     )
-    
+
     # Apply filters
     if source:
         query = query.where(GenerationData.source == source)
@@ -600,52 +619,57 @@ async def get_quality_stats(
         query = query.where(GenerationData.hour >= start_date)
     if end_date:
         query = query.where(GenerationData.hour <= end_date)
-    
+
     # Group by period
-    query = query.group_by('period').order_by('period')
-    
+    query = query.group_by("period").order_by("period")
+
     result = await db.execute(query)
     stats = result.all()
-    
+
     # Calculate overall summary
     summary_query = select(
-        func.avg(GenerationData.quality_score).label('overall_avg_quality'),
-        func.count(GenerationData.id).label('total_records'),
-        func.sum(func.cast(GenerationData.is_manual_override, Integer)).label('total_manual_overrides')
+        func.avg(GenerationData.quality_score).label("overall_avg_quality"),
+        func.count(GenerationData.id).label("total_records"),
+        func.sum(func.cast(GenerationData.is_manual_override, Integer)).label(
+            "total_manual_overrides"
+        ),
     )
-    
+
     if source:
         summary_query = summary_query.where(GenerationData.source == source)
     if start_date:
         summary_query = summary_query.where(GenerationData.hour >= start_date)
     if end_date:
         summary_query = summary_query.where(GenerationData.hour <= end_date)
-    
+
     summary_result = await db.execute(summary_query)
     summary = summary_result.first()
-    
+
     return {
-        'stats': [
+        "stats": [
             {
-                'period': stat.period.isoformat(),
-                'avgQuality': float(stat.avg_quality) if stat.avg_quality else 0,
-                'minQuality': float(stat.min_quality) if stat.min_quality else 0,
-                'maxQuality': float(stat.max_quality) if stat.max_quality else 0,
-                'completeness': float(stat.completeness) if stat.completeness else 0,
-                'recordCount': stat.record_count,
-                'manualOverrides': stat.manual_overrides or 0
+                "period": stat.period.isoformat(),
+                "avgQuality": float(stat.avg_quality) if stat.avg_quality else 0,
+                "minQuality": float(stat.min_quality) if stat.min_quality else 0,
+                "maxQuality": float(stat.max_quality) if stat.max_quality else 0,
+                "completeness": float(stat.completeness) if stat.completeness else 0,
+                "recordCount": stat.record_count,
+                "manualOverrides": stat.manual_overrides or 0,
             }
             for stat in stats
         ],
-        'summary': {
-            'overallAvgQuality': float(summary.overall_avg_quality) if summary.overall_avg_quality else 0,
-            'totalRecords': summary.total_records or 0,
-            'totalManualOverrides': summary.total_manual_overrides or 0
-        }
+        "summary": {
+            "overallAvgQuality": float(summary.overall_avg_quality)
+            if summary.overall_avg_quality
+            else 0,
+            "totalRecords": summary.total_records or 0,
+            "totalManualOverrides": summary.total_manual_overrides or 0,
+        },
     }
 
 
 # Portfolio-level generation endpoints
+
 
 @router.get("/portfolio/stats")
 async def get_portfolio_generation_stats(
@@ -654,16 +678,17 @@ async def get_portfolio_generation_stats(
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
     scope: PeerScopeParams = Depends(),
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """
     Get aggregated generation statistics across all accessible wind farms.
 
     Returns total MWh, average capacity factor, farm count, and top performers.
     """
+    from sqlalchemy import and_, desc, func, select
+
     from app.models.generation_data import GenerationData
     from app.models.windfarm import Windfarm
-    from sqlalchemy import select, func, and_, desc
 
     # Build base query for generation aggregation
     conditions = [
@@ -678,24 +703,24 @@ async def get_portfolio_generation_stats(
         if not windfarm_scope_ids:
             # Filters matched no windfarms - return zeros
             return {
-                'total_mwh': 0,
-                'avg_capacity_factor': 0,
-                'farm_count': 0,
-                'record_count': 0,
-                'avg_quality_score': 0,
-                'total_capacity_mw': 0,
-                'top_performers': [],
-                'bottom_performers': [],
+                "total_mwh": 0,
+                "avg_capacity_factor": 0,
+                "farm_count": 0,
+                "record_count": 0,
+                "avg_quality_score": 0,
+                "total_capacity_mw": 0,
+                "top_performers": [],
+                "bottom_performers": [],
             }
         conditions.append(GenerationData.windfarm_id.in_(windfarm_scope_ids))
 
     # Get total generation stats (net = generation - consumption)
     net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
     stats_query = select(
-        func.sum(net_gen).label('total_mwh'),
-        func.avg(GenerationData.quality_score).label('avg_quality'),
-        func.count(func.distinct(GenerationData.windfarm_id)).label('farm_count'),
-        func.count(GenerationData.id).label('record_count'),
+        func.sum(net_gen).label("total_mwh"),
+        func.avg(GenerationData.quality_score).label("avg_quality"),
+        func.count(func.distinct(GenerationData.windfarm_id)).label("farm_count"),
+        func.count(GenerationData.id).label("record_count"),
     ).where(and_(*conditions))
 
     # These two aggregations each scan ~1M generation rows for a year-wide peer
@@ -706,16 +731,15 @@ async def get_portfolio_generation_stats(
     stats = stats_result.first()
 
     # Get per-farm stats for ranking
-    farm_stats_query = select(
-        GenerationData.windfarm_id,
-        func.sum(net_gen).label('total_mwh'),
-        func.avg(GenerationData.quality_score).label('avg_quality'),
-    ).where(
-        and_(*conditions)
-    ).group_by(
-        GenerationData.windfarm_id
-    ).order_by(
-        desc('total_mwh')
+    farm_stats_query = (
+        select(
+            GenerationData.windfarm_id,
+            func.sum(net_gen).label("total_mwh"),
+            func.avg(GenerationData.quality_score).label("avg_quality"),
+        )
+        .where(and_(*conditions))
+        .group_by(GenerationData.windfarm_id)
+        .order_by(desc("total_mwh"))
     )
 
     farm_stats_result = await db.execute(farm_stats_query)
@@ -729,10 +753,10 @@ async def get_portfolio_generation_stats(
         windfarms_result = await db.execute(windfarms_query)
         for wf in windfarms_result.scalars().all():
             windfarm_details[wf.id] = {
-                'id': wf.id,
-                'name': wf.name,
-                'code': wf.code,
-                'capacity_mw': float(wf.nameplate_capacity_mw) if wf.nameplate_capacity_mw else 0,
+                "id": wf.id,
+                "name": wf.name,
+                "code": wf.code,
+                "capacity_mw": float(wf.nameplate_capacity_mw) if wf.nameplate_capacity_mw else 0,
             }
 
     # Capacity factors divide by capacity-hours in force over the window
@@ -742,6 +766,7 @@ async def get_portfolio_generation_stats(
     cap_hours: Dict[int, float] = {}
     if windfarm_ids and hours_in_period > 0:
         from sqlalchemy import text
+
         from app.utils.capacity_sql import capacity_hours_window_sql
 
         cap_result = await db.execute(
@@ -765,42 +790,46 @@ async def get_portfolio_generation_stats(
     for row in farm_stats[:10]:  # Top 10
         wf = windfarm_details.get(row.windfarm_id, {})
         cf = _cf(row)
-        top_performers.append({
-            'windfarm_id': row.windfarm_id,
-            'name': wf.get('name', f'Farm {row.windfarm_id}'),
-            'total_mwh': round(float(row.total_mwh), 2),
-            'capacity_factor': round(cf, 1),
-            'avg_quality': round(float(row.avg_quality or 0), 2),
-        })
+        top_performers.append(
+            {
+                "windfarm_id": row.windfarm_id,
+                "name": wf.get("name", f"Farm {row.windfarm_id}"),
+                "total_mwh": round(float(row.total_mwh), 2),
+                "capacity_factor": round(cf, 1),
+                "avg_quality": round(float(row.avg_quality or 0), 2),
+            }
+        )
 
     for row in farm_stats[-10:] if len(farm_stats) > 10 else []:  # Bottom 10
         wf = windfarm_details.get(row.windfarm_id, {})
         cf = _cf(row)
-        bottom_performers.append({
-            'windfarm_id': row.windfarm_id,
-            'name': wf.get('name', f'Farm {row.windfarm_id}'),
-            'total_mwh': round(float(row.total_mwh), 2),
-            'capacity_factor': round(cf, 1),
-            'avg_quality': round(float(row.avg_quality or 0), 2),
-        })
+        bottom_performers.append(
+            {
+                "windfarm_id": row.windfarm_id,
+                "name": wf.get("name", f"Farm {row.windfarm_id}"),
+                "total_mwh": round(float(row.total_mwh), 2),
+                "capacity_factor": round(cf, 1),
+                "avg_quality": round(float(row.avg_quality or 0), 2),
+            }
+        )
 
     # Portfolio-level capacity factor: Σ MWh / Σ capacity-hours of the farms
     # that have data. `total_capacity_mw` stays the nameplate sum (response field).
-    total_capacity_mw = sum(wf.get('capacity_mw', 0) for wf in windfarm_details.values())
+    total_capacity_mw = sum(wf.get("capacity_mw", 0) for wf in windfarm_details.values())
     total_cap_hours = sum(cap_hours.get(wf_id, 0.0) for wf_id in windfarm_details)
     avg_capacity_factor = 0
     if total_cap_hours > 0 and stats.total_mwh:
         avg_capacity_factor = (float(stats.total_mwh) / total_cap_hours) * 100
 
     return {
-        'total_mwh': round(float(stats.total_mwh or 0), 2),
-        'avg_capacity_factor': round(avg_capacity_factor, 1),
-        'farm_count': stats.farm_count or 0,
-        'record_count': stats.record_count or 0,
-        'avg_quality_score': round(float(stats.avg_quality or 0), 2),
-        'total_capacity_mw': round(total_capacity_mw, 2),
-        'top_performers': top_performers,
-        'bottom_performers': bottom_performers,
+        "total_mwh": round(float(stats.total_mwh or 0), 2),
+        "avg_capacity_factor": round(avg_capacity_factor, 1),
+        "farm_count": stats.farm_count or 0,
+        "record_count": stats.record_count or 0,
+        "avg_quality_score": round(float(stats.avg_quality or 0), 2),
+        "total_capacity_mw": round(total_capacity_mw, 2),
+        "top_performers": top_performers,
+        "bottom_performers": bottom_performers,
     }
 
 
@@ -812,16 +841,17 @@ async def get_portfolio_generation_timeseries(
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
     scope: PeerScopeParams = Depends(),
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """
     Get portfolio generation timeseries with breakdown by wind farm.
 
     Returns timeseries data aggregated by the specified period (hourly/daily/weekly/monthly).
     """
+    from sqlalchemy import and_, func, literal, select
+
     from app.models.generation_data import GenerationData
     from app.models.windfarm import Windfarm
-    from sqlalchemy import select, func, and_, literal
 
     # Build base conditions
     conditions = [
@@ -835,22 +865,22 @@ async def get_portfolio_generation_timeseries(
     if windfarm_scope_ids is not None:
         if not windfarm_scope_ids:
             return {
-                'aggregation': aggregation,
-                'start_date': start_date.isoformat(),
-                'end_date': end_date.isoformat(),
-                'timeseries': [],
-                'by_farm': {},
+                "aggregation": aggregation,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "timeseries": [],
+                "by_farm": {},
             }
         conditions.append(GenerationData.windfarm_id.in_(windfarm_scope_ids))
 
     # Map aggregation to PostgreSQL date_trunc
     agg_map = {
-        'hourly': 'hour',
-        'daily': 'day',
-        'weekly': 'week',
-        'monthly': 'month',
+        "hourly": "hour",
+        "daily": "day",
+        "weekly": "week",
+        "monthly": "month",
     }
-    trunc_period = agg_map.get(aggregation, 'day')
+    trunc_period = agg_map.get(aggregation, "day")
 
     # Get total timeseries (net = generation - consumption).
     # NOTE: pass trunc_period as a SQL literal (not a bound parameter), otherwise
@@ -859,31 +889,35 @@ async def get_portfolio_generation_timeseries(
     # with "column hour must appear in the GROUP BY clause".
     net_gen = GenerationData.generation_mwh - func.coalesce(GenerationData.consumption_mwh, 0)
     period_expr = func.date_trunc(literal(trunc_period), GenerationData.hour)
-    total_query = select(
-        period_expr.label('period'),
-        func.sum(net_gen).label('total_mwh'),
-        func.avg(GenerationData.quality_score).label('avg_quality'),
-        func.count(func.distinct(GenerationData.windfarm_id)).label('farm_count'),
-    ).where(
-        and_(*conditions)
-    ).group_by(
-        period_expr
-    ).order_by('period')
+    total_query = (
+        select(
+            period_expr.label("period"),
+            func.sum(net_gen).label("total_mwh"),
+            func.avg(GenerationData.quality_score).label("avg_quality"),
+            func.count(func.distinct(GenerationData.windfarm_id)).label("farm_count"),
+        )
+        .where(and_(*conditions))
+        .group_by(period_expr)
+        .order_by("period")
+    )
 
     total_result = await db.execute(total_query)
     total_data = total_result.fetchall()
 
     # Get per-farm breakdown
-    farm_query = select(
-        period_expr.label('period'),
-        GenerationData.windfarm_id,
-        func.sum(net_gen).label('total_mwh'),
-    ).where(
-        and_(*conditions)
-    ).group_by(
-        period_expr,
-        GenerationData.windfarm_id,
-    ).order_by('period', GenerationData.windfarm_id)
+    farm_query = (
+        select(
+            period_expr.label("period"),
+            GenerationData.windfarm_id,
+            func.sum(net_gen).label("total_mwh"),
+        )
+        .where(and_(*conditions))
+        .group_by(
+            period_expr,
+            GenerationData.windfarm_id,
+        )
+        .order_by("period", GenerationData.windfarm_id)
+    )
 
     farm_result = await db.execute(farm_query)
     farm_data = farm_result.fetchall()
@@ -903,33 +937,37 @@ async def get_portfolio_generation_timeseries(
     timeseries = []
     for row in total_data:
         period_str = row.period.isoformat() if row.period else None
-        timeseries.append({
-            'period': period_str,
-            'total_mwh': round(float(row.total_mwh or 0), 2),
-            'avg_quality': round(float(row.avg_quality or 0), 2),
-            'farm_count': row.farm_count or 0,
-        })
+        timeseries.append(
+            {
+                "period": period_str,
+                "total_mwh": round(float(row.total_mwh or 0), 2),
+                "avg_quality": round(float(row.avg_quality or 0), 2),
+                "farm_count": row.farm_count or 0,
+            }
+        )
 
     # Build per-farm breakdown
     farm_breakdown = {}
     for row in farm_data:
         period_str = row.period.isoformat() if row.period else None
-        wf_name = windfarm_names.get(row.windfarm_id, f'Farm {row.windfarm_id}')
+        wf_name = windfarm_names.get(row.windfarm_id, f"Farm {row.windfarm_id}")
 
         if wf_name not in farm_breakdown:
             farm_breakdown[wf_name] = []
 
-        farm_breakdown[wf_name].append({
-            'period': period_str,
-            'mwh': round(float(row.total_mwh or 0), 2),
-        })
+        farm_breakdown[wf_name].append(
+            {
+                "period": period_str,
+                "mwh": round(float(row.total_mwh or 0), 2),
+            }
+        )
 
     return {
-        'aggregation': aggregation,
-        'start_date': start_date.isoformat(),
-        'end_date': end_date.isoformat(),
-        'timeseries': timeseries,
-        'by_farm': farm_breakdown,
+        "aggregation": aggregation,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "timeseries": timeseries,
+        "by_farm": farm_breakdown,
     }
 
 
@@ -978,7 +1016,7 @@ async def get_portfolio_performance(
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
     scope: PeerScopeParams = Depends(),
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """
     Get portfolio-wide performance metrics and benchmarks.
@@ -989,8 +1027,9 @@ async def get_portfolio_performance(
     - Performance trends over time
     - Technology comparison (by turbine model)
     """
-    from app.models.country import Country  # noqa: F401  # referenced via SQL JOIN
     from sqlalchemy import text
+
+    from app.models.country import Country  # noqa: F401  # referenced via SQL JOIN
 
     # Calculate hours in period
     hours_in_period = (end_date - start_date).total_seconds() / 3600
@@ -1033,7 +1072,10 @@ async def get_portfolio_performance(
     # whose capacity never changed, less for the years before an extension.
     from app.utils.capacity_sql import capacity_hours_cte
 
-    farm_cf_query = text("WITH " + capacity_hours_cte(end_param=":cap_end") + """
+    farm_cf_query = text(
+        "WITH "
+        + capacity_hours_cte(end_param=":cap_end")
+        + """
         SELECT
             wf.id as windfarm_id,
             wf.name as windfarm_name,
@@ -1056,19 +1098,22 @@ async def get_portfolio_performance(
         WHERE g.hour >= :start_date
           AND g.hour < :end_date
           AND g.generation_mwh IS NOT NULL
-    """ + scope_and + """
+    """
+        + scope_and
+        + """
         GROUP BY wf.id, wf.name, wf.code, wf.nameplate_capacity_mw, c.name, cap.cap_hours
         HAVING SUM(g.generation_mwh - COALESCE(g.consumption_mwh, 0)) > 0
         ORDER BY capacity_factor DESC
-    """)
+    """
+    )
 
     params = {
-        'start_date': start_date,
-        'end_date': exclusive_end(end_date),
+        "start_date": start_date,
+        "end_date": exclusive_end(end_date),
         # Capacity window = the same [start, start + :hours) the denominator
         # always used, so constant-capacity farms are unchanged.
-        'cap_end': end_date,
-        'hours': hours_in_period,
+        "cap_end": end_date,
+        "hours": hours_in_period,
     }
 
     # Keep the per-farm bitmap aggregations exact/in-memory (see
@@ -1076,9 +1121,7 @@ async def get_portfolio_performance(
     await apply_analytics_work_mem(db)
 
     try:
-        farm_cf_result = await asyncio.wait_for(
-            db.execute(farm_cf_query, params), timeout=60
-        )
+        farm_cf_result = await asyncio.wait_for(db.execute(farm_cf_query, params), timeout=60)
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=504,
@@ -1101,17 +1144,19 @@ async def get_portfolio_performance(
         total_capacity_mw += float(row.nameplate_capacity_mw or 0)
         total_generation_mwh += float(row.total_mwh or 0)
 
-        performance_ranking.append({
-            "windfarm_id": row.windfarm_id,
-            "windfarm_name": row.windfarm_name,
-            "windfarm_code": row.windfarm_code,
-            "country_name": row.country_name,
-            "capacity_mw": round(float(row.nameplate_capacity_mw or 0), 2),
-            "total_mwh": round(float(row.total_mwh or 0), 2),
-            "capacity_factor": round(cf, 2),
-            "avg_quality": round(float(row.avg_quality or 0), 2),
-            "record_count": row.record_count,
-        })
+        performance_ranking.append(
+            {
+                "windfarm_id": row.windfarm_id,
+                "windfarm_name": row.windfarm_name,
+                "windfarm_code": row.windfarm_code,
+                "country_name": row.country_name,
+                "capacity_mw": round(float(row.nameplate_capacity_mw or 0), 2),
+                "total_mwh": round(float(row.total_mwh or 0), 2),
+                "capacity_factor": round(cf, 2),
+                "avg_quality": round(float(row.avg_quality or 0), 2),
+                "record_count": row.record_count,
+            }
+        )
 
     # Build CF distribution histogram (bins of 5%)
     cf_bins = list(range(0, 105, 5))  # 0, 5, 10, ..., 100
@@ -1120,12 +1165,14 @@ async def get_portfolio_performance(
         bin_start = cf_bins[i]
         bin_end = cf_bins[i + 1]
         count = sum(1 for cf in capacity_factors if bin_start <= cf < bin_end)
-        cf_distribution.append({
-            "bin_start": bin_start,
-            "bin_end": bin_end,
-            "bin_label": f"{bin_start}-{bin_end}%",
-            "count": count,
-        })
+        cf_distribution.append(
+            {
+                "bin_start": bin_start,
+                "bin_end": bin_end,
+                "bin_label": f"{bin_start}-{bin_end}%",
+                "count": count,
+            }
+        )
 
     # Performance trend over time (monthly).
     #
@@ -1143,7 +1190,10 @@ async def get_portfolio_performance(
     from app.utils.capacity_sql import UNIT_CTES, capacity_hours_expr, unit_overlap_lateral
 
     month_hours = "EXTRACT(EPOCH FROM (mf.period + interval '1 month' - mf.period)) / 3600.0"
-    trend_query = text("WITH " + UNIT_CTES + """,
+    trend_query = text(
+        "WITH "
+        + UNIT_CTES
+        + """,
         monthly_farm AS (
             SELECT
                 date_trunc('month', g.hour) as period,
@@ -1153,28 +1203,33 @@ async def get_portfolio_performance(
             WHERE g.hour >= :start_date
               AND g.hour < :end_date
               AND g.generation_mwh IS NOT NULL
-    """ + scope_and + """
+    """
+        + scope_and
+        + """
             GROUP BY date_trunc('month', g.hour), g.windfarm_id
         )
         SELECT
             mf.period as period,
             SUM(mf.wf_mwh) as total_mwh,
             SUM(wf.nameplate_capacity_mw) as total_capacity,
-            SUM(""" + capacity_hours_expr(month_hours) + """) as total_cap_hours,
+            SUM("""
+        + capacity_hours_expr(month_hours)
+        + """) as total_cap_hours,
             COUNT(DISTINCT mf.windfarm_id) as farm_count,
             EXTRACT(EPOCH FROM (mf.period + interval '1 month' - mf.period)) / 3600 as period_hours
         FROM monthly_farm mf
         JOIN windfarms wf ON mf.windfarm_id = wf.id
         LEFT JOIN unit_today ut ON ut.windfarm_id = wf.id
-        """ + unit_overlap_lateral("mf.period", "mf.period + interval '1 month'", "mf.windfarm_id") + """
+        """
+        + unit_overlap_lateral("mf.period", "mf.period + interval '1 month'", "mf.windfarm_id")
+        + """
         GROUP BY mf.period
         ORDER BY mf.period
-    """)
+    """
+    )
 
     try:
-        trend_result = await asyncio.wait_for(
-            db.execute(trend_query, params), timeout=60
-        )
+        trend_result = await asyncio.wait_for(db.execute(trend_query, params), timeout=60)
         trend_rows = trend_result.fetchall()
     except asyncio.TimeoutError:
         # Trend chart is secondary — return empty rather than fail the whole
@@ -1194,12 +1249,14 @@ async def get_portfolio_performance(
         if total_cap_hours > 0 and row.total_mwh:
             period_cf = (float(row.total_mwh) / total_cap_hours) * 100
 
-        performance_trend.append({
-            "period": row.period.isoformat() if row.period else None,
-            "total_mwh": round(float(row.total_mwh or 0), 2),
-            "capacity_factor": round(period_cf, 2),
-            "farm_count": row.farm_count,
-        })
+        performance_trend.append(
+            {
+                "period": row.period.isoformat() if row.period else None,
+                "total_mwh": round(float(row.total_mwh or 0), 2),
+                "capacity_factor": round(period_cf, 2),
+                "farm_count": row.farm_count,
+            }
+        )
 
     # Technology comparison (by turbine model)
     #
@@ -1214,7 +1271,8 @@ async def get_portfolio_performance(
     # (model, farm) → capacity map separately, then attribute generation to
     # each model proportionally to its share of the farm's capacity (covers
     # the mixed-model farm case correctly).
-    tech_query = text("""
+    tech_query = text(
+        """
         WITH wf_gen AS (
             SELECT
                 g.windfarm_id,
@@ -1224,7 +1282,9 @@ async def get_portfolio_performance(
             WHERE g.hour >= :start_date
               AND g.hour < :end_date
               AND g.generation_mwh IS NOT NULL
-    """ + scope_and + """
+    """
+        + scope_and
+        + """
             GROUP BY g.windfarm_id
         ),
         model_per_farm AS (
@@ -1273,29 +1333,30 @@ async def get_portfolio_performance(
         GROUP BY tm.id, tm.supplier, tm.model, tm.rated_power_kw
         HAVING SUM(mpf.model_capacity_kw) > 0
         ORDER BY capacity_factor DESC NULLS LAST
-    """)
+    """
+    )
 
     try:
-        tech_result = await asyncio.wait_for(
-            db.execute(tech_query, params), timeout=60
-        )
+        tech_result = await asyncio.wait_for(db.execute(tech_query, params), timeout=60)
         tech_rows = tech_result.fetchall()
     except asyncio.TimeoutError:
         tech_rows = []
 
     by_technology = []
     for row in tech_rows:
-        by_technology.append({
-            "model_id": row.model_id,
-            "manufacturer": row.manufacturer,
-            "model_name": row.model_name,
-            "rated_power_kw": float(row.rated_power_kw or 0),
-            "farm_count": row.farm_count,
-            "turbine_count": row.turbine_count,
-            "total_capacity_mw": round(float(row.total_capacity_mw or 0), 2),
-            "total_mwh": round(float(row.total_mwh or 0), 2),
-            "capacity_factor": round(float(row.capacity_factor or 0), 2),
-        })
+        by_technology.append(
+            {
+                "model_id": row.model_id,
+                "manufacturer": row.manufacturer,
+                "model_name": row.model_name,
+                "rated_power_kw": float(row.rated_power_kw or 0),
+                "farm_count": row.farm_count,
+                "turbine_count": row.turbine_count,
+                "total_capacity_mw": round(float(row.total_capacity_mw or 0), 2),
+                "total_mwh": round(float(row.total_mwh or 0), 2),
+                "capacity_factor": round(float(row.capacity_factor or 0), 2),
+            }
+        )
 
     # Calculate statistics
     avg_cf = sum(capacity_factors) / len(capacity_factors) if capacity_factors else 0
@@ -1328,7 +1389,7 @@ async def get_portfolio_normalised_timeseries(
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
     scope: PeerScopeParams = Depends(),
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """
     Monthly actual vs ERA5-wind-normalised generation for a peer group.
@@ -1371,7 +1432,8 @@ async def get_portfolio_normalised_timeseries(
         if windfarm_filter_ids is not None
         else ""
     )
-    query = text(f"""
+    query = text(
+        f"""
         WITH monthly_gen AS (
             SELECT
                 g.windfarm_id,
@@ -1399,7 +1461,8 @@ async def get_portfolio_normalised_timeseries(
          AND ps.year = EXTRACT(YEAR FROM mg.month)::int
          AND ps.month = EXTRACT(MONTH FROM mg.month)::int
         ORDER BY mg.month
-    """)
+    """
+    )
 
     params: Dict[str, Any] = {
         "start_date": start_date,
@@ -1414,8 +1477,7 @@ async def get_portfolio_normalised_timeseries(
         raise HTTPException(
             status_code=504,
             detail=(
-                "Normalised generation query exceeded 60s — narrow the date "
-                "range or peer group."
+                "Normalised generation query exceeded 60s — narrow the date " "range or peer group."
             ),
         )
 
@@ -1483,30 +1545,34 @@ async def get_portfolio_normalised_timeseries(
     timeseries = []
     for month in sorted(month_acc):
         m = month_acc[month]
-        timeseries.append({
-            "month": month.strftime("%Y-%m"),
-            "actual_mwh": round(m["actual"], 2),
-            "actual_covered_mwh": round(m["actual_covered"], 2),
-            "normalised_mwh": round(m["normalised"], 2) if m["covered"] else None,
-        })
+        timeseries.append(
+            {
+                "month": month.strftime("%Y-%m"),
+                "actual_mwh": round(m["actual"], 2),
+                "actual_covered_mwh": round(m["actual_covered"], 2),
+                "normalised_mwh": round(m["normalised"], 2) if m["covered"] else None,
+            }
+        )
 
     by_farm = []
     for f in sorted(farm_acc.values(), key=lambda x: x["actual"], reverse=True)[:10]:
         covered = f["months_covered"] > 0 and f["normalised"] > 0
-        by_farm.append({
-            "windfarm_id": f["windfarm_id"],
-            "name": f["name"],
-            "capacity_mw": round(f["capacity_mw"], 2),
-            "actual_mwh": round(f["actual"], 2),
-            "normalised_mwh": round(f["normalised"], 2) if covered else None,
-            "delta_pct": (
-                round((f["actual_covered"] - f["normalised"]) / f["normalised"] * 100, 2)
-                if covered
-                else None
-            ),
-            "months_covered": f["months_covered"],
-            "months_total": f["months_total"],
-        })
+        by_farm.append(
+            {
+                "windfarm_id": f["windfarm_id"],
+                "name": f["name"],
+                "capacity_mw": round(f["capacity_mw"], 2),
+                "actual_mwh": round(f["actual"], 2),
+                "normalised_mwh": round(f["normalised"], 2) if covered else None,
+                "delta_pct": (
+                    round((f["actual_covered"] - f["normalised"]) / f["normalised"] * 100, 2)
+                    if covered
+                    else None
+                ),
+                "months_covered": f["months_covered"],
+                "months_total": f["months_total"],
+            }
+        )
 
     return {
         "start_date": start_date.isoformat(),
@@ -1520,9 +1586,7 @@ async def get_portfolio_normalised_timeseries(
             "actual_covered_mwh": round(total_actual_covered, 2),
             "normalised_mwh": round(total_normalised, 2),
             "delta_pct": delta_pct,
-            "avg_actual_mwh_per_farm": (
-                round(total_actual / len(farm_acc), 2) if farm_acc else 0
-            ),
+            "avg_actual_mwh_per_farm": (round(total_actual / len(farm_acc), 2) if farm_acc else 0),
         },
         "timeseries": timeseries,
         "by_farm": by_farm,

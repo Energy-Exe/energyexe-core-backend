@@ -136,6 +136,7 @@ class GenerationAnalyticsService:
         keys: List[str],
         granularity: Granularity,
         monthly_gen: Dict[str, Tuple[float, int]],
+        windfarm_id: Optional[int] = None,
     ) -> Capacity:
         """Capacity in force per point key.
 
@@ -147,15 +148,15 @@ class GenerationAnalyticsService:
             return None
         np_ = float(nameplate)
         if granularity == "month":
-            return monthly_capacity(windows, keys, np_)
+            return monthly_capacity(windows, keys, np_, windfarm_id=windfarm_id)
         if granularity == "day":
             months = sorted({k[:7] for k in keys})
-            mc = monthly_capacity(windows, months, np_)
+            mc = monthly_capacity(windows, months, np_, windfarm_id=windfarm_id)
             return {k: mc[k[:7]] for k in keys}
         out: Dict[str, float] = {}
         for y in keys:
             months = [f"{y}-{m:02d}" for m in range(1, 13)]
-            mc = monthly_capacity(windows, months, np_)
+            mc = monthly_capacity(windows, months, np_, windfarm_id=windfarm_id)
             hours = {m: monthly_gen[m][1] for m in months if m in monthly_gen}
             wc = weighted_capacity(mc, hours)
             out[y] = wc if wc is not None else sum(mc.values()) / len(mc)
@@ -372,6 +373,7 @@ class GenerationAnalyticsService:
                 keys,
                 granularity,
                 monthly.get(f.id, {}),
+                windfarm_id=f.id,
             )
             points = self.build_points(keys, gen.get(f.id, {}), caps)
             farm_rows.append(

@@ -352,7 +352,12 @@ async def window_capacity_mw(ctx: ReportContext, start: date, end: date) -> Opti
     hours = (window_end - window_start).total_seconds() / 3600.0
     if hours <= 0:
         return float(nameplate)
-    return capacity_hours(windows, window_start, window_end, float(nameplate)) / hours
+    return (
+        capacity_hours(
+            windows, window_start, window_end, float(nameplate), windfarm_id=ctx.windfarm_id
+        )
+        / hours
+    )
 
 
 async def window_metrics(ctx: ReportContext, start: date, end: date) -> dict:

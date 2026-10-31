@@ -15,7 +15,7 @@ treated as in force across the gap. No farm with performance data has such a gap
 
 from __future__ import annotations
 
-from app.utils.capacity import ANCHOR_TOLERANCE
+from app.utils.capacity import ANCHOR_TOLERANCE, REGISTRY_BLOCKED_WINDFARM_IDS
 
 TODAY_UTC = "(CURRENT_DATE::timestamp AT TIME ZONE 'UTC')"
 
@@ -67,23 +67,35 @@ LEFT JOIN LATERAL (
 ) {alias} ON TRUE"""
 
 
+def blocked_windfarm_sql(windfarm_id_expr: str) -> str:
+    """SQL predicate: this farm is in ``REGISTRY_BLOCKED_WINDFARM_IDS`` (constant nameplate)."""
+    if not REGISTRY_BLOCKED_WINDFARM_IDS:
+        return "FALSE"
+    ids = ", ".join(str(int(i)) for i in sorted(REGISTRY_BLOCKED_WINDFARM_IDS))
+    return f"{windfarm_id_expr} IN ({ids})"
+
+
 def capacity_hours_expr(
     window_hours_expr: str,
     nameplate_expr: str = "wf.nameplate_capacity_mw",
     s_anchor_expr: str = "ut.s_anchor",
     overlap_alias: str = "uo",
+    windfarm_id_expr: str = "wf.id",
 ) -> str:
     """Capacity-hours over one window for one farm row.
 
     ``window_hours_expr`` is the window length in hours (a bound ``:hours`` or a
     typed SQL expression — asyncpg cannot type ``:end - :start`` on its own).
     Needs ``unit_today`` joined as ``ut`` (or ``s_anchor_expr`` pointing at it)
-    and ``unit_overlap_lateral`` joined as ``overlap_alias``.
+    and ``unit_overlap_lateral`` joined as ``overlap_alias``. Farms in
+    ``REGISTRY_BLOCKED_WINDFARM_IDS`` (``windfarm_id_expr``) get nameplate ×
+    hours, the same fallback the Python helpers apply.
     """
     window_h = f"({window_hours_expr})"
     return f"""CASE
     WHEN {s_anchor_expr} > 0
          AND ABS({s_anchor_expr} / {nameplate_expr} - 1) <= {ANCHOR_TOLERANCE}
+         AND NOT ({blocked_windfarm_sql(windfarm_id_expr)})
     THEN COALESCE({overlap_alias}.raw_cap_hours, 0) * {nameplate_expr} / {s_anchor_expr}
          + {nameplate_expr} * GREATEST(0, {window_h} - COALESCE({overlap_alias}.in_force_hours, 0))
     ELSE {nameplate_expr} * {window_h}
