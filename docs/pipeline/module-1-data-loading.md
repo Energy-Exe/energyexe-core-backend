@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Pulls hourly generation, wind speed and price for a single windfarm out of Postgres, normalises power to per-unit of nameplate capacity, and applies hard plausibility filters. Produces two DataFrames that every downstream module consumes:
+Pulls hourly generation, wind speed and price for a single windfarm out of Postgres, normalises power to per-unit of the installed capacity in force that hour, and applies hard plausibility filters. Produces two DataFrames that every downstream module consumes:
 
 - `df_clean` — every row that passed plausibility checks (wind 0–40 m/s, p_pu in [-0.05, 1.20]).
 - `df_curve` — subset of `df_clean` restricted to the curve-fitting range (wind 2–25 m/s).
@@ -12,7 +12,9 @@ Module 1 does not write to the database. It runs in memory and the DataFrames ar
 ## Concepts
 
 ### Per-unit (p.u.)
-We never compare windfarms in raw MW because rated capacities differ (a 50 MW farm producing 25 MW is "running at half" — the same as a 200 MW farm producing 100 MW). `p_pu = generation_mwh / nameplate_capacity_mw` puts every farm on a 0–1 scale (1.0 = full rated output). All downstream maths is in p.u.
+We never compare windfarms in raw MW because rated capacities differ (a 50 MW farm producing 25 MW is "running at half" — the same as a 200 MW farm producing 100 MW). `p_pu = generation_mwh / capacity_mw` puts every farm on a 0–1 scale (1.0 = full output of what was installed that hour). All downstream maths is in p.u.
+
+`capacity_mw` is the **installed capacity in force** for that hour, derived from `generation_units` dates (`COALESCE(first_power_date, start_date) <= hour < end_date`) and anchored to the windfarm's nameplate (`app/utils/capacity.py`). For a farm whose capacity never changed it equals nameplate exactly. For a phased, repowered or partly decommissioned farm (Smøla 150.4 → 145.8 MW in Feb 2024, Midtfjellet 12.5 → 149.6 MW over 2012-2018) it follows the registry, so early years are not divided by capacity that did not exist yet. If today's summed unit capacity disagrees with nameplate by more than 3 % the registry is inconsistent and the loader falls back to constant nameplate (`capacity_basis_fallback` log). The registry can also agree with nameplate today and still be wrong about the past (Chungwei: Phase 1 is dated as ended in 2013 and a later unit as started in 2023, yet the farm metered 92-132 MW against 75.9 MW "in force" in 2020-2022). If more than 10 % of a year's hours sit above the 1.02 ceiling on the in-force basis the loader reverts the farm to constant nameplate (`capacity_basis_implausible` log); farms already known to be in this state are listed in `REGISTRY_BLOCKED_WINDFARM_IDS` so the capacity-factor views, which never see hourly data, apply the same fallback. The stamped `generation_data.capacity_mw` is *not* used for this: it is copied at import time and never refreshed when a unit is edited.
 
 ### Hard plausibility filters
 Real-world energy data has measurement glitches (sensor faults, telemetry hiccups, ramp-up/shutdown noise). Two filters drop the worst:
@@ -64,7 +66,7 @@ Three separate SQL queries are issued (avoiding a 3-way nested join that misbeha
 
 - **Inner join** generation + weather on `hour`. Both are required; if wind is missing we can't compare to a curve.
 - **Left join** price on `hour`. Optional — used only by Modules 3 (loss EUR) and 6 (commercial). Missing price → loss/revenue columns are NaN downstream.
-- Compute `year = hour.year` and `p_pu = generation_mwh / rated_mw`.
+- Compute `year = hour.year`, attach `capacity_mw` (capacity in force, see above) and `p_pu = generation_mwh / capacity_mw`. The frame also carries `online_capacity_mw` (stamped capacity of the units that reported that hour) as a diagnostic, and `df.attrs["capacity_basis"] = "in_force"` so a downstream projection that drops `capacity_mw` raises instead of silently reverting to nameplate.
 - Dedup and sort by `hour`.
 
 Resulting DataFrame has columns: `hour, year, generation_mwh, wind_speed, market_price, p_pu`.
@@ -99,13 +101,14 @@ Constants live at the top of the file (`app/services/power_curve_service.py:24�
 | Generation | `generation_data` | `hour`, `generation_mwh`, `is_ramp_up` | Summed across all units; ramp-up hours excluded |
 | Wind | `weather_data` | `hour`, `wind_speed_100m` | ERA5 Copernicus reanalysis, 100 m height |
 | Price | `price_data` | `hour`, `day_ahead_price` | Averaged across sources (ENTSOE + ELEXON if both exist) |
-| Rated capacity | `windfarms` | `nameplate_capacity_mw` | Used to compute p_pu |
+| Rated capacity | `windfarms` | `nameplate_capacity_mw` | Anchor and fallback for `capacity_mw` |
+| Unit windows | `generation_units` | `capacity_mw`, `first_power_date`, `start_date`, `end_date` | Capacity in force per hour (`app/utils/capacity.py`) |
 
 All timestamps are UTC end-to-end. No local-time / BST conversion is applied at this stage (ELEXON BST handling happens upstream during raw → hourly aggregation — see `MEMORY.md` "ELEXON BST Fix Pattern").
 
 ## Aggregation level
 
-**Per-windfarm**, hourly. Generation is summed across all generation units of the windfarm before normalising by the single windfarm-level `nameplate_capacity_mw`. There is no per-unit power curve.
+**Per-windfarm**, hourly. Generation is summed across all generation units of the windfarm before normalising by the capacity in force that hour (sum of the units whose date window covers the hour, anchored to nameplate). There is no per-unit power curve.
 
 ## Caller graph
 

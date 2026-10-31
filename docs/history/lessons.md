@@ -82,3 +82,53 @@ monthly index and, because the yearly index is the mean of monthly means, a 191 
 `MIN_MONTH_HOURS` (100) qualifying hours, and the run now NULLs normalisation values on rows inside its span that it
 did not compute, so values from an earlier run cannot survive next to fresh ones. Related: when a windfarm's COD moves,
 the stale-row rule is "period ends before the first non-ramp-up hour", not "year < COD year".
+
+## 2026-10-30 — A brain-agent query pinned prod RDS CPU for 6 hours
+
+An admin agent session wrote its own psycopg2 script instead of going through `db.py`, so the 30 s guard in `db.py`
+never applied. The query aggregated all of `generation_data` (`COUNT(DISTINCT hour) ... GROUP BY windfarm_id, year`)
+and joined it to `financial_data` on a `make_date(...)` filter the planner estimated at 1 row, so the full 26M-row
+sort ran inside a nested loop once per financial row, spilling to temp files (~330 write IOPS, 7.3 TB of temp files
+in the database's stats). The agent `pkill`ed its script after two minutes, but killing a client does not cancel a
+running query, and nothing noticed the dead socket. CPU sat at 90–96 % from 09:20 to 15:25 UTC until the query was
+cancelled with `pg_cancel_backend`. Fixes: `statement_timeout = 120s` on the `brain_agent_ro` and
+`brain_agent_client_ro` roles (prod and staging), `-c statement_timeout=120000` in the sandbox's `PGOPTIONS` (libpq
+applies it to every connection the agent opens), and `client_connection_check_interval = 10s` on database
+`energyexe_db` (prod and staging) so a query whose client has gone is stopped. Prod uses the default parameter group,
+so these are role/database settings rather than parameter-group changes (no reboot needed).
+
+## 2026-10-31 — Every pipeline module divided by today's nameplate (EPR-184 follow-up)
+
+`p_pu = generation / nameplate_capacity_mw` for every hour of a farm's history. Installed capacity is not constant: 13 of
+250 farms with performance data changed capacity after ramp-up (Smøla 150.4 → 145.8 MW in Feb 2024, Midtfjellet 12.5 →
+149.6 MW over 2012-2018). The bias reached the power curve, the wind-normalised index, ODI lost MWh, degradation (a
+capacity step read as a trend) and the commercial proxy, and the curve builder's 1.02 ceiling threw away every full-load
+hour on a farm whose real capacity exceeded its nameplate. Two things to remember: (1) the stamped
+`generation_data.capacity_mw` is NOT a usable basis — it is copied from the unit at import time, never refreshed on edit,
+NULL on some paths, and only present for hours where the unit reported a row; capacity must come from `generation_units`
+dates (`app/utils/capacity.py`). (2) The anchor for scaling must be frame-independent (today, not "last hour in the
+frame") — otherwise a one-year load and a full-history load put the same hour on different bases — and must refuse to
+scale when today's units disagree with nameplate beyond rounding (Mailiao: 46 MW of units vs 36 MW nameplate would have
+produced an invented 28.2 MW history).
+
+## 2026-10-31 — Re-running the pipeline on staging looked like a hang; it was a micro RDS reading from disk
+
+Three attempts to re-run 17 farms on staging after the capacity-basis change "hung": 0 % CPU on the laptop, the only
+database session idle, nothing new in the log for an hour. None of it was a hang. Staging's database is a db.t4g.micro
+(about 150 MB free memory), so the per-year generation query that Module 6 runs once per data year (`_load_hourly_data
+(year, year)`, on top of the full-span load the other modules share) reads every page from disk; with two or three farms
+running at once read IOPS climbed to ~2,200 against the 3,000 gp3 ceiling and a single year took minutes. What hid this:
+the runner redirected stdout to a file, so Python block-buffered structlog's output (nothing appears until 8 KB
+accumulates, and the tail is lost when the process is killed), and my one-hour cap killed runs that were still working.
+Things that now exist so this does not repeat: `kill -USR1 <pid>` on `scripts/backfill_pipeline.py` prints every pending
+asyncio task's stack (the dump showed the task awaiting an asyncpg reply, and `pg_stat_activity` then showed that
+session `active` in `DataFileRead`); run with `PYTHONUNBUFFERED=1`; run one farm per process rather than one process per
+batch; macOS has no `timeout`/`gtimeout`, so enforce a cap from Python (`subprocess.Popen(...).wait(timeout=...)`). Two
+more lessons from the same day. (1) Yearly `performance_summaries` rows have `month = NULL`, which the unique key treats
+as distinct, so older runs can leave a stale yearly row next to the current one (1,905 such keys across 243 farms on
+staging); a before/after compare that pairs rows by key then reports phantom changes — the snapshot script now keeps the
+most recently updated row per key, and the clean baseline for a code change is "old code, same data, same day" (a
+worktree at the pre-change commit run against the same database), not whatever the last scheduled run left behind.
+(2) Staging's outputs predated the run by ten days and were produced by a different image; comparing them with today's run
+mixed code drift, data drift and the change under test. Follow-up worth doing: Module 6 should slice the already-loaded
+full-span frame per year instead of re-running the loader, which would remove N heavy queries per farm from the nightly run.

@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -58,7 +60,7 @@ async def get_power_curves(
     include_zone_comparison: bool = Query(
         True,
         description="If true, also return per-bin bidzone-average q50/q90 "
-                    "computed across all peer windfarms with the same curve_type.",
+        "computed across all peer windfarms with the same curve_type.",
     ),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
@@ -93,15 +95,15 @@ async def get_power_curves(
         from app.models.windfarm import Windfarm
         from sqlalchemy import func
 
-        wf_row = (await db.execute(
-            select(Windfarm.bidzone_id).where(Windfarm.id == windfarm_id)
-        )).first()
+        wf_row = (
+            await db.execute(select(Windfarm.bidzone_id).where(Windfarm.id == windfarm_id))
+        ).first()
         bidzone_id = wf_row[0] if wf_row else None
 
         if bidzone_id is not None:
-            bz_row = (await db.execute(
-                select(Bidzone.name).where(Bidzone.id == bidzone_id)
-            )).first()
+            bz_row = (
+                await db.execute(select(Bidzone.name).where(Bidzone.id == bidzone_id))
+            ).first()
             bidzone_name = bz_row[0] if bz_row else None
 
             # Get peer windfarm IDs in the same bidzone (excluding this windfarm)
@@ -189,9 +191,9 @@ async def get_odi_metrics(
         from app.models.windfarm import Windfarm
         from app.services.peer_aggregate_service import PeerAggregateService
 
-        wf_row = (await db.execute(
-            select(Windfarm.bidzone_id).where(Windfarm.id == windfarm_id)
-        )).first()
+        wf_row = (
+            await db.execute(select(Windfarm.bidzone_id).where(Windfarm.id == windfarm_id))
+        ).first()
         bidzone_id = wf_row[0] if wf_row else None
 
         if bidzone_id is not None:
@@ -201,18 +203,30 @@ async def get_odi_metrics(
                     continue  # Skip monthly rows
                 try:
                     for metric_key, attr_avg, attr_diff, this_attr in [
-                        ("odi_pct_underperf",
-                         "zone_avg_odi_pct_underperf", "vs_zone_diff_underperf",
-                         "odi_pct_underperf"),
-                        ("odi_pct_loss_mwh",
-                         "zone_avg_odi_pct_loss_mwh", "vs_zone_diff_loss_mwh",
-                         "odi_pct_loss_mwh"),
-                        ("odi_pct_loss_eur",
-                         "zone_avg_odi_pct_loss_eur", "vs_zone_diff_loss_eur",
-                         "odi_pct_loss_eur"),
+                        (
+                            "odi_pct_underperf",
+                            "zone_avg_odi_pct_underperf",
+                            "vs_zone_diff_underperf",
+                            "odi_pct_underperf",
+                        ),
+                        (
+                            "odi_pct_loss_mwh",
+                            "zone_avg_odi_pct_loss_mwh",
+                            "vs_zone_diff_loss_mwh",
+                            "odi_pct_loss_mwh",
+                        ),
+                        (
+                            "odi_pct_loss_eur",
+                            "zone_avg_odi_pct_loss_eur",
+                            "vs_zone_diff_loss_eur",
+                            "odi_pct_loss_eur",
+                        ),
                     ]:
                         agg = await agg_svc.get_or_compute(
-                            "bidzone", bidzone_id, metric_key, year=resp.year,
+                            "bidzone",
+                            bidzone_id,
+                            metric_key,
+                            year=resp.year,
                         )
                         if agg is not None and agg.avg_value is not None:
                             zone_avg = float(agg.avg_value)
@@ -221,13 +235,16 @@ async def get_odi_metrics(
                             this_val = getattr(resp, this_attr)
                             if this_val is not None:
                                 setattr(
-                                    resp, attr_diff,
+                                    resp,
+                                    attr_diff,
                                     round(float(this_val) - zone_avg, 4),
                                 )
                 except Exception as exc:
                     logger.warning(
                         "odi_zone_comparison_failed",
-                        windfarm_id=windfarm_id, year=resp.year, error=str(exc),
+                        windfarm_id=windfarm_id,
+                        year=resp.year,
+                        error=str(exc),
                     )
 
             await db.commit()
@@ -272,7 +289,7 @@ async def get_degradation(
     include_zone_comparison: bool = Query(
         True,
         description="If true, attach bidzone-average slope and vs-zone diff "
-                    "(uses cached peer aggregates when available).",
+        "(uses cached peer aggregates when available).",
     ),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
@@ -284,9 +301,11 @@ async def get_degradation(
     the analysis_end year — diff fields are then None.
     """
     result = await db.execute(
-        select(DegradationResult).where(
+        select(DegradationResult)
+        .where(
             DegradationResult.windfarm_id == windfarm_id,
-        ).order_by(DegradationResult.reference_curve)
+        )
+        .order_by(DegradationResult.reference_curve)
     )
     results = result.scalars().all()
     if not results:
@@ -298,9 +317,9 @@ async def get_degradation(
         from app.models.windfarm import Windfarm
         from app.services.peer_aggregate_service import PeerAggregateService
 
-        wf_row = (await db.execute(
-            select(Windfarm.bidzone_id).where(Windfarm.id == windfarm_id)
-        )).first()
+        wf_row = (
+            await db.execute(select(Windfarm.bidzone_id).where(Windfarm.id == windfarm_id))
+        ).first()
         bidzone_id = wf_row[0] if wf_row else None
 
         if bidzone_id is not None:
@@ -313,7 +332,9 @@ async def get_degradation(
                 )
                 try:
                     agg = await agg_svc.get_or_compute(
-                        "bidzone", bidzone_id, metric_key,
+                        "bidzone",
+                        bidzone_id,
+                        metric_key,
                         year=r.analysis_end.year,
                     )
                     if agg is not None and agg.avg_value is not None:
@@ -327,7 +348,9 @@ async def get_degradation(
                 except Exception as exc:
                     logger.warning(
                         "degradation_zone_comparison_failed",
-                        windfarm_id=windfarm_id, ref=r.reference_curve, error=str(exc),
+                        windfarm_id=windfarm_id,
+                        ref=r.reference_curve,
+                        error=str(exc),
                     )
 
             # Persist any newly-computed peer aggregate cache rows.
@@ -412,10 +435,12 @@ async def get_anomalies(
                 select(
                     PerformanceAnomaly.run_id,
                     func.count(PerformanceAnomaly.id).label("cnt"),
-                ).where(
+                )
+                .where(
                     PerformanceAnomaly.windfarm_id == windfarm_id,
                     PerformanceAnomaly.run_id.in_(run_ids),
-                ).group_by(PerformanceAnomaly.run_id)
+                )
+                .group_by(PerformanceAnomaly.run_id)
             )
             valid_runs = {r.run_id for r in run_counts.fetchall() if r.cnt >= min_run_hours}
             anomalies = [a for a in anomalies if a.run_id in valid_runs]
@@ -465,9 +490,7 @@ async def run_ppa_scenarios(
     from app.services.performance_pipeline_service import PerformancePipelineService
 
     service = PerformancePipelineService(db)
-    results = await service.run_ppa_scenarios(
-        windfarm_id, request.year, request.price_scenarios
-    )
+    results = await service.run_ppa_scenarios(windfarm_id, request.year, request.price_scenarios)
     return [PPAScenarioResponse(**r) for r in results]
 
 
@@ -644,6 +667,33 @@ async def get_wind_normalisation_monthly(
     ]
 
 
+def build_wind_normalised_points(
+    hourly: pd.DataFrame, ref_expected_pu: float, rated_mw: float
+) -> List[WindNormalisedHourPoint]:
+    """One chart point per qualifying hour.
+
+    ``wind_normalised_mwh`` is projected onto the capacity in force that hour
+    (``capacity_mw`` from the loader; constant ``rated_mw`` for plain frames) so
+    it sits on the same MW scale as the hour's actual output. Column names
+    must not start with an underscore: ``itertuples`` renames those
+    positionally.
+    """
+    from app.utils.capacity import capacity_col
+
+    frame = hourly.assign(cap_mw=capacity_col(hourly, rated_mw))
+    return [
+        WindNormalisedHourPoint(
+            hour=row.hour,
+            actual_mwh=float(row.actual_mw),
+            expected_mwh=float(row.expected_mw),
+            wind_normalised_mwh=float(row.norm_ratio) * ref_expected_pu * float(row.cap_mw),
+            norm_ratio=float(row.norm_ratio),
+            wind_speed=float(row.wind_speed),
+        )
+        for row in frame.itertuples()
+    ]
+
+
 @router.get(
     "/wind-normalisation/{windfarm_id}/hourly",
     response_model=WindNormalisedHourlyResponse,
@@ -674,9 +724,13 @@ async def get_wind_normalisation_hourly(
     For each qualifying hour (wind ≥ 4 m/s, curve value exists,
     expected_mwh > 0):
 
-      expected_mwh = curve(wind_speed) × rated_mw
+      expected_mwh = curve(wind_speed) × capacity_in_force_mw(hour)
       norm_ratio   = actual_mwh / expected_mwh
-      wind_normalised_mwh = norm_ratio × curve(mean_wind_speed) × rated_mw
+      wind_normalised_mwh = norm_ratio × curve(mean_wind_speed) × capacity_in_force_mw(hour)
+
+    Capacity is the installed capacity in force that hour (from the unit
+    registry, anchored to nameplate), so farms whose capacity changed over
+    time are normalised against what was actually installed.
 
     `wind_normalised_mwh` is the value users should plot to "factor out
     wind variability" — it is each hour's measured efficiency projected
@@ -689,9 +743,7 @@ async def get_wind_normalisation_hourly(
 
     # Resolve rated capacity.
     wf_row = (
-        await db.execute(
-            select(Windfarm.nameplate_capacity_mw).where(Windfarm.id == windfarm_id)
-        )
+        await db.execute(select(Windfarm.nameplate_capacity_mw).where(Windfarm.id == windfarm_id))
     ).first()
     rated_mw = float(wf_row[0]) if wf_row and wf_row[0] is not None else None
     if not rated_mw or rated_mw <= 0:
@@ -728,7 +780,9 @@ async def get_wind_normalisation_hourly(
         return WindNormalisedHourlyResponse(
             windfarm_id=windfarm_id,
             reference_curve=reference,
-            reference_wind_speed_mps=float(df["wind_speed"].mean()) if "wind_speed" in df.columns else 0.0,
+            reference_wind_speed_mps=float(df["wind_speed"].mean())
+            if "wind_speed" in df.columns
+            else 0.0,
             long_run_avg_norm_ratio=0.0,
             qualifying_hours=0,
             points=[],
@@ -744,20 +798,8 @@ async def get_wind_normalisation_hourly(
     while ref_bin not in curve_lookup and ref_bin > 0:
         ref_bin -= 1.0
     ref_expected_pu = curve_lookup.get(ref_bin, 0.0)
-    ref_expected_mw = ref_expected_pu * rated_mw
     long_run_norm_ratio = float(hourly["norm_ratio"].mean())
-
-    points = [
-        WindNormalisedHourPoint(
-            hour=row.hour,
-            actual_mwh=float(row.actual_mw),
-            expected_mwh=float(row.expected_mw),
-            wind_normalised_mwh=float(row.norm_ratio) * ref_expected_mw,
-            norm_ratio=float(row.norm_ratio),
-            wind_speed=float(row.wind_speed),
-        )
-        for row in hourly.itertuples()
-    ]
+    points = build_wind_normalised_points(hourly, ref_expected_pu, rated_mw)
 
     return WindNormalisedHourlyResponse(
         windfarm_id=windfarm_id,

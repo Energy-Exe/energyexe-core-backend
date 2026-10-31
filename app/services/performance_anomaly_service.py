@@ -20,6 +20,7 @@ from app.models.performance_summary import PerformanceSummary
 from app.models.power_curve_bin import PowerCurveBin
 from app.models.ppa import PPA
 from app.models.windfarm import Windfarm
+from app.utils.capacity import capacity_col
 
 # IsolationForest is optional (sklearn import) — keeps test env light.
 try:
@@ -37,6 +38,8 @@ UNDERPERF_MAD_K = 2.5
 OVERPERF_MAD_K = 1.5
 CEILING_PU = 1.02
 LONG_RUN_HOURS = 24
+# performance_anomalies.actual_p_pu / expected_p_pu are Numeric(6,5).
+P_PU_STORE_MAX = 9.99999
 
 # Optional secondary anomaly detector (Module 3b). Disabled by default — the
 # spec marks it as optional and notes it does NOT contribute to loss calcs.
@@ -46,6 +49,13 @@ ISOLATION_CONTAMINATION = float(os.getenv("PIPELINE_ISOLATION_CONTAMINATION", "0
 # Threshold for the W2 NaN-price warning — matches the spec's posture
 # of treating NaN-heavy datasets as suspect (spec :270-280).
 NAN_PRICE_WARN_RATIO = 0.05
+
+
+def _store_pu(value) -> Optional[float]:
+    """Clip a per-unit value to what the Numeric(6,5) columns can hold."""
+    if value is None or pd.isna(value):
+        return None
+    return float(min(max(float(value), -P_PU_STORE_MAX), P_PU_STORE_MAX))
 
 
 def _warn_if_market_price_nan_heavy(
@@ -163,8 +173,11 @@ class PerformanceAnomalyService:
         Merges capability bin stats onto hourly data, then applies thresholds:
         - Underperformance: p_pu < q50_bin - 2.5 * MAD
         - Overperformance: p_pu > q90_bin + 1.5 * MAD or p_pu > 1.02
-        - Lost MWh = max(0, q50_bin * rated_mw - actual_mwh)
+        - Lost MWh = max(0, q50_bin * capacity_in_force_mw - actual_mwh)
         - Lost EUR = lost_mwh * price
+
+        ``capacity_in_force_mw`` is the loader's per-hour ``capacity_mw`` column;
+        ``rated_mw`` is used only when the frame has no such column.
         """
         out = df.copy()
 
@@ -222,7 +235,7 @@ class PerformanceAnomalyService:
         out["is_anomaly"] = underperf | overperf
 
         # Loss quantification (underperformance only)
-        out["expected_mwh"] = out["q50_bin"] * rated_mw
+        out["expected_mwh"] = out["q50_bin"] * capacity_col(out, rated_mw)
         out["lost_mwh"] = np.where(
             underperf,
             np.maximum(0, out["expected_mwh"] - out["generation_mwh"]),
@@ -352,7 +365,10 @@ class PerformanceAnomalyService:
         df = await pcs._load_hourly_data(windfarm_id, year, year, float(rated_mw))
         if df.empty:
             return df
-        return df[["hour", "generation_mwh", "wind_speed", "market_price", "p_pu"]]
+        keep = ["hour", "generation_mwh", "wind_speed", "market_price", "p_pu", "capacity_mw"]
+        out = df[[c for c in keep if c in df.columns]]
+        out.attrs.update(df.attrs)
+        return out
 
     async def _load_capability_stats(self, windfarm_id: int, year: int) -> pd.DataFrame:
         """Load yearly capability curve bins."""
@@ -484,8 +500,8 @@ class PerformanceAnomalyService:
                 windfarm_id=windfarm_id,
                 hour=row["hour"],
                 anomaly_type=row["anomaly_type"],
-                actual_p_pu=float(row["p_pu"]) if pd.notna(row.get("p_pu")) else None,
-                expected_p_pu=float(row["q50_bin"]) if pd.notna(row.get("q50_bin")) else None,
+                actual_p_pu=_store_pu(row.get("p_pu")),
+                expected_p_pu=_store_pu(row.get("q50_bin")),
                 wind_speed=float(row["wind_speed"]) if pd.notna(row.get("wind_speed")) else None,
                 wind_bin=float(row["wind_bin_float"])
                 if pd.notna(row.get("wind_bin_float"))
@@ -693,10 +709,8 @@ class PerformanceAnomalyService:
                     "windfarm_id": windfarm_id,
                     "hour": row["hour"],
                     "anomaly_type": row["anomaly_type"],
-                    "actual_p_pu": float(row["p_pu"]) if pd.notna(row.get("p_pu")) else None,
-                    "expected_p_pu": float(row["q50_bin"])
-                    if pd.notna(row.get("q50_bin"))
-                    else None,
+                    "actual_p_pu": _store_pu(row.get("p_pu")),
+                    "expected_p_pu": _store_pu(row.get("q50_bin")),
                     "wind_speed": float(row["wind_speed"])
                     if pd.notna(row.get("wind_speed"))
                     else None,

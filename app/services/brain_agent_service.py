@@ -1624,8 +1624,14 @@ class BrainAgentService:
                 "DATABASE_URL": agent_db_url,
                 # Belt-and-suspenders — forces every transaction to be
                 # read-only at the session level even if the role somehow
-                # gained write grants.
-                "PGOPTIONS": "-c default_transaction_read_only=on",
+                # gained write grants. libpq reads PGOPTIONS for every
+                # connection the agent opens, so the statement_timeout also
+                # covers self-written psycopg2/psql scripts that skip db.py's
+                # 30 s guard (2026-10-30: one such script ran a full-table
+                # aggregate for 6 h and pinned prod RDS CPU at 95 %). The
+                # brain_agent_*_ro roles carry the same 120 s timeout
+                # server-side; this keeps it when the fallback URL is in use.
+                "PGOPTIONS": "-c default_transaction_read_only=on -c statement_timeout=120000",
                 # EPR-59: client db.py rejects information_schema / pg_catalog
                 # introspection so the client agent can't describe DB structure.
                 # The PreToolUse hook above enforces the same rule for commands
