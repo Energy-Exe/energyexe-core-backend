@@ -41,7 +41,7 @@ def _generate_cache_key(
     end_date_str = end_date.strftime("%Y-%m-%d")
 
     key_parts = [
-        f"report:v1:{windfarm_id}",
+        f"report:v2:{windfarm_id}",
         start_date_str,
         end_date_str,
         include_peer_groups or "all",

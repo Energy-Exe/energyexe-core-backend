@@ -245,8 +245,17 @@ SKILL_DOMAIN = """# Energy Domain Knowledge
   denominators) AND double-counts hours (`COUNT(hour)` = 17,520 for a
   2-unit year instead of 8,760).
 - Correct pattern: `SUM(generation_mwh) / (nameplate × COUNT(DISTINCT hour))`,
-  GROUP BY 1, nameplate_capacity_mw. Always pull nameplate from `windfarms`,
-  not from the per-row `capacity_mw` which can vary across units.
+  GROUP BY 1, nameplate_capacity_mw. Pull nameplate from `windfarms`, not from
+  the per-row `capacity_mw` which can vary across units.
+- Nameplate is TODAY's installed capacity. For a farm whose capacity changed
+  over time (several `generation_units` with different start/end dates —
+  phased build-out, repowering, decommissioned turbines) a yearly CF against
+  today's nameplate is wrong for the earlier years. Use the capacity in force:
+  join `generation_units gu ON gu.windfarm_id = g.windfarm_id AND
+  COALESCE(gu.first_power_date, gu.start_date) <= g.hour::date AND
+  (gu.end_date IS NULL OR g.hour::date < gu.end_date)`, sum `gu.capacity_mw`
+  per hour, and divide SUM(generation) by SUM(capacity per hour). The
+  platform's own pipeline and analytics pages already do this.
 
 **Financial reporting periods are NOT always 12 months.** The
 `financial_data` table can contain transition-year rows of 6 or 9 months
