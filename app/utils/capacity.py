@@ -64,6 +64,24 @@ BASIS_IN_FORCE = "in_force"
 STATUS_IN_FORCE = "in_force"  # anchored in-force series applied
 STATUS_BLOCKED = "blocked"  # registry disagrees with nameplate → constant nameplate
 STATUS_NO_UNITS = "no_units"  # no dated/sized units → constant nameplate
+STATUS_IMPLAUSIBLE = "implausible"  # output contradicts the unit history → constant nameplate
+
+# Farms whose unit history is contradicted by their own output: hours well
+# above the capacity the registry says was in force. The anchor check cannot
+# catch these (today's units agree with nameplate), so they stay on constant
+# nameplate until the registry is corrected. Listed, with the evidence, in
+# docs/reports/2026-10/capacity_audit/README.md.
+#   7434 Chungwei (Zhongwei Da-an): 92 MW in 2020-21 and 132 MW in 2022 against
+#        75.9 MW registered — Phase 1 is dated as ended 2013-01-31 and ChuangWei
+#        as started 2023-10-26, both contradicted by the metered output.
+REGISTRY_BLOCKED_WINDFARM_IDS: frozenset = frozenset({7434})
+
+# A year in which more than this share of hours sits above the curve ceiling on
+# the in-force basis means a unit's dates or capacity are wrong for that period
+# (the loader then reverts the farm to constant nameplate and logs it). Smøla's
+# genuine 150.4 MW years and Aikengall II's early-commissioning months (5 % in
+# 2020) stay well under it; Chungwei's 2020 and 2022 (21-23 %) do not.
+IMPLAUSIBLE_CEILING_SHARE = 0.10
 
 DateLike = Union[date, datetime, pd.Timestamp, None]
 
@@ -230,10 +248,21 @@ def anchor_scale(
     return float(nameplate) / s_anchor
 
 
+def registry_blocked(windfarm_id: Optional[int]) -> bool:
+    """True for farms kept on constant nameplate by ``REGISTRY_BLOCKED_WINDFARM_IDS``."""
+    return windfarm_id is not None and int(windfarm_id) in REGISTRY_BLOCKED_WINDFARM_IDS
+
+
 def capacity_basis_status(
-    windows: Sequence[UnitWindow], nameplate: float, today: DateLike = None
+    windows: Sequence[UnitWindow],
+    nameplate: float,
+    today: DateLike = None,
+    *,
+    windfarm_id: Optional[int] = None,
 ) -> str:
     """One of STATUS_IN_FORCE / STATUS_BLOCKED / STATUS_NO_UNITS."""
+    if registry_blocked(windfarm_id):
+        return STATUS_BLOCKED
     if not windows:
         return STATUS_NO_UNITS
     return (
@@ -248,16 +277,18 @@ def capacity_series(
     *,
     anchor: bool = True,
     today: DateLike = None,
+    windfarm_id: Optional[int] = None,
 ) -> pd.Series:
     """Capacity in force per hour (MW), aligned to ``hours``' index.
 
     Anchored to nameplate by default (see module docstring). ``anchor=False``
     returns the raw unit sum and is meant for tests and audits only. Hours with
-    no unit in force (``S(h) = 0``) fall back to nameplate.
+    no unit in force (``S(h) = 0``) fall back to nameplate, as does a farm in
+    ``REGISTRY_BLOCKED_WINDFARM_IDS`` (pass ``windfarm_id`` to apply that).
     """
     h = _hours_utc(hours)
     const = pd.Series(float(nameplate), index=h.index)
-    if not windows:
+    if not windows or registry_blocked(windfarm_id):
         return const
     s = installed_series(windows, h)
     if anchor:
@@ -277,10 +308,11 @@ def capacity_at(
     *,
     anchor: bool = True,
     today: DateLike = None,
+    windfarm_id: Optional[int] = None,
 ) -> float:
     """Capacity in force at one instant (same rules as ``capacity_series``)."""
     s = installed_at(windows, at)
-    if not windows:
+    if not windows or registry_blocked(windfarm_id):
         return float(nameplate)
     if anchor:
         scale = anchor_scale(windows, nameplate, today)
@@ -296,16 +328,35 @@ def attach_capacity(
     nameplate: float,
     *,
     today: DateLike = None,
+    windfarm_id: Optional[int] = None,
 ) -> pd.DataFrame:
     """Add ``capacity_mw`` and recompute ``p_pu`` on the in-force basis.
 
     Marks the frame (``df.attrs``) so downstream ``capacity_col`` calls refuse
     to silently revert to nameplate if the column is projected away.
     """
-    df["capacity_mw"] = capacity_series(windows, df["hour"], nameplate, today=today).values
+    df["capacity_mw"] = capacity_series(
+        windows, df["hour"], nameplate, today=today, windfarm_id=windfarm_id
+    ).values
     df["p_pu"] = df["generation_mwh"].astype(float) / df["capacity_mw"]
     df.attrs[CAPACITY_BASIS_ATTR] = BASIS_IN_FORCE
     return df
+
+
+def implausible_years(
+    df: pd.DataFrame, ceiling: float, *, min_share: float = IMPLAUSIBLE_CEILING_SHARE
+) -> Dict[int, float]:
+    """Years whose share of hours with ``p_pu`` above ``ceiling`` exceeds ``min_share``.
+
+    On the in-force basis a persistent excess means the registry under-states
+    the capacity that was really running (wrong unit dates or capacity), and
+    dividing by it would inflate every ratio for those years and drop a fifth
+    of the hours at the curve ceiling. Empty when the basis is plausible.
+    """
+    if df.empty or "p_pu" not in df.columns or "year" not in df.columns:
+        return {}
+    share = (df["p_pu"] > ceiling).groupby(df["year"]).mean()
+    return {int(y): round(float(v), 4) for y, v in share.items() if v > min_share}
 
 
 def capacity_col(df: pd.DataFrame, rated_mw: float) -> pd.Series:
@@ -336,6 +387,7 @@ def monthly_capacity(
     nameplate: float,
     *,
     today: DateLike = None,
+    windfarm_id: Optional[int] = None,
 ) -> Dict[str, float]:
     """Hours-weighted average capacity in force per ``YYYY-MM`` month.
 
@@ -348,7 +400,9 @@ def monthly_capacity(
         start = pd.Timestamp(f"{m}-01", tz="UTC")
         end = start + pd.offsets.MonthBegin(1)
         hours = pd.date_range(start, end, freq="h", inclusive="left")
-        out[m] = float(capacity_series(windows, hours, nameplate, today=today).mean())
+        out[m] = float(
+            capacity_series(windows, hours, nameplate, today=today, windfarm_id=windfarm_id).mean()
+        )
     return out
 
 
