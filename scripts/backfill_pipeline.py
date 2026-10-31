@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import asyncio
+import signal
 import sys
 import time
 from datetime import datetime
@@ -22,7 +23,9 @@ async def get_eligible_windfarms(db):
     """Get windfarm IDs that have generation + weather data + capacity."""
     from sqlalchemy import text
 
-    result = await db.execute(text("""
+    result = await db.execute(
+        text(
+            """
         SELECT w.id, w.name
         FROM windfarms w
         WHERE w.status = 'operational'
@@ -30,11 +33,34 @@ async def get_eligible_windfarms(db):
           AND EXISTS (SELECT 1 FROM weather_data wd WHERE wd.windfarm_id = w.id LIMIT 1)
           AND EXISTS (SELECT 1 FROM generation_data g WHERE g.windfarm_id = w.id AND g.is_ramp_up = false LIMIT 1)
         ORDER BY w.id
-    """))
+    """
+        )
+    )
     return [(r[0], r[1]) for r in result.fetchall()]
 
 
+def install_task_dump() -> None:
+    """``kill -USR1 <pid>`` prints the stack of every pending asyncio task to stderr.
+
+    Diagnostic for a run that stops making progress (0 % CPU, idle DB session,
+    no log lines): the dump shows which coroutine the event loop is waiting on
+    without having to kill the run. Must be called from inside the running loop.
+    """
+    loop = asyncio.get_running_loop()
+
+    def _dump() -> None:
+        print(f"--- asyncio task dump {datetime.utcnow().isoformat()}Z ---", file=sys.stderr)
+        for task in asyncio.all_tasks(loop):
+            print(f"task {task.get_name()} done={task.done()}", file=sys.stderr)
+            task.print_stack(file=sys.stderr)
+        print("--- end task dump ---", file=sys.stderr)
+        sys.stderr.flush()
+
+    loop.add_signal_handler(signal.SIGUSR1, _dump)
+
+
 async def run_backfill(args):
+    install_task_dump()
     from app.core.database import get_session_factory
     from app.services.performance_pipeline_service import PerformancePipelineService
     from app.services.opportunity_detection_service import OpportunityDetectionService
@@ -58,7 +84,9 @@ async def run_backfill(args):
     # ─── Phase 1: Performance Pipeline ─────────────────────────
     if not args.opportunities_only:
         print(f"\n{'='*60}")
-        print(f"[PIPELINE] Starting performance pipeline for {total} windfarms (batch_size={batch_size})")
+        print(
+            f"[PIPELINE] Starting performance pipeline for {total} windfarms (batch_size={batch_size})"
+        )
         print(f"{'='*60}")
 
         pipeline_ok = 0
@@ -70,7 +98,9 @@ async def run_backfill(args):
             batch_num = i // batch_size + 1
             total_batches = (total + batch_size - 1) // batch_size
 
-            print(f"\n[PIPELINE] Batch {batch_num}/{total_batches} ({len(batch)} windfarms: {batch[0]}-{batch[-1]})")
+            print(
+                f"\n[PIPELINE] Batch {batch_num}/{total_batches} ({len(batch)} windfarms: {batch[0]}-{batch[-1]})"
+            )
 
             for wf_id in batch:
                 wf_start = time.time()
@@ -158,7 +188,9 @@ async def run_backfill(args):
                 print(f"  Batch {i//batch_size + 1}: ERROR: {e}")
 
         opp_elapsed = time.time() - opp_start
-        print(f"\n[OPPORTUNITIES] Complete: {total_opps} opportunities detected in {opp_elapsed:.0f}s")
+        print(
+            f"\n[OPPORTUNITIES] Complete: {total_opps} opportunities detected in {opp_elapsed:.0f}s"
+        )
 
     # ─── Summary ───────────────────────────────────────────────
     total_elapsed = time.time() - start_time
@@ -169,9 +201,13 @@ async def run_backfill(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Backfill performance pipeline and opportunities")
-    parser.add_argument("--batch-size", type=int, default=10, help="Windfarms per batch (default: 10)")
+    parser.add_argument(
+        "--batch-size", type=int, default=10, help="Windfarms per batch (default: 10)"
+    )
     parser.add_argument("--pipeline-only", action="store_true", help="Skip opportunity detection")
-    parser.add_argument("--opportunities-only", action="store_true", help="Skip pipeline, run opportunities only")
+    parser.add_argument(
+        "--opportunities-only", action="store_true", help="Skip pipeline, run opportunities only"
+    )
     parser.add_argument("--windfarm-ids", type=int, nargs="+", help="Specific windfarm IDs")
     args = parser.parse_args()
 

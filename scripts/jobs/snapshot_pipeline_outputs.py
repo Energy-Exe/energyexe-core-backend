@@ -44,14 +44,17 @@ DB_URL = os.environ.get("DATABASE_URL", "").replace("postgresql+asyncpg://", "po
 TABLES: Dict[str, Tuple[str, List[str], List[str]]] = {
     "performance_summaries": (
         """
-        SELECT windfarm_id, period_type, year, month,
+        -- Yearly rows have month = NULL, which the unique key treats as distinct,
+        -- so older runs can leave a stale yearly row behind. Keep the latest.
+        SELECT DISTINCT ON (windfarm_id, period_type, year, month)
+               windfarm_id, period_type, year, month,
                total_hours, underperf_hours, overperf_hours, odi_pct_underperf,
                lost_mwh, expected_mwh, odi_pct_loss_mwh, lost_eur,
                norm_ratio_p50, norm_index_p50, norm_ratio_p10, norm_index_p10,
                constraint_proxy_mwh, lost_value_eur, contract_revenue_eur,
                contract_revenue_vs_p50_target_eur
         FROM performance_summaries WHERE windfarm_id = ANY($1::int[])
-        ORDER BY windfarm_id, period_type, year, month
+        ORDER BY windfarm_id, period_type, year, month, updated_at DESC NULLS LAST
         """,
         ["windfarm_id", "period_type", "year", "month"],
         [
@@ -133,9 +136,11 @@ TABLES: Dict[str, Tuple[str, List[str], List[str]]] = {
 }
 
 FLEET_SQL = """
-SELECT windfarm_id, year, norm_index_p50, norm_ratio_p50, lost_mwh, expected_mwh,
+SELECT DISTINCT ON (windfarm_id, year)
+       windfarm_id, year, norm_index_p50, norm_ratio_p50, lost_mwh, expected_mwh,
        odi_pct_loss_mwh, constraint_proxy_mwh
-FROM performance_summaries WHERE period_type = 'year' ORDER BY windfarm_id, year
+FROM performance_summaries WHERE period_type = 'year'
+ORDER BY windfarm_id, year, updated_at DESC NULLS LAST
 """
 
 
