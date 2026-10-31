@@ -205,3 +205,45 @@ class TestPeriodHelpers:
         hours = {"2024-01": 744, "2024-02": 696}
         assert weighted_capacity(caps, hours) == pytest.approx((744 * 10 + 696 * 20) / 1440)
         assert weighted_capacity(caps, {}) is None
+
+
+class TestRegistryGuard:
+    """Farms whose output contradicts the unit history stay on constant nameplate."""
+
+    def test_blocked_farm_gets_constant_nameplate_everywhere(self):
+        from app.utils.capacity import (
+            REGISTRY_BLOCKED_WINDFARM_IDS,
+            STATUS_BLOCKED,
+            capacity_at,
+            capacity_basis_status,
+            monthly_capacity,
+        )
+
+        blocked = next(iter(REGISTRY_BLOCKED_WINDFARM_IDS))
+        windows = [_w(75.9, "2013-02-01"), _w(49.2, "2023-10-26")]  # Chungwei as registered
+        hours = _hours("2020-01-01", "2020-01-03")
+        assert capacity_basis_status(windows, 125.1, windfarm_id=blocked) == STATUS_BLOCKED
+        assert (capacity_series(windows, hours, 125.1, windfarm_id=blocked) == 125.1).all()
+        assert capacity_at(windows, "2020-06-01", 125.1, windfarm_id=blocked) == 125.1
+        assert monthly_capacity(windows, ["2020-06"], 125.1, windfarm_id=blocked) == {
+            "2020-06": 125.1
+        }
+        # Without the id the same registry would (wrongly) give 75.9 MW in 2020.
+        assert np.allclose(capacity_series(windows, hours, 125.1), 75.9)
+        df = pd.DataFrame({"hour": hours, "generation_mwh": 90.0})
+        attach_capacity(df, windows, 125.1, windfarm_id=blocked)
+        assert (df["capacity_mw"] == 125.1).all()
+
+    def test_implausible_years_flags_only_years_with_heavy_excess(self):
+        from app.utils.capacity import implausible_years
+
+        df = pd.DataFrame(
+            {
+                "year": [2020] * 100 + [2021] * 100,
+                # 2020: 25 % of hours above the ceiling; 2021: 5 % (early commissioning)
+                "p_pu": [1.2] * 25 + [0.5] * 75 + [1.2] * 5 + [0.5] * 95,
+            }
+        )
+        assert implausible_years(df, 1.02) == {2020: 0.25}
+        assert implausible_years(df, 1.02, min_share=0.04) == {2020: 0.25, 2021: 0.05}
+        assert implausible_years(pd.DataFrame(), 1.02) == {}

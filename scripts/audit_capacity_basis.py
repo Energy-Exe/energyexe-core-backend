@@ -149,7 +149,7 @@ async def main() -> None:
         nameplate = float(f["nameplate"] or 0)
         us = by_farm.get(wf, [])
         windows = _windows(us)
-        status = capacity_basis_status(windows, nameplate, today=today)
+        status = capacity_basis_status(windows, nameplate, today=today, windfarm_id=wf)
         s_anchor = installed_at(windows, anchor_date(windows, today=today)) if windows else 0.0
         diff_pct = (
             round(100.0 * (s_anchor / nameplate - 1.0), 2) if nameplate and s_anchor else None

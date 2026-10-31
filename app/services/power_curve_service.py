@@ -19,9 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.power_curve_bin import PowerCurveBin
 from app.models.windfarm import Windfarm
 from app.utils.capacity import (
+    STATUS_IMPLAUSIBLE,
     STATUS_IN_FORCE,
     attach_capacity,
     capacity_basis_status,
+    implausible_years,
     load_unit_windows,
 )
 
@@ -247,7 +249,7 @@ class PowerCurveService:
         # Installed capacity in force per hour (from generation_units dates,
         # anchored to nameplate) and the p_pu every module shares.
         windows = (await load_unit_windows(self.db, [windfarm_id])).get(windfarm_id, [])
-        basis = capacity_basis_status(windows, float(rated_mw))
+        basis = capacity_basis_status(windows, float(rated_mw), windfarm_id=windfarm_id)
         if basis != STATUS_IN_FORCE:
             logger.warning(
                 "capacity_basis_fallback",
@@ -256,7 +258,24 @@ class PowerCurveService:
                 n_units=len(windows),
                 nameplate_mw=float(rated_mw),
             )
-        attach_capacity(df, windows, float(rated_mw))
+        attach_capacity(df, windows, float(rated_mw), windfarm_id=windfarm_id)
+        if basis == STATUS_IN_FORCE:
+            # The registry can agree with nameplate today and still be wrong
+            # about the past (a unit dated as ended that kept running). If the
+            # metered output sits above the ceiling for a large share of a
+            # year, the in-force basis is under-stating capacity for that
+            # period: revert the farm to constant nameplate rather than drop a
+            # fifth of its hours and inflate every ratio.
+            bad_years = implausible_years(df, CEILING_PU)
+            if bad_years:
+                logger.warning(
+                    "capacity_basis_implausible",
+                    windfarm_id=windfarm_id,
+                    years=bad_years,
+                    nameplate_mw=float(rated_mw),
+                    status=STATUS_IMPLAUSIBLE,
+                )
+                attach_capacity(df, [], float(rated_mw))
         self._log_ceiling_share(windfarm_id, df)
 
         cols = [
