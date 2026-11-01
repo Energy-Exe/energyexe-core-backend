@@ -1,9 +1,10 @@
 """User management endpoints."""
 
-from typing import List
+from typing import Any, List
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_active_user, get_current_superuser, get_db
@@ -11,6 +12,11 @@ from app.core.exceptions import NotFoundException, ValidationException
 from app.models.user import User
 from app.schemas.user import UserResponse, UserUpdate
 from app.services.user import UserService
+from app.services.user_preference_service import (
+    InvalidPreference,
+    UnknownPreference,
+    UserPreferenceService,
+)
 
 logger = structlog.get_logger()
 
@@ -40,6 +46,63 @@ async def update_current_user_profile(
         return updated_user
     except (NotFoundException, ValidationException) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
+
+
+# ---- Saved settings for the signed-in user (EPR-202) ---------------------------
+# Only allowlisted keys; anything else is 404. Not audited: a display preference
+# (the Degradation page's default horizon) is not a data change.
+
+_PREF_KEY = Path(..., min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+
+
+class PreferenceValue(BaseModel):
+    value: Any
+
+
+def _pref_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, UnknownPreference):
+        return HTTPException(status_code=404, detail=f"Unknown preference: {exc}")
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/me/preferences/{key}")
+async def get_my_preference(
+    key: str = _PREF_KEY,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    try:
+        value = await UserPreferenceService(db).get(current_user.id, key)
+    except UnknownPreference as exc:
+        raise _pref_error(exc)
+    return {"key": key, "value": value}
+
+
+@router.put("/me/preferences/{key}")
+async def set_my_preference(
+    body: PreferenceValue,
+    key: str = _PREF_KEY,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    try:
+        value = await UserPreferenceService(db).set(current_user.id, key, body.value)
+    except (UnknownPreference, InvalidPreference) as exc:
+        raise _pref_error(exc)
+    return {"key": key, "value": value}
+
+
+@router.delete("/me/preferences/{key}")
+async def clear_my_preference(
+    key: str = _PREF_KEY,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    try:
+        await UserPreferenceService(db).clear(current_user.id, key)
+    except UnknownPreference as exc:
+        raise _pref_error(exc)
+    return {"key": key, "value": None}
 
 
 @router.get("/", response_model=List[UserResponse])

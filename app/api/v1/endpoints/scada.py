@@ -21,6 +21,7 @@ from app.models.user import User
 from app.scada_preview.schemas import AnyIngestionSummary
 from app.scada_preview.service import IngestionSummaryService
 from app.schemas.scada import ScadaFarmsResponse
+from app.services.scada_degradation_service import ScadaDegradationService
 from app.services.scada_performance_service import (
     PerformanceColumnsMissing,
     ScadaPerformanceService,
@@ -305,6 +306,23 @@ async def get_performance_league(
         return await perf.league(farm, period)
     except PerformanceColumnsMissing:
         raise HTTPException(status_code=503, detail="Performance data not available yet")
+
+
+# ---- Degradation page (EPR-202) ---------------------------------------------
+# Ageing ladder, mid-wind fade and the cost of ageing, every year to 2050 in one
+# payload so the horizon, turbine, view and loss mode change without a refetch.
+
+
+@router.get("/degradation-outlook")
+async def get_degradation_outlook(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Per-turbine ageing trends projected to 2050, and the generation and revenue they cost."""
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    return await ScadaDegradationService(db).outlook(farm)
 
 
 # ---- silver-viz charts (2026-08-03 build) -----------------------------------
