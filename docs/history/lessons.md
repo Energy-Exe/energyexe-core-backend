@@ -132,3 +132,17 @@ worktree at the pre-change commit run against the same database), not whatever t
 (2) Staging's outputs predated the run by ten days and were produced by a different image; comparing them with today's run
 mixed code drift, data drift and the change under test. Follow-up worth doing: Module 6 should slice the already-loaded
 full-span frame per year instead of re-running the loader, which would remove N heavy queries per farm from the nightly run.
+
+## 2026-11-01 — A local API on a branch with a new model creates its table on staging
+
+Learned while shipping EPR-202 (the per-user `user_preferences` table).
+
+`init_db()` in `app/core/database.py` runs `Base.metadata.create_all` every time the app starts. The local `.env`
+points at the staging database, so starting the API from a branch that adds a model (here to check the new endpoint
+against real data) quietly created `user_preferences` on staging, without the migration and without its
+`server_default`. `alembic current` still showed the previous revision, so the migration then failed with
+`DuplicateTableError`, and the staging deploy (which runs `alembic upgrade head`) would have failed the same way.
+Before migrating, compare `alembic current` with the tables that exist (`to_regclass('public.<table>')`); if the
+table is there but the revision is not, the table came from `create_all`. It is safe to drop only when it is empty and
+nothing on the deployed code uses it; then run the real migration, which also rehearses it on PostgreSQL before
+production. Production is not exposed to this, because no laptop API points at it.
