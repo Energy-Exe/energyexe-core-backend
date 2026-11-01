@@ -14,13 +14,17 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.agent_access import is_internal_staff
+from app.core.config import get_settings
 from app.core.deps import get_current_active_user, get_current_internal_user, get_db
 from app.models.user import User
 from app.scada_preview.schemas import AnyIngestionSummary
 from app.scada_preview.service import IngestionSummaryService
 from app.schemas.scada import ScadaFarmsResponse
+from app.services.scada_performance_service import (
+    PerformanceColumnsMissing,
+    ScadaPerformanceService,
+)
 from app.services.scada_service import ScadaService, scada_schema_present
 
 logger = structlog.get_logger(__name__)
@@ -251,6 +255,56 @@ async def get_league(
     service = await _service(db)
     await _validated_farm(service, farm)
     return await service.league(farm=farm, year=year)
+
+
+# ---- Performance page (EPR-203) ---------------------------------------------
+# Wind-normalised index, P50 and the lost-energy league from losses_daily's
+# performance-bucket columns. 503 until the gold publish carrying them lands.
+
+_PERIOD = r"^(12m|24m|3y|5y|all)$"
+
+
+async def _performance_service(
+    db: AsyncSession, farm: str, turbine: str | None = None
+) -> ScadaPerformanceService:
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    perf = ScadaPerformanceService(db)
+    if turbine and await perf.turbine_rated_kw(farm, turbine) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown turbine {turbine} for {farm}")
+    return perf
+
+
+@router.get("/performance")
+async def get_performance(
+    farm: str = Query(DEFAULT_FARM),
+    period: str = Query("24m", pattern=_PERIOD),
+    granularity: str = Query("month", pattern=r"^(day|month|year)$"),
+    turbine: str | None = Query(None, min_length=1, max_length=32),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Index bars (day/month/year), spot price and the P50 block for one farm or turbine."""
+    perf = await _performance_service(db, farm, turbine)
+    try:
+        return await perf.performance(farm, period, granularity, turbine)
+    except PerformanceColumnsMissing:
+        raise HTTPException(status_code=503, detail="Performance data not available yet")
+
+
+@router.get("/performance-league")
+async def get_performance_league(
+    farm: str = Query(DEFAULT_FARM),
+    period: str = Query("24m", pattern=_PERIOD),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Per-turbine energy gained or lost against expected over the period, worst first."""
+    perf = await _performance_service(db, farm)
+    try:
+        return await perf.league(farm, period)
+    except PerformanceColumnsMissing:
+        raise HTTPException(status_code=503, detail="Performance data not available yet")
 
 
 # ---- silver-viz charts (2026-08-03 build) -----------------------------------
