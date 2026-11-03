@@ -215,6 +215,54 @@ def test_a_rising_trend_loses_nothing_and_no_trend_gives_no_rows():
     assert no_base[0]["mwh"] is None and no_base[0]["lost_frac"] == pytest.approx(0.03)
 
 
+# ─── measured generation (Total view, EPR-213) ──────────────────────────────
+
+
+def test_measured_to_is_the_last_year_before_the_current_one_with_energy():
+    yearly = {2016: (1e6, 10), 2024: (1e6, 5), 2025: (0.0, 0), 2026: (1e6, 9)}
+    assert sds.measured_to_year(yearly, 2026) == 2024  # 2025 recorded nothing; 2026 is current
+    assert sds.measured_to_year({2026: (1e6, 9)}, 2026) is None
+    assert sds.measured_to_year({}, 2026) is None
+
+
+def test_measured_is_mwh_with_the_share_of_the_years_intervals_known():
+    # kWh in, MWh out; a leap year has 366 days of intervals for every turbine
+    got, cov = sds.measured({2024: (3e6, full_known(2024, 3) // 2)}, 2024, 3)
+    assert got == pytest.approx(3000.0)
+    assert cov == pytest.approx(0.5, abs=1e-4)
+    assert sds.measured({2023: (1e6, full_known(2023))}, 2023, 1) == (pytest.approx(1000.0), 1.0)
+    # nothing recorded: no measured value, so the client estimates the year instead
+    assert sds.measured({}, 2023, 4) == (None, 0.0)
+    assert sds.measured({2023: (0.0, 0)}, 2023, 4) == (None, 0.0)
+
+
+def test_loss_rows_carry_measured_generation_only_up_to_the_split():
+    yearly = {y: (2e6, full_known(y)) for y in range(2016, 2027)}
+    yearly[2018] = (1e6, full_known(2018) // 4)
+    rows = sds.loss_rows(
+        lambda y: 1 - 0.01 * (y - 2016),
+        2016,
+        2000.0,
+        range(2016, 2031),
+        {},
+        2026,
+        yearly=yearly,
+        n_turbines=1,
+        measured_to=2025,
+    )
+    by = {r["year"]: r for r in rows}
+    assert by[2016]["measured_mwh"] == pytest.approx(2000.0) and by[2016]["coverage"] == 1.0
+    assert by[2018]["measured_mwh"] == pytest.approx(1000.0)
+    assert by[2018]["coverage"] == pytest.approx(0.25, abs=1e-4)
+    assert by[2025]["measured_mwh"] == pytest.approx(2000.0)
+    # the current year and forecast years are drawn from the baseline, not measured
+    for y in (2026, 2027, 2030):
+        assert by[y]["measured_mwh"] is None and by[y]["coverage"] is None
+    # without the measured inputs the rows stay as before
+    plain = sds.loss_rows(lambda y: 1.0, 2016, 2000.0, [2016], {}, 2026)
+    assert plain[0]["measured_mwh"] is None and plain[0]["coverage"] is None
+
+
 def test_flat_price_averages_years_with_most_of_their_hours():
     by_year = {
         2016: (50.0, 2225),
@@ -308,6 +356,7 @@ async def test_outlook_runs_every_series_to_2050_and_prices_each_year(monkeypatc
         "first": 2016,
         "last_data": 2026,
         "current": 2026,
+        "measured_to": 2025,
         "horizon_min": 2027,
         "horizon_max": 2050,
     }
@@ -332,6 +381,34 @@ async def test_outlook_runs_every_series_to_2050_and_prices_each_year(monkeypatc
     assert rows[2026]["price"] == pytest.approx(100.0)  # own partial year (83 % of hours)
     assert rows[2027]["price"] == pytest.approx(50.0) and rows[2027]["projected"]
     assert rows[2030]["revenue"] == pytest.approx(rows[2030]["mwh"] * 50.0, rel=1e-6)
+
+
+async def test_outlook_rows_carry_measured_generation_for_farm_and_turbine(monkeypatch):
+    out = await fake_outlook(monkeypatch).outlook("kelmarsh", today=TODAY)
+    farm = {r["year"]: r for r in out["loss"]["scopes"]["_farm"]["rows"]}
+    # 4 turbines × 5 GWh (5e6 kWh) a year; 2016 has a third of its intervals
+    assert farm[2020]["measured_mwh"] == pytest.approx(20000.0) and farm[2020]["coverage"] == 1.0
+    assert farm[2016]["coverage"] == pytest.approx(1 / 3, abs=1e-3)
+    assert farm[2025]["measured_mwh"] == pytest.approx(20000.0)
+    assert farm[2026]["measured_mwh"] is None and farm[2027]["measured_mwh"] is None
+    t3 = {r["year"]: r for r in out["loss"]["scopes"]["T3"]["rows"]}
+    assert t3[2020]["measured_mwh"] == pytest.approx(5000.0) and t3[2020]["coverage"] == 1.0
+    assert t3[2026]["measured_mwh"] is None
+
+
+async def test_a_farm_whose_data_ends_early_is_measured_only_to_its_last_year(monkeypatch):
+    svc = fake_outlook(monkeypatch)
+    energy = {t: {y: (5e6, full_known(y)) for y in range(2016, 2025)} for t in SLOPES}
+
+    async def ret(value):
+        return value
+
+    monkeypatch.setattr(svc, "_energy", lambda farm: ret(energy))
+    out = await svc.outlook("kelmarsh", today=TODAY)
+    assert out["years"]["measured_to"] == 2024
+    farm = {r["year"]: r for r in out["loss"]["scopes"]["_farm"]["rows"]}
+    assert farm[2024]["measured_mwh"] == pytest.approx(20000.0)
+    assert farm[2025]["measured_mwh"] is None and farm[2025]["coverage"] is None
 
 
 async def test_a_turbine_scope_uses_its_own_trend_and_output(monkeypatch):

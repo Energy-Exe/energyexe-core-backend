@@ -32,7 +32,12 @@ Rules (one place; the client only slices and formats):
                    the fleet trend (or the selected turbine's own trend) and y0 its first full
                    year; baseline = mean of complete years (``estimate_annual_gwh``, 0.99 rule).
                    A rising trend loses nothing.
-    price          a year with >= 50 % of its hours priced uses its own average; every other
+    measured       for the Total view (EPR-213): years up to ``measured_to`` (the last year
+                   before the current one with farm energy) carry the measured generation
+                   (already net of degradation) and the share of the year's intervals known;
+                   later years have none, and the client draws them from the baseline.
+                   A year with nothing recorded has no measured value (it is estimated too).
+    price         a year with >= 50 % of its hours priced uses its own average; every other
                    year (forecast, thin years) uses the flat price = the mean of the yearly
                    averages of years with >= 90 % of hours. The farm's own platform wind farm
                    first; otherwise any platform wind farm in the same bidzone (prices are
@@ -302,6 +307,22 @@ def year_prices(
     return out
 
 
+def measured_to_year(yearly: Dict[int, Tuple[float, int]], current_year: int) -> Optional[int]:
+    """The last year before the current one with any measured energy (the Total view's split)."""
+    years = [y for y, (_, known) in yearly.items() if y < current_year and known > 0]
+    return max(years) if years else None
+
+
+def measured(
+    yearly: Dict[int, Tuple[float, int]], year: int, n_turbines: int
+) -> Tuple[Optional[float], float]:
+    """(measured MWh or None when nothing was recorded, share of the year's intervals known)."""
+    kwh, known = yearly.get(year, (0.0, 0))
+    possible = days_in_year(year) * INTERVALS_PER_DAY * max(1, n_turbines)
+    coverage = min(1.0, known / possible)
+    return (kwh / 1000.0 if known > 0 else None), coverage
+
+
 def loss_rows(
     trend: Optional[Callable[[int], float]],
     start: Optional[int],
@@ -309,8 +330,16 @@ def loss_rows(
     years: Iterable[int],
     prices: Dict[int, Optional[float]],
     current_year: int,
+    *,
+    yearly: Optional[Dict[int, Tuple[float, int]]] = None,
+    n_turbines: int = 1,
+    measured_to: Optional[int] = None,
 ) -> Optional[List[Dict[str, Any]]]:
-    """Generation and revenue lost each year; None when there is no usable trend."""
+    """Generation and revenue lost each year; None when there is no usable trend.
+
+    Years up to ``measured_to`` also carry the measured generation (already net of
+    degradation) and the share of the year's intervals it covers, for the Total view.
+    """
     if trend is None or start is None:
         return None
     t0 = trend(start)
@@ -321,6 +350,11 @@ def loss_rows(
         frac = 0.0 if y < start else min(1.0, max(0.0, (t0 - trend(y)) / t0))
         mwh = baseline_mwh * frac if baseline_mwh is not None else None
         price = prices.get(y)
+        got, coverage = (
+            measured(yearly, y, n_turbines)
+            if yearly is not None and measured_to is not None and y <= measured_to
+            else (None, None)
+        )
         rows.append(
             {
                 "year": y,
@@ -329,6 +363,8 @@ def loss_rows(
                 "revenue": round(mwh * price, 2) if mwh is not None and price is not None else None,
                 "price": round(price, 2) if price is not None else None,
                 "projected": y > current_year,
+                "measured_mwh": round(got, 3) if got is not None else None,
+                "coverage": round(coverage, 4) if coverage is not None else None,
             }
         )
     return rows
@@ -673,6 +709,8 @@ class ScadaDegradationService:
                 k0, n0 = farm_yearly[y]
                 farm_yearly[y] = (k0 + kwh, n0 + known)
 
+        measured_to = measured_to_year(farm_yearly, current_year)
+
         def scope(
             line: Optional[Line],
             start: Optional[int],
@@ -683,7 +721,17 @@ class ScadaDegradationService:
             gwh, base_years = estimate_annual_gwh(dict(yearly), n)
             baseline = gwh * 1000 if gwh is not None else None
             trend = (lambda y, ln=line: at(ln, y)) if line is not None else None
-            rows = loss_rows(trend, start, baseline, years, prices, current_year)
+            rows = loss_rows(
+                trend,
+                start,
+                baseline,
+                years,
+                prices,
+                current_year,
+                yearly=yearly,
+                n_turbines=n,
+                measured_to=measured_to,
+            )
             return {
                 "baseline_mwh": round(baseline, 3) if baseline is not None else None,
                 "baseline_years": base_years,
@@ -720,6 +768,7 @@ class ScadaDegradationService:
                 "first": first,
                 "last_data": last_data,
                 "current": current_year,
+                "measured_to": measured_to,
                 "horizon_min": HORIZON_MIN,
                 "horizon_max": HORIZON_MAX,
             },
