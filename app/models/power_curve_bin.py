@@ -32,7 +32,8 @@ class PowerCurveBin(Base):
     )  # raw, capability, overall_clean
     wind_bin: Mapped[float] = mapped_column(Numeric(4, 1), nullable=False)  # 2.0, 3.0, ... 25.0
 
-    # Bin statistics (power output as fraction of rated capacity)
+    # Bin statistics (power output as fraction of installed capacity in force,
+    # nameplate-anchored — see app/utils/capacity.py)
     q50_pu: Mapped[Optional[float]] = mapped_column(Numeric(6, 5), nullable=True)  # Median (P50)
     q90_pu: Mapped[Optional[float]] = mapped_column(Numeric(6, 5), nullable=True)  # 90th pct (P10)
     mean_pu: Mapped[Optional[float]] = mapped_column(Numeric(6, 5), nullable=True)

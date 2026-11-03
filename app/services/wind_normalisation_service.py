@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.performance_summary import PerformanceSummary
 from app.models.power_curve_bin import PowerCurveBin
 from app.models.windfarm import Windfarm
+from app.utils.capacity import capacity_col
 
 logger = structlog.get_logger(__name__)
 
@@ -145,6 +146,12 @@ class WindNormalisationService:
     ) -> pd.DataFrame:
         """Compute norm_ratio = actual_mw / expected_mw per hour.
 
+        ``expected_mw`` is the curve value times the capacity in force that hour
+        (``capacity_mw`` column from the loader). ``rated_mw`` is only used when
+        the frame has no such column (plain fixtures). This keeps the hourly
+        ratio in the same units as the curve, which is built from ``p_pu`` on
+        the same per-hour basis.
+
         Excludes: wind < min_wind, no curve value, expected_mw <= 0.
         """
         out = df.copy()
@@ -155,8 +162,8 @@ class WindNormalisationService:
         # Look up expected p_pu from curve
         out["expected_pu"] = out["wind_bin"].map(curve_lookup)
 
-        # Convert to MW
-        out["expected_mw"] = out["expected_pu"] * rated_mw
+        # Convert to MW with the capacity in force that hour
+        out["expected_mw"] = out["expected_pu"] * capacity_col(out, rated_mw)
         out["actual_mw"] = out["generation_mwh"]  # hourly MWh ≈ MW for 1-hour periods
 
         # Filter
