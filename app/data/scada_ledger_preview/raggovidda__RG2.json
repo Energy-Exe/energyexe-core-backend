@@ -1,0 +1,634 @@
+{
+ "schema": "ledger-preview/v1",
+ "meta": {
+  "farm": "raggovidda",
+  "asset": "RG2",
+  "currency": "NOK",
+  "stamp": "SANDBOX \u2014 not for clients",
+  "window_from": "2025-01-01",
+  "window_to": "2025-12-31",
+  "years": 1.0,
+  "source_runs": {
+   "ledger": "vl-20261105-ledger_rg-r6",
+   "criteria": "vl-20261105-criteria-r6"
+  },
+  "generated_utc": "2026-11-06T10:06:26+00:00"
+ },
+ "headline": {
+  "ledger": 1069702.7993525607,
+  "today_same_years": 979911.0,
+  "register": 979911.0,
+  "register_basis": "approved register, 2025"
+ },
+ "groups": [
+  {
+   "key": "curtailment",
+   "label": "Curtailment"
+  },
+  {
+   "key": "downtime",
+   "label": "Downtime"
+  },
+  {
+   "key": "weather",
+   "label": "Weather"
+  },
+  {
+   "key": "peers",
+   "label": "Against peers"
+  },
+  {
+   "key": "degradation",
+   "label": "Degradation"
+  },
+  {
+   "key": "remainder",
+   "label": "Remainder"
+  },
+  {
+   "key": "own_grain",
+   "label": "Carried as today"
+  }
+ ],
+ "bridge": [
+  {
+   "key": "register",
+   "label": "Today's register",
+   "change": null,
+   "headline_after": 979911.0
+  },
+  {
+   "key": "wake",
+   "label": "Today's wake line retired",
+   "change": -51122.0,
+   "headline_after": 928789.0
+  },
+  {
+   "key": "events",
+   "label": "Claims kept to their own seconds, one cause per kWh, heat per period",
+   "change": -24142.599252343876,
+   "headline_after": 904646.4007476561
+  },
+  {
+   "key": "peers",
+   "label": "Peer layer, signed",
+   "change": -5692.222418666508,
+   "headline_after": 898954.1783289897
+  },
+  {
+   "key": "degradation",
+   "label": "Degradation",
+   "change": 10617.850398469855,
+   "headline_after": 909572.0287274595
+  },
+  {
+   "key": "remainder",
+   "label": "Remainder, signed",
+   "change": 160130.7706251012,
+   "headline_after": 1069702.7993525607
+  }
+ ],
+ "leaves": [
+  {
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "label": "Curtailment",
+   "group": "curtailment",
+   "value_year": 828875.6243,
+   "mwh_year": 26587.4839
+  },
+  {
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "label": "Storm stop",
+   "group": "weather",
+   "value_year": 48589.2863,
+   "mwh_year": 723.0383
+  },
+  {
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "label": "Storm derate",
+   "group": "weather",
+   "value_year": 1853.1034,
+   "mwh_year": 23.733
+  },
+  {
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "label": "Heat derate",
+   "group": "weather",
+   "value_year": 101.3868,
+   "mwh_year": 4.031
+  },
+  {
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "label": "Above peers",
+   "group": "peers",
+   "value_year": -188751.1933,
+   "mwh_year": -1939.065
+  },
+  {
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "label": "Degradation",
+   "group": "degradation",
+   "value_year": 10617.8504,
+   "mwh_year": 11.968
+  },
+  {
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "label": "Below peers: broadband",
+   "group": "peers",
+   "value_year": 83457.2697,
+   "mwh_year": 852.8712
+  },
+  {
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "label": "Below peers: recoverable wake",
+   "group": "peers",
+   "value_year": 78050.1559,
+   "mwh_year": 897.2929
+  },
+  {
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "label": "Below peers: siting wake",
+   "group": "peers",
+   "value_year": 21551.5453,
+   "mwh_year": 222.6072
+  },
+  {
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "label": "Remainder in claimed periods",
+   "group": "remainder",
+   "value_year": -150474.8881,
+   "mwh_year": -3016.8104
+  },
+  {
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "label": "Unexplained remainder",
+   "group": "remainder",
+   "value_year": 310605.6587,
+   "mwh_year": 12251.2226
+  },
+  {
+   "step": "own grain",
+   "trigger": "MKT_02",
+   "leaf": "MKT_02",
+   "label": "Negative-price generation exposure",
+   "group": "own_grain",
+   "value_year": 14563.0,
+   "mwh_year": NaN
+  },
+  {
+   "step": "own grain",
+   "trigger": "FIN_05",
+   "leaf": "FIN_05",
+   "label": "Parasitic import",
+   "group": "own_grain",
+   "value_year": 10664.0,
+   "mwh_year": NaN
+  }
+ ],
+ "lines": [
+  {
+   "line": "MKT_03",
+   "label": "Curtailment",
+   "register": 852573.0,
+   "today": 852573.3354216274,
+   "ledger": 828875.6243277874
+  },
+  {
+   "line": "OPS_08",
+   "label": "Heat derate",
+   "register": 164.0,
+   "today": 165.36505978107934,
+   "ledger": 101.38680196473403
+  },
+  {
+   "line": "OPS_12",
+   "label": "Storm",
+   "register": 50825.0,
+   "today": 50824.57249038476,
+   "ledger": 50442.389617903995
+  },
+  {
+   "line": "MKT_02",
+   "label": "Negative-price generation exposure",
+   "register": 14563.0,
+   "today": 14563.0,
+   "ledger": 14563.0
+  },
+  {
+   "line": "FIN_05",
+   "label": "Parasitic import",
+   "register": 10664.0,
+   "today": 10664.0,
+   "ledger": 10664.0
+  }
+ ],
+ "by_year": [
+  {
+   "year": 2025,
+   "group": "curtailment",
+   "value": 828875.62
+  },
+  {
+   "year": 2025,
+   "group": "degradation",
+   "value": 10617.85
+  },
+  {
+   "year": 2025,
+   "group": "peers",
+   "value": -5692.22
+  },
+  {
+   "year": 2025,
+   "group": "remainder",
+   "value": 160130.77
+  },
+  {
+   "year": 2025,
+   "group": "weather",
+   "value": 50543.78
+  }
+ ],
+ "by_turbine": [
+  {
+   "turbine": "T01",
+   "group": "curtailment",
+   "value_year": 69044.42
+  },
+  {
+   "turbine": "T01",
+   "group": "degradation",
+   "value_year": 4000.33
+  },
+  {
+   "turbine": "T01",
+   "group": "peers",
+   "value_year": -1987.24
+  },
+  {
+   "turbine": "T01",
+   "group": "remainder",
+   "value_year": 15190.52
+  },
+  {
+   "turbine": "T01",
+   "group": "weather",
+   "value_year": 2825.58
+  },
+  {
+   "turbine": "T02",
+   "group": "curtailment",
+   "value_year": 64833.04
+  },
+  {
+   "turbine": "T02",
+   "group": "degradation",
+   "value_year": 2622.79
+  },
+  {
+   "turbine": "T02",
+   "group": "peers",
+   "value_year": 1701.6
+  },
+  {
+   "turbine": "T02",
+   "group": "remainder",
+   "value_year": 7345.18
+  },
+  {
+   "turbine": "T02",
+   "group": "weather",
+   "value_year": 4391.51
+  },
+  {
+   "turbine": "T03",
+   "group": "curtailment",
+   "value_year": 74383.38
+  },
+  {
+   "turbine": "T03",
+   "group": "degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T03",
+   "group": "peers",
+   "value_year": 1869.22
+  },
+  {
+   "turbine": "T03",
+   "group": "remainder",
+   "value_year": 14202.96
+  },
+  {
+   "turbine": "T03",
+   "group": "weather",
+   "value_year": 4038.25
+  },
+  {
+   "turbine": "T04",
+   "group": "curtailment",
+   "value_year": 65800.99
+  },
+  {
+   "turbine": "T04",
+   "group": "degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T04",
+   "group": "peers",
+   "value_year": -34391.47
+  },
+  {
+   "turbine": "T04",
+   "group": "remainder",
+   "value_year": 22764.18
+  },
+  {
+   "turbine": "T04",
+   "group": "weather",
+   "value_year": 3812.52
+  },
+  {
+   "turbine": "T05",
+   "group": "curtailment",
+   "value_year": 65259.59
+  },
+  {
+   "turbine": "T05",
+   "group": "degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T05",
+   "group": "peers",
+   "value_year": 14091.47
+  },
+  {
+   "turbine": "T05",
+   "group": "remainder",
+   "value_year": 16124.81
+  },
+  {
+   "turbine": "T05",
+   "group": "weather",
+   "value_year": 4403.89
+  },
+  {
+   "turbine": "T06",
+   "group": "curtailment",
+   "value_year": 64023.27
+  },
+  {
+   "turbine": "T06",
+   "group": "degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T06",
+   "group": "peers",
+   "value_year": 13723.22
+  },
+  {
+   "turbine": "T06",
+   "group": "remainder",
+   "value_year": 26649.39
+  },
+  {
+   "turbine": "T06",
+   "group": "weather",
+   "value_year": 5519.68
+  },
+  {
+   "turbine": "T07",
+   "group": "curtailment",
+   "value_year": 65201.3
+  },
+  {
+   "turbine": "T07",
+   "group": "degradation",
+   "value_year": 3994.73
+  },
+  {
+   "turbine": "T07",
+   "group": "peers",
+   "value_year": 21400.17
+  },
+  {
+   "turbine": "T07",
+   "group": "remainder",
+   "value_year": 15531.35
+  },
+  {
+   "turbine": "T07",
+   "group": "weather",
+   "value_year": 7912.44
+  },
+  {
+   "turbine": "T08",
+   "group": "curtailment",
+   "value_year": 82825.49
+  },
+  {
+   "turbine": "T08",
+   "group": "degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T08",
+   "group": "peers",
+   "value_year": -11174.0
+  },
+  {
+   "turbine": "T08",
+   "group": "remainder",
+   "value_year": 900.93
+  },
+  {
+   "turbine": "T08",
+   "group": "weather",
+   "value_year": 4619.22
+  },
+  {
+   "turbine": "T09",
+   "group": "curtailment",
+   "value_year": 69024.13
+  },
+  {
+   "turbine": "T09",
+   "group": "degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T09",
+   "group": "peers",
+   "value_year": -8828.53
+  },
+  {
+   "turbine": "T09",
+   "group": "remainder",
+   "value_year": 7638.86
+  },
+  {
+   "turbine": "T09",
+   "group": "weather",
+   "value_year": 4830.1
+  },
+  {
+   "turbine": "T10",
+   "group": "curtailment",
+   "value_year": 76310.44
+  },
+  {
+   "turbine": "T10",
+   "group": "degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T10",
+   "group": "peers",
+   "value_year": 12261.13
+  },
+  {
+   "turbine": "T10",
+   "group": "remainder",
+   "value_year": 13131.26
+  },
+  {
+   "turbine": "T10",
+   "group": "weather",
+   "value_year": 4522.04
+  },
+  {
+   "turbine": "T11",
+   "group": "curtailment",
+   "value_year": 68925.37
+  },
+  {
+   "turbine": "T11",
+   "group": "degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T11",
+   "group": "peers",
+   "value_year": 2813.42
+  },
+  {
+   "turbine": "T11",
+   "group": "remainder",
+   "value_year": 4973.15
+  },
+  {
+   "turbine": "T11",
+   "group": "weather",
+   "value_year": 1261.59
+  },
+  {
+   "turbine": "T12",
+   "group": "curtailment",
+   "value_year": 63244.19
+  },
+  {
+   "turbine": "T12",
+   "group": "degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T12",
+   "group": "peers",
+   "value_year": -17171.22
+  },
+  {
+   "turbine": "T12",
+   "group": "remainder",
+   "value_year": 15678.19
+  },
+  {
+   "turbine": "T12",
+   "group": "weather",
+   "value_year": 2406.97
+  }
+ ],
+ "coverage": [
+  {
+   "year": 2025,
+   "share_valued": 0.8954492411702404,
+   "share_valued_unclaimed_stops_not_counted": 0.8954492411702404,
+   "share_data_gap": 0.0018201766903226,
+   "unexplained_share_of_expected": 0.0147962602749621,
+   "whole_remainder_share_of_expected": 0.0076281178208507,
+   "degradation": 10617.850398469856,
+   "degradation_lo": -16826.532092268393,
+   "degradation_hi": 38062.232889208106
+  }
+ ],
+ "criteria": [
+  {
+   "n": 1,
+   "name": "Adds up",
+   "kind": "consistency check",
+   "result": "passed",
+   "note": "All 562,735 running periods add up to within a billionth of a kWh. It holds by construction, because the remainder is the residual; it would catch a missing layer."
+  },
+  {
+   "n": 2,
+   "name": "Counted once",
+   "kind": "evidence",
+   "result": "passed",
+   "note": "No period keeps more than its largest claim."
+  },
+  {
+   "n": 3,
+   "name": "Reconciled",
+   "kind": "evidence",
+   "result": "passed",
+   "note": "Every line as built matches its register line within the register's rounding; each change is named by the bridge row that made it."
+  },
+  {
+   "n": 8,
+   "name": "Coverage",
+   "kind": "measurement",
+   "result": "reported",
+   "note": "Stopped time cannot be valued without stop timers; it is counted as not valued."
+  },
+  {
+   "n": "4\u20137, 9",
+   "name": "Run on Hill of Towie",
+   "kind": "\u2014",
+   "result": "not run here",
+   "note": "Roll-up, order, synthetic cases and per-period versions were run on Hill of Towie; the cadence test on Lutelandet."
+  }
+ ],
+ "confirmations": [
+  "Varanger's stop timers, so stopped time can be valued.",
+  "More than one year of data, so more than 3 of 12 healthy baselines can be measured."
+ ],
+ "notes": [
+  "Icing stays context, as in the register: as a cause it almost cancels against the remainder.",
+  "Figures are in Norwegian kroner and do not compare with Hill of Towie's pounds."
+ ]
+}
