@@ -1,0 +1,1497 @@
+{
+ "schema": "ledger-preview/v1",
+ "meta": {
+  "farm": "hill_of_towie",
+  "asset": "HOT",
+  "currency": "GBP",
+  "stamp": "SANDBOX \u2014 not for clients",
+  "window_from": "2016-09-28",
+  "window_to": "2024-12-31",
+  "years": 8.2601,
+  "source_runs": {
+   "ledger": "vl-20261105-ledger-r6",
+   "criteria": "vl-20261105-criteria_hot-r5"
+  },
+  "generated_utc": "2026-11-06T10:23:20+00:00"
+ },
+ "headline": {
+  "ledger": 1045219.5955934186,
+  "today_same_years": 851883.56,
+  "register": 792659.0,
+  "register_basis": "approved register, full record"
+ },
+ "groups": [
+  {
+   "key": "curtailment",
+   "label": "Curtailment"
+  },
+  {
+   "key": "downtime",
+   "label": "Downtime"
+  },
+  {
+   "key": "weather",
+   "label": "Weather"
+  },
+  {
+   "key": "peers",
+   "label": "Against peers"
+  },
+  {
+   "key": "degradation",
+   "label": "Degradation"
+  },
+  {
+   "key": "remainder",
+   "label": "Remainder"
+  },
+  {
+   "key": "own_grain",
+   "label": "Carried as today"
+  }
+ ],
+ "bridge": [
+  {
+   "key": "0b today's settings",
+   "label": "Today's method, same years",
+   "change": null,
+   "headline_after": 851883.56
+  },
+  {
+   "key": "4 curves per upgrade period",
+   "label": "Curves per upgrade period",
+   "change": -3365.17,
+   "headline_after": 848518.38
+  },
+  {
+   "key": "settings 1-4 on those curves",
+   "label": "Four settings: curtailment signed, storm on own curve, standby below cut-in, zero setpoint as curtailment",
+   "change": 98850.71,
+   "headline_after": 947369.1
+  },
+  {
+   "key": "heat per period",
+   "label": "Heat valued per period",
+   "change": 68.19,
+   "headline_after": 947437.29
+  },
+  {
+   "key": "icing enters as a leaf",
+   "label": "Icing while running becomes a cause",
+   "change": 3235.93,
+   "headline_after": 950673.22
+  },
+  {
+   "key": "one cause per running kWh",
+   "label": "One cause per running kWh",
+   "change": -5100.67,
+   "headline_after": 945572.55
+  },
+  {
+   "key": "stopped claims cut to the stopped seconds",
+   "label": "Stopped claims kept to their stopped seconds",
+   "change": -621.36,
+   "headline_after": 944951.19
+  },
+  {
+   "key": "chained periods: running claims cut to the running seconds, out of today's overlap",
+   "label": "Running claims kept to their running seconds",
+   "change": -3535.89,
+   "headline_after": 941415.3
+  },
+  {
+   "key": "OPS_14 retired into the peer layer",
+   "label": "Today's wake line retired",
+   "change": -36529.88,
+   "headline_after": 904885.41
+  },
+  {
+   "key": "peer layer",
+   "label": "Peer layer, signed",
+   "change": 35288.74,
+   "headline_after": 940174.15
+  },
+  {
+   "key": "degradation",
+   "label": "Degradation",
+   "change": 146578.12,
+   "headline_after": 1086752.27
+  },
+  {
+   "key": "remainder",
+   "label": "Remainder, signed",
+   "change": -41532.67,
+   "headline_after": 1045219.6
+  }
+ ],
+ "leaves": [
+  {
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "label": "Curtailment",
+   "group": "curtailment",
+   "value_year": 387607.4203,
+   "mwh_year": 4839.6814
+  },
+  {
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed_held_at_zero",
+   "label": "Curtailment, held at a zero setpoint",
+   "group": "curtailment",
+   "value_year": 60923.7338,
+   "mwh_year": 684.3709
+  },
+  {
+   "step": "3",
+   "trigger": "OPS_01",
+   "leaf": "grid_outage",
+   "label": "Grid outage",
+   "group": "downtime",
+   "value_year": 34230.762,
+   "mwh_year": 271.8652
+  },
+  {
+   "step": "4",
+   "trigger": "OPS_01",
+   "leaf": "downtime_fault",
+   "label": "Fault stop",
+   "group": "downtime",
+   "value_year": 136825.7903,
+   "mwh_year": 1885.1652
+  },
+  {
+   "step": "4b",
+   "trigger": "OPS_01",
+   "leaf": "weather_environmental_stop",
+   "label": "Environmental stop",
+   "group": "weather",
+   "value_year": 31225.1743,
+   "mwh_year": 397.2282
+  },
+  {
+   "step": "4b",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "label": "Cold lockout",
+   "group": "weather",
+   "value_year": 69.0952,
+   "mwh_year": 0.8748
+  },
+  {
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "label": "Storm stop",
+   "group": "weather",
+   "value_year": 832.14,
+   "mwh_year": 7.0951
+  },
+  {
+   "step": "4c",
+   "trigger": "OPS_01",
+   "leaf": "downtime_comms",
+   "label": "Communications stop",
+   "group": "downtime",
+   "value_year": 44048.384,
+   "mwh_year": 484.4832
+  },
+  {
+   "step": "5",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "label": "Cold lockout",
+   "group": "weather",
+   "value_year": 3293.4114,
+   "mwh_year": 40.105
+  },
+  {
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "downtime_unknown",
+   "label": "Stop, cause unknown",
+   "group": "downtime",
+   "value_year": 119619.5095,
+   "mwh_year": 1227.3022
+  },
+  {
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_idle_above_cut_in",
+   "label": "Idle, wind well above cut-in",
+   "group": "downtime",
+   "value_year": 15924.2423,
+   "mwh_year": 195.7463
+  },
+  {
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_near_cut_in",
+   "label": "Idle, wind near cut-in",
+   "group": "downtime",
+   "value_year": 36878.3416,
+   "mwh_year": 422.1395
+  },
+  {
+   "step": "7",
+   "trigger": "OPS_16",
+   "leaf": "iced_running",
+   "label": "Icing while running",
+   "group": "weather",
+   "value_year": -4829.8155,
+   "mwh_year": -200.4078
+  },
+  {
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "label": "Storm derate",
+   "group": "weather",
+   "value_year": 230.3613,
+   "mwh_year": 1.6406
+  },
+  {
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "label": "Heat derate",
+   "group": "weather",
+   "value_year": 586.8633,
+   "mwh_year": 8.5116
+  },
+  {
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "label": "Above peers",
+   "group": "peers",
+   "value_year": -160197.0808,
+   "mwh_year": -2210.6519
+  },
+  {
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "label": "Degradation",
+   "group": "degradation",
+   "value_year": 146578.12,
+   "mwh_year": 1684.7295
+  },
+  {
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "label": "Below peers: broadband",
+   "group": "peers",
+   "value_year": 123828.6786,
+   "mwh_year": 1645.4405
+  },
+  {
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "label": "Below peers: recoverable wake",
+   "group": "peers",
+   "value_year": 55996.2973,
+   "mwh_year": 719.2626
+  },
+  {
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "label": "Below peers: siting wake",
+   "group": "peers",
+   "value_year": 15660.8415,
+   "mwh_year": 212.6268
+  },
+  {
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "label": "Remainder in claimed periods",
+   "group": "remainder",
+   "value_year": -56749.1585,
+   "mwh_year": -725.324
+  },
+  {
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "label": "Unexplained remainder",
+   "group": "remainder",
+   "value_year": 15216.4838,
+   "mwh_year": 402.9574
+  },
+  {
+   "step": "own grain",
+   "trigger": "MKT_02",
+   "leaf": "MKT_02",
+   "label": "Negative-price generation exposure",
+   "group": "own_grain",
+   "value_year": 28922.0,
+   "mwh_year": NaN
+  },
+  {
+   "step": "own grain",
+   "trigger": "FIN_05",
+   "leaf": "FIN_05",
+   "label": "Parasitic import",
+   "group": "own_grain",
+   "value_year": 8498.0,
+   "mwh_year": NaN
+  }
+ ],
+ "lines": [
+  {
+   "line": "MKT_03",
+   "label": "Curtailment",
+   "register": null,
+   "today": 405080.589372548,
+   "ledger": 448531.1541131331
+  },
+  {
+   "line": "OPS_01",
+   "label": "Downtime",
+   "register": null,
+   "today": 367254.3056603724,
+   "ledger": 418752.2040402244
+  },
+  {
+   "line": "OPS_08",
+   "label": "Heat derate",
+   "register": null,
+   "today": 547.9089494735684,
+   "ledger": 586.8632804409965
+  },
+  {
+   "line": "OPS_09",
+   "label": "Cold",
+   "register": null,
+   "today": 4132.794090840008,
+   "ledger": 3362.5065805962427
+  },
+  {
+   "line": "OPS_12",
+   "label": "Storm",
+   "register": null,
+   "today": 918.061602053056,
+   "ledger": 1062.501286972669
+  },
+  {
+   "line": "OPS_14",
+   "label": "Wake",
+   "register": null,
+   "today": 36529.89840800834,
+   "ledger": 0.0
+  },
+  {
+   "line": "OPS_16",
+   "label": "Icing while running",
+   "register": null,
+   "today": 0.0,
+   "ledger": -4829.815488382994
+  },
+  {
+   "line": "OPS_17",
+   "label": "Sector management",
+   "register": null,
+   "today": 0.0,
+   "ledger": 0.0
+  },
+  {
+   "line": "MKT_02",
+   "label": "Negative-price generation exposure",
+   "register": 28922.0,
+   "today": 28922.0,
+   "ledger": 28922.0
+  },
+  {
+   "line": "FIN_05",
+   "label": "Parasitic import",
+   "register": 8498.0,
+   "today": 8498.0,
+   "ledger": 8498.0
+  }
+ ],
+ "by_year": [
+  {
+   "year": 2016,
+   "group": "curtailment",
+   "value": 44221.34
+  },
+  {
+   "year": 2016,
+   "group": "degradation",
+   "value": -5478.32
+  },
+  {
+   "year": 2016,
+   "group": "downtime",
+   "value": 30732.82
+  },
+  {
+   "year": 2016,
+   "group": "peers",
+   "value": 3025.42
+  },
+  {
+   "year": 2016,
+   "group": "remainder",
+   "value": -40790.3
+  },
+  {
+   "year": 2016,
+   "group": "weather",
+   "value": -966.23
+  },
+  {
+   "year": 2017,
+   "group": "curtailment",
+   "value": 85575.22
+  },
+  {
+   "year": 2017,
+   "group": "degradation",
+   "value": 9621.14
+  },
+  {
+   "year": 2017,
+   "group": "downtime",
+   "value": 189850.21
+  },
+  {
+   "year": 2017,
+   "group": "peers",
+   "value": 7943.79
+  },
+  {
+   "year": 2017,
+   "group": "remainder",
+   "value": -55577.22
+  },
+  {
+   "year": 2017,
+   "group": "weather",
+   "value": -30779.32
+  },
+  {
+   "year": 2018,
+   "group": "curtailment",
+   "value": 60430.86
+  },
+  {
+   "year": 2018,
+   "group": "degradation",
+   "value": 65125.61
+  },
+  {
+   "year": 2018,
+   "group": "downtime",
+   "value": 222885.69
+  },
+  {
+   "year": 2018,
+   "group": "peers",
+   "value": 16395.69
+  },
+  {
+   "year": 2018,
+   "group": "remainder",
+   "value": 69480.94
+  },
+  {
+   "year": 2018,
+   "group": "weather",
+   "value": -35082.88
+  },
+  {
+   "year": 2019,
+   "group": "curtailment",
+   "value": 53499.02
+  },
+  {
+   "year": 2019,
+   "group": "degradation",
+   "value": 84572.09
+  },
+  {
+   "year": 2019,
+   "group": "downtime",
+   "value": 89592.16
+  },
+  {
+   "year": 2019,
+   "group": "peers",
+   "value": 9858.39
+  },
+  {
+   "year": 2019,
+   "group": "remainder",
+   "value": 54221.58
+  },
+  {
+   "year": 2019,
+   "group": "weather",
+   "value": 47454.64
+  },
+  {
+   "year": 2020,
+   "group": "curtailment",
+   "value": 45093.71
+  },
+  {
+   "year": 2020,
+   "group": "degradation",
+   "value": 103394.71
+  },
+  {
+   "year": 2020,
+   "group": "downtime",
+   "value": 147472.52
+  },
+  {
+   "year": 2020,
+   "group": "peers",
+   "value": 7476.82
+  },
+  {
+   "year": 2020,
+   "group": "remainder",
+   "value": 20267.72
+  },
+  {
+   "year": 2020,
+   "group": "weather",
+   "value": 4702.58
+  },
+  {
+   "year": 2021,
+   "group": "curtailment",
+   "value": 134880.98
+  },
+  {
+   "year": 2021,
+   "group": "degradation",
+   "value": 397600.62
+  },
+  {
+   "year": 2021,
+   "group": "downtime",
+   "value": 603890.18
+  },
+  {
+   "year": 2021,
+   "group": "peers",
+   "value": 35342.21
+  },
+  {
+   "year": 2021,
+   "group": "remainder",
+   "value": -10935.52
+  },
+  {
+   "year": 2021,
+   "group": "weather",
+   "value": 36329.9
+  },
+  {
+   "year": 2022,
+   "group": "curtailment",
+   "value": 1777950.05
+  },
+  {
+   "year": 2022,
+   "group": "degradation",
+   "value": 528830.3
+  },
+  {
+   "year": 2022,
+   "group": "downtime",
+   "value": 1311510.81
+  },
+  {
+   "year": 2022,
+   "group": "peers",
+   "value": 74941.98
+  },
+  {
+   "year": 2022,
+   "group": "remainder",
+   "value": -261677.21
+  },
+  {
+   "year": 2022,
+   "group": "weather",
+   "value": 73528.72
+  },
+  {
+   "year": 2023,
+   "group": "curtailment",
+   "value": 1029785.55
+  },
+  {
+   "year": 2023,
+   "group": "degradation",
+   "value": 30470.42
+  },
+  {
+   "year": 2023,
+   "group": "downtime",
+   "value": 281975.51
+  },
+  {
+   "year": 2023,
+   "group": "peers",
+   "value": 57737.5
+  },
+  {
+   "year": 2023,
+   "group": "remainder",
+   "value": -60991.65
+  },
+  {
+   "year": 2023,
+   "group": "weather",
+   "value": 95870.13
+  },
+  {
+   "year": 2024,
+   "group": "curtailment",
+   "value": 473473.58
+  },
+  {
+   "year": 2024,
+   "group": "degradation",
+   "value": -3387.25
+  },
+  {
+   "year": 2024,
+   "group": "downtime",
+   "value": 323100.51
+  },
+  {
+   "year": 2024,
+   "group": "peers",
+   "value": 78766.55
+  },
+  {
+   "year": 2024,
+   "group": "remainder",
+   "value": -57062.22
+  },
+  {
+   "year": 2024,
+   "group": "weather",
+   "value": 68369.19
+  }
+ ],
+ "by_turbine": [
+  {
+   "turbine": "T01",
+   "group": "curtailment",
+   "value_year": 16514.28
+  },
+  {
+   "turbine": "T01",
+   "group": "degradation",
+   "value_year": 2257.81
+  },
+  {
+   "turbine": "T01",
+   "group": "downtime",
+   "value_year": 14648.03
+  },
+  {
+   "turbine": "T01",
+   "group": "peers",
+   "value_year": 24186.36
+  },
+  {
+   "turbine": "T01",
+   "group": "remainder",
+   "value_year": -2226.62
+  },
+  {
+   "turbine": "T01",
+   "group": "weather",
+   "value_year": 2220.06
+  },
+  {
+   "turbine": "T02",
+   "group": "curtailment",
+   "value_year": 21564.91
+  },
+  {
+   "turbine": "T02",
+   "group": "degradation",
+   "value_year": 6315.13
+  },
+  {
+   "turbine": "T02",
+   "group": "downtime",
+   "value_year": 14205.45
+  },
+  {
+   "turbine": "T02",
+   "group": "peers",
+   "value_year": -9403.24
+  },
+  {
+   "turbine": "T02",
+   "group": "remainder",
+   "value_year": -1938.0
+  },
+  {
+   "turbine": "T02",
+   "group": "weather",
+   "value_year": -188.09
+  },
+  {
+   "turbine": "T03",
+   "group": "curtailment",
+   "value_year": 19907.36
+  },
+  {
+   "turbine": "T03",
+   "group": "degradation",
+   "value_year": 4652.51
+  },
+  {
+   "turbine": "T03",
+   "group": "downtime",
+   "value_year": 12103.17
+  },
+  {
+   "turbine": "T03",
+   "group": "peers",
+   "value_year": 5351.76
+  },
+  {
+   "turbine": "T03",
+   "group": "remainder",
+   "value_year": 4076.05
+  },
+  {
+   "turbine": "T03",
+   "group": "weather",
+   "value_year": 1861.82
+  },
+  {
+   "turbine": "T04",
+   "group": "curtailment",
+   "value_year": 17365.94
+  },
+  {
+   "turbine": "T04",
+   "group": "degradation",
+   "value_year": 3620.81
+  },
+  {
+   "turbine": "T04",
+   "group": "downtime",
+   "value_year": 8573.62
+  },
+  {
+   "turbine": "T04",
+   "group": "peers",
+   "value_year": -907.06
+  },
+  {
+   "turbine": "T04",
+   "group": "remainder",
+   "value_year": 4802.85
+  },
+  {
+   "turbine": "T04",
+   "group": "weather",
+   "value_year": 1412.4
+  },
+  {
+   "turbine": "T05",
+   "group": "curtailment",
+   "value_year": 17295.02
+  },
+  {
+   "turbine": "T05",
+   "group": "degradation",
+   "value_year": 9601.49
+  },
+  {
+   "turbine": "T05",
+   "group": "downtime",
+   "value_year": 16060.51
+  },
+  {
+   "turbine": "T05",
+   "group": "peers",
+   "value_year": -4980.39
+  },
+  {
+   "turbine": "T05",
+   "group": "remainder",
+   "value_year": 2626.0
+  },
+  {
+   "turbine": "T05",
+   "group": "weather",
+   "value_year": 1673.14
+  },
+  {
+   "turbine": "T06",
+   "group": "curtailment",
+   "value_year": 19079.99
+  },
+  {
+   "turbine": "T06",
+   "group": "degradation",
+   "value_year": 2455.32
+  },
+  {
+   "turbine": "T06",
+   "group": "downtime",
+   "value_year": 79126.08
+  },
+  {
+   "turbine": "T06",
+   "group": "peers",
+   "value_year": -965.77
+  },
+  {
+   "turbine": "T06",
+   "group": "remainder",
+   "value_year": 248.77
+  },
+  {
+   "turbine": "T06",
+   "group": "weather",
+   "value_year": 864.85
+  },
+  {
+   "turbine": "T07",
+   "group": "curtailment",
+   "value_year": 15329.5
+  },
+  {
+   "turbine": "T07",
+   "group": "degradation",
+   "value_year": 8953.88
+  },
+  {
+   "turbine": "T07",
+   "group": "downtime",
+   "value_year": 13402.83
+  },
+  {
+   "turbine": "T07",
+   "group": "peers",
+   "value_year": 30416.45
+  },
+  {
+   "turbine": "T07",
+   "group": "remainder",
+   "value_year": 4186.67
+  },
+  {
+   "turbine": "T07",
+   "group": "weather",
+   "value_year": 2835.45
+  },
+  {
+   "turbine": "T08",
+   "group": "curtailment",
+   "value_year": 16639.69
+  },
+  {
+   "turbine": "T08",
+   "group": "degradation",
+   "value_year": 10167.66
+  },
+  {
+   "turbine": "T08",
+   "group": "downtime",
+   "value_year": 11309.04
+  },
+  {
+   "turbine": "T08",
+   "group": "peers",
+   "value_year": 5319.76
+  },
+  {
+   "turbine": "T08",
+   "group": "remainder",
+   "value_year": 2552.62
+  },
+  {
+   "turbine": "T08",
+   "group": "weather",
+   "value_year": 2881.16
+  },
+  {
+   "turbine": "T09",
+   "group": "curtailment",
+   "value_year": 17135.52
+  },
+  {
+   "turbine": "T09",
+   "group": "degradation",
+   "value_year": 7187.99
+  },
+  {
+   "turbine": "T09",
+   "group": "downtime",
+   "value_year": 14411.29
+  },
+  {
+   "turbine": "T09",
+   "group": "peers",
+   "value_year": -17643.71
+  },
+  {
+   "turbine": "T09",
+   "group": "remainder",
+   "value_year": 2984.16
+  },
+  {
+   "turbine": "T09",
+   "group": "weather",
+   "value_year": 706.26
+  },
+  {
+   "turbine": "T10",
+   "group": "curtailment",
+   "value_year": 19614.17
+  },
+  {
+   "turbine": "T10",
+   "group": "degradation",
+   "value_year": 7053.7
+  },
+  {
+   "turbine": "T10",
+   "group": "downtime",
+   "value_year": 11820.44
+  },
+  {
+   "turbine": "T10",
+   "group": "peers",
+   "value_year": -5251.93
+  },
+  {
+   "turbine": "T10",
+   "group": "remainder",
+   "value_year": 272.32
+  },
+  {
+   "turbine": "T10",
+   "group": "weather",
+   "value_year": 1807.69
+  },
+  {
+   "turbine": "T11",
+   "group": "curtailment",
+   "value_year": 9914.56
+  },
+  {
+   "turbine": "T11",
+   "group": "degradation",
+   "value_year": 27869.81
+  },
+  {
+   "turbine": "T11",
+   "group": "downtime",
+   "value_year": 14526.48
+  },
+  {
+   "turbine": "T11",
+   "group": "peers",
+   "value_year": 3655.48
+  },
+  {
+   "turbine": "T11",
+   "group": "remainder",
+   "value_year": -2748.75
+  },
+  {
+   "turbine": "T11",
+   "group": "weather",
+   "value_year": 2700.62
+  },
+  {
+   "turbine": "T12",
+   "group": "curtailment",
+   "value_year": 15140.84
+  },
+  {
+   "turbine": "T12",
+   "group": "degradation",
+   "value_year": 8832.89
+  },
+  {
+   "turbine": "T12",
+   "group": "downtime",
+   "value_year": 10304.14
+  },
+  {
+   "turbine": "T12",
+   "group": "peers",
+   "value_year": 35593.56
+  },
+  {
+   "turbine": "T12",
+   "group": "remainder",
+   "value_year": 3485.41
+  },
+  {
+   "turbine": "T12",
+   "group": "weather",
+   "value_year": 1940.94
+  },
+  {
+   "turbine": "T13",
+   "group": "curtailment",
+   "value_year": 14618.02
+  },
+  {
+   "turbine": "T13",
+   "group": "degradation",
+   "value_year": -217.65
+  },
+  {
+   "turbine": "T13",
+   "group": "downtime",
+   "value_year": 11708.25
+  },
+  {
+   "turbine": "T13",
+   "group": "peers",
+   "value_year": 27247.86
+  },
+  {
+   "turbine": "T13",
+   "group": "remainder",
+   "value_year": 1558.03
+  },
+  {
+   "turbine": "T13",
+   "group": "weather",
+   "value_year": 5393.6
+  },
+  {
+   "turbine": "T14",
+   "group": "curtailment",
+   "value_year": 15541.71
+  },
+  {
+   "turbine": "T14",
+   "group": "degradation",
+   "value_year": 2441.12
+  },
+  {
+   "turbine": "T14",
+   "group": "downtime",
+   "value_year": 7835.47
+  },
+  {
+   "turbine": "T14",
+   "group": "peers",
+   "value_year": 6441.46
+  },
+  {
+   "turbine": "T14",
+   "group": "remainder",
+   "value_year": 4049.93
+  },
+  {
+   "turbine": "T14",
+   "group": "weather",
+   "value_year": 3107.23
+  },
+  {
+   "turbine": "T15",
+   "group": "curtailment",
+   "value_year": 18976.94
+  },
+  {
+   "turbine": "T15",
+   "group": "degradation",
+   "value_year": 14631.9
+  },
+  {
+   "turbine": "T15",
+   "group": "downtime",
+   "value_year": 43223.04
+  },
+  {
+   "turbine": "T15",
+   "group": "peers",
+   "value_year": -18467.0
+  },
+  {
+   "turbine": "T15",
+   "group": "remainder",
+   "value_year": -1138.1
+  },
+  {
+   "turbine": "T15",
+   "group": "weather",
+   "value_year": 1580.07
+  },
+  {
+   "turbine": "T16",
+   "group": "curtailment",
+   "value_year": 96177.39
+  },
+  {
+   "turbine": "T16",
+   "group": "degradation",
+   "value_year": -7521.25
+  },
+  {
+   "turbine": "T16",
+   "group": "downtime",
+   "value_year": 11945.08
+  },
+  {
+   "turbine": "T16",
+   "group": "peers",
+   "value_year": -7297.73
+  },
+  {
+   "turbine": "T16",
+   "group": "remainder",
+   "value_year": -61914.57
+  },
+  {
+   "turbine": "T16",
+   "group": "weather",
+   "value_year": -307.29
+  },
+  {
+   "turbine": "T17",
+   "group": "curtailment",
+   "value_year": 26752.15
+  },
+  {
+   "turbine": "T17",
+   "group": "degradation",
+   "value_year": -1117.79
+  },
+  {
+   "turbine": "T17",
+   "group": "downtime",
+   "value_year": 21527.65
+  },
+  {
+   "turbine": "T17",
+   "group": "peers",
+   "value_year": -11360.0
+  },
+  {
+   "turbine": "T17",
+   "group": "remainder",
+   "value_year": -6479.76
+  },
+  {
+   "turbine": "T17",
+   "group": "weather",
+   "value_year": 1951.49
+  },
+  {
+   "turbine": "T18",
+   "group": "curtailment",
+   "value_year": 22017.12
+  },
+  {
+   "turbine": "T18",
+   "group": "degradation",
+   "value_year": 4768.79
+  },
+  {
+   "turbine": "T18",
+   "group": "downtime",
+   "value_year": 18347.08
+  },
+  {
+   "turbine": "T18",
+   "group": "peers",
+   "value_year": -20486.95
+  },
+  {
+   "turbine": "T18",
+   "group": "remainder",
+   "value_year": -4769.25
+  },
+  {
+   "turbine": "T18",
+   "group": "weather",
+   "value_year": -971.8
+  },
+  {
+   "turbine": "T19",
+   "group": "curtailment",
+   "value_year": 14529.25
+  },
+  {
+   "turbine": "T19",
+   "group": "degradation",
+   "value_year": 25290.63
+  },
+  {
+   "turbine": "T19",
+   "group": "downtime",
+   "value_year": 12498.0
+  },
+  {
+   "turbine": "T19",
+   "group": "peers",
+   "value_year": 21531.56
+  },
+  {
+   "turbine": "T19",
+   "group": "remainder",
+   "value_year": 2648.87
+  },
+  {
+   "turbine": "T19",
+   "group": "weather",
+   "value_year": -253.67
+  },
+  {
+   "turbine": "T20",
+   "group": "curtailment",
+   "value_year": 18588.27
+  },
+  {
+   "turbine": "T20",
+   "group": "degradation",
+   "value_year": 5454.79
+  },
+  {
+   "turbine": "T20",
+   "group": "downtime",
+   "value_year": 15569.17
+  },
+  {
+   "turbine": "T20",
+   "group": "peers",
+   "value_year": -23383.96
+  },
+  {
+   "turbine": "T20",
+   "group": "remainder",
+   "value_year": 2115.47
+  },
+  {
+   "turbine": "T20",
+   "group": "weather",
+   "value_year": 47.76
+  },
+  {
+   "turbine": "T21",
+   "group": "curtailment",
+   "value_year": 15828.54
+  },
+  {
+   "turbine": "T21",
+   "group": "degradation",
+   "value_year": 3878.58
+  },
+  {
+   "turbine": "T21",
+   "group": "downtime",
+   "value_year": 24382.23
+  },
+  {
+   "turbine": "T21",
+   "group": "peers",
+   "value_year": -4307.78
+  },
+  {
+   "turbine": "T21",
+   "group": "remainder",
+   "value_year": 4075.22
+  },
+  {
+   "turbine": "T21",
+   "group": "weather",
+   "value_year": 143.53
+  }
+ ],
+ "coverage": [
+  {
+   "year": 2016,
+   "share_valued": 0.9786166805903648,
+   "share_valued_unclaimed_stops_not_counted": 0.8551900584795321,
+   "share_data_gap": 0.0054476468950153,
+   "unexplained_share_of_expected": -0.0042609940974831,
+   "whole_remainder_share_of_expected": -0.0256140765466945,
+   "degradation": -5478.315489421793,
+   "degradation_lo": -9472.260824174584,
+   "degradation_hi": -1484.370154669003
+  },
+  {
+   "year": 2017,
+   "share_valued": 0.9648419946365152,
+   "share_valued_unclaimed_stops_not_counted": 0.8608583387692976,
+   "share_data_gap": 0.014418895412046,
+   "unexplained_share_of_expected": -0.0060376336551361,
+   "whole_remainder_share_of_expected": -0.0099954231147522,
+   "degradation": 9621.135314221983,
+   "degradation_lo": 3173.4850243107644,
+   "degradation_hi": 16068.7856041332
+  },
+  {
+   "year": 2018,
+   "share_valued": 0.972688809161412,
+   "share_valued_unclaimed_stops_not_counted": 0.8532633905921577,
+   "share_data_gap": 0.0081802203377545,
+   "unexplained_share_of_expected": 0.0100684375071811,
+   "whole_remainder_share_of_expected": 0.0106524896223288,
+   "degradation": 65125.61211108808,
+   "degradation_lo": 27609.191429707626,
+   "degradation_hi": 102642.03279246853
+  },
+  {
+   "year": 2019,
+   "share_valued": 0.9822878161919256,
+   "share_valued_unclaimed_stops_not_counted": 0.8703214466913097,
+   "share_data_gap": 0.0028321374211785,
+   "unexplained_share_of_expected": 0.0165209987214029,
+   "whole_remainder_share_of_expected": 0.011449921960618,
+   "degradation": 84572.08709957913,
+   "degradation_lo": 36077.30615918824,
+   "degradation_hi": 133066.86803997
+  },
+  {
+   "year": 2020,
+   "share_valued": 0.979903034377078,
+   "share_valued_unclaimed_stops_not_counted": 0.8660461300488623,
+   "share_data_gap": 0.0049792913522421,
+   "unexplained_share_of_expected": 0.0124307186255799,
+   "whole_remainder_share_of_expected": 0.0053224954332505,
+   "degradation": 103394.70970377844,
+   "degradation_lo": 44246.21518180069,
+   "degradation_hi": 162543.20422575617
+  },
+  {
+   "year": 2021,
+   "share_valued": 0.9702480611727188,
+   "share_valued_unclaimed_stops_not_counted": 0.8183690294991665,
+   "share_data_gap": 0.0117525549032398,
+   "unexplained_share_of_expected": 0.0058241481948398,
+   "whole_remainder_share_of_expected": -0.0010142174244932,
+   "degradation": 397600.6201820337,
+   "degradation_lo": 166493.44522495556,
+   "degradation_hi": 628707.7951391117
+  },
+  {
+   "year": 2022,
+   "share_valued": 0.8647504892367907,
+   "share_valued_unclaimed_stops_not_counted": 0.7526056389070088,
+   "share_data_gap": 0.0505463144161774,
+   "unexplained_share_of_expected": -0.0053809764818472,
+   "whole_remainder_share_of_expected": -0.0156960521488209,
+   "degradation": 528830.3024894616,
+   "degradation_lo": -35502.70367160664,
+   "degradation_hi": 1093163.3086505297
+  },
+  {
+   "year": 2023,
+   "share_valued": 0.9271127781401756,
+   "share_valued_unclaimed_stops_not_counted": 0.7562332391099514,
+   "share_data_gap": 0.0048497861854026,
+   "unexplained_share_of_expected": -0.0010810281032834,
+   "whole_remainder_share_of_expected": -0.008106195466791,
+   "degradation": 30470.417125479653,
+   "degradation_lo": -161304.02215873665,
+   "degradation_hi": 222244.85640969596
+  },
+  {
+   "year": 2024,
+   "share_valued": 0.8678603955243299,
+   "share_valued_unclaimed_stops_not_counted": 0.7343176265648943,
+   "share_data_gap": 0.0035408896406164,
+   "unexplained_share_of_expected": 0.0015380768574178,
+   "whole_remainder_share_of_expected": -0.0089111980424583,
+   "degradation": -3387.2515569712255,
+   "degradation_lo": -47569.0039404849,
+   "degradation_hi": 40794.500826542455
+  }
+ ],
+ "criteria": [
+  {
+   "n": 1,
+   "name": "Adds up",
+   "kind": "consistency check",
+   "result": "passed",
+   "note": "All 8,601,030 running periods add up to within a billionth of a kWh. It holds by construction, because the remainder is the residual; it would catch a missing layer."
+  },
+  {
+   "n": 2,
+   "name": "Counted once",
+   "kind": "evidence",
+   "result": "passed",
+   "note": "1 period keeps more than its largest claim (\u00a30.14 a year), under a \u00a31-a-year tolerance set after the run that found it."
+  },
+  {
+   "n": 3,
+   "name": "Reconciled",
+   "kind": "evidence",
+   "result": "passed",
+   "note": "Every line as built matches its register line within the register's rounding; each change is named by the bridge row that made it."
+  },
+  {
+   "n": 4,
+   "name": "Roll-up",
+   "kind": "consistency check (timers); evidence (prices)",
+   "result": "open",
+   "note": "Without stop timers \u00a3418,821 a year is relabelled as cause not resolvable, so the total cannot move. Without prices, 141 kWh a year is counted twice in zero-price periods; the fix (net energy by energy) is proposed."
+  },
+  {
+   "n": 5,
+   "name": "Order moves value, never creates it",
+   "kind": "consistency check",
+   "result": "passed",
+   "note": "9 swaps of adjacent steps: leaves move by at most \u00a31,985 a year; the total never moves."
+  },
+  {
+   "n": 6,
+   "name": "Degradation, synthetic cases",
+   "kind": "evidence",
+   "result": "passed",
+   "note": "All four of Aje's cases, including the one that must fail on today's method."
+  },
+  {
+   "n": 7,
+   "name": "Per-period versions",
+   "kind": "agree, or the difference named",
+   "result": "named",
+   "note": "Heat, cold, iced running and the peer shortfall per period; differences named."
+  },
+  {
+   "n": 8,
+   "name": "Coverage",
+   "kind": "measurement",
+   "result": "reported",
+   "note": "Shown by year below, counted both ways."
+  },
+  {
+   "n": 9,
+   "name": "Cadence (Lutelandet turbine 9)",
+   "kind": "evidence",
+   "result": "passed",
+   "note": "Totals at 10 minutes within 0.17% of the year's expected energy of the 5-minute totals (1 % declared before the run); curtailment is 7 % lower at 10 minutes."
+  }
+ ],
+ "confirmations": [
+  "What the farm-wide zero-setpoint holds of September 2022 to April 2023 were.",
+  "The cut-in speed, from the manufacturer (3.0 or 3.5 m/s).",
+  "A second source for degradation, the largest single row.",
+  "How the 2017\u201318 step in output splits between degradation and the remainder."
+ ],
+ "notes": [
+  "Degradation is one straight line per turbine from its healthy baseline; the shortfall looks more like a step of about 4 % in 2017\u201318, so its split with the remainder is not reliable.",
+  "Without prices, 141 kWh a year is counted twice in 52 zero-price periods (fix proposed)."
+ ]
+}
