@@ -160,6 +160,10 @@ class Settings(BaseSettings):
 
     # Brain Agent default model (used as fallback when caller omits one)
     SCADA_INGESTION_ENABLED: bool = False
+    # Ledger preview (internal sandbox page, /scada/ledger-preview). Unset means on everywhere
+    # except production (SENTRY_ENVIRONMENT), so staging gets it without an infra change and the
+    # promoted image stays dark on prod. Set it explicitly to override.
+    SCADA_LEDGER_PREVIEW_ENABLED: Optional[bool] = None
     BRAIN_AGENT_ACCESS_POLICY: Literal["authenticated", "superusers"] = "authenticated"
 
     BRAIN_MODEL: str = "claude-sonnet-5-5"
@@ -192,6 +196,12 @@ class Settings(BaseSettings):
     # Celery settings
     CELERY_BROKER_URL: Optional[str] = None
     CELERY_RESULT_BACKEND: Optional[str] = None
+
+    @property
+    def scada_ledger_preview_enabled(self) -> bool:
+        if self.SCADA_LEDGER_PREVIEW_ENABLED is not None:
+            return self.SCADA_LEDGER_PREVIEW_ENABLED
+        return self.SENTRY_ENVIRONMENT != "production"
 
     @property
     def s3_enabled(self) -> bool:

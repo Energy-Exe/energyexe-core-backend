@@ -332,6 +332,34 @@ async def opex_metrics_for(ctx: ReportContext, as_of: date) -> Optional[OpexMetr
     return metrics.get(ctx.windfarm_id)
 
 
+async def window_capacity_mw(ctx: ReportContext, start: date, end: date) -> Optional[float]:
+    """Average installed capacity in force over the window (MW).
+
+    From the unit registry (`app/utils/capacity.py`), anchored to nameplate, so
+    a farm that expanded or lost turbines inside the window is measured against
+    what was installed. Averaged over the whole calendar window, not only the
+    hours with data, so a window that straddles a phase change while data
+    covers only one side carries a small bias; months-level reports are
+    unaffected because they never straddle a phase boundary by much.
+    """
+    from app.utils.capacity import capacity_hours, load_unit_windows
+
+    nameplate = ctx.windfarm.nameplate_capacity_mw if ctx.windfarm is not None else None
+    if not nameplate or ctx.windfarm_id is None:
+        return None
+    windows = (await load_unit_windows(ctx.db, [ctx.windfarm_id])).get(ctx.windfarm_id, [])
+    window_start, window_end = utc_bounds(start, end)
+    hours = (window_end - window_start).total_seconds() / 3600.0
+    if hours <= 0:
+        return float(nameplate)
+    return (
+        capacity_hours(
+            windows, window_start, window_end, float(nameplate), windfarm_id=ctx.windfarm_id
+        )
+        / hours
+    )
+
+
 async def window_metrics(ctx: ReportContext, start: date, end: date) -> dict:
     gen = await generation_totals(ctx, start, end)
     stats = await summary_stats(ctx, start, end)
@@ -339,7 +367,7 @@ async def window_metrics(ctx: ReportContext, start: date, end: date) -> dict:
     fin = await financials_for(ctx, end)
     opex = await opex_metrics_for(ctx, end)
 
-    capacity_mw = ctx.windfarm.nameplate_capacity_mw if ctx.windfarm is not None else None
+    capacity_mw = await window_capacity_mw(ctx, start, end)
     capacity_factor = capacity_factor_pct(
         gen["generation_mwh"], capacity_mw, gen["hours_with_data"]
     )

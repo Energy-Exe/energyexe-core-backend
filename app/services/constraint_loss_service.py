@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.constraint_loss_summary import ConstraintLossSummary
 from app.models.power_curve_bin import PowerCurveBin
 from app.models.structural_constraint_flag import StructuralConstraintFlag
+from app.utils.capacity import capacity_col
 
 logger = structlog.get_logger(__name__)
 
@@ -51,9 +52,11 @@ class ConstraintLossService:
         """Loss for the hours of one constraint period vs overall_clean Q50.
 
         ``period_df`` is the hourly slice inside the period (columns ``hour,
-        wind_speed, generation_mwh, market_price``). Expected output per hour is
-        ``overall_clean Q50[bin] * rated_mw``; lost = ``max(0, expected -
-        actual)`` per hour (matching the spec). Hours whose wind bin has no
+        wind_speed, generation_mwh, market_price`` and, from the loader,
+        ``capacity_mw``). Expected output per hour is ``overall_clean Q50[bin] *
+        capacity in force that hour`` (``rated_mw`` only when the frame has no
+        ``capacity_mw`` column); lost = ``max(0, expected - actual)`` per hour
+        (matching the spec). Hours whose wind bin has no
         overall_clean value are skipped (no reference to price against).
 
         Returns None when no hour maps to a curve bin.
@@ -68,7 +71,7 @@ class ConstraintLossService:
         if df.empty:
             return None
 
-        df["expected_mwh"] = df["expected_pu"].astype(float) * rated_mw
+        df["expected_mwh"] = df["expected_pu"].astype(float) * capacity_col(df, rated_mw)
         df["actual_mwh"] = df["generation_mwh"].astype(float)
         df["lost_mwh"] = (df["expected_mwh"] - df["actual_mwh"]).clip(lower=0.0)
 

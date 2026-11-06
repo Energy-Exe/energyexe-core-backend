@@ -13,7 +13,7 @@ Raw MWh output mixes two signals: operational performance and weather. A "low MW
 
 ### `norm_ratio = actual / expected`
 For each hour:
-- Look up `expected_mw = q50_bin × rated_mw` from the `overall_clean` curve at this hour's wind bin.
+- Look up `expected_mw = q50_bin × capacity_mw` from the `overall_clean` curve at this hour's wind bin, where `capacity_mw` is the capacity in force that hour (same basis the curve was built on).
 - Compute `norm_ratio = actual_mw / expected_mw`.
 
 Reads as: "given the wind we actually had, did the turbine deliver what the curve predicts?"
@@ -66,7 +66,7 @@ Three tiers of aggregation:
 ### Step-by-step
 
 1. **Build the curve lookup** once — fetch `power_curve_bins` rows with `curve_type='overall_clean'` and map `wind_bin → q50_pu` (or `q90_pu` for the Q10 run). Avoids querying Postgres per hour.
-2. **Per-hour ratio.** Wind-bin every hour (1 m/s). Look up `expected_pu` from the cache. Compute `expected_mw = expected_pu × rated_mw` and `norm_ratio = actual_mw / expected_mw`. Drop hours where `wind_speed < 4 m/s`, no curve value, or `expected_mw ≤ 0`.
+2. **Per-hour ratio.** Wind-bin every hour (1 m/s). Look up `expected_pu` from the cache. Compute `expected_mw = expected_pu × capacity_mw` (per-hour capacity in force) and `norm_ratio = actual_mw / expected_mw`. Drop hours where `wind_speed < 4 m/s`, no curve value, or `expected_mw ≤ 0`.
 3. **Monthly average ratio.** Group qualifying hours by `(year, month)`, mean of `norm_ratio` → `avg_norm_ratio` per month.
 4. **Historical mean.** Mean of all monthly avg_norm_ratios across the dataset.
 5. **Monthly index.** `index_vs_base = avg_norm_ratio / historical_mean × 100`.
