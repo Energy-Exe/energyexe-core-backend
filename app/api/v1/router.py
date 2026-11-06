@@ -44,6 +44,7 @@ from app.api.v1.endpoints import (
     report_commentary,
     reports,
     scada,
+    scada_ledger_preview,
     scada_opportunities,
     scada_ppas,
     states,
@@ -206,6 +207,12 @@ api_router.include_router(
 # SCADA PPAs — EPR-97's detailed offtake structure. Superadmin-gated and audited, unlike the
 # read-only /scada charts. Entirely separate from the Perform /ppas router above.
 api_router.include_router(scada_ppas.router, prefix="/scada/ppas", tags=["scada-ppas"])
+
+# SCADA ledger preview — the value-ledger sandbox's results, internal staff only, static files,
+# off on production by default (SCADA_LEDGER_PREVIEW_ENABLED).
+api_router.include_router(
+    scada_ledger_preview.router, prefix="/scada/ledger-preview", tags=["scada-ledger-preview"]
+)
 
 # Reports platform (EPR-81/82 — generated reports store + async two-pass pipeline)
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
