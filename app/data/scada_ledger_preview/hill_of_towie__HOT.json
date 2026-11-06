@@ -12,7 +12,7 @@
    "ledger": "vl-20261105-ledger-r6",
    "criteria": "vl-20261105-criteria_hot-r5"
   },
-  "generated_utc": "2026-11-06T10:06:03+00:00"
+  "generated_utc": "2026-11-06T10:23:20+00:00"
  },
  "headline": {
   "ledger": 1045219.5955934186,
@@ -1432,7 +1432,7 @@
    "name": "Counted once",
    "kind": "evidence",
    "result": "passed",
-   "note": "1 period keeps more than its largest claim (\u00a30 a year), under a \u00a31-a-year tolerance set after the run that found it."
+   "note": "1 period keeps more than its largest claim (\u00a30.14 a year), under a \u00a31-a-year tolerance set after the run that found it."
   },
   {
    "n": 3,
