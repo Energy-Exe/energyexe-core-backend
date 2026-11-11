@@ -1145,3 +1145,199 @@ def test_finish_orphaned_run_records_late_files_before_persisting(monkeypatch):
     assert seen["run_files"] == [
         {"url": f"/brain-agent/files/{USER_ID_DETACH}/s-detach/late.png", "filename": "late.png"}
     ]
+
+
+# --- EPR-185: a recreated / compacted session never deletes earlier turns ---
+
+FOLD = (
+    "<conversation_history>\nThis is a continuation of an existing conversation.\n\n"
+    "Human: q0\n\nAssistant: a0\n\n</conversation_history>\n\n"
+)
+
+
+def _base_session(base, *run_files, prompt="q"):
+    session = _session_with_run_files(*run_files)
+    session.history_base = [dict(m) for m in base]
+    session.current_prompt = prompt
+    return session
+
+
+def _persist(service, session):
+    return asyncio.run(
+        service._persist_completed_run(
+            user_id=1,
+            session_id="s-img",
+            result_message=_result_message(),
+            session=session,
+        )
+    )
+
+
+def _no_stored(monkeypatch):
+    async def _stored(self, session_id):
+        raise AssertionError("a session with a base must not re-read the stored thread")
+
+    monkeypatch.setattr(BrainAgentService, "_load_thread_messages", _stored)
+
+
+def test_persist_recreated_session_keeps_earlier_turns_and_charts(monkeypatch):
+    sleeps = []
+    base = [
+        {"id": "u0", "type": "user", "content": "q0"},
+        {"id": "a0", "type": "assistant", "content": "a0", "images": [_img("old.png")]},
+    ]
+    saved = _persist_harness(
+        monkeypatch, [_sm("user", "u1", FOLD + "q1"), _sm("assistant", "a1", "a1")], sleeps
+    )
+    _no_stored(monkeypatch)
+    service = BrainAgentService(db=None)
+    session = _base_session(base, "chart.png", prompt="q1")
+
+    _persist(service, session)
+    msgs = saved["messages"]
+    assert [m["content"] for m in msgs] == ["q0", "a0", "q1", "a1"]
+    assert msgs[1]["images"] == [_img("old.png")]
+    assert msgs[3]["images"] == [_img("chart.png")]
+    assert not any("<conversation_history>" in m["content"] for m in msgs)
+
+    # Next turn in the same session: the transcript still opens with the fold.
+    monkeypatch.setattr(
+        _svc_mod,
+        "get_session_messages",
+        lambda session_id, directory: [
+            _sm("user", "u1", FOLD + "q1"),
+            _sm("assistant", "a1", "a1"),
+            _sm("user", "u2", "q2"),
+            _sm("assistant", "a2", "a2"),
+        ],
+    )
+    session.run_files = []
+    session.current_prompt = "q2"
+    _persist(service, session)
+    msgs = saved["messages"]
+    assert [m["content"] for m in msgs] == ["q0", "a0", "q1", "a1", "q2", "a2"]
+    assert msgs[3]["images"] == [_img("chart.png")]  # carried from the session's own save
+    assert "images" not in msgs[5]
+
+
+def test_persist_repeated_continue_after_restart_keeps_both_turns(monkeypatch):
+    sleeps = []
+    base = [
+        {"id": "u0", "type": "user", "content": "continue"},
+        {"id": "a0", "type": "assistant", "content": "a3", "images": [_img("a3.png")]},
+    ]
+    saved = _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", FOLD + "continue"), _sm("assistant", "a1", "a4")],
+        sleeps,
+    )
+    _no_stored(monkeypatch)
+    _persist(BrainAgentService(db=None), _base_session(base, prompt="continue"))
+    msgs = saved["messages"]
+    assert [m["content"] for m in msgs] == ["continue", "a3", "continue", "a4"]
+    assert msgs[1]["images"] == [_img("a3.png")]
+    assert "images" not in msgs[3]  # no chart borrowed from the older turn
+
+
+def test_persist_mid_turn_compaction_keeps_earlier_turns_and_prompt(monkeypatch):
+    sleeps = []
+    summary = (
+        "This session is being continued from a previous conversation that ran out of "
+        "context. The conversation is summarized below: ..."
+    )
+    saved = _persist_harness(
+        monkeypatch,
+        [_sm("user", "s1", summary), _sm("assistant", "a3", "a3")],
+        sleeps,
+    )
+    _no_stored(monkeypatch)
+    session = _base_session([{"id": "u0", "type": "user", "content": "q0"}], prompt="q3")
+    session.history_base.append({"id": "a0", "type": "assistant", "content": "a0"})
+    session.session_part = [
+        {"id": "u2", "type": "user", "content": "q2"},
+        {"id": "a2", "type": "assistant", "content": "a2"},
+    ]
+    _persist(BrainAgentService(db=None), session)
+    msgs = saved["messages"]
+    assert [m["content"] for m in msgs] == ["q0", "a0", "q2", "a2", "q3", "a3"]
+    assert not any(m["content"].startswith("This session is being continued") for m in msgs)
+
+
+def test_persist_attachment_note_before_fold_is_kept_and_fold_dropped(monkeypatch):
+    sleeps = []
+    note = "<attachments>\n- data.csv\n</attachments>"
+    saved = _persist_harness(
+        monkeypatch,
+        [_sm("user", "u1", f"{note}\n\n{FOLD}summarise"), _sm("assistant", "a1", "done")],
+        sleeps,
+    )
+    _no_stored(monkeypatch)
+    _persist(
+        BrainAgentService(db=None),
+        _base_session([{"id": "u0", "type": "user", "content": "q0"}], prompt="summarise"),
+    )
+    msgs = saved["messages"]
+    assert msgs[1]["content"] == f"{note}\n\nsummarise"
+    assert [m["content"] for m in msgs][-1] == "done"
+
+
+def test_chat_first_run_snapshots_the_stored_thread_as_base(monkeypatch, _isolated_sessions):
+    """The first run of a session records what was stored before it (minus the
+    prompt the client already saved); later runs keep that same base."""
+    fake_client = _FakeClient([_result_message(), _result_message()])
+    session = AgentSession(
+        session_id="s-base",
+        user_id=1,
+        client=fake_client,
+        created_at=_time.time(),
+        last_activity=_time.time(),
+    )
+    reads = []
+
+    async def _fake_get_or_create(self, user_id, session_id, *a, **kw):
+        BrainAgentService._sessions[session_id] = session
+        return session, True
+
+    async def _fake_load(self, session_id):
+        reads.append(session_id)
+        return [
+            {"id": "u0", "type": "user", "content": "q0"},
+            {"id": "a0", "type": "assistant", "content": "a0"},
+            {"id": "u1", "type": "user", "content": "deep dive"},
+        ]
+
+    async def _fake_persist(
+        self, user_id, session_id, result_message, model=None, session=None, detached=False
+    ):
+        return PersistOutcome(messages=[], terminal_info=derive_terminal_info(result_message))
+
+    async def _noop(*_a, **_kw):
+        return None
+
+    fake_client.query = _noop
+    monkeypatch.setattr(BrainAgentService, "_get_or_create_session", _fake_get_or_create)
+    monkeypatch.setattr(BrainAgentService, "_load_thread_messages", _fake_load)
+    monkeypatch.setattr(BrainAgentService, "_persist_completed_run", _fake_persist)
+    monkeypatch.setattr(BrainAgentService, "_set_thread_streaming", _noop)
+    monkeypatch.setattr(BrainAgentService, "_cleanup_stale_sessions", lambda self: None)
+
+    class _NoBudgetDB:
+        async def execute(self, *_a, **_kw):
+            return SimpleNamespace(
+                scalar_one_or_none=lambda: None,
+                one_or_none=lambda: SimpleNamespace(
+                    is_active=True, role="admin", email_verified=True,
+                    is_approved=True, is_superuser=True,
+                ),
+            )
+
+    async def _run(prompt):
+        service = BrainAgentService(db=_NoBudgetDB())
+        async for _ev in service.chat(user_id=1, session_id="s-base", prompt=prompt):
+            pass
+
+    asyncio.run(_run("deep dive"))
+    assert [m["content"] for m in session.history_base] == ["q0", "a0"]
+    asyncio.run(_run("follow-up"))
+    assert reads == ["s-base"]  # snapshotted once per session
+    assert [m["content"] for m in session.history_base] == ["q0", "a0"]
