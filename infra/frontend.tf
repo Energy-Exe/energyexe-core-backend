@@ -113,6 +113,48 @@ resource "aws_cloudfront_distribution" "prod_frontend" {
     origin_access_control_id = aws_cloudfront_origin_access_control.prod_frontend[each.key].id
   }
 
+  # PostHog origins (client portal only); see the PostHog reverse proxy note above.
+  dynamic "origin" {
+    for_each = each.key == "client" ? {
+      posthog-ingest = local.posthog_ingest_host
+      posthog-assets = local.posthog_assets_host
+    } : {}
+    content {
+      domain_name = origin.value
+      origin_id   = origin.key
+      custom_origin_config {
+        http_port              = 80
+        https_port             = 443
+        origin_protocol_policy = "https-only"
+        origin_ssl_protocols   = ["TLSv1.2"]
+      }
+    }
+  }
+
+  # Most specific first: scripts + remote config from the assets host, the rest
+  # (events, recordings, flags) from the ingestion host.
+  dynamic "ordered_cache_behavior" {
+    for_each = each.key == "client" ? [
+      { path = "/ingest/static/*", origin = "posthog-assets" },
+      { path = "/ingest/array/*", origin = "posthog-assets" },
+      { path = "/ingest/*", origin = "posthog-ingest" },
+    ] : []
+    content {
+      path_pattern             = ordered_cache_behavior.value.path
+      target_origin_id         = ordered_cache_behavior.value.origin
+      viewer_protocol_policy   = "redirect-to-https"
+      allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+      cached_methods           = ["GET", "HEAD"]
+      compress                 = false
+      cache_policy_id          = local.cf_cache_disabled
+      origin_request_policy_id = local.cf_origin_all_viewer_except_host
+      function_association {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.posthog_ingest.arn
+      }
+    }
+  }
+
   default_cache_behavior {
     target_origin_id       = "s3-${each.key}"
     viewer_protocol_policy = "redirect-to-https"
@@ -152,6 +194,34 @@ resource "aws_cloudfront_distribution" "prod_frontend" {
     ssl_support_method             = var.frontend_certificate_arn == "" ? null : "sni-only"
     minimum_protocol_version       = var.frontend_certificate_arn == "" ? null : "TLSv1.2_2021"
   }
+}
+
+# --- PostHog reverse proxy (client portal only) ---
+# The client portal sends analytics to its own address, /ingest/*, and this
+# distribution forwards it to PostHog EU. Ad blockers and company firewalls
+# block eu.i.posthog.com, but not the portal's own domain. The CloudFront
+# Function strips the /ingest prefix. /ingest/static/* and /ingest/array/*
+# (scripts and the project's remote config, which recordings need) come from
+# PostHog's assets host; everything else (events, recordings, flags) from the
+# ingestion host. Nothing is cached and every header, cookie and query string
+# is forwarded, except Host, which CloudFront sets to the PostHog origin.
+# Note: the SPA custom_error_response (403/404 -> index.html) is
+# distribution-wide, so a PostHog 403/404 reaches the browser as index.html.
+# posthog-js treats both as failures, so it's harmless.
+locals {
+  posthog_ingest_host = "eu.i.posthog.com"
+  posthog_assets_host = "eu-assets.i.posthog.com"
+  # AWS-managed policies
+  cf_cache_disabled                = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # CachingDisabled
+  cf_origin_all_viewer_except_host = "b689b0a8-53d0-40ab-baf2-68738e2966ac" # AllViewerExceptHostHeader
+}
+
+resource "aws_cloudfront_function" "posthog_ingest" {
+  name    = "energyexe-prod-posthog-ingest"
+  runtime = "cloudfront-js-2.0"
+  comment = "Strip /ingest before forwarding to PostHog EU (client portal)"
+  publish = true
+  code    = file("${path.module}/cloudfront/posthog_ingest.js")
 }
 
 # --- Bucket policy: only this CloudFront distribution may read objects ---
