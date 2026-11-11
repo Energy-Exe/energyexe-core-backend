@@ -32,7 +32,14 @@ from app.core.agent_access import require_fresh_agent_access
 from app.core.config import get_settings
 from app.schemas.brain_agent import DEFAULT_BRAIN_MODEL
 from app.services.brain_agent_db_script import DB_HELPER_SCRIPT
-from app.services.brain_agent_files import attach_run_files, merge_images_by_turn
+from app.services.brain_agent_files import (
+    attach_run_files,
+    history_base,
+    is_machine_title,
+    merge_images_by_turn,
+    session_messages,
+    title_from_prompt,
+)
 from app.services.brain_agent_hooks import make_pre_tool_use_hook
 from app.services.brain_agent_skill_files import (
     CHART_STYLE_PY,
@@ -279,6 +286,15 @@ class AgentSession:
     # _persist_completed_run attaches them to the run's answer bubble so they
     # survive the transcript rebuild (the transcript knows nothing about them).
     run_files: List[Dict[str, str]] = field(default_factory=list)
+    # EPR-185: the stored thread as it stood before this session's first run.
+    # The SDK transcript only covers THIS session (a recreated session starts
+    # at a folded <conversation_history> prompt; an auto-compaction drops
+    # everything before its summary), so every save is history_base + the
+    # session's own messages — never the transcript alone, which deleted the
+    # earlier turns and their charts. None until the first run snapshots it.
+    history_base: Optional[List[Dict[str, Any]]] = None
+    # The session's own messages as last persisted (pre-compaction memory).
+    session_part: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -501,6 +517,12 @@ class BrainAgentService:
                 session.current_prompt = raw_prompt
                 session.run_started_at = time.time()
                 session.run_files = []
+                if session.history_base is None:
+                    # First run of this session: everything already stored
+                    # precedes its transcript (EPR-185).
+                    session.history_base = history_base(
+                        await self._load_thread_messages(session_id), raw_prompt
+                    )
 
                 # Advisory only (never read as a server-side guard): lets the
                 # UI poll GET /threads/{id} to see a run is live after its
@@ -846,11 +868,12 @@ class BrainAgentService:
             result = await self.db.execute(select(AgentThread).where(AgentThread.id == session_id))
             thread = result.scalar_one_or_none()
 
-            # Derive title from first user message
+            # Derive title from first user message (the user's own text, not a
+            # folded history block or attachment note).
             title = None
             first_user = next((m for m in messages if m.get("type") == "user"), None)
             if first_user:
-                title = first_user.get("content", "")[:80]
+                title = title_from_prompt(first_user.get("content", "")) or None
 
             delta = Decimal(str(round(cost_delta_usd, 4))) if cost_delta_usd is not None else None
 
@@ -858,7 +881,9 @@ class BrainAgentService:
                 thread.messages = messages
                 thread.message_count = len(messages)
                 thread.is_streaming = False
-                if not thread.title and title:
+                # Never replace a title the user chose (EPR-207); a machine
+                # title (empty, or a leaked history/attachment prefix) heals.
+                if title and is_machine_title(thread.title):
                     thread.title = title
                 if delta is not None:
                     thread.total_cost_usd = (thread.total_cost_usd or Decimal("0")) + delta
@@ -1019,9 +1044,36 @@ class BrainAgentService:
                     )
 
         if from_transcript:
-            stored = await _stored()
-            if stored:
-                final_messages = merge_images_by_turn(stored, final_messages, now_ms=now_ms)
+            # The transcript covers this agent session only (EPR-185): strip a
+            # folded history prompt, splice across an auto-compaction, then
+            # put the turns from before the session back in front of it.
+            previous_part = session.session_part if session is not None else []
+            final_messages = session_messages(
+                final_messages,
+                previous_part,
+                session.current_prompt if session is not None else None,
+                now_ms=now_ms,
+            )
+            # Images come back from this session's own earlier saves — pairing
+            # against the whole stored thread could hand an older turn's chart
+            # to a repeated prompt ("continue"). Without a session base (no
+            # session object) fall back to the stored thread, as before.
+            if session is not None and session.history_base is not None:
+                image_source = previous_part
+            else:
+                image_source = await _stored()
+            if image_source:
+                final_messages = merge_images_by_turn(image_source, final_messages, now_ms=now_ms)
+            if session is not None:
+                session.session_part = list(final_messages)
+                if session.history_base:
+                    final_messages = [*session.history_base, *final_messages]
+                    logger.info(
+                        "brain_agent_history_base_applied",
+                        session_id=session_id,
+                        base=len(session.history_base),
+                        session_messages=len(session.session_part),
+                    )
 
         if terminal_info["kind"] != "success":
             marker = self._terminal_marker(result_message, terminal_info)

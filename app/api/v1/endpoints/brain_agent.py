@@ -26,6 +26,7 @@ from app.schemas.brain_agent import (
     ThreadTitleUpdate,
     ThreadUpsertRequest,
 )
+from app.services.brain_agent_files import is_machine_title
 from app.services.brain_agent_service import SANDBOX_SEED_FILES, BrainAgentService
 from app.services.brain_agent_uploads import (
     MAX_SESSION_UPLOAD_BYTES,
@@ -496,7 +497,13 @@ async def upsert_thread(
         # Validate ownership before updating
         if thread.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="Thread not found")
-        thread.title = body.title
+        # EPR-207: the frontends PUT a title recomputed from the first prompt
+        # after every turn — never let that clobber a rename (PATCH /title).
+        # Only an empty or machine-derived title is replaced, and never by
+        # another machine title (an older client deriving one from a folded
+        # history prompt).
+        if not is_machine_title(body.title) and is_machine_title(thread.title):
+            thread.title = body.title
         thread.model = body.model
         thread.messages = body.messages
         thread.message_count = body.message_count
