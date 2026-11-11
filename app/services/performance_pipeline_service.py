@@ -657,13 +657,51 @@ class PerformancePipelineService:
 
     # ─── Module 6: Commercial metrics ──────────────────────────
 
+    @staticmethod
+    def compute_constraint_proxy(
+        df: "pd.DataFrame", gap_by_bin: Dict[float, float], rated_mw: float
+    ) -> Dict[str, float]:
+        """Constraint proxy per wind bin (pure, testable).
+
+        For every hour whose bin has a positive (q90 − q50) gap the proxy is
+        ``gap × capacity in force that hour``; summed per bin via the per-hour
+        ``capacity_mw`` column (``rated_mw`` only when the frame has none).
+        ``lost_value_eur`` prices the proxy at the hours-weighted average
+        effective price of the qualifying hours.
+
+        ``df`` needs ``wind_bin`` and ``effective_price`` columns.
+        """
+        import pandas as pd
+
+        from app.utils.capacity import capacity_col
+
+        if df.empty or not gap_by_bin:
+            return {"constraint_proxy_mwh": 0.0, "lost_value_eur": 0.0, "proxy_hours": 0}
+
+        work = df.copy()
+        work["_cap"] = capacity_col(work, rated_mw)
+        work["_gap"] = work["wind_bin"].map(gap_by_bin)
+        work = work[work["_gap"].notna() & (work["_gap"] > 0)]
+        if work.empty:
+            return {"constraint_proxy_mwh": 0.0, "lost_value_eur": 0.0, "proxy_hours": 0}
+
+        total_proxy_mwh = float((work["_gap"] * work["_cap"]).sum())
+        proxy_hours = int(len(work))
+        price = pd.to_numeric(work["effective_price"], errors="coerce")
+        avg_price = float(price.mean()) if price.notna().any() else 0.0
+        return {
+            "constraint_proxy_mwh": total_proxy_mwh,
+            "lost_value_eur": total_proxy_mwh * avg_price,
+            "proxy_hours": proxy_hours,
+        }
+
     async def _compute_commercial_metrics(
         self, windfarm_id: int, year: int, pipeline_run_id: Optional[int] = None
     ) -> None:
         """Compute commercial metrics for a year.
 
         Persists onto ``performance_summaries`` (period_type='year'):
-        - constraint_proxy_mwh = sum((q90_bin - q50_bin) * rated_mw) per qualifying hour
+        - constraint_proxy_mwh = sum((q90_bin - q50_bin) * capacity_in_force_mw) per qualifying hour
         - lost_value_eur = constraint_proxy_mwh * avg_market_price
         - contract_revenue_eur = sum(actual_mwh × price), where price is the
           active PPA price if the windfarm has a fixed-price contract for
@@ -733,32 +771,9 @@ class PerformancePipelineService:
             else:
                 df = df.assign(effective_price=df["market_price"])
 
-        # Aggregate constraint proxy per wind_bin
-        grouped = (
-            df.groupby("wind_bin")
-            .agg(
-                hours=("hour", "count"),
-                avg_price=("effective_price", "mean"),
-            )
-            .reset_index()
-        )
-
-        total_proxy_mwh = 0.0
-        total_proxy_hours = 0
-        total_price_sum = 0.0
-        for _, row in grouped.iterrows():
-            wbin = float(row["wind_bin"])
-            gap = gap_by_bin.get(wbin, 0)
-            if gap > 0:
-                hours = int(row["hours"])
-                proxy = gap * float(rated_mw) * hours
-                total_proxy_mwh += proxy
-                total_proxy_hours += hours
-                if pd.notna(row["avg_price"]):
-                    total_price_sum += float(row["avg_price"]) * hours
-
-        avg_price_in_proxy_hours = total_price_sum / max(total_proxy_hours, 1)
-        lost_value = total_proxy_mwh * avg_price_in_proxy_hours
+        proxy_out = self.compute_constraint_proxy(df, gap_by_bin, float(rated_mw))
+        total_proxy_mwh = proxy_out["constraint_proxy_mwh"]
+        lost_value = proxy_out["lost_value_eur"]
 
         # Contract revenue: price-weighted sum across ALL valid hours
         actual_mwh = float(df["generation_mwh"].sum())

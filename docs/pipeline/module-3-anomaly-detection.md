@@ -34,7 +34,7 @@ ODI replaces a simpler "availability %" metric. Three perspectives, all stored o
 MEMORY.md note: "Real ODI now comes from `performance_summaries` (Module 3, power-curve-based), replacing availability placeholder in OPS-01."
 
 ### Expected MWh — the counterfactual
-For each hour, given its wind speed, `q50_bin × rated_mw` is what the turbine *should* have produced at typical performance. Subtract actual from that to get `lost_mwh`. This is a counterfactual — we're not comparing to nameplate (which is rarely achievable) and we're not comparing to last year (which has its own problems); we're comparing to *what this windfarm typically does at this wind speed*.
+For each hour, given its wind speed, `q50_bin × capacity_mw` (capacity in force that hour) is what the turbine *should* have produced at typical performance. Subtract actual from that to get `lost_mwh`. This is a counterfactual — we're not comparing to nameplate (which is rarely achievable) and we're not comparing to last year (which has its own problems); we're comparing to *what this windfarm typically does at this wind speed*.
 
 ### Why EUR loss differs from MWh loss
 If 10 MWh of loss falls in January peak hours (€80/MWh) vs June off-peak (€30/MWh), MWh loss is identical but EUR loss differs by ~2.5×. Time-weighted price matters because:
@@ -74,7 +74,7 @@ Consecutive underperformance hours get grouped into "runs". `gap > 1 h` ends a r
 2. Merge `q50_pu, q90_pu, mad_pu` from `power_curve_bins` (capability curve for that year).
 3. Set `is_underperf = p_pu < q50_bin - 2.5 × mad_bin`.
 4. Set `is_overperf = (p_pu > q90_bin + 1.5 × mad_bin) | (p_pu > 1.02)`.
-5. Compute `expected_mwh = q50_bin × rated_mw`.
+5. Compute `expected_mwh = q50_bin × capacity_mw` (per-hour capacity in force from the loader; `rated_mw` only when the frame has no such column).
 6. Compute `lost_mwh = max(0, expected_mwh - actual_mwh)` for underperf hours (0 elsewhere).
 7. Compute `lost_eur = lost_mwh × price` — price = PPA contract price if a contract covers this hour, else hourly spot from `market_price`.
 
@@ -128,7 +128,7 @@ One row per `(windfarm, period_type, year, month)`:
 | `overperf_hours` | count flagged overperf |
 | `odi_pct_underperf` | underperf_hours / total_hours × 100 |
 | `lost_mwh` | sum of `lost_mwh` |
-| `expected_mwh` | sum of `expected_p_pu × rated_mw` |
+| `expected_mwh` | sum of `expected_p_pu × capacity_mw` (capacity in force that hour) |
 | `odi_pct_loss_mwh` | lost_mwh / expected_mwh × 100 |
 | `lost_eur` | sum of `lost_eur` |
 | `expected_revenue_eur` | sum of `expected_mwh × price` |

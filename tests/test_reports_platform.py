@@ -1670,6 +1670,8 @@ class TestOpexMetricsInReports:
         )
         monkeypatch.setattr(common, "capture_rate_pct", AsyncMock(return_value=None))
         monkeypatch.setattr(common, "financials_for", AsyncMock(return_value=fin_row))
+        # capacity in force over the window (unit registry); constant farm = nameplate
+        monkeypatch.setattr(common, "window_capacity_mw", AsyncMock(return_value=51.3))
         helper = AsyncMock(return_value={wf_id: metrics})
         monkeypatch.setattr(common, "opex_metrics_for_windfarms", helper)
 

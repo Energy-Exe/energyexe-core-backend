@@ -126,7 +126,7 @@ Migration `d7f91a2b3c4e_widen_degradation_precision.py`. OLS fits `residual ~ ye
 **Inputs:**
 - Hourly DataFrame (pre-loaded by the orchestrator; constraint hours already masked out — see "Why structural constraints contaminate this fit" above).
 - `power_curve_bins` with `curve_type='capability'` per year (from Module 2).
-- `windfarms.nameplate_capacity_mw` for p_pu / MW conversions.
+- `windfarms.nameplate_capacity_mw` as the anchor for the per-hour capacity in force that `p_pu` is based on (Module 1). A capacity step (new phase, decommissioned turbines) therefore no longer appears as a degradation step.
 
 **Outputs:**
 - Rows in `degradation_results`.

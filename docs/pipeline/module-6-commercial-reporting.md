@@ -36,7 +36,7 @@ For commercial reporting, the PPA price (when one covers the period) replaces ho
 Different from Module 3's lost MWh (which is `q50 - actual`, the gap between expected and observed). Module 6's proxy is `q90 - q50` — the gap between **upper-capability** and **median expectation**:
 
 ```
-lost_mwh_proxy_per_hour = max(0, (q90_bin - q50_bin) × rated_mw)
+lost_mwh_proxy_per_hour = max(0, (q90_bin - q50_bin) × capacity_mw)   # capacity in force that hour
 ```
 
 It's a **conservative estimate of commercial headroom**: how much energy could be recovered if the turbine reliably operated at its upper-capability bound rather than its median. Multiplied by hourly price → `lost_value_eur`.
@@ -70,7 +70,7 @@ Computed inline in `_compute_commercial_metrics(windfarm_id, year, pipeline_run_
 
 - Loads the `overall_clean` power curve.
 - For each hour, computes `gap = q90_bin - q50_bin` at that hour's wind bin.
-- Sums `(gap × rated_mw)` → annual `total_constraint_proxy_mwh`.
+- Sums `(gap × capacity_mw)` per hour (`PerformancePipelineService.compute_constraint_proxy`) → annual `total_constraint_proxy_mwh`.
 - Multiplies hour-by-hour by `market_price` → annual `lost_value_eur`.
 - Persists onto `performance_summaries` for the yearly row only (`month=NULL`).
 
