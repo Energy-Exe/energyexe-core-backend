@@ -70,7 +70,6 @@ from .turbine_unit import TurbineUnit
 from .user import User
 from .user_consent import UserConsent
 from .user_feature import DEFAULT_FEATURES, UserFeature
-from .user_preference import UserPreference
 from .weather_data import WeatherData, WeatherDataRaw
 from .windfarm import Windfarm
 from .windfarm_financial_entity import WindfarmFinancialEntity
@@ -120,7 +119,6 @@ __all__ = [
     "TurbineUnit",
     "User",
     "UserFeature",
-    "UserPreference",
     "UserConsent",
     "Portfolio",
     "PortfolioItem",
