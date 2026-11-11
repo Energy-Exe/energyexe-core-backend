@@ -183,3 +183,95 @@ class TestAttachRunFiles:
 
         assert len(out) == 4
         assert out[3]["content"] == "" and images_of(out)[3] == ["chart.png"]
+
+
+# --- EPR-185: folded history, compaction, session base --------------------
+
+from app.services.brain_agent_files import (  # noqa: E402
+    history_base,
+    is_compact_summary,
+    is_machine_title,
+    session_messages,
+    strip_folded_history,
+    title_from_prompt,
+)
+
+NOTE = "<attachments>\nThe user has attached the following file(s):\n- data.csv\n</attachments>"
+SUMMARY = (
+    "This session is being continued from a previous conversation that ran out of "
+    "context. The conversation is summarized below: ..."
+)
+
+
+def test_strip_folded_history_keeps_only_the_prompt():
+    assert strip_folded_history(HISTORY + "q1") == "q1"
+    assert strip_folded_history("plain prompt") == "plain prompt"
+    assert strip_folded_history(None) is None
+
+
+def test_strip_folded_history_keeps_the_attachment_note_before_the_block():
+    assert strip_folded_history(f"{NOTE}\n\n{HISTORY}q1") == f"{NOTE}\n\nq1"
+
+
+def test_strip_folded_history_handles_nested_blocks():
+    nested = f"<conversation_history>\nHuman: {HISTORY}q0\n</conversation_history>\n\nq1"
+    assert strip_folded_history(nested) == "q1"
+
+
+def test_is_compact_summary():
+    assert is_compact_summary(U(SUMMARY))
+    assert not is_compact_summary(A(SUMMARY))
+    assert not is_compact_summary(U("q1"))
+
+
+def test_title_from_prompt_strips_machine_text():
+    assert title_from_prompt(HISTORY + "how many farms?") == "how many farms?"
+    assert title_from_prompt(f"{NOTE}\n\nsummarise this file") == "summarise this file"
+    assert title_from_prompt("x" * 200) == "x" * 80
+
+
+def test_is_machine_title():
+    assert is_machine_title(None) and is_machine_title("  ")
+    assert is_machine_title("<conversation_history> This is a continu")
+    assert is_machine_title("<attachments> The user has attached th")
+    assert not is_machine_title("My Norway analysis")
+
+
+def test_history_base_drops_a_trailing_copy_of_the_current_prompt():
+    stored = [U("q0"), A("a0"), U("q1")]
+    assert history_base(stored, "q1") == [U("q0"), A("a0")]
+    # an unanswered DIFFERENT prompt is history, keep it
+    assert history_base(stored, "q2") == stored
+    # answered turns are never dropped, even when the prompt repeats
+    assert history_base([U("continue"), A("a0")], "continue") == [U("continue"), A("a0")]
+
+
+def test_session_messages_strips_the_folded_prompt():
+    rebuilt = [U(HISTORY + "q1"), A("a1")]
+    out = session_messages(rebuilt, [], "q1", now_ms=NOW)
+    assert [m["content"] for m in out] == ["q1", "a1"]
+    assert rebuilt[0]["content"] == HISTORY + "q1"  # input untouched
+
+
+def test_session_messages_mid_turn_compaction_reinserts_the_prompt():
+    previous = [U("q1"), A("a1")]
+    rebuilt = [U(SUMMARY), A("a2-after-compaction")]
+    out = session_messages(rebuilt, previous, "q2", now_ms=NOW)
+    assert [m["type"] for m in out] == ["user", "assistant", "user", "assistant"]
+    assert [m["content"] for m in out] == ["q1", "a1", "q2", "a2-after-compaction"]
+
+
+def test_session_messages_earlier_compaction_adds_only_new_messages():
+    # Compaction happened during q2; q3 is this run. Everything up to a3's
+    # predecessor is already in `previous` (matched by transcript id).
+    previous = [U("q1"), A("a1"), U("q2"), A("a2")]
+    rebuilt = [U(SUMMARY), A("a2"), U("q3"), A("a3")]
+    out = session_messages(rebuilt, previous, "q3", now_ms=NOW)
+    assert [m["content"] for m in out] == ["q1", "a1", "q2", "a2", "q3", "a3"]
+
+
+def test_session_messages_compaction_at_prompt_time_needs_no_reinsert():
+    previous = [U("q1"), A("a1")]
+    rebuilt = [U(SUMMARY), U("q2"), A("a2")]
+    out = session_messages(rebuilt, previous, "q2", now_ms=NOW)
+    assert [m["content"] for m in out] == ["q1", "a1", "q2", "a2"]
