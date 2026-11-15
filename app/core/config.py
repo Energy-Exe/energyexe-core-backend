@@ -158,6 +158,9 @@ class Settings(BaseSettings):
     REPORTS_LLM_MODEL_SUMMARY: str = "claude-opus-5-5"  # action plan + exec summary
     REPORTS_MAX_COST_USD: float = 0.50  # hard budget per report generation run
 
+    # SCADA Builder (EPR-221): turns a plain-words chart request into a spec.
+    SCADA_BUILDER_MODEL: str = "claude-opus-5-5"
+
     # Brain Agent default model (used as fallback when caller omits one)
     SCADA_INGESTION_ENABLED: bool = False
     # Ledger preview (internal sandbox page, /scada/ledger-preview). Unset means on everywhere
