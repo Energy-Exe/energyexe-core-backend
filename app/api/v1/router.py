@@ -44,6 +44,7 @@ from app.api.v1.endpoints import (
     report_commentary,
     reports,
     scada,
+    scada_builder,
     scada_ledger_preview,
     scada_opportunities,
     scada_ppas,
@@ -198,6 +199,9 @@ api_router.include_router(
 
 # SCADA portal (14-chart dashboard over gold schema `scada`; 503s until the schema exists)
 api_router.include_router(scada.router, prefix="/scada", tags=["scada"])
+
+# SCADA Builder (EPR-221) — prompt → chart spec, and one dataset's rows; read-only.
+api_router.include_router(scada_builder.router, prefix="/scada/builder", tags=["scada-builder"])
 
 # SCADA opportunities — Revenue-at-Risk register (503s until the findings tables are populated)
 api_router.include_router(
