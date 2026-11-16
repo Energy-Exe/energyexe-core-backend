@@ -12,7 +12,7 @@
    "ledger": "vl-20261105-ledger-r6",
    "criteria": "vl-20261105-criteria_hot-r5"
   },
-  "generated_utc": "2026-11-06T10:23:20+00:00"
+  "generated_utc": "2026-11-16T10:14:30+00:00"
  },
  "headline": {
   "ledger": 1045219.5955934186,
@@ -1419,6 +1419,1847 @@
    "degradation_hi": 40794.500826542455
   }
  ],
+ "leaves_by_year": [
+  {
+   "year": 2016,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "group": "curtailment",
+   "value": 44132.4617,
+   "mwh": 964.2819
+  },
+  {
+   "year": 2016,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed_held_at_zero",
+   "group": "curtailment",
+   "value": 88.8812,
+   "mwh": 2.0065
+  },
+  {
+   "year": 2016,
+   "step": "3",
+   "trigger": "OPS_01",
+   "leaf": "grid_outage",
+   "group": "downtime",
+   "value": 262.4373,
+   "mwh": 4.2752
+  },
+  {
+   "year": 2016,
+   "step": "4",
+   "trigger": "OPS_01",
+   "leaf": "downtime_fault",
+   "group": "downtime",
+   "value": 12092.1699,
+   "mwh": 313.8423
+  },
+  {
+   "year": 2016,
+   "step": "4b",
+   "trigger": "OPS_01",
+   "leaf": "weather_environmental_stop",
+   "group": "weather",
+   "value": 4406.239,
+   "mwh": 102.3477
+  },
+  {
+   "year": 2016,
+   "step": "4b",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 0.323,
+   "mwh": 0.0111
+  },
+  {
+   "year": 2016,
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "group": "weather",
+   "value": 36.9889,
+   "mwh": 0.8153
+  },
+  {
+   "year": 2016,
+   "step": "4c",
+   "trigger": "OPS_01",
+   "leaf": "downtime_comms",
+   "group": "downtime",
+   "value": 1495.6082,
+   "mwh": 43.4543
+  },
+  {
+   "year": 2016,
+   "step": "5",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 296.0104,
+   "mwh": 4.423
+  },
+  {
+   "year": 2016,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "downtime_unknown",
+   "group": "downtime",
+   "value": 11572.512,
+   "mwh": 219.7985
+  },
+  {
+   "year": 2016,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_idle_above_cut_in",
+   "group": "downtime",
+   "value": 1860.2386,
+   "mwh": 38.183
+  },
+  {
+   "year": 2016,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_near_cut_in",
+   "group": "downtime",
+   "value": 3449.8546,
+   "mwh": 65.716
+  },
+  {
+   "year": 2016,
+   "step": "7",
+   "trigger": "OPS_16",
+   "leaf": "iced_running",
+   "group": "weather",
+   "value": -5706.5646,
+   "mwh": -135.1751
+  },
+  {
+   "year": 2016,
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "group": "weather",
+   "value": 0.7687,
+   "mwh": 0.0157
+  },
+  {
+   "year": 2016,
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "group": "weather",
+   "value": 0.0,
+   "mwh": 0.0974
+  },
+  {
+   "year": 2016,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "group": "peers",
+   "value": -29416.9079,
+   "mwh": -628.0393
+  },
+  {
+   "year": 2016,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "group": "degradation",
+   "value": -5478.3155,
+   "mwh": -122.4447
+  },
+  {
+   "year": 2016,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "group": "peers",
+   "value": 20821.7911,
+   "mwh": 426.0649
+  },
+  {
+   "year": 2016,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "group": "peers",
+   "value": 9021.4142,
+   "mwh": 186.8921
+  },
+  {
+   "year": 2016,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "group": "peers",
+   "value": 2599.1201,
+   "mwh": 52.3708
+  },
+  {
+   "year": 2016,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "group": "remainder",
+   "value": -34004.6829,
+   "mwh": -740.0362
+  },
+  {
+   "year": 2016,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "group": "remainder",
+   "value": -6785.613,
+   "mwh": -153.947
+  },
+  {
+   "year": 2017,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "group": "curtailment",
+   "value": 85029.593,
+   "mwh": 1871.8612
+  },
+  {
+   "year": 2017,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed_held_at_zero",
+   "group": "curtailment",
+   "value": 545.6228,
+   "mwh": 12.1577
+  },
+  {
+   "year": 2017,
+   "step": "3",
+   "trigger": "OPS_01",
+   "leaf": "grid_outage",
+   "group": "downtime",
+   "value": 16471.3625,
+   "mwh": 373.8792
+  },
+  {
+   "year": 2017,
+   "step": "4",
+   "trigger": "OPS_01",
+   "leaf": "downtime_fault",
+   "group": "downtime",
+   "value": 63904.2895,
+   "mwh": 1399.7263
+  },
+  {
+   "year": 2017,
+   "step": "4b",
+   "trigger": "OPS_01",
+   "leaf": "weather_environmental_stop",
+   "group": "weather",
+   "value": 25728.0714,
+   "mwh": 532.057
+  },
+  {
+   "year": 2017,
+   "step": "4b",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 61.2667,
+   "mwh": 1.1805
+  },
+  {
+   "year": 2017,
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "group": "weather",
+   "value": 38.6684,
+   "mwh": 0.795
+  },
+  {
+   "year": 2017,
+   "step": "4c",
+   "trigger": "OPS_01",
+   "leaf": "downtime_comms",
+   "group": "downtime",
+   "value": 35249.9669,
+   "mwh": 821.6247
+  },
+  {
+   "year": 2017,
+   "step": "5",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 3538.2084,
+   "mwh": 60.9665
+  },
+  {
+   "year": 2017,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "downtime_unknown",
+   "group": "downtime",
+   "value": 51463.4578,
+   "mwh": 1099.943
+  },
+  {
+   "year": 2017,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_idle_above_cut_in",
+   "group": "downtime",
+   "value": 9893.8874,
+   "mwh": 221.1361
+  },
+  {
+   "year": 2017,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_near_cut_in",
+   "group": "downtime",
+   "value": 12867.2463,
+   "mwh": 282.5544
+  },
+  {
+   "year": 2017,
+   "step": "7",
+   "trigger": "OPS_16",
+   "leaf": "iced_running",
+   "group": "weather",
+   "value": -60328.9175,
+   "mwh": -1174.6493
+  },
+  {
+   "year": 2017,
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "group": "weather",
+   "value": 1.7702,
+   "mwh": 0.0413
+  },
+  {
+   "year": 2017,
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "group": "weather",
+   "value": 181.6121,
+   "mwh": 4.497
+  },
+  {
+   "year": 2017,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "group": "peers",
+   "value": -105000.5029,
+   "mwh": -2373.8293
+  },
+  {
+   "year": 2017,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "group": "degradation",
+   "value": 9621.1353,
+   "mwh": 206.2935
+  },
+  {
+   "year": 2017,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "group": "peers",
+   "value": 73253.4195,
+   "mwh": 1642.0683
+  },
+  {
+   "year": 2017,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "group": "peers",
+   "value": 31372.9563,
+   "mwh": 701.0879
+  },
+  {
+   "year": 2017,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "group": "peers",
+   "value": 8317.922,
+   "mwh": 188.7413
+  },
+  {
+   "year": 2017,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "group": "remainder",
+   "value": -22006.3653,
+   "mwh": -603.4397
+  },
+  {
+   "year": 2017,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "group": "remainder",
+   "value": -33570.854,
+   "mwh": -713.4681
+  },
+  {
+   "year": 2018,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "group": "curtailment",
+   "value": 60301.7981,
+   "mwh": 1066.4676
+  },
+  {
+   "year": 2018,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed_held_at_zero",
+   "group": "curtailment",
+   "value": 129.0656,
+   "mwh": 2.7484
+  },
+  {
+   "year": 2018,
+   "step": "3",
+   "trigger": "OPS_01",
+   "leaf": "grid_outage",
+   "group": "downtime",
+   "value": 11278.8278,
+   "mwh": 197.3433
+  },
+  {
+   "year": 2018,
+   "step": "4",
+   "trigger": "OPS_01",
+   "leaf": "downtime_fault",
+   "group": "downtime",
+   "value": 98515.9598,
+   "mwh": 1673.4635
+  },
+  {
+   "year": 2018,
+   "step": "4b",
+   "trigger": "OPS_01",
+   "leaf": "weather_environmental_stop",
+   "group": "weather",
+   "value": 32379.4271,
+   "mwh": 550.69
+  },
+  {
+   "year": 2018,
+   "step": "4b",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 51.9776,
+   "mwh": 0.8818
+  },
+  {
+   "year": 2018,
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "group": "weather",
+   "value": 151.2088,
+   "mwh": 3.2263
+  },
+  {
+   "year": 2018,
+   "step": "4c",
+   "trigger": "OPS_01",
+   "leaf": "downtime_comms",
+   "group": "downtime",
+   "value": 27261.5977,
+   "mwh": 548.4737
+  },
+  {
+   "year": 2018,
+   "step": "5",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 1467.3946,
+   "mwh": 28.2706
+  },
+  {
+   "year": 2018,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "downtime_unknown",
+   "group": "downtime",
+   "value": 51633.0615,
+   "mwh": 960.7516
+  },
+  {
+   "year": 2018,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_idle_above_cut_in",
+   "group": "downtime",
+   "value": 11452.8779,
+   "mwh": 201.1567
+  },
+  {
+   "year": 2018,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_near_cut_in",
+   "group": "downtime",
+   "value": 22743.3631,
+   "mwh": 395.503
+  },
+  {
+   "year": 2018,
+   "step": "7",
+   "trigger": "OPS_16",
+   "leaf": "iced_running",
+   "group": "weather",
+   "value": -69438.0397,
+   "mwh": -980.8871
+  },
+  {
+   "year": 2018,
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "group": "weather",
+   "value": 6.5709,
+   "mwh": 0.1203
+  },
+  {
+   "year": 2018,
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "group": "weather",
+   "value": 298.5835,
+   "mwh": 5.5515
+  },
+  {
+   "year": 2018,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "group": "peers",
+   "value": -121152.1781,
+   "mwh": -2141.7046
+  },
+  {
+   "year": 2018,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "group": "degradation",
+   "value": 65125.6121,
+   "mwh": 1150.4337
+  },
+  {
+   "year": 2018,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "group": "peers",
+   "value": 90288.0472,
+   "mwh": 1568.285
+  },
+  {
+   "year": 2018,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "group": "peers",
+   "value": 36462.3488,
+   "mwh": 636.5133
+  },
+  {
+   "year": 2018,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "group": "peers",
+   "value": 10797.4765,
+   "mwh": 184.0092
+  },
+  {
+   "year": 2018,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "group": "remainder",
+   "value": 3809.4841,
+   "mwh": -46.0642
+  },
+  {
+   "year": 2018,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "group": "remainder",
+   "value": 65671.4551,
+   "mwh": 1086.8953
+  },
+  {
+   "year": 2019,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "group": "curtailment",
+   "value": 53423.1794,
+   "mwh": 1346.7523
+  },
+  {
+   "year": 2019,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed_held_at_zero",
+   "group": "curtailment",
+   "value": 75.8402,
+   "mwh": 1.8185
+  },
+  {
+   "year": 2019,
+   "step": "3",
+   "trigger": "OPS_01",
+   "leaf": "grid_outage",
+   "group": "downtime",
+   "value": 2337.8582,
+   "mwh": 68.0306
+  },
+  {
+   "year": 2019,
+   "step": "4",
+   "trigger": "OPS_01",
+   "leaf": "downtime_fault",
+   "group": "downtime",
+   "value": 22024.0341,
+   "mwh": 513.8314
+  },
+  {
+   "year": 2019,
+   "step": "4b",
+   "trigger": "OPS_01",
+   "leaf": "weather_environmental_stop",
+   "group": "weather",
+   "value": 34455.5176,
+   "mwh": 649.8201
+  },
+  {
+   "year": 2019,
+   "step": "4b",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 41.7334,
+   "mwh": 0.8129
+  },
+  {
+   "year": 2019,
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "group": "weather",
+   "value": 3.2432,
+   "mwh": 0.0605
+  },
+  {
+   "year": 2019,
+   "step": "4c",
+   "trigger": "OPS_01",
+   "leaf": "downtime_comms",
+   "group": "downtime",
+   "value": 8913.6505,
+   "mwh": 202.2042
+  },
+  {
+   "year": 2019,
+   "step": "5",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 430.6454,
+   "mwh": 8.7419
+  },
+  {
+   "year": 2019,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "downtime_unknown",
+   "group": "downtime",
+   "value": 31893.3587,
+   "mwh": 822.7115
+  },
+  {
+   "year": 2019,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_idle_above_cut_in",
+   "group": "downtime",
+   "value": 7004.47,
+   "mwh": 164.1832
+  },
+  {
+   "year": 2019,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_near_cut_in",
+   "group": "downtime",
+   "value": 17418.7857,
+   "mwh": 411.4532
+  },
+  {
+   "year": 2019,
+   "step": "7",
+   "trigger": "OPS_16",
+   "leaf": "iced_running",
+   "group": "weather",
+   "value": 12125.699,
+   "mwh": 197.0661
+  },
+  {
+   "year": 2019,
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "group": "weather",
+   "value": 0.7226,
+   "mwh": 0.035
+  },
+  {
+   "year": 2019,
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "group": "weather",
+   "value": 397.0827,
+   "mwh": 11.5232
+  },
+  {
+   "year": 2019,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "group": "peers",
+   "value": -93573.2856,
+   "mwh": -2303.1693
+  },
+  {
+   "year": 2019,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "group": "degradation",
+   "value": 84572.0871,
+   "mwh": 2175.7391
+  },
+  {
+   "year": 2019,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "group": "peers",
+   "value": 66795.6244,
+   "mwh": 1617.8829
+  },
+  {
+   "year": 2019,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "group": "peers",
+   "value": 27487.1978,
+   "mwh": 659.6047
+  },
+  {
+   "year": 2019,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "group": "peers",
+   "value": 9148.8507,
+   "mwh": 227.153
+  },
+  {
+   "year": 2019,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "group": "remainder",
+   "value": -24014.2941,
+   "mwh": -731.3406
+  },
+  {
+   "year": 2019,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "group": "remainder",
+   "value": 78235.8739,
+   "mwh": 2006.1594
+  },
+  {
+   "year": 2020,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "group": "curtailment",
+   "value": 44952.3268,
+   "mwh": 1470.7355
+  },
+  {
+   "year": 2020,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed_held_at_zero",
+   "group": "curtailment",
+   "value": 141.3829,
+   "mwh": 4.6481
+  },
+  {
+   "year": 2020,
+   "step": "3",
+   "trigger": "OPS_01",
+   "leaf": "grid_outage",
+   "group": "downtime",
+   "value": 656.0593,
+   "mwh": 23.5142
+  },
+  {
+   "year": 2020,
+   "step": "4",
+   "trigger": "OPS_01",
+   "leaf": "downtime_fault",
+   "group": "downtime",
+   "value": 81113.6501,
+   "mwh": 3103.7684
+  },
+  {
+   "year": 2020,
+   "step": "4b",
+   "trigger": "OPS_01",
+   "leaf": "weather_environmental_stop",
+   "group": "weather",
+   "value": 4945.3478,
+   "mwh": 161.942
+  },
+  {
+   "year": 2020,
+   "step": "4b",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 9.5076,
+   "mwh": 0.2695
+  },
+  {
+   "year": 2020,
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "group": "weather",
+   "value": 0.1108,
+   "mwh": 0.0025
+  },
+  {
+   "year": 2020,
+   "step": "4c",
+   "trigger": "OPS_01",
+   "leaf": "downtime_comms",
+   "group": "downtime",
+   "value": 4216.9976,
+   "mwh": 171.1856
+  },
+  {
+   "year": 2020,
+   "step": "5",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 1652.7862,
+   "mwh": 54.5809
+  },
+  {
+   "year": 2020,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "downtime_unknown",
+   "group": "downtime",
+   "value": 40164.5444,
+   "mwh": 1364.5305
+  },
+  {
+   "year": 2020,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_idle_above_cut_in",
+   "group": "downtime",
+   "value": 5435.0818,
+   "mwh": 162.6803
+  },
+  {
+   "year": 2020,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_near_cut_in",
+   "group": "downtime",
+   "value": 15886.1847,
+   "mwh": 450.614
+  },
+  {
+   "year": 2020,
+   "step": "7",
+   "trigger": "OPS_16",
+   "leaf": "iced_running",
+   "group": "weather",
+   "value": -2059.8383,
+   "mwh": -146.065
+  },
+  {
+   "year": 2020,
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "group": "weather",
+   "value": 36.5438,
+   "mwh": 0.8608
+  },
+  {
+   "year": 2020,
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "group": "weather",
+   "value": 118.1241,
+   "mwh": 3.9099
+  },
+  {
+   "year": 2020,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "group": "peers",
+   "value": -70890.6646,
+   "mwh": -2240.1643
+  },
+  {
+   "year": 2020,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "group": "degradation",
+   "value": 103394.7097,
+   "mwh": 3354.2425
+  },
+  {
+   "year": 2020,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "group": "peers",
+   "value": 49589.7515,
+   "mwh": 1522.2046
+  },
+  {
+   "year": 2020,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "group": "peers",
+   "value": 22148.8891,
+   "mwh": 675.9361
+  },
+  {
+   "year": 2020,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "group": "peers",
+   "value": 6628.846,
+   "mwh": 205.3613
+  },
+  {
+   "year": 2020,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "group": "remainder",
+   "value": -27067.6524,
+   "mwh": -872.3005
+  },
+  {
+   "year": 2020,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "group": "remainder",
+   "value": 47335.3694,
+   "mwh": 1292.3783
+  },
+  {
+   "year": 2021,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "group": "curtailment",
+   "value": 134211.9664,
+   "mwh": 1205.0662
+  },
+  {
+   "year": 2021,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed_held_at_zero",
+   "group": "curtailment",
+   "value": 669.009,
+   "mwh": 4.763
+  },
+  {
+   "year": 2021,
+   "step": "3",
+   "trigger": "OPS_01",
+   "leaf": "grid_outage",
+   "group": "downtime",
+   "value": 2552.5193,
+   "mwh": 17.9379
+  },
+  {
+   "year": 2021,
+   "step": "4",
+   "trigger": "OPS_01",
+   "leaf": "downtime_fault",
+   "group": "downtime",
+   "value": 255242.3086,
+   "mwh": 1985.5276
+  },
+  {
+   "year": 2021,
+   "step": "4b",
+   "trigger": "OPS_01",
+   "leaf": "weather_environmental_stop",
+   "group": "weather",
+   "value": 30500.2808,
+   "mwh": 295.4164
+  },
+  {
+   "year": 2021,
+   "step": "4b",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 172.2525,
+   "mwh": 1.1327
+  },
+  {
+   "year": 2021,
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "group": "weather",
+   "value": 1384.3951,
+   "mwh": 7.7557
+  },
+  {
+   "year": 2021,
+   "step": "4c",
+   "trigger": "OPS_01",
+   "leaf": "downtime_comms",
+   "group": "downtime",
+   "value": 102056.8981,
+   "mwh": 829.4243
+  },
+  {
+   "year": 2021,
+   "step": "5",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 4473.9125,
+   "mwh": 40.7988
+  },
+  {
+   "year": 2021,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "downtime_unknown",
+   "group": "downtime",
+   "value": 168681.3339,
+   "mwh": 1368.9227
+  },
+  {
+   "year": 2021,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_idle_above_cut_in",
+   "group": "downtime",
+   "value": 23760.978,
+   "mwh": 192.4773
+  },
+  {
+   "year": 2021,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_near_cut_in",
+   "group": "downtime",
+   "value": 51596.1454,
+   "mwh": 443.4927
+  },
+  {
+   "year": 2021,
+   "step": "7",
+   "trigger": "OPS_16",
+   "leaf": "iced_running",
+   "group": "weather",
+   "value": -1429.4471,
+   "mwh": -148.0242
+  },
+  {
+   "year": 2021,
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "group": "weather",
+   "value": 583.0106,
+   "mwh": 2.8662
+  },
+  {
+   "year": 2021,
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "group": "weather",
+   "value": 645.4917,
+   "mwh": 7.9055
+  },
+  {
+   "year": 2021,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "group": "peers",
+   "value": -209560.8612,
+   "mwh": -1931.646
+  },
+  {
+   "year": 2021,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "group": "degradation",
+   "value": 397600.6202,
+   "mwh": 3722.7436
+  },
+  {
+   "year": 2021,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "group": "peers",
+   "value": 153320.3816,
+   "mwh": 1395.9341
+  },
+  {
+   "year": 2021,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "group": "peers",
+   "value": 69364.6552,
+   "mwh": 617.2284
+  },
+  {
+   "year": 2021,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "group": "peers",
+   "value": 22218.0325,
+   "mwh": 214.6101
+  },
+  {
+   "year": 2021,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "group": "remainder",
+   "value": -73732.7882,
+   "mwh": -507.6112
+  },
+  {
+   "year": 2021,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "group": "remainder",
+   "value": 62797.269,
+   "mwh": 525.3132
+  },
+  {
+   "year": 2022,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "group": "curtailment",
+   "value": 1453227.4961,
+   "mwh": 12009.9123
+  },
+  {
+   "year": 2022,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed_held_at_zero",
+   "group": "curtailment",
+   "value": 324722.5572,
+   "mwh": 2816.6317
+  },
+  {
+   "year": 2022,
+   "step": "3",
+   "trigger": "OPS_01",
+   "leaf": "grid_outage",
+   "group": "downtime",
+   "value": 227473.6044,
+   "mwh": 1197.2042
+  },
+  {
+   "year": 2022,
+   "step": "4",
+   "trigger": "OPS_01",
+   "leaf": "downtime_fault",
+   "group": "downtime",
+   "value": 296050.5583,
+   "mwh": 1786.1243
+  },
+  {
+   "year": 2022,
+   "step": "4b",
+   "trigger": "OPS_01",
+   "leaf": "weather_environmental_stop",
+   "group": "weather",
+   "value": 41532.7275,
+   "mwh": 214.6552
+  },
+  {
+   "year": 2022,
+   "step": "4b",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 108.5858,
+   "mwh": 0.5897
+  },
+  {
+   "year": 2022,
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "group": "weather",
+   "value": 3679.6914,
+   "mwh": 16.7573
+  },
+  {
+   "year": 2022,
+   "step": "4c",
+   "trigger": "OPS_01",
+   "leaf": "downtime_comms",
+   "group": "downtime",
+   "value": 129761.4165,
+   "mwh": 628.8159
+  },
+  {
+   "year": 2022,
+   "step": "5",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 4432.1595,
+   "mwh": 32.5594
+  },
+  {
+   "year": 2022,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "downtime_unknown",
+   "group": "downtime",
+   "value": 531510.0766,
+   "mwh": 2873.8298
+  },
+  {
+   "year": 2022,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_idle_above_cut_in",
+   "group": "downtime",
+   "value": 32572.5019,
+   "mwh": 170.3459
+  },
+  {
+   "year": 2022,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_near_cut_in",
+   "group": "downtime",
+   "value": 94142.6496,
+   "mwh": 458.8652
+  },
+  {
+   "year": 2022,
+   "step": "7",
+   "trigger": "OPS_16",
+   "leaf": "iced_running",
+   "group": "weather",
+   "value": 21456.9226,
+   "mwh": 39.583
+  },
+  {
+   "year": 2022,
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "group": "weather",
+   "value": 927.8873,
+   "mwh": 4.654
+  },
+  {
+   "year": 2022,
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "group": "weather",
+   "value": 1390.7508,
+   "mwh": 9.5445
+  },
+  {
+   "year": 2022,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "group": "peers",
+   "value": -329278.5317,
+   "mwh": -1917.5988
+  },
+  {
+   "year": 2022,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "group": "degradation",
+   "value": 528830.3025,
+   "mwh": 3164.838
+  },
+  {
+   "year": 2022,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "group": "peers",
+   "value": 252272.2403,
+   "mwh": 1358.2986
+  },
+  {
+   "year": 2022,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "group": "peers",
+   "value": 120017.6879,
+   "mwh": 667.4004
+  },
+  {
+   "year": 2022,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "group": "peers",
+   "value": 31930.584,
+   "mwh": 189.5286
+  },
+  {
+   "year": 2022,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "group": "remainder",
+   "value": -171968.0942,
+   "mwh": -948.1777
+  },
+  {
+   "year": 2022,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "group": "remainder",
+   "value": -89709.1113,
+   "mwh": -635.6588
+  },
+  {
+   "year": 2023,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "group": "curtailment",
+   "value": 909258.02,
+   "mwh": 10501.1286
+  },
+  {
+   "year": 2023,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed_held_at_zero",
+   "group": "curtailment",
+   "value": 120527.5348,
+   "mwh": 1271.0424
+  },
+  {
+   "year": 2023,
+   "step": "3",
+   "trigger": "OPS_01",
+   "leaf": "grid_outage",
+   "group": "downtime",
+   "value": 3578.1792,
+   "mwh": 76.17
+  },
+  {
+   "year": 2023,
+   "step": "4",
+   "trigger": "OPS_01",
+   "leaf": "downtime_fault",
+   "group": "downtime",
+   "value": 121968.912,
+   "mwh": 1557.7724
+  },
+  {
+   "year": 2023,
+   "step": "4b",
+   "trigger": "OPS_01",
+   "leaf": "weather_environmental_stop",
+   "group": "weather",
+   "value": 57552.8698,
+   "mwh": 450.4632
+  },
+  {
+   "year": 2023,
+   "step": "4b",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 69.2861,
+   "mwh": 1.7692
+  },
+  {
+   "year": 2023,
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "group": "weather",
+   "value": 832.961,
+   "mwh": 11.9869
+  },
+  {
+   "year": 2023,
+   "step": "4c",
+   "trigger": "OPS_01",
+   "leaf": "downtime_comms",
+   "group": "downtime",
+   "value": 30220.5267,
+   "mwh": 325.8107
+  },
+  {
+   "year": 2023,
+   "step": "5",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 8900.1976,
+   "mwh": 77.6189
+  },
+  {
+   "year": 2023,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "downtime_unknown",
+   "group": "downtime",
+   "value": 59990.9454,
+   "mwh": 719.3134
+  },
+  {
+   "year": 2023,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_idle_above_cut_in",
+   "group": "downtime",
+   "value": 17111.7668,
+   "mwh": 193.7033
+  },
+  {
+   "year": 2023,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_near_cut_in",
+   "group": "downtime",
+   "value": 49105.1792,
+   "mwh": 505.9382
+  },
+  {
+   "year": 2023,
+   "step": "7",
+   "trigger": "OPS_16",
+   "leaf": "iced_running",
+   "group": "weather",
+   "value": 26871.9947,
+   "mwh": 250.2892
+  },
+  {
+   "year": 2023,
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "group": "weather",
+   "value": 311.0666,
+   "mwh": 4.2544
+  },
+  {
+   "year": 2023,
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "group": "weather",
+   "value": 1331.7535,
+   "mwh": 18.6142
+  },
+  {
+   "year": 2023,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "group": "peers",
+   "value": -200614.5558,
+   "mwh": -2309.1629
+  },
+  {
+   "year": 2023,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "group": "degradation",
+   "value": 30470.4171,
+   "mwh": 306.4559
+  },
+  {
+   "year": 2023,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "group": "peers",
+   "value": 158257.6485,
+   "mwh": 1793.507
+  },
+  {
+   "year": 2023,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "group": "peers",
+   "value": 80333.0959,
+   "mwh": 885.0552
+  },
+  {
+   "year": 2023,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "group": "peers",
+   "value": 19761.3065,
+   "mwh": 230.9515
+  },
+  {
+   "year": 2023,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "group": "remainder",
+   "value": -52857.9109,
+   "mwh": -639.8323
+  },
+  {
+   "year": 2023,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "group": "remainder",
+   "value": -8133.7403,
+   "mwh": -56.1856
+  },
+  {
+   "year": 2024,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "group": "curtailment",
+   "value": 417137.5924,
+   "mwh": 9540.0267
+  },
+  {
+   "year": 2024,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed_held_at_zero",
+   "group": "curtailment",
+   "value": 56335.986,
+   "mwh": 1537.1528
+  },
+  {
+   "year": 2024,
+   "step": "3",
+   "trigger": "OPS_01",
+   "leaf": "grid_outage",
+   "group": "downtime",
+   "value": 18138.5261,
+   "mwh": 287.2784
+  },
+  {
+   "year": 2024,
+   "step": "4",
+   "trigger": "OPS_01",
+   "leaf": "downtime_fault",
+   "group": "downtime",
+   "value": 179282.2569,
+   "mwh": 3237.589
+  },
+  {
+   "year": 2024,
+   "step": "4b",
+   "trigger": "OPS_01",
+   "leaf": "weather_environmental_stop",
+   "group": "weather",
+   "value": 26422.4512,
+   "mwh": 323.7513
+  },
+  {
+   "year": 2024,
+   "step": "4b",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 55.8,
+   "mwh": 0.5783
+  },
+  {
+   "year": 2024,
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "group": "weather",
+   "value": 746.2885,
+   "mwh": 17.2065
+  },
+  {
+   "year": 2024,
+   "step": "4c",
+   "trigger": "OPS_01",
+   "leaf": "downtime_comms",
+   "group": "downtime",
+   "value": 24667.2107,
+   "mwh": 430.8843
+  },
+  {
+   "year": 2024,
+   "step": "5",
+   "trigger": "OPS_09",
+   "leaf": "weather_cold_lockout",
+   "group": "weather",
+   "value": 2012.5793,
+   "mwh": 23.3115
+  },
+  {
+   "year": 2024,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "downtime_unknown",
+   "group": "downtime",
+   "value": 41159.3209,
+   "mwh": 707.833
+  },
+  {
+   "year": 2024,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_idle_above_cut_in",
+   "group": "downtime",
+   "value": 22443.9644,
+   "mwh": 273.0175
+  },
+  {
+   "year": 2024,
+   "step": "6",
+   "trigger": "OPS_01",
+   "leaf": "stopped_unknown_near_cut_in",
+   "group": "downtime",
+   "value": 37409.2269,
+   "mwh": 472.7756
+  },
+  {
+   "year": 2024,
+   "step": "7",
+   "trigger": "OPS_16",
+   "leaf": "iced_running",
+   "group": "weather",
+   "value": 38613.4521,
+   "mwh": 442.4752
+  },
+  {
+   "year": 2024,
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "group": "weather",
+   "value": 34.4655,
+   "mwh": 0.7042
+  },
+  {
+   "year": 2024,
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "group": "weather",
+   "value": 484.1485,
+   "mwh": 8.6636
+  },
+  {
+   "year": 2024,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "group": "peers",
+   "value": -163755.7507,
+   "mwh": -2414.8821
+  },
+  {
+   "year": 2024,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "group": "degradation",
+   "value": -3387.2516,
+   "mwh": -42.274
+  },
+  {
+   "year": 2024,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "group": "peers",
+   "value": 158237.847,
+   "mwh": 2267.251
+  },
+  {
+   "year": 2024,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "group": "peers",
+   "value": 66326.5366,
+   "mwh": 911.4595
+  },
+  {
+   "year": 2024,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "group": "peers",
+   "value": 17957.9132,
+   "mwh": 263.5922
+  },
+  {
+   "year": 2024,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "group": "remainder",
+   "value": -66911.1836,
+   "mwh": -902.4433
+  },
+  {
+   "year": 2024,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "group": "remainder",
+   "value": 9848.965,
+   "mwh": -23.0198
+  }
+ ],
+ "realised_by_year": [
+  {
+   "year": 2016,
+   "value": 1597752.06,
+   "mwh": 35446.67,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2017,
+   "value": 5574123.53,
+   "mwh": 126488.34,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2018,
+   "value": 6380762.11,
+   "mwh": 113740.79,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2019,
+   "value": 4521171.17,
+   "mwh": 114240.58,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2020,
+   "value": 3634234.31,
+   "mwh": 119622.63,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2021,
+   "value": 10229683.71,
+   "mwh": 99819.17,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2022,
+   "value": 15183287.92,
+   "mwh": 88407.05,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2023,
+   "value": 6814475.51,
+   "mwh": 80224.69,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2024,
+   "value": 5933543.15,
+   "mwh": 90507.09,
+   "unpriced_periods": 0
+  }
+ ],
+ "realised_year": 7247982.92,
  "criteria": [
   {
    "n": 1,
