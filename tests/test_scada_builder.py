@@ -29,6 +29,8 @@ DATASET_IDS = [
     "performance_index",
     "alarm_events_per_year",
     "value_lost_per_year",
+    "curtailment_per_year",
+    "downtime_per_year",
     "turbine_lost_energy",
     "turbine_availability",
     "turbine_capacity_factor",
@@ -41,6 +43,29 @@ DATASET_IDS = [
 def test_dataset_ids_are_frozen():
     assert list(builder.DATASETS) == DATASET_IDS
     assert builder.SPEC_SCHEMA["properties"]["dataset"]["enum"] == DATASET_IDS
+
+
+@pytest.mark.asyncio
+async def test_yearly_money_splits_part_years_from_unpriced_hours(monkeypatch):
+    seen = {}
+
+    async def rows(self, sql, **p):
+        seen["sql"] = sql
+        return [
+            SimpleNamespace(y=2023, v=10.0, days=365, hp=8000, hu=12),  # whole year, some unpriced
+            SimpleNamespace(y=2024, v=20.0, days=100, hp=2400, hu=0),  # part year, all priced
+        ]
+
+    monkeypatch.setattr(builder.ScadaBuilderService, "_rows", rows)
+    out = {}
+    await builder.ScadaBuilderService(None)._yearly(
+        out, "hill_of_towie", "curtailment_per_year", date(2024, 4, 9)
+    )
+    assert "revenue_curtailment_gbp" in seen["sql"]
+    assert [(r["key"], r["partial"], r["unpriced"]) for r in out["rows"]] == [
+        ("2023", False, True),
+        ("2024", True, False),
+    ]
 
 
 def test_window_is_whole_months_ending_on_the_last_data_day():
