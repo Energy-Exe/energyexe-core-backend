@@ -1,0 +1,877 @@
+{
+ "farm": "hill_of_towie",
+ "asset_code": "HOT",
+ "run_id": "sample-hot-c",
+ "register_run_id": "epr138-fresh-a955e1ae60a7a037a1c38123",
+ "method_version": "hot-c@6f453e8",
+ "format": "value-ledger/2",
+ "currency": "GBP",
+ "window_from": "2016-09-28",
+ "window_to": "2024-12-31",
+ "years": 8.260095824777549,
+ "years_basis": "window_days",
+ "years_detail": [
+  {
+   "year": 2016,
+   "days_covered": 95,
+   "partial_year": true
+  },
+  {
+   "year": 2017,
+   "days_covered": 365,
+   "partial_year": false
+  },
+  {
+   "year": 2018,
+   "days_covered": 365,
+   "partial_year": false
+  },
+  {
+   "year": 2019,
+   "days_covered": 365,
+   "partial_year": false
+  },
+  {
+   "year": 2020,
+   "days_covered": 366,
+   "partial_year": false
+  },
+  {
+   "year": 2021,
+   "days_covered": 365,
+   "partial_year": false
+  },
+  {
+   "year": 2022,
+   "days_covered": 365,
+   "partial_year": false
+  },
+  {
+   "year": 2023,
+   "days_covered": 365,
+   "partial_year": false
+  },
+  {
+   "year": 2024,
+   "days_covered": 366,
+   "partial_year": false
+  }
+ ],
+ "headline_year": 858503.4397881501,
+ "today_same_years_year": 851883.5580832954,
+ "register_year": 792659.0,
+ "realised_year": 7251977.782237558,
+ "turbines": [
+  "T01",
+  "T02",
+  "T03",
+  "T04",
+  "T05",
+  "T06",
+  "T07",
+  "T08",
+  "T09",
+  "T10",
+  "T11",
+  "T12",
+  "T13",
+  "T14",
+  "T15",
+  "T16",
+  "T17",
+  "T18",
+  "T19",
+  "T20",
+  "T21"
+ ],
+ "bridge": [
+  {
+   "key": "start",
+   "label": "Today's method, same years",
+   "change": null,
+   "detail": [],
+   "headline_after": 851883.5580832954
+  },
+  {
+   "key": "claims_method",
+   "label": "How claims are counted",
+   "change": 57032.59274226881,
+   "detail": [
+    {
+     "key": "4 curves per upgrade period",
+     "label": "Curves per upgrade period",
+     "change": -14676.345381729188
+    },
+    {
+     "key": "settings 1-4 on those curves",
+     "label": "Four settings: curtailment signed, storm on own curve, standby below cut-in, zero setpoint as curtailment",
+     "change": 78360.51398944529
+    },
+    {
+     "key": "heat per period",
+     "label": "Heat valued per period",
+     "change": 68.16865218477324
+    },
+    {
+     "key": "icing enters as a leaf",
+     "label": "Icing while running becomes a cause",
+     "change": 3235.9302675231593
+    },
+    {
+     "key": "one cause per running kWh",
+     "label": "One cause per running kWh",
+     "change": -5071.326494206325
+    },
+    {
+     "key": "stopped claims cut to the stopped seconds",
+     "label": "Stopped claims kept to their stopped seconds",
+     "change": -636.2152322197799
+    },
+    {
+     "key": "chained periods: running claims cut to the running seconds, out of today's overlap",
+     "label": "Running claims kept to their running seconds",
+     "change": -4248.133058729116
+    }
+   ],
+   "headline_after": 908916.1508255642
+  },
+  {
+   "key": "wake_retired",
+   "label": "Today's wake line retired",
+   "change": -36529.888007250614,
+   "detail": [],
+   "headline_after": 872386.2628183136
+  },
+  {
+   "key": "peers",
+   "label": "Against peers, signed",
+   "change": 39814.69475477132,
+   "detail": [],
+   "headline_after": 912200.9575730849
+  },
+  {
+   "key": "degradation",
+   "label": "Degradation",
+   "change": -7867.752374091193,
+   "detail": [],
+   "headline_after": 904333.2051989937
+  },
+  {
+   "key": "remainder",
+   "label": "Remainder, signed",
+   "change": -45024.594877193435,
+   "detail": [],
+   "headline_after": 859308.6103218002
+  },
+  {
+   "key": "own_grain_years",
+   "label": "Company-wide lines over the years covered",
+   "change": -805.1705336426894,
+   "detail": [],
+   "headline_after": 858503.4397881576
+  }
+ ],
+ "bridge_start_basis": "today_same_years",
+ "bridge_basis": {
+  "build": "hot-c",
+  "window_from": "2016-09-28",
+  "window_to": "2024-12-31",
+  "headline_year": 858503.4397881501
+ },
+ "ranges": [
+  {
+   "key": "cut-in (alone)",
+   "basis_build": "step11",
+   "basis_headline_year": 1045220.0,
+   "default_change": -15833.0,
+   "low_change": -36852.0,
+   "high_change": 0.0,
+   "rebuild": "Stage 6"
+  },
+  {
+   "key": "holds (alone)",
+   "basis_build": "step11",
+   "basis_headline_year": 1045220.0,
+   "default_change": 0.0,
+   "low_change": -8327.0,
+   "high_change": 0.0,
+   "rebuild": "Stage 6"
+  },
+  {
+   "key": "anemometer (alone)",
+   "basis_build": "step11",
+   "basis_headline_year": 1045220.0,
+   "default_change": -161555.0,
+   "low_change": -161555.0,
+   "high_change": -59023.0,
+   "rebuild": "Stage 6"
+  },
+  {
+   "key": "all defaults together",
+   "basis_build": "step11",
+   "basis_headline_year": 1045220.0,
+   "default_change": -176738.0,
+   "low_change": -206734.0,
+   "high_change": -59023.0,
+   "rebuild": "Stage 6"
+  }
+ ],
+ "coverage": [
+  {
+   "year": 2016,
+   "share_valued": 0.9787663603453076,
+   "share_valued_unclaimed_stops_not_counted": 0.8553049289891396,
+   "share_data_gap": 0.0054476468950153,
+   "unexplained_share_of_expected": -0.0048633330581701,
+   "whole_remainder_share_of_expected": -0.0272201244600521,
+   "degradation": 1217.56507239648,
+   "degradation_lo": -1503.9374114843845,
+   "degradation_hi": 3939.067556277344
+  },
+  {
+   "year": 2017,
+   "share_valued": 0.9649117561788796,
+   "share_valued_unclaimed_stops_not_counted": 0.8608963905196781,
+   "share_data_gap": 0.014418895412046,
+   "unexplained_share_of_expected": -0.0023383315211178,
+   "whole_remainder_share_of_expected": -0.0055252135217928,
+   "degradation": -799.7181802746609,
+   "degradation_lo": -4650.3561941212865,
+   "degradation_hi": 3050.9198335719652
+  },
+  {
+   "year": 2018,
+   "share_valued": 0.9700061607595856,
+   "share_valued_unclaimed_stops_not_counted": 0.8500172138870769,
+   "share_data_gap": 0.0081802203377545,
+   "unexplained_share_of_expected": -0.0001091500869254,
+   "whole_remainder_share_of_expected": 0.0034380313301907,
+   "degradation": -10386.86928920955,
+   "degradation_lo": -36244.14595707065,
+   "degradation_hi": 15470.407378651553
+  },
+  {
+   "year": 2019,
+   "share_valued": 0.9791612307023266,
+   "share_valued_unclaimed_stops_not_counted": 0.8661602159889831,
+   "share_data_gap": 0.0028321374211785,
+   "unexplained_share_of_expected": 0.0018959284377576,
+   "whole_remainder_share_of_expected": -0.0034059700136807,
+   "degradation": -13075.40239615054,
+   "degradation_lo": -45865.36355989247,
+   "degradation_hi": 19714.55876759139
+  },
+  {
+   "year": 2020,
+   "share_valued": 0.9767280697950096,
+   "share_valued_unclaimed_stops_not_counted": 0.8610334085060861,
+   "share_data_gap": 0.0049792913522421,
+   "unexplained_share_of_expected": 0.0011638016236792,
+   "whole_remainder_share_of_expected": -0.0058151127691925,
+   "degradation": -16092.71067136003,
+   "degradation_lo": -55408.36021791099,
+   "degradation_hi": 23222.93887519093
+  },
+  {
+   "year": 2021,
+   "share_valued": 0.9660514967021816,
+   "share_valued_unclaimed_stops_not_counted": 0.8116239037471914,
+   "share_data_gap": 0.0117525549032398,
+   "unexplained_share_of_expected": 0.0027922654516439,
+   "whole_remainder_share_of_expected": -0.0016956043224074,
+   "degradation": -47624.96412137656,
+   "degradation_lo": -198164.10288961636,
+   "degradation_hi": 102914.17464686323
+  },
+  {
+   "year": 2022,
+   "share_valued": 0.8606191563383344,
+   "share_valued_unclaimed_stops_not_counted": 0.7357170036964558,
+   "share_data_gap": 0.0505463144161774,
+   "unexplained_share_of_expected": -0.0019028438330905,
+   "whole_remainder_share_of_expected": -0.0098276297196205,
+   "degradation": -7230.37977368061,
+   "degradation_lo": -476299.6595994672,
+   "degradation_hi": 461838.90005210607
+  },
+  {
+   "year": 2023,
+   "share_valued": 0.9207771617018192,
+   "share_valued_unclaimed_stops_not_counted": 0.7257347611799667,
+   "share_data_gap": 0.0048497861854026,
+   "unexplained_share_of_expected": -0.0008979998198631,
+   "whole_remainder_share_of_expected": -0.0072195061423974,
+   "degradation": 30438.643275570874,
+   "degradation_lo": -185273.67118207476,
+   "degradation_hi": 246150.95773321652
+  },
+  {
+   "year": 2024,
+   "share_valued": 0.8594079784312024,
+   "share_valued_unclaimed_stops_not_counted": 0.7085140370659496,
+   "share_data_gap": 0.0035408896406164,
+   "unexplained_share_of_expected": 0.0014066108556263,
+   "whole_remainder_share_of_expected": -0.0080048586515655,
+   "degradation": -1434.5524515297311,
+   "degradation_lo": -45918.866702808584,
+   "degradation_hi": 43049.761799749125
+  }
+ ],
+ "checks": [
+  {
+   "n": 1,
+   "name": "Adds up",
+   "result": "passed",
+   "window": "full record",
+   "values": {}
+  },
+  {
+   "n": 2,
+   "name": "Counted once",
+   "result": "passed",
+   "window": "full record",
+   "values": {}
+  },
+  {
+   "n": 3,
+   "name": "Reconciled",
+   "result": "passed",
+   "window": "quotable",
+   "values": {
+    "ledger_year_by_line": {
+     "FIN_05": 8498.0,
+     "MKT_02": 28922.0,
+     "MKT_03": 434869.0,
+     "OPS_01": 399756.0,
+     "OPS_08": 587.0,
+     "OPS_09": 3481.0,
+     "OPS_12": 1172.0,
+     "OPS_14": 0.0,
+     "OPS_16": -4900.0,
+     "OPS_17": 0.0
+    },
+    "tolerance_year": 10.5
+   }
+  },
+  {
+   "n": 4,
+   "name": "Roll-up",
+   "result": "failed",
+   "window": "quotable",
+   "values": {
+    "no price record": {
+     "q_d_mwh_year": -0.145,
+     "q_d_value_year": 9081616.91,
+     "q_mwh_moved_year": 0.073,
+     "q_mwh_year": 9916.729,
+     "q_value_moved_year": 4736787.467,
+     "q_value_year": 834966.263
+    },
+    "no stop timers": {
+     "q_d_mwh_year": 0.0,
+     "q_d_value_year": 0.0,
+     "q_mwh_moved_year": 4694.827,
+     "q_mwh_year": 9916.729,
+     "q_value_moved_year": 399825.823,
+     "q_value_year": 834966.263
+    }
+   }
+  },
+  {
+   "n": 5,
+   "name": "Order moves value, never creates it",
+   "result": "passed",
+   "window": "quotable",
+   "values": {
+    "max_value_moved_year": 1886.552,
+    "swaps": 9
+   }
+  },
+  {
+   "n": 8,
+   "name": "Coverage",
+   "result": "reported",
+   "window": "quotable",
+   "values": {}
+  }
+ ],
+ "lines": [
+  {
+   "line": "MKT_03",
+   "register_year": null,
+   "today_year": 405080.589372548,
+   "ledger_year": 434869.4136879805
+  },
+  {
+   "line": "OPS_01",
+   "register_year": null,
+   "today_year": 367254.3056603724,
+   "ledger_year": 399756.3268395136
+  },
+  {
+   "line": "OPS_08",
+   "register_year": null,
+   "today_year": 547.9089494735684,
+   "ledger_year": 586.8626018728498
+  },
+  {
+   "line": "OPS_09",
+   "register_year": null,
+   "today_year": 4132.794090840008,
+   "ledger_year": 3481.3226781359685
+  },
+  {
+   "line": "OPS_12",
+   "register_year": null,
+   "today_year": 918.061602053056,
+   "ledger_year": 1172.268123161369
+  },
+  {
+   "line": "OPS_14",
+   "register_year": null,
+   "today_year": 36529.89840800834,
+   "ledger_year": 0.0
+  },
+  {
+   "line": "OPS_16",
+   "register_year": null,
+   "today_year": 0.0,
+   "ledger_year": -4899.93111235084
+  },
+  {
+   "line": "OPS_17",
+   "register_year": null,
+   "today_year": 0.0,
+   "ledger_year": 0.0
+  },
+  {
+   "line": "MKT_02",
+   "register_year": 28922.0,
+   "today_year": 28922.0,
+   "ledger_year": 27426.195144182966
+  },
+  {
+   "line": "FIN_05",
+   "register_year": 8498.0,
+   "today_year": 8498.0,
+   "ledger_year": 9188.634322174346
+  }
+ ],
+ "realised": [
+  {
+   "year": 2016,
+   "value": 1597676.38339,
+   "mwh": 35444.7090744,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2017,
+   "value": 5574524.23636,
+   "mwh": 126496.94375,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2018,
+   "value": 6384697.16176,
+   "mwh": 113807.220455,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2019,
+   "value": 4522241.05153,
+   "mwh": 114263.614923,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2020,
+   "value": 3638919.67165,
+   "mwh": 119761.710787,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2021,
+   "value": 10241833.0041,
+   "mwh": 99903.5995268,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2022,
+   "value": 15195335.6359,
+   "mwh": 88476.1023931,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2023,
+   "value": 6813183.04242,
+   "mwh": 80206.2332683,
+   "unpriced_periods": 0
+  },
+  {
+   "year": 2024,
+   "value": 5933621.21333,
+   "mwh": 90507.1214202,
+   "unpriced_periods": 0
+  }
+ ],
+ "catalog": {
+  "catalog": "ledger_causes",
+  "version": 1,
+  "groups": [
+   {
+    "key": "curtailment",
+    "label": "Curtailment"
+   },
+   {
+    "key": "downtime",
+    "label": "Downtime"
+   },
+   {
+    "key": "weather",
+    "label": "Weather"
+   },
+   {
+    "key": "peers",
+    "label": "Against peers"
+   },
+   {
+    "key": "degradation",
+    "label": "Degradation"
+   },
+   {
+    "key": "remainder",
+    "label": "Unexplained"
+   },
+   {
+    "key": "own_grain",
+    "label": "Company-wide lines"
+   }
+  ],
+  "causes": [
+   {
+    "code": "2:MKT_03:curtailed",
+    "label": "Curtailed",
+    "group": "curtailment",
+    "cls": "CURTAILMENT",
+    "recoverability": "partly",
+    "summed": true,
+    "status_key": {
+     "trigger": "MKT_03",
+     "scope": "VL:curtailed",
+     "cls": "CURTAILMENT"
+    }
+   },
+   {
+    "code": "2:MKT_03:curtailed_held_at_zero",
+    "label": "Held at zero output",
+    "group": "curtailment",
+    "cls": "CURTAILMENT",
+    "recoverability": "partly",
+    "summed": true,
+    "status_key": {
+     "trigger": "MKT_03",
+     "scope": "VL:held_at_zero",
+     "cls": "CURTAILMENT"
+    }
+   },
+   {
+    "code": "2:OPS_17:curtailed_sector_managed",
+    "label": "Sector management (inside curtailment)",
+    "group": "curtailment",
+    "cls": "CURTAILMENT",
+    "recoverability": "partly",
+    "summed": false,
+    "status_key": {
+     "trigger": "OPS_17",
+     "scope": "VL:sector_managed",
+     "cls": "CURTAILMENT"
+    }
+   },
+   {
+    "code": "3:OPS_01:grid_outage",
+    "label": "Grid outage",
+    "group": "downtime",
+    "cls": "REALIZED",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_01",
+     "scope": "VL:grid_outage",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "4:OPS_01:downtime_fault",
+    "label": "Fault stop",
+    "group": "downtime",
+    "cls": "REALIZED",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_01",
+     "scope": "VL:fault",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "4b:OPS_01:weather_environmental_stop",
+    "label": "Weather stop",
+    "group": "weather",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_01",
+     "scope": "VL:environmental_stop",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "4b:OPS_09:weather_cold_lockout",
+    "label": "Cold lockout (timed)",
+    "group": "weather",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_09",
+     "scope": "VL:cold_lockout",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "4b:OPS_12:weather_storm_stop",
+    "label": "Storm stop",
+    "group": "weather",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_12",
+     "scope": "VL:storm_stop",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "4c:OPS_01:downtime_comms",
+    "label": "Lost communications",
+    "group": "downtime",
+    "cls": "REALIZED",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_01",
+     "scope": "VL:comms",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "5:OPS_09:weather_cold_lockout",
+    "label": "Cold lockout (not timed)",
+    "group": "weather",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_09",
+     "scope": "VL:cold_lockout",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "6:OPS_01:downtime_unknown",
+    "label": "Stopped, cause unknown",
+    "group": "downtime",
+    "cls": "REALIZED",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_01",
+     "scope": "VL:stop_unknown",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+    "label": "Idle in good wind",
+    "group": "downtime",
+    "cls": "REALIZED",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_01",
+     "scope": "VL:idle_above_cut_in",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "6:OPS_01:stopped_unknown_near_cut_in",
+    "label": "Idle in light wind",
+    "group": "downtime",
+    "cls": "REALIZED",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_01",
+     "scope": "VL:idle_near_cut_in",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "7:OPS_16:iced_running",
+    "label": "Running with ice",
+    "group": "weather",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_16",
+     "scope": "VL:iced_running",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "7b:OPS_12:weather_storm_derate",
+    "label": "Slowed in a storm",
+    "group": "weather",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_12",
+     "scope": "VL:storm_derate",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "7c:OPS_08:heat_derate",
+    "label": "Slowed by heat",
+    "group": "weather",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_08",
+     "scope": "VL:heat_derate",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "8:LEDGER:peer_siting",
+    "label": "Behind neighbours, siting",
+    "group": "peers",
+    "cls": "RECOVERABLE",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:peer_siting",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "8:LEDGER:peer_recoverable",
+    "label": "Behind neighbours, wake",
+    "group": "peers",
+    "cls": "RECOVERABLE",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:peer_recoverable",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "8:LEDGER:peer_broadband",
+    "label": "Behind neighbours, all winds",
+    "group": "peers",
+    "cls": "RECOVERABLE",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:peer_broadband",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "8:LEDGER:above_peers",
+    "label": "Ahead of its neighbours",
+    "group": "peers",
+    "cls": "RECOVERABLE",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:above_peers",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "8:LEDGER:degradation",
+    "label": "Degradation",
+    "group": "degradation",
+    "cls": "RECOVERABLE",
+    "recoverability": "partly",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:degradation",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "9:LEDGER:remainder_in_claimed_periods",
+    "label": "Unexplained, during named causes",
+    "group": "remainder",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:remainder_claimed",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "9:LEDGER:remainder_unexplained",
+    "label": "Unexplained, other periods",
+    "group": "remainder",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:remainder_unexplained",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "own:MKT_02:negative_price_generation",
+    "label": "Sold while prices were below zero",
+    "group": "own_grain",
+    "cls": "RECOVERABLE",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "MKT_02",
+     "scope": "FLEET",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "own:FIN_05:parasitic_import",
+    "label": "Power drawn from the grid",
+    "group": "own_grain",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "FIN_05",
+     "scope": "FLEET",
+     "cls": "REALIZED"
+    }
+   }
+  ]
+ }
+}

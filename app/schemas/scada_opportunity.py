@@ -8,7 +8,7 @@ typing — it mirrors the core /opportunities envelope ({items, total, summary})
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ScadaOpportunity(BaseModel):
@@ -220,15 +220,15 @@ class ScadaFindingActionUpdate(BaseModel):
     The client passes the finding's natural key (already on every register row) rather than the
     volatile register ``id`` — the pipeline reassigns ``id`` on every persist. ``status`` must be one
     of ACKNOWLEDGED / CONFIRMED / DISMISSED / RESOLVED (validated in the endpoint). ``asset_code`` may be
-    omitted when the farm publishes one asset (D-081).
+    omitted when the farm publishes one asset (D-081). Lengths are the ``scada_finding_action`` columns'.
     """
 
-    farm: str
-    asset_code: Optional[str] = None
-    trigger: Optional[str] = None
-    scope: str
-    cls: str
-    status: str
+    farm: str = Field(max_length=64)
+    asset_code: Optional[str] = Field(None, max_length=16)
+    trigger: Optional[str] = Field(None, max_length=48)
+    scope: str = Field(max_length=32)
+    cls: str = Field(max_length=16)
+    status: str = Field(max_length=20)
     notes: Optional[str] = None
 
 
