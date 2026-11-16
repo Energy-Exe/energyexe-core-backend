@@ -30,6 +30,7 @@ repos is `../../docs/README.md`.
 | [operations/partner-upload-sfe.md](operations/partner-upload-sfe.md) | Instructions sent to SFE for uploading SCADA files to the inbound S3 drop zone |
 | [operations/partner-upload-varanger-kraft.md](operations/partner-upload-varanger-kraft.md) | Same, for Varanger Kraft (Raggovidda) |
 | [operations/partner-upload-aura.md](operations/partner-upload-aura.md) | Same, for AURA |
+| [operations/partner-upload-statkraft.md](operations/partner-upload-statkraft.md) | Same, for Statkraft (Björkhöjden and Smøla, one subfolder each) |
 | [operations/sfe-local-preview.md](operations/sfe-local-preview.md) | The isolated local-only preview API for measured SCADA runs (`app/scada_preview/`) |
 | [operations/EPR-143-internal-users-grant.md](operations/EPR-143-internal-users-grant.md) | Granting `users.is_internal` per environment by hand |
 | [../.github/workflows/README.md](../.github/workflows/README.md) | The deploy workflows and the manual import trigger; why GitHub `schedule:` was retired |
