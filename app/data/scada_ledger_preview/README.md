@@ -8,3 +8,4 @@ These files feed the internal-only **Ledger preview** page in the client portal 
 - **What they are not:** they are not the register and not a client figure. The approved figures stay on the Value in Play page, which is unchanged.
 - **Who can read them:** internal staff only (`get_current_internal_user`). The endpoint is on by default only outside production; see `SCADA_LEDGER_PREVIEW_ENABLED` in `app/core/config.py`.
 - **To update:** re-run `preview_export` in the sandbox, then copy the two files here under the names `<farm>__<asset>.json`.
+- **Per-year fields (added 2026-11-16, EPR-222):** each line per calendar year (`leaves_by_year`), the revenue the turbines actually earned by year (`realised_by_year`, actual energy at that period's price), and its average a year (`realised_year`). The client's Value in Play page uses them for its year selector and value-flow chart. The schema name stays `ledger-preview/v1`, because the fields are only added.

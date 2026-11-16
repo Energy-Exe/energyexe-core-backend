@@ -12,7 +12,7 @@
    "ledger": "vl-20261105-ledger_rg-r6",
    "criteria": "vl-20261105-criteria-r6"
   },
-  "generated_utc": "2026-11-06T10:23:26+00:00"
+  "generated_utc": "2026-11-16T10:14:36+00:00"
  },
  "headline": {
   "ledger": 1069702.7993525607,
@@ -586,6 +586,116 @@
    "degradation_hi": 38062.232889208106
   }
  ],
+ "leaves_by_year": [
+  {
+   "year": 2025,
+   "step": "2",
+   "trigger": "MKT_03",
+   "leaf": "curtailed",
+   "group": "curtailment",
+   "value": 828875.6243,
+   "mwh": 26587.4839
+  },
+  {
+   "year": 2025,
+   "step": "4b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_stop",
+   "group": "weather",
+   "value": 48589.2863,
+   "mwh": 723.0383
+  },
+  {
+   "year": 2025,
+   "step": "7b",
+   "trigger": "OPS_12",
+   "leaf": "weather_storm_derate",
+   "group": "weather",
+   "value": 1853.1034,
+   "mwh": 23.733
+  },
+  {
+   "year": 2025,
+   "step": "7c",
+   "trigger": "OPS_08",
+   "leaf": "heat_derate",
+   "group": "weather",
+   "value": 101.3868,
+   "mwh": 4.031
+  },
+  {
+   "year": 2025,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "above_peers",
+   "group": "peers",
+   "value": -188751.1933,
+   "mwh": -1939.065
+  },
+  {
+   "year": 2025,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "ageing",
+   "group": "degradation",
+   "value": 10617.8504,
+   "mwh": 11.968
+  },
+  {
+   "year": 2025,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_broadband",
+   "group": "peers",
+   "value": 83457.2697,
+   "mwh": 852.8712
+  },
+  {
+   "year": 2025,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_recoverable",
+   "group": "peers",
+   "value": 78050.1559,
+   "mwh": 897.2929
+  },
+  {
+   "year": 2025,
+   "step": "8",
+   "trigger": "chain",
+   "leaf": "peer_shortfall_siting_wake",
+   "group": "peers",
+   "value": 21551.5453,
+   "mwh": 222.6072
+  },
+  {
+   "year": 2025,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_in_claimed_periods",
+   "group": "remainder",
+   "value": -150474.8881,
+   "mwh": -3016.8104
+  },
+  {
+   "year": 2025,
+   "step": "9",
+   "trigger": "chain",
+   "leaf": "remainder_unexplained",
+   "group": "remainder",
+   "value": 310605.6587,
+   "mwh": 12251.2226
+  }
+ ],
+ "realised_by_year": [
+  {
+   "year": 2025,
+   "value": 20006068.05,
+   "mwh": 177653.12,
+   "unpriced_periods": 0
+  }
+ ],
+ "realised_year": 20006068.05,
  "criteria": [
   {
    "n": 1,
