@@ -41,7 +41,12 @@ SERIES = (
     "p50_attainment",
     "performance_index",
 )
-YEARLY = ("alarm_events_per_year", "value_lost_per_year")
+YEARLY = (
+    "alarm_events_per_year",
+    "value_lost_per_year",
+    "curtailment_per_year",
+    "downtime_per_year",
+)
 TURBINE = (
     "turbine_lost_energy",
     "turbine_availability",
@@ -54,6 +59,8 @@ NEEDS_PRICE = {
     "capture_price",
     "revenue",
     "value_lost_per_year",
+    "curtailment_per_year",
+    "downtime_per_year",
     "turbine_downtime_cost",
     "value_lost_by_cause",
 }
@@ -61,6 +68,13 @@ MONTHS = (3, 6, 12, 24)
 CHARTS = ("column", "line", "area", "bar", "donut", "table")
 
 BUCKET_LABELS = {"none": "No impact", None: "Unclassified"}
+
+# Yearly money datasets: the revenue_impact_daily column each one sums.
+_YEARLY_MONEY = {
+    "value_lost_per_year": "revenue_loss_total_gbp",
+    "curtailment_per_year": "revenue_curtailment_gbp",
+    "downtime_per_year": "revenue_downtime_gbp",
+}
 
 
 def window_start(last: date, months: int) -> date:
@@ -216,7 +230,8 @@ class ScadaBuilderService:
                     "key": r.mo.strftime("%Y-%m"),
                     "label": r.mo.strftime("%Y-%m"),
                     "value": None if priced and not r.hp else _num(r.v),
-                    "partial": r.days < days_in_month(r.mo) or bool(priced and r.hu),
+                    "partial": r.days < days_in_month(r.mo),
+                    "unpriced": bool(priced and r.hu),
                 }
                 for r in rows
             ]
@@ -299,21 +314,21 @@ class ScadaBuilderService:
                 GROUP BY 1 ORDER BY 1
             """
         else:
-            sql = """
-                SELECT EXTRACT(YEAR FROM date_utc)::int AS y, SUM(revenue_loss_total_gbp) AS v,
+            sql = f"""
+                SELECT EXTRACT(YEAR FROM date_utc)::int AS y, SUM({_YEARLY_MONEY[dataset]}) AS v,
                        COUNT(DISTINCT date_utc) AS days, SUM(hours_priced) AS hp,
                        SUM(hours_unpriced) AS hu
                 FROM scada.revenue_impact_daily WHERE farm = :farm AND date_utc <= :end
                 GROUP BY 1 ORDER BY 1
             """
-        priced = dataset == "value_lost_per_year"
+        priced = dataset in _YEARLY_MONEY
         out["rows"] = [
             {
                 "key": str(r.y),
                 "label": str(r.y),
                 "value": None if priced and not r.hp else _num(r.v),
-                "partial": r.days < (date(r.y + 1, 1, 1) - date(r.y, 1, 1)).days
-                or bool(priced and r.hu),
+                "partial": r.days < (date(r.y + 1, 1, 1) - date(r.y, 1, 1)).days,
+                "unpriced": bool(priced and r.hu),
             }
             for r in await self._rows(sql, farm=farm, end=last)
         ]
@@ -390,7 +405,11 @@ Datasets (id: what it is; charts allowed):
 - performance_index: wind-normalised performance index per month (100 = expected); \
 column, line, area, table
 - alarm_events_per_year: number of alarm events started, per year; column, line, area, table
-- value_lost_per_year: money lost to downtime, curtailment and performance, per year; \
+- value_lost_per_year: lost revenue (a daily estimate) to downtime, curtailment and \
+performance, per year; column, line, area, table
+- curtailment_per_year: lost revenue to curtailment per year (a daily estimate); \
+column, line, area, table
+- downtime_per_year: lost revenue to downtime per year (a daily estimate); \
 column, line, area, table
 - turbine_lost_energy: energy lost per turbine, MWh; bar, donut, table
 - turbine_availability: availability per turbine, %; bar, donut, table
@@ -398,8 +417,8 @@ column, line, area, table
 - turbine_downtime_cost: money lost to downtime per turbine; bar, donut, table
 - alarm_hours_by_category: alarm hours by category (forced, scheduled, external, ...); \
 bar, donut, table
-- value_lost_by_cause: money lost by cause (downtime, curtailment, performance); \
-bar, donut, table
+- value_lost_by_cause: lost revenue by cause (downtime, curtailment, performance), \
+a daily estimate; bar, donut, table
 
 Rules:
 - chart: use one the dataset allows. "pie" means donut; "bars" means column for monthly \
