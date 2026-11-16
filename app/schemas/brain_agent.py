@@ -93,6 +93,9 @@ class ThreadUpsertRequest(BaseModel):
     message_count: int = Field(default=0, ge=0, description="Number of messages")
     total_cost_usd: Optional[Decimal] = Field(default=None, description="Cumulative cost in USD")
     total_turns: int = Field(default=0, ge=0, description="Number of agent turns")
+    portal: Optional[Literal["scada", "perform"]] = Field(
+        default=None, description="Client portal the chat belongs to; set once"
+    )
 
 
 class ThreadTitleUpdate(BaseModel):
@@ -111,6 +114,7 @@ class ThreadListItem(BaseModel):
     total_cost_usd: Optional[Decimal]
     total_turns: int
     is_streaming: bool = False
+    portal: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
