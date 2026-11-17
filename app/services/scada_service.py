@@ -15,12 +15,20 @@ Semantics rules baked in (docs/ui/README.md):
 The scada schema is NOT on the search_path — every query is schema-qualified.
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.scada_data_quality import (
+    MIN_COVERAGE,
+    completeness_grid,
+    coverage_cards,
+    load_trigger_config,
+    trigger_table,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -265,28 +273,87 @@ class ScadaService:
             ),
             {"farm": farm},
         )
-        rows = result.fetchall()
-        turbines = sorted({r.turbine for r in rows})
-        present = sorted({r.mo for r in rows})
-        months: List[str] = []
-        if present:
-            # Full-year span (Jan of first data year → Dec of last) so farm-wide
-            # holes render as visible gaps instead of silently vanishing.
-            for y in range(int(present[0][:4]), int(present[-1][:4]) + 1):
-                months.extend(f"{y:04d}-{m:02d}" for m in range(1, 13))
-        m_idx = {m: i for i, m in enumerate(months)}
-        t_idx = {t: i for i, t in enumerate(turbines)}
-        grid: List[List[Optional[List[float]]]] = [[None] * len(months) for _ in turbines]
-        for r in rows:
-            ex = float(r.ex or 0)
-            if ex <= 0:
-                continue
-            grid[t_idx[r.turbine]][m_idx[r.mo]] = [
-                round(float(r.rv or 0) / ex * 100, 1),
-                1 if r.pre else 0,
-                round(float(r.rp or 0) / ex * 100, 1),
-            ]
-        return {"turbines": turbines, "months": months, "grid": grid}
+        cods = await self.db.execute(
+            text(
+                "SELECT turbine, TO_CHAR(cod, 'YYYY-MM') AS mo FROM scada.dim_turbine "
+                "WHERE farm = :farm AND cod IS NOT NULL"
+            ),
+            {"farm": farm},
+        )
+        return completeness_grid(result.fetchall(), {r.turbine: r.mo for r in cods.fetchall()})
+
+    async def data_quality(self, farm: str) -> Dict[str, Any]:
+        """Data Quality page (EPR-230): four coverage cards over the farm's whole data
+        period, and which priced Opportunity Schema triggers its data can feed."""
+        totals = (
+            await self.db.execute(
+                text(
+                    """
+                    SELECT SUM(expected_intervals) AS ex, SUM(rows_present) AS rp,
+                           MIN(date_utc) AS d0, MAX(date_utc) AS d1
+                    FROM scada.completeness_daily
+                    WHERE farm = :farm AND NOT pre_cod
+                    """
+                ),
+                {"farm": farm},
+            )
+        ).one()
+        nulls = {
+            r.signal: r.null_pct
+            for r in (
+                await self.db.execute(
+                    text(
+                        "SELECT signal, null_pct FROM scada.dim_signal_capability "
+                        "WHERE farm = :farm AND signal IN ('power_kw', 'wind_speed_ms')"
+                    ),
+                    {"farm": farm},
+                )
+            ).fetchall()
+        }
+        price_hours: Optional[int] = None
+        price_expected: Optional[int] = None
+        windfarm_id = (
+            await self.db.execute(
+                text("SELECT windfarm_id FROM scada.dim_farm WHERE farm = :farm"), {"farm": farm}
+            )
+        ).scalar()
+        if windfarm_id is not None and totals.d0 is not None:
+            start = datetime.combine(totals.d0, datetime.min.time())
+            end = datetime.combine(totals.d1 + timedelta(days=1), datetime.min.time())
+            price_expected = int((end - start).total_seconds() // 3600)
+            price_hours = (
+                await self.db.execute(
+                    text(
+                        "SELECT COUNT(DISTINCT hour) FROM price_data "
+                        "WHERE windfarm_id = :wf AND day_ahead_price IS NOT NULL "
+                        "AND hour >= :start AND hour < :end"
+                    ),
+                    {
+                        "wf": windfarm_id,
+                        "start": start.replace(tzinfo=timezone.utc),
+                        "end": end.replace(tzinfo=timezone.utc),
+                    },
+                )
+            ).scalar() or 0
+        cards = coverage_cards(
+            expected=int(totals.ex or 0),
+            present=int(totals.rp or 0),
+            power_null_pct=nulls.get("power_kw"),
+            wind_null_pct=nulls.get("wind_speed_ms"),
+            price_hours=price_hours,
+            price_expected=price_expected,
+        )
+        price = cards["price"]
+        price_ok = None if price is None else price["priced"] >= MIN_COVERAGE * price["expected"]
+        return {
+            "period": (
+                {"start": totals.d0.isoformat(), "end": totals.d1.isoformat()}
+                if totals.d0 is not None
+                else None
+            ),
+            "cards": cards,
+            "triggers": trigger_table(load_trigger_config(), farm, price_ok),
+        }
 
     async def _weighted_pi_by_turbine_year(self, farm: str) -> Dict[str, Dict[int, float]]:
         """performance_index interval-weighted across epoch-straddling configs."""
