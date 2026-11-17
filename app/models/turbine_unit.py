@@ -26,6 +26,8 @@ class TurbineUnit(Base):
     # Status and technical info
     status = Column(String(100), nullable=True)  # "operational" | "installing" | "decommissioned"
     hub_height_m = Column(DECIMAL(6, 2), nullable=True)
+    # Ground level at the turbine base, metres above sea level (EPR-96); 0 and below are valid.
+    ground_elevation_m = Column(DECIMAL(7, 2), nullable=True)
 
     # Operational dates
     start_date = Column(Date, nullable=True)
