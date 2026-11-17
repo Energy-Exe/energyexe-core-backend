@@ -504,25 +504,9 @@ EXPECTED_SNAPSHOT: Dict[str, Tuple[tuple, ...]] = {
                 "ppa_status",
             ),
         ),
-        # OPS-01 firing (non-None) opens the OPS-03 dependency gate. With no PPA,
-        # contract_type is None → WATCH, branch C, and contract_type /
-        # contract_penalty_clauses join the missing_slots.
-        (
-            "OPS_03",
-            "WATCH",
-            "C",
-            "ACTIVE",
-            (
-                "am_location",
-                "asset_age_years",
-                "contract_penalty_clauses",
-                "contract_type",
-                "insource_benchmark",
-                "oem_response_time",
-                "peer_odi_p50",
-            ),
-            ("contract_type", "has_availability_penalties", "odi_pct", "period", "ppa_status"),
-        ),
+        # CHANGED EPR-95: the OPS-03 (WATCH, C) follow-on is gone — OPS-03 is
+        #   INACTIVE in the live registry, so OPS-01 firing no longer yields it.
+        #   M1_LEGACY_BASELINE (frozen) still carries it.
     ),
     # CHANGED #95: old ((OPS_01 WATCH A ...), (OPS_03 WATCH A ...)) -> () (reason:
     #   the scenario has only ONE month below the ODI threshold; under the new spec

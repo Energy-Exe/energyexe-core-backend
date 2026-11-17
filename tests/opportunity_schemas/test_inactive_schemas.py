@@ -141,3 +141,23 @@ async def test_live_registry_skips_inactive_genuine_noop_detectors():
     # The detectors must not have been reached (INACTIVE skip happens first), so
     # the FakeSession was never flushed.
     assert ctx.db.flush_count == 0
+
+
+@pytest.mark.asyncio
+async def test_ops03_is_switched_off_and_never_runs():
+    """EPR-95: OPS-03 is INACTIVE in the live registry, so its detector is never called."""
+    assert SCHEMA_STATUS[SchemaCode.OPS_03] == "INACTIVE"
+    ctx = _make_ctx()
+    calls = {"ops03": 0}
+
+    async def ops03_spy(c):
+        calls["ops03"] += 1
+        return DetectorResult(schema_code=SchemaCode.OPS_03, severity=Severity.WATCH)
+
+    created = await run_for_windfarm(
+        ctx, registry={SchemaCode.OPS_03: ops03_spy}, status=SCHEMA_STATUS
+    )
+
+    assert created == []
+    assert ctx.db.added == []
+    assert calls == {"ops03": 0}
