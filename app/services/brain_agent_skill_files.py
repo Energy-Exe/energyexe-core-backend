@@ -43,7 +43,7 @@ SKILL_SCHEMA = """# Database Schema Reference
 ## Supporting Tables
 
 **turbine_models**: model, supplier, original_supplier, rated_power_kw, cut_in_wind_speed_ms, cut_out_wind_speed_ms, rated_wind_speed_ms, blade_length_m, rotor_diameter_m
-**turbine_units**: windfarm_id, turbine_model_id, lat, lng, hub_height_m, status, start_date, end_date
+**turbine_units**: windfarm_id, turbine_model_id, lat, lng, hub_height_m, ground_elevation_m (ground level at the turbine base, metres above sea level; NULL when unknown), status, start_date, end_date
 **windfarm_owners**: windfarm_id, owner_id, ownership_percentage
 **owners**: id, code, name, type (energy/institutional_investor/community_investors/municipality/private_individual/supply_chain_oem/other/unknown)
 **ppas**: windfarm_id, ppa_buyer, ppa_size_mw, ppa_duration_years, ppa_start_date, ppa_end_date, ppa_notes, contract_type (fixed_price/indexed/hybrid/merchant), ppa_status (active/expired/renegotiating), ppa_price_eur_mwh, has_availability_penalties (bool)
