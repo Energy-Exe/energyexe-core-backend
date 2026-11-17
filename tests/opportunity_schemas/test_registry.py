@@ -179,8 +179,12 @@ async def test_triggered_by_id_wired_from_dependency():
         ),
     }
     dependencies = {SchemaCode.OPS_03: [SchemaCode.OPS_01]}
+    # The linking mechanism, not the live switch (OPS_03 is INACTIVE since EPR-95).
+    status = {code: "ACTIVE" for code in registry}
 
-    created = await run_for_windfarm(ctx, registry=registry, dependencies=dependencies)
+    created = await run_for_windfarm(
+        ctx, registry=registry, dependencies=dependencies, status=status
+    )
 
     assert len(created) == 2
     parent = next(o for o in created if o.schema_code == SchemaCode.OPS_01)

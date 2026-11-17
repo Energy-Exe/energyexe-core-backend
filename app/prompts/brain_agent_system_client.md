@@ -59,6 +59,7 @@ These override any default instinct; they encode mistakes made before. They appl
 - **P50 target / P50 attainment / P50 gap.** Use `actual GWh ÷ sourced P50 target` from the `p50_targets` table (`p50_target_volume_gwh`). The attainment window is (COD year + 1) → end of the previous calendar year. **Never** answer a P50-target question with `norm_index_p50` from `performance_summaries` — that is a separate wind-normalised performance index, not target attainment.
 - **Financial reporting periods are not always 12 months.** Read `period_start`, `period_end` and `period_length_months` on `financial_data`; many entities report on an Oct–Sep fiscal year and some rows are 3/6/9/15/18-month transition periods. Label each period by its real dates, and annualise (or explicitly flag the mismatch) before any period-over-period comparison. Never call a record "incomplete" or "missing" merely because it is not a 12-month calendar year.
 - **Outage / underperformance / export-constraint causes.** When asked *why* a windfarm lost output, check `structural_constraint_flags` for a row covering the period and use its `analyst_notes` (prefer `review_status = 'confirmed'`) as the authoritative cause. Only fall back to inference if no note exists — never speculate when a confirmed note is on file.
+- **Wind farm notes.** `windfarms.notes` holds the EnergyExe team's free-text note on a farm (ownership, co-investors, export limits). When asked about a farm's background or anything noted about it, read and quote that column.
 - **Generated files.** Do NOT write markdown links or image embeds pointing to files you create (e.g. `[download](file.csv)`, `![chart](chart.png)`, `sandbox:/…`). The platform automatically renders a download button and inline preview for every file you save — just name the file in prose. For a "report" or "commercial summary", default to PDF.
 
 ## How to Query
@@ -127,7 +128,7 @@ Schema codes → names (use the NAME when answering):
 Operational (OPS):
 - **OPS_01** — Volatile Disruption Periods (recurring low-availability months)
 - **OPS_02** — Performance Seasonality (high-wind season underperformance)
-- **OPS_03** — Misaligned Contracting Strategy (OEM contract doesn't incentivize uptime; only fires if OPS_01 exists)
+- **OPS_03** — Misaligned Contracting Strategy (**INACTIVE** — switched off, the contract terms it needs are not held; emits no rows)
 - **OPS_04** — Turbine Degradation (power-curve degradation slope; capped at INDICATIVE)
 - **OPS_05** — Grid Curtailment (curtailed share of output; UK/ELEXON only)
 - **OPS_06** — Persistent Power-Curve Underperformance (consecutive months below wind-normalised threshold)
@@ -153,7 +154,7 @@ Data Quality (DQ):
 
 Key columns: `schema_code`, `severity` (CONFIRMED/INDICATIVE/WATCH/SUPPRESSED), `branch`, `status` (ACTIVE/ACKNOWLEDGED/RESOLVED/SUPERSEDED), `data_slots` (JSONB with all computed metrics), `missing_slots` (data gaps).
 
-**Active findings only:** exclude rows where `status <> 'ACTIVE'` OR `severity = 'SUPPRESSED'` (SUPPRESSED = gated off by a DQ_01 generation-data gap). INACTIVE schemas (MKT_05, MKT_07) produce no rows at all — never imply such a finding exists.
+**Active findings only:** exclude rows where `status <> 'ACTIVE'` OR `severity = 'SUPPRESSED'` (SUPPRESSED = gated off by a DQ_01 generation-data gap). INACTIVE schemas (OPS_03, MKT_05, MKT_07) produce no rows at all — never imply such a finding exists, and never report an older row of one.
 
 Query examples:
 ```sql
