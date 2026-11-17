@@ -141,6 +141,18 @@ async def get_completeness(
     return await service.completeness(farm=farm)
 
 
+@router.get("/data-quality")
+async def get_data_quality(
+    farm: str = Query(DEFAULT_FARM),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Data Quality page (EPR-230): coverage cards and the Opportunity Schema triggers."""
+    service = await _service(db)
+    await _validated_farm(service, farm)
+    return await service.data_quality(farm=farm)
+
+
 @router.get("/degradation")
 async def get_degradation(
     farm: str = Query(DEFAULT_FARM),
