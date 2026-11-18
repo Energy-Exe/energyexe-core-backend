@@ -1,0 +1,404 @@
+{
+ "farm": "raggovidda",
+ "asset_code": "RG2",
+ "run_id": "sample-rg2-d",
+ "register_run_id": "epr138-fresh-e6eeeecad396f4da5d6e034c",
+ "method_version": "rg2-d@557444a+v1",
+ "format": "value-ledger/2",
+ "currency": "NOK",
+ "window_from": "2025-01-01",
+ "window_to": "2025-12-31",
+ "years": 1.0,
+ "years_basis": "whole_calendar_years",
+ "years_detail": [
+  {
+   "year": 2025,
+   "days_covered": 365,
+   "partial_year": false
+  }
+ ],
+ "headline_year": 1059084.948954091,
+ "today_same_years_year": 979911.0,
+ "register_year": 979911.0,
+ "realised_year": 20006068.047380008,
+ "turbines": [
+  "T01",
+  "T02",
+  "T03",
+  "T04",
+  "T05",
+  "T06",
+  "T07",
+  "T08",
+  "T09",
+  "T10",
+  "T11",
+  "T12"
+ ],
+ "bridge": [
+  {
+   "key": "start",
+   "label": "Today's register",
+   "change": null,
+   "detail": [],
+   "headline_after": 979911.0
+  },
+  {
+   "key": "claims_method",
+   "label": "How claims are counted",
+   "change": -24142.599252343876,
+   "detail": [],
+   "headline_after": 955768.4007476561
+  },
+  {
+   "key": "wake_retired",
+   "label": "Today's wake line retired",
+   "change": -51122.0,
+   "detail": [],
+   "headline_after": 904646.4007476561
+  },
+  {
+   "key": "peers",
+   "label": "Against peers, signed",
+   "change": -5692.222418666508,
+   "detail": [],
+   "headline_after": 898954.1783289897
+  },
+  {
+   "key": "degradation",
+   "label": "Degradation",
+   "change": 0.0,
+   "detail": [],
+   "headline_after": 898954.1783289897
+  },
+  {
+   "key": "remainder",
+   "label": "Remainder, signed",
+   "change": 160130.7706251012,
+   "detail": [],
+   "headline_after": 1059084.948954091
+  },
+  {
+   "key": "own_grain_years",
+   "label": "Company-wide lines over the years covered",
+   "change": 0.0,
+   "detail": [],
+   "headline_after": 1059084.948954091
+  }
+ ],
+ "bridge_start_basis": "register",
+ "bridge_basis": {
+  "build": "rg2-d",
+  "window_from": "2025-01-01",
+  "window_to": "2025-12-31",
+  "headline_year": 1059084.948954091
+ },
+ "ranges": [
+  {
+   "key": "all defaults together",
+   "basis_build": "rg2-d",
+   "basis_headline_year": 1059084.95,
+   "default_change": 0.0,
+   "low_change": 0.0,
+   "high_change": 552737.05,
+   "rebuild": null
+  }
+ ],
+ "coverage": [
+  {
+   "year": 2025,
+   "share_valued": 0.8954492411702404,
+   "share_valued_unclaimed_stops_not_counted": 0.8954492411702404,
+   "share_data_gap": 0.0018201766903226,
+   "unexplained_share_of_expected": 0.0147962602749621,
+   "whole_remainder_share_of_expected": 0.0076281178208507,
+   "degradation": 10617.850398469856,
+   "degradation_lo": -16826.53209226839,
+   "degradation_hi": 38062.2328892081
+  }
+ ],
+ "checks": [
+  {
+   "n": 1,
+   "name": "Adds up",
+   "result": "passed",
+   "window": "full record",
+   "values": {}
+  },
+  {
+   "n": 2,
+   "name": "Counted once",
+   "result": "passed",
+   "window": "full record",
+   "values": {}
+  },
+  {
+   "n": 3,
+   "name": "Reconciled",
+   "result": "passed",
+   "window": "quotable",
+   "values": {
+    "tolerance_year": 6.0,
+    "ledger_year_by_line": {
+     "MKT_03": 828876.0,
+     "OPS_08": 101.0,
+     "OPS_12": 50442.0,
+     "MKT_02": 14563.0,
+     "FIN_05": 10664.0
+    }
+   }
+  },
+  {
+   "n": 8,
+   "name": "Coverage",
+   "result": "reported",
+   "window": "quotable",
+   "values": {}
+  }
+ ],
+ "lines": [
+  {
+   "line": "MKT_03",
+   "register_year": 852573.0,
+   "today_year": 852573.3354216274,
+   "ledger_year": 828875.6243277874
+  },
+  {
+   "line": "OPS_08",
+   "register_year": 164.0,
+   "today_year": 165.36505978107934,
+   "ledger_year": 101.38680196473403
+  },
+  {
+   "line": "OPS_12",
+   "register_year": 50825.0,
+   "today_year": 50824.57249038476,
+   "ledger_year": 50442.389617903995
+  },
+  {
+   "line": "MKT_02",
+   "register_year": 14563.0,
+   "today_year": 14563.0,
+   "ledger_year": 14563.0
+  },
+  {
+   "line": "FIN_05",
+   "register_year": 10664.0,
+   "today_year": 10664.0,
+   "ledger_year": 10664.0
+  }
+ ],
+ "realised": [
+  {
+   "year": 2025,
+   "value": 20006068.047380008,
+   "mwh": 177653.11835233078,
+   "unpriced_periods": 0
+  }
+ ],
+ "catalog": {
+  "catalog": "ledger_causes",
+  "version": 2,
+  "groups": [
+   {
+    "key": "curtailment",
+    "label": "Curtailment"
+   },
+   {
+    "key": "downtime",
+    "label": "Downtime"
+   },
+   {
+    "key": "weather",
+    "label": "Weather"
+   },
+   {
+    "key": "peers",
+    "label": "Against peers"
+   },
+   {
+    "key": "degradation",
+    "label": "Degradation"
+   },
+   {
+    "key": "remainder",
+    "label": "Unexplained"
+   },
+   {
+    "key": "own_grain",
+    "label": "Company-wide lines"
+   }
+  ],
+  "causes": [
+   {
+    "code": "2:MKT_03:curtailed",
+    "label": "Curtailed",
+    "group": "curtailment",
+    "cls": "CURTAILMENT",
+    "recoverability": "partly",
+    "summed": true,
+    "status_key": {
+     "trigger": "MKT_03",
+     "scope": "VL:curtailed",
+     "cls": "CURTAILMENT"
+    }
+   },
+   {
+    "code": "4b:OPS_12:weather_storm_stop",
+    "label": "Storm stop",
+    "group": "weather",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_12",
+     "scope": "VL:storm_stop",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "7b:OPS_12:weather_storm_derate",
+    "label": "Slowed in a storm",
+    "group": "weather",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_12",
+     "scope": "VL:storm_derate",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "7c:OPS_08:heat_derate",
+    "label": "Slowed by heat",
+    "group": "weather",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "OPS_08",
+     "scope": "VL:heat_derate",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "8:LEDGER:peer_siting",
+    "label": "Behind neighbours, siting",
+    "group": "peers",
+    "cls": "RECOVERABLE",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:peer_siting",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "8:LEDGER:peer_recoverable",
+    "label": "Behind neighbours, wake",
+    "group": "peers",
+    "cls": "RECOVERABLE",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:peer_recoverable",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "8:LEDGER:peer_broadband",
+    "label": "Behind neighbours, all winds",
+    "group": "peers",
+    "cls": "RECOVERABLE",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:peer_broadband",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "8:LEDGER:above_peers",
+    "label": "Ahead of its neighbours",
+    "group": "peers",
+    "cls": "RECOVERABLE",
+    "recoverability": "yes",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:above_peers",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "8:LEDGER:degradation",
+    "label": "Degradation",
+    "group": "degradation",
+    "cls": "RECOVERABLE",
+    "recoverability": "partly",
+    "summed": false,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:degradation",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "9:LEDGER:remainder_in_claimed_periods",
+    "label": "Unexplained, during named causes",
+    "group": "remainder",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:remainder_claimed",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "9:LEDGER:remainder_unexplained",
+    "label": "Unexplained, other periods",
+    "group": "remainder",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "LEDGER",
+     "scope": "VL:remainder_unexplained",
+     "cls": "REALIZED"
+    }
+   },
+   {
+    "code": "own:MKT_02:negative_price_generation",
+    "label": "Sold while prices were below zero",
+    "group": "own_grain",
+    "cls": "RECOVERABLE",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "MKT_02",
+     "scope": "FLEET",
+     "cls": "RECOVERABLE"
+    }
+   },
+   {
+    "code": "own:FIN_05:parasitic_import",
+    "label": "Power drawn from the grid",
+    "group": "own_grain",
+    "cls": "REALIZED",
+    "recoverability": "no",
+    "summed": true,
+    "status_key": {
+     "trigger": "FIN_05",
+     "scope": "FLEET",
+     "cls": "REALIZED"
+    }
+   }
+  ]
+ }
+}

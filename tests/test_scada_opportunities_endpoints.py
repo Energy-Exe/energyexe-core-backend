@@ -431,9 +431,11 @@ def _fake_action(status="ACKNOWLEDGED", notes="looks real", asset_code="HOT"):
 def finding(monkeypatch, service):
     """set_action returns a persisted row for the known key, None otherwise."""
 
-    async def _set_action(self, *, farm, asset_code, trigger, scope, cls, status, notes, user_id):
-        CALLS.append(("set_action", farm, asset_code))
-        if scope == "T03":
+    async def _set_action(
+        self, *, farm, asset_code, trigger, scope, cls, status, notes, user_id, internal_staff
+    ):
+        CALLS.append(("set_action", farm, asset_code, internal_staff))
+        if scope == "T03" or scope.startswith("VL:"):
             return _fake_action(status=status, notes=notes, asset_code=asset_code)
         return None
 
@@ -725,7 +727,7 @@ def test_action_carries_the_asset(staff_client, finding):
     body = {**_ACTION_BODY, "farm": "raggovidda", "asset_code": "RG2"}
     resp = staff_client.put("/scada/opportunities/actions", json=body)
     assert resp.status_code == 200 and resp.json()["asset_code"] == "RG2"
-    assert ("set_action", "raggovidda", "RG2") in CALLS
+    assert ("set_action", "raggovidda", "RG2", True) in CALLS
 
 
 def test_action_on_an_internal_farm_is_403_for_non_staff(app_client, finding):
@@ -736,6 +738,31 @@ def test_action_on_an_internal_farm_is_403_for_non_staff(app_client, finding):
 def test_action_resolves_a_single_asset_farm(app_client, finding):
     resp = app_client.put("/scada/opportunities/actions", json=_ACTION_BODY)
     assert resp.status_code == 200 and resp.json()["asset_code"] == "HOT"
+
+
+_VL_BODY = {**_ACTION_BODY, "trigger": "OPS_01", "scope": "VL:downtime_fault", "cls": "REALIZED"}
+
+
+def test_a_ledger_status_key_is_staff_only(app_client, finding):
+    assert app_client.put("/scada/opportunities/actions", json=_VL_BODY).status_code == 403
+    assert not [c for c in CALLS if c[0] == "set_action"]
+    app_client.app.dependency_overrides[get_current_active_user] = lambda: _StaffUser()
+    resp = app_client.put("/scada/opportunities/actions", json=_VL_BODY)
+    assert resp.status_code == 200 and ("set_action", "hill_of_towie", "HOT", True) in CALLS
+
+
+def test_a_register_key_passes_the_callers_staff_flag(app_client, finding):
+    assert app_client.put("/scada/opportunities/actions", json=_ACTION_BODY).status_code == 200
+    assert ("set_action", "hill_of_towie", "HOT", False) in CALLS
+
+
+@pytest.mark.parametrize(
+    "field,length",
+    [("farm", 65), ("asset_code", 17), ("trigger", 49), ("scope", 33), ("cls", 17), ("status", 21)],
+)
+def test_an_over_long_key_is_422(app_client, finding, field, length):
+    body = {**_ACTION_BODY, field: "X" * length}
+    assert app_client.put("/scada/opportunities/actions", json=body).status_code == 422
 
 
 @pytest.mark.parametrize(

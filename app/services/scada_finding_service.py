@@ -5,6 +5,10 @@ table), keyed by the stable natural key ``(farm, asset_code, trigger, scope, cls
 write pattern: load-or-create the ORM row, mutate, ``commit``/``refresh``. The register itself
 (``scada.opportunity_register``) is read via schema-qualified raw SQL only to validate that the
 natural key names a real finding before recording an action against it.
+
+A value-ledger status key (D7; scope ``VL:…``) is the second existence check, for internal staff with the ledger
+switched on: the asset's current (not stale) ledger run has a cause with that status key in its cause list and a
+row for that cause.
 """
 
 from datetime import datetime, timezone
@@ -14,7 +18,9 @@ import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models.scada_finding_action import ScadaFindingAction, ScadaFindingStatus
+from app.services.scada_ledger_service import ScadaLedgerService, scada_ledger_present
 
 logger = structlog.get_logger(__name__)
 
@@ -47,6 +53,29 @@ class ScadaFindingService:
         )
         return result.scalar() is not None
 
+    async def _ledger_key_exists(
+        self, farm: str, asset_code: str, trigger: str, scope: str, cls: str
+    ) -> bool:
+        """True when the asset's current ledger run has a row for a cause with this status key. False when the
+        tables are absent or the switch is off, so such an environment keeps the register's 404."""
+        if not get_settings().scada_ledger_enabled or not await scada_ledger_present(self.db):
+            return False
+        run = await ScadaLedgerService(self.db).current(farm, asset_code)
+        if run is None:
+            return False
+        key = {"trigger": trigger, "scope": scope, "cls": cls}
+        codes = [c["code"] for c in run["catalog"]["causes"] if c["status_key"] == key]
+        if not codes:
+            return False
+        result = await self.db.execute(
+            text(
+                "SELECT 1 FROM scada.opportunity_ledger_cause WHERE farm = :farm AND asset_code = :asset_code "
+                "AND run_id = :run_id AND cause = ANY(:codes) LIMIT 1"
+            ),
+            {"farm": farm, "asset_code": asset_code, "run_id": run["run_id"], "codes": codes},
+        )
+        return result.scalar() is not None
+
     async def set_action(
         self,
         *,
@@ -58,10 +87,14 @@ class ScadaFindingService:
         status: str,
         notes: Optional[str],
         user_id: int,
+        internal_staff: bool = False,
     ) -> Optional[ScadaFindingAction]:
-        """Upsert the lifecycle state for one finding. Returns None if the finding doesn't exist."""
+        """Upsert the lifecycle state for one finding. Returns None if the finding doesn't exist. Ledger status
+        keys are checked only for internal staff."""
         trig = (trigger or "").strip()
-        if not await self._register_row_exists(farm, asset_code, trig, scope, cls):
+        if not await self._register_row_exists(farm, asset_code, trig, scope, cls) and not (
+            internal_staff and await self._ledger_key_exists(farm, asset_code, trig, scope, cls)
+        ):
             return None
 
         existing = (

@@ -272,6 +272,10 @@ async def set_finding_action(
             status_code=400,
             detail=f"status must be one of {sorted(SCADA_FINDING_WRITABLE_STATUSES)}",
         )
+    # value-ledger status keys (scope VL:...) are staff-only, like the ledger itself
+    staff = is_internal_staff(current_user)
+    if payload.scope.startswith("VL:") and not staff:
+        raise HTTPException(status_code=403, detail="Internal EnergyExe access required")
     # 503 until the register exists on this env; 403/404 on a farm the caller may not read
     _, code = await _scoped(db, current_user, payload.farm, payload.asset_code)
     action = await ScadaFindingService(db).set_action(
@@ -283,6 +287,7 @@ async def set_finding_action(
         status=payload.status,
         notes=payload.notes,
         user_id=current_user.id,
+        internal_staff=staff,
     )
     if action is None:
         raise HTTPException(status_code=404, detail="No SCADA finding matches that key")
