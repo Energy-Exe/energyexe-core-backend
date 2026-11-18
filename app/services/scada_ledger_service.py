@@ -32,12 +32,23 @@ JSON_FIELDS = (
     "realised",
     "catalog",
 )
-_NOT_RUN = ("pipeline_version", "computed_at", "current_register_run_id", "has_rows")
+_NOT_RUN = (
+    "pipeline_version",
+    "computed_at",
+    "current_register_run_id",
+    "has_rows",
+    "register_window_start_year",
+    "register_window_end_year",
+    "register_ann_years",
+)
 
-# One statement: the ledger run rows, the register's current run for the same (farm, asset), and whether the
-# ledger run's cause rows are there.
+# One statement: the ledger run rows, the register's current run for the same (farm, asset) with its years and
+# what it averages over (the portal's first bridge row, rollout Stage 8), and whether the ledger run's cause rows
+# are there.
 _RUNS_SQL = """
     SELECT l.*, o.run_id AS current_register_run_id,
+           o.window_start_year AS register_window_start_year, o.window_end_year AS register_window_end_year,
+           o.ann_years AS register_ann_years,
            EXISTS (SELECT 1 FROM scada.opportunity_ledger_cause c
                    WHERE c.farm = l.farm AND c.asset_code = l.asset_code AND c.run_id = l.run_id) AS has_rows
     FROM scada.opportunity_ledger_run l
@@ -93,6 +104,18 @@ def parse_run(row: Mapping[str, Any]) -> Dict[str, Any]:
     for k in ("window_from", "window_to"):
         run[k] = run[k].isoformat()
     return run
+
+
+def register_basis(row: Mapping[str, Any]) -> Optional[Dict[str, int]]:
+    """The register's current run: its first and last year and the years its figures are averaged over (today a
+    fixed ten). None when the asset has no register run."""
+    if row.get("current_register_run_id") is None:
+        return None
+    return {
+        "window_start_year": int(row["register_window_start_year"]),
+        "window_end_year": int(row["register_window_end_year"]),
+        "ann_years": int(row["register_ann_years"]),
+    }
 
 
 def is_stale(row: Mapping[str, Any]) -> bool:
@@ -215,6 +238,7 @@ class ScadaLedgerService:
             "status": "ok" if document else "stale",
             "register_run_id": run["register_run_id"],
             "current_register_run_id": row["current_register_run_id"],
+            "register": register_basis(row),
             "document": document,
             "statuses": await self._statuses(farm, asset, run["catalog"]),
         }

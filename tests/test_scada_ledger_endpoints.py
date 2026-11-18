@@ -32,6 +32,7 @@ def _ledger(build="rg2-b", stale=False):
         "status": "stale" if stale else "ok",
         "register_run_id": run["register_run_id"],
         "current_register_run_id": "newer" if stale else run["register_run_id"],
+        "register": {"window_start_year": 2025, "window_end_year": 2025, "ann_years": 1},
         "document": None if stale else build_document(rows, run),
         "statuses": [
             {
@@ -106,6 +107,7 @@ def test_returns_the_typed_document_and_statuses(client, enabled, ledgers):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "ok" and body["register_run_id"] == body["current_register_run_id"]
+    assert body["register"] == {"window_start_year": 2025, "window_end_year": 2025, "ann_years": 1}
     assert close(body["document"], sample("rg2-b")[2])
     assert body["statuses"][0]["scope"] == "VL:downtime_fault"
 

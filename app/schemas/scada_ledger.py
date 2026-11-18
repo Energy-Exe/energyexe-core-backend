@@ -185,6 +185,14 @@ class LedgerAsset(BaseModel):
     status: LedgerReadStatus
 
 
+class LedgerRegisterBasis(BaseModel):
+    """The register's current run, as the portal's first bridge row names it (rollout Stage 8)."""
+
+    window_start_year: int
+    window_end_year: int
+    ann_years: int
+
+
 class LedgerResponse(BaseModel):
     """One asset's ledger. ``document`` is null when stale: the register run the ledger was built beside is no
     longer the register's current run (or its rows are missing)."""
@@ -192,5 +200,6 @@ class LedgerResponse(BaseModel):
     status: LedgerReadStatus
     register_run_id: str
     current_register_run_id: Optional[str]
+    register: Optional[LedgerRegisterBasis] = None
     document: Optional[LedgerDocument]
     statuses: List[LedgerStatus]

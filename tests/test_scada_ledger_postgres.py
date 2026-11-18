@@ -35,6 +35,7 @@ pytestmark = pytest.mark.skipif(
 REGISTER_DDL = """
 CREATE SCHEMA scada;
 CREATE TABLE scada.opportunity_run (farm varchar(64), asset_code varchar(16), run_id varchar(64) NOT NULL,
+                                    window_start_year integer, window_end_year integer, ann_years integer,
                                     PRIMARY KEY (farm, asset_code));
 CREATE TABLE scada.opportunity_register (farm varchar(64), asset_code varchar(16), id integer,
                                          trigger varchar(48), scope varchar(32) NOT NULL, cls varchar(16) NOT NULL,
@@ -130,7 +131,7 @@ async def _publish(db, build="rg2-b", current=None):
 async def _set_register_run(db, run_id):
     await db.execute(text("DELETE FROM scada.opportunity_run"))
     await db.execute(
-        text("INSERT INTO scada.opportunity_run VALUES (:f, :a, :r)"),
+        text("INSERT INTO scada.opportunity_run VALUES (:f, :a, :r, 2025, 2025, 1)"),
         {"f": FARM, "a": ASSET, "r": run_id},
     )
     await db.commit()
@@ -193,6 +194,7 @@ async def test_a_current_ledger_serves_its_document_and_the_statuses_on_its_caus
     assert [a["status"] for a in await svc.assets(FARM)] == ["ok"]
     got = await svc.get(FARM, ASSET)
     assert got["status"] == "ok" and got["current_register_run_id"] == run["register_run_id"]
+    assert got["register"] == {"window_start_year": 2025, "window_end_year": 2025, "ann_years": 1}
     assert close(got["document"], sample("rg2-b")[2])
     assert sorted((s["trigger"], s["scope"]) for s in got["statuses"]) == sorted(
         [("MKT_02", "FLEET"), (vl["trigger"], vl["scope"])]
