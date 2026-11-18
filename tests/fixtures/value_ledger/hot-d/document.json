@@ -1,0 +1,4897 @@
+{
+ "format": "value-ledger/2",
+ "run": {
+  "farm": "hill_of_towie",
+  "asset_code": "HOT",
+  "run_id": "sample-hot-d",
+  "register_run_id": "epr138-fresh-a955e1ae60a7a037a1c38123",
+  "method_version": "hot-d@557444a+v1-c",
+  "format": "value-ledger/2",
+  "currency": "GBP",
+  "window_from": "2016-09-28",
+  "window_to": "2024-12-31",
+  "years": 8.260095824777549,
+  "years_basis": "window_days",
+  "years_detail": [
+   {
+    "year": 2016,
+    "days_covered": 95,
+    "partial_year": true
+   },
+   {
+    "year": 2017,
+    "days_covered": 365,
+    "partial_year": false
+   },
+   {
+    "year": 2018,
+    "days_covered": 365,
+    "partial_year": false
+   },
+   {
+    "year": 2019,
+    "days_covered": 365,
+    "partial_year": false
+   },
+   {
+    "year": 2020,
+    "days_covered": 366,
+    "partial_year": false
+   },
+   {
+    "year": 2021,
+    "days_covered": 365,
+    "partial_year": false
+   },
+   {
+    "year": 2022,
+    "days_covered": 365,
+    "partial_year": false
+   },
+   {
+    "year": 2023,
+    "days_covered": 365,
+    "partial_year": false
+   },
+   {
+    "year": 2024,
+    "days_covered": 366,
+    "partial_year": false
+   }
+  ],
+  "headline_year": 866371.1921622487,
+  "today_same_years_year": 851883.5580832954,
+  "register_year": 792659.0,
+  "realised_year": 7251977.782238225,
+  "turbines": [
+   "T01",
+   "T02",
+   "T03",
+   "T04",
+   "T05",
+   "T06",
+   "T07",
+   "T08",
+   "T09",
+   "T10",
+   "T11",
+   "T12",
+   "T13",
+   "T14",
+   "T15",
+   "T16",
+   "T17",
+   "T18",
+   "T19",
+   "T20",
+   "T21"
+  ],
+  "bridge": [
+   {
+    "key": "start",
+    "label": "Today's method, same years",
+    "change": null,
+    "detail": [],
+    "headline_after": 851883.5580832954
+   },
+   {
+    "key": "claims_method",
+    "label": "How claims are counted",
+    "change": -3175.8207155503333,
+    "detail": [
+     {
+      "key": "4 curves per upgrade period",
+      "label": "Curves per upgrade period",
+      "change": -14676.345381729188
+     },
+     {
+      "key": "settings 1-4 on those curves",
+      "label": "Four settings: curtailment signed, storm on own curve, standby below cut-in, zero setpoint as curtailment",
+      "change": 78360.51398944529
+     },
+     {
+      "key": "heat per period",
+      "label": "Heat valued per period",
+      "change": 68.16865218477324
+     },
+     {
+      "key": "icing enters as a leaf",
+      "label": "Icing while running becomes a cause",
+      "change": 3235.9302675231593
+     },
+     {
+      "key": "one cause per running kWh",
+      "label": "One cause per running kWh",
+      "change": -5071.326494206325
+     },
+     {
+      "key": "stopped claims cut to the stopped seconds",
+      "label": "Stopped claims kept to their stopped seconds",
+      "change": -636.2152322197799
+     },
+     {
+      "key": "chained periods: running claims cut to the running seconds, out of today's overlap",
+      "label": "Running claims kept to their running seconds",
+      "change": -4248.133058729116
+     },
+     {
+      "key": "standing caps: curtailment under a cap that does not hold output back, to the remainder (D2)",
+      "label": "Curtailment under a cap that does not hold output back, to the remainder",
+      "change": -60208.413457819144
+     }
+    ],
+    "headline_after": 848707.737367745
+   },
+   {
+    "key": "wake_retired",
+    "label": "Today's wake line retired",
+    "change": -36529.88800725085,
+    "detail": [],
+    "headline_after": 812177.8493604942
+   },
+   {
+    "key": "peers",
+    "label": "Against peers, signed",
+    "change": 39814.69475477132,
+    "detail": [],
+    "headline_after": 851992.5441152655
+   },
+   {
+    "key": "degradation",
+    "label": "Degradation",
+    "change": 0.0,
+    "detail": [],
+    "headline_after": 851992.5441152655
+   },
+   {
+    "key": "remainder",
+    "label": "Remainder, signed",
+    "change": 15183.818580625752,
+    "detail": [],
+    "headline_after": 867176.3626958912
+   },
+   {
+    "key": "own_grain_years",
+    "label": "Company-wide lines over the years covered",
+    "change": -805.1705336426894,
+    "detail": [],
+    "headline_after": 866371.1921622485
+   }
+  ],
+  "bridge_start_basis": "today_same_years",
+  "bridge_basis": {
+   "build": "hot-d",
+   "window_from": "2016-09-28",
+   "window_to": "2024-12-31",
+   "headline_year": 866371.1921622487
+  },
+  "ranges": [
+   {
+    "key": "cut-in (alone)",
+    "basis_build": "hot-d",
+    "basis_headline_year": 866371.19,
+    "default_change": 0.0,
+    "low_change": -19206.95,
+    "high_change": 15064.76,
+    "rebuild": null
+   },
+   {
+    "key": "holds (alone)",
+    "basis_build": "hot-d",
+    "basis_headline_year": 866371.19,
+    "default_change": 0.0,
+    "low_change": -8248.0,
+    "high_change": 0.0,
+    "rebuild": null
+   },
+   {
+    "key": "anemometer (alone)",
+    "basis_build": "hot-d",
+    "basis_headline_year": 866371.19,
+    "default_change": 0.0,
+    "low_change": 0.0,
+    "high_change": 103780.26,
+    "rebuild": null
+   },
+   {
+    "key": "all defaults together",
+    "basis_build": "hot-d",
+    "basis_headline_year": 866371.19,
+    "default_change": 0.0,
+    "low_change": -27454.95,
+    "high_change": 118845.02,
+    "rebuild": null
+   }
+  ],
+  "coverage": [
+   {
+    "year": 2016,
+    "share_valued": 0.9787663603453076,
+    "share_valued_unclaimed_stops_not_counted": 0.8553049289891396,
+    "share_data_gap": 0.0054476468950153,
+    "unexplained_share_of_expected": -0.0048633330581701,
+    "whole_remainder_share_of_expected": -0.0011612915305161,
+    "degradation": 1217.56507239648,
+    "degradation_lo": -1503.9374114843836,
+    "degradation_hi": 3939.067556277344
+   },
+   {
+    "year": 2017,
+    "share_valued": 0.9649117561788796,
+    "share_valued_unclaimed_stops_not_counted": 0.8608963905196781,
+    "share_data_gap": 0.014418895412046,
+    "unexplained_share_of_expected": -0.0023383315211178,
+    "whole_remainder_share_of_expected": 0.0079692846415705,
+    "degradation": -799.7181802746609,
+    "degradation_lo": -4650.356194121286,
+    "degradation_hi": 3050.919833571964
+   },
+   {
+    "year": 2018,
+    "share_valued": 0.9700061607595856,
+    "share_valued_unclaimed_stops_not_counted": 0.8500172138870769,
+    "share_data_gap": 0.0081802203377545,
+    "unexplained_share_of_expected": -0.0001091500869254,
+    "whole_remainder_share_of_expected": 0.0099971238970741,
+    "degradation": -10386.86928920955,
+    "degradation_lo": -36244.14595707064,
+    "degradation_hi": 15470.407378651542
+   },
+   {
+    "year": 2019,
+    "share_valued": 0.9791612307023266,
+    "share_valued_unclaimed_stops_not_counted": 0.8661602159889831,
+    "share_data_gap": 0.0028321374211785,
+    "unexplained_share_of_expected": 0.0018959284377576,
+    "whole_remainder_share_of_expected": 0.0046483524261625,
+    "degradation": -13075.40239615054,
+    "degradation_lo": -45865.36355989246,
+    "degradation_hi": 19714.558767591378
+   },
+   {
+    "year": 2020,
+    "share_valued": 0.9767280697950096,
+    "share_valued_unclaimed_stops_not_counted": 0.8610334085060861,
+    "share_data_gap": 0.0049792913522421,
+    "unexplained_share_of_expected": 0.0011638016236792,
+    "whole_remainder_share_of_expected": 0.002850275451923,
+    "degradation": -16092.71067136003,
+    "degradation_lo": -55408.36021791097,
+    "degradation_hi": 23222.938875190917
+   },
+   {
+    "year": 2021,
+    "share_valued": 0.9660514967021816,
+    "share_valued_unclaimed_stops_not_counted": 0.8116239037471914,
+    "share_data_gap": 0.0117525549032398,
+    "unexplained_share_of_expected": 0.0027922654516439,
+    "whole_remainder_share_of_expected": 0.0071996372051613,
+    "degradation": -47624.96412137656,
+    "degradation_lo": -198164.1028896163,
+    "degradation_hi": 102914.1746468632
+   },
+   {
+    "year": 2022,
+    "share_valued": 0.8606191563383344,
+    "share_valued_unclaimed_stops_not_counted": 0.7357170036964558,
+    "share_data_gap": 0.0505463144161774,
+    "unexplained_share_of_expected": -0.0019028438330905,
+    "whole_remainder_share_of_expected": -0.0030498435976788,
+    "degradation": -7230.37977368061,
+    "degradation_lo": -476299.6595994671,
+    "degradation_hi": 461838.9000521059
+   },
+   {
+    "year": 2023,
+    "share_valued": 0.9207771617018192,
+    "share_valued_unclaimed_stops_not_counted": 0.7257347611799667,
+    "share_data_gap": 0.0048497861854026,
+    "unexplained_share_of_expected": -0.0008979998198631,
+    "whole_remainder_share_of_expected": -0.003094518842855,
+    "degradation": 30438.643275570874,
+    "degradation_lo": -185273.67118207476,
+    "degradation_hi": 246150.95773321652
+   },
+   {
+    "year": 2024,
+    "share_valued": 0.8594079784312024,
+    "share_valued_unclaimed_stops_not_counted": 0.7085140370659496,
+    "share_data_gap": 0.0035408896406164,
+    "unexplained_share_of_expected": 0.0014066108556263,
+    "whole_remainder_share_of_expected": -0.0021944204036655,
+    "degradation": -1434.5524515297311,
+    "degradation_lo": -45918.866702808584,
+    "degradation_hi": 43049.761799749125
+   }
+  ],
+  "checks": [
+   {
+    "n": 1,
+    "name": "Adds up",
+    "result": "passed",
+    "window": "full record",
+    "values": {}
+   },
+   {
+    "n": 2,
+    "name": "Counted once",
+    "result": "passed",
+    "window": "full record",
+    "values": {}
+   },
+   {
+    "n": 3,
+    "name": "Reconciled",
+    "result": "passed",
+    "window": "quotable",
+    "values": {
+     "tolerance_year": 10.5,
+     "ledger_year_by_line": {
+      "MKT_03": 374661.0,
+      "OPS_01": 399756.0,
+      "OPS_08": 587.0,
+      "OPS_09": 3481.0,
+      "OPS_12": 1172.0,
+      "OPS_14": 0.0,
+      "OPS_16": -4900.0,
+      "OPS_17": 0.0,
+      "MKT_02": 28922.0,
+      "FIN_05": 8498.0
+     }
+    }
+   },
+   {
+    "n": 4,
+    "name": "Roll-up",
+    "result": "passed",
+    "window": "quotable",
+    "values": {
+     "no stop timers": {
+      "q_value_year": 774757.849,
+      "q_d_value_year": 0.0,
+      "q_mwh_year": 8990.404,
+      "q_d_mwh_year": 0.0,
+      "q_value_moved_year": 399825.823,
+      "q_mwh_moved_year": 4694.728
+     },
+     "no price record": {
+      "q_value_year": 774757.849,
+      "q_d_value_year": 8215646.31,
+      "q_mwh_year": 8990.404,
+      "q_d_mwh_year": 0.0,
+      "q_value_moved_year": 4303802.167,
+      "q_mwh_moved_year": 0.0
+     }
+    }
+   },
+   {
+    "n": 5,
+    "name": "Order moves value, never creates it",
+    "result": "passed",
+    "window": "quotable",
+    "values": {
+     "swaps": 9,
+     "max_value_moved_year": 1886.552
+    }
+   },
+   {
+    "n": 8,
+    "name": "Coverage",
+    "result": "reported",
+    "window": "quotable",
+    "values": {}
+   }
+  ],
+  "lines": [
+   {
+    "line": "MKT_03",
+    "register_year": null,
+    "today_year": 405080.589372548,
+    "ledger_year": 374661.00023016136
+   },
+   {
+    "line": "OPS_01",
+    "register_year": null,
+    "today_year": 367254.3056603724,
+    "ledger_year": 399756.3268395136
+   },
+   {
+    "line": "OPS_08",
+    "register_year": null,
+    "today_year": 547.9089494735684,
+    "ledger_year": 586.8626018728498
+   },
+   {
+    "line": "OPS_09",
+    "register_year": null,
+    "today_year": 4132.794090840008,
+    "ledger_year": 3481.3226781359685
+   },
+   {
+    "line": "OPS_12",
+    "register_year": null,
+    "today_year": 918.061602053056,
+    "ledger_year": 1172.268123161369
+   },
+   {
+    "line": "OPS_14",
+    "register_year": null,
+    "today_year": 36529.89840800834,
+    "ledger_year": 0.0
+   },
+   {
+    "line": "OPS_16",
+    "register_year": null,
+    "today_year": 0.0,
+    "ledger_year": -4899.93111235084
+   },
+   {
+    "line": "OPS_17",
+    "register_year": null,
+    "today_year": 0.0,
+    "ledger_year": 0.0
+   },
+   {
+    "line": "MKT_02",
+    "register_year": 28922.0,
+    "today_year": 28922.0,
+    "ledger_year": 27426.195144182966
+   },
+   {
+    "line": "FIN_05",
+    "register_year": 8498.0,
+    "today_year": 8498.0,
+    "ledger_year": 9188.634322174346
+   }
+  ],
+  "realised": [
+   {
+    "year": 2016,
+    "value": 1597676.3833909226,
+    "mwh": 35444.70907444295,
+    "unpriced_periods": 0
+   },
+   {
+    "year": 2017,
+    "value": 5574524.236363915,
+    "mwh": 126496.94375043154,
+    "unpriced_periods": 0
+   },
+   {
+    "year": 2018,
+    "value": 6384697.161764664,
+    "mwh": 113807.22045540121,
+    "unpriced_periods": 0
+   },
+   {
+    "year": 2019,
+    "value": 4522241.051526202,
+    "mwh": 114263.61492274198,
+    "unpriced_periods": 0
+   },
+   {
+    "year": 2020,
+    "value": 3638919.6716531133,
+    "mwh": 119761.710786703,
+    "unpriced_periods": 0
+   },
+   {
+    "year": 2021,
+    "value": 10241833.004084399,
+    "mwh": 99903.59952677124,
+    "unpriced_periods": 0
+   },
+   {
+    "year": 2022,
+    "value": 15195335.635911321,
+    "mwh": 88476.10239307617,
+    "unpriced_periods": 0
+   },
+   {
+    "year": 2023,
+    "value": 6813183.042419952,
+    "mwh": 80206.23326826714,
+    "unpriced_periods": 0
+   },
+   {
+    "year": 2024,
+    "value": 5933621.2133310195,
+    "mwh": 90507.1214201675,
+    "unpriced_periods": 0
+   }
+  ]
+ },
+ "groups": [
+  {
+   "key": "curtailment",
+   "label": "Curtailment"
+  },
+  {
+   "key": "downtime",
+   "label": "Downtime"
+  },
+  {
+   "key": "weather",
+   "label": "Weather"
+  },
+  {
+   "key": "peers",
+   "label": "Against peers"
+  },
+  {
+   "key": "degradation",
+   "label": "Degradation"
+  },
+  {
+   "key": "remainder",
+   "label": "Unexplained"
+  },
+  {
+   "key": "own_grain",
+   "label": "Company-wide lines"
+  }
+ ],
+ "causes": [
+  {
+   "code": "2:MKT_03:curtailed",
+   "label": "Curtailed",
+   "group": "curtailment",
+   "cls": "CURTAILMENT",
+   "recoverability": "partly",
+   "summed": true,
+   "status_key": {
+    "trigger": "MKT_03",
+    "scope": "VL:curtailed",
+    "cls": "CURTAILMENT"
+   }
+  },
+  {
+   "code": "2:MKT_03:curtailed_held_at_zero",
+   "label": "Held at zero output",
+   "group": "curtailment",
+   "cls": "CURTAILMENT",
+   "recoverability": "partly",
+   "summed": true,
+   "status_key": {
+    "trigger": "MKT_03",
+    "scope": "VL:held_at_zero",
+    "cls": "CURTAILMENT"
+   }
+  },
+  {
+   "code": "2:OPS_17:curtailed_sector_managed",
+   "label": "Sector management (inside curtailment)",
+   "group": "curtailment",
+   "cls": "CURTAILMENT",
+   "recoverability": "partly",
+   "summed": false,
+   "status_key": {
+    "trigger": "OPS_17",
+    "scope": "VL:sector_managed",
+    "cls": "CURTAILMENT"
+   }
+  },
+  {
+   "code": "3:OPS_01:grid_outage",
+   "label": "Grid outage",
+   "group": "downtime",
+   "cls": "REALIZED",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_01",
+    "scope": "VL:grid_outage",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "4:OPS_01:downtime_fault",
+   "label": "Fault stop",
+   "group": "downtime",
+   "cls": "REALIZED",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_01",
+    "scope": "VL:fault",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "4b:OPS_01:weather_environmental_stop",
+   "label": "Weather stop",
+   "group": "weather",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_01",
+    "scope": "VL:environmental_stop",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "4b:OPS_09:weather_cold_lockout",
+   "label": "Cold lockout (timed)",
+   "group": "weather",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_09",
+    "scope": "VL:cold_lockout",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "4b:OPS_12:weather_storm_stop",
+   "label": "Storm stop",
+   "group": "weather",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_12",
+    "scope": "VL:storm_stop",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "4c:OPS_01:downtime_comms",
+   "label": "Lost communications",
+   "group": "downtime",
+   "cls": "REALIZED",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_01",
+    "scope": "VL:comms",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "5:OPS_09:weather_cold_lockout",
+   "label": "Cold lockout (not timed)",
+   "group": "weather",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_09",
+    "scope": "VL:cold_lockout",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "6:OPS_01:downtime_unknown",
+   "label": "Stopped, cause unknown",
+   "group": "downtime",
+   "cls": "REALIZED",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_01",
+    "scope": "VL:stop_unknown",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "label": "Idle in good wind",
+   "group": "downtime",
+   "cls": "REALIZED",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_01",
+    "scope": "VL:idle_above_cut_in",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "6:OPS_01:stopped_unknown_near_cut_in",
+   "label": "Idle in light wind",
+   "group": "downtime",
+   "cls": "REALIZED",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_01",
+    "scope": "VL:idle_near_cut_in",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "7:OPS_16:iced_running",
+   "label": "Running with ice",
+   "group": "weather",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_16",
+    "scope": "VL:iced_running",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "7b:OPS_12:weather_storm_derate",
+   "label": "Slowed in a storm",
+   "group": "weather",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_12",
+    "scope": "VL:storm_derate",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "7c:OPS_08:heat_derate",
+   "label": "Slowed by heat",
+   "group": "weather",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_08",
+    "scope": "VL:heat_derate",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "8:LEDGER:peer_siting",
+   "label": "Behind neighbours, siting",
+   "group": "peers",
+   "cls": "RECOVERABLE",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:peer_siting",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "8:LEDGER:peer_recoverable",
+   "label": "Behind neighbours, wake",
+   "group": "peers",
+   "cls": "RECOVERABLE",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:peer_recoverable",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "8:LEDGER:peer_broadband",
+   "label": "Behind neighbours, all winds",
+   "group": "peers",
+   "cls": "RECOVERABLE",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:peer_broadband",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "8:LEDGER:above_peers",
+   "label": "Ahead of its neighbours",
+   "group": "peers",
+   "cls": "RECOVERABLE",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:above_peers",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "8:LEDGER:degradation",
+   "label": "Degradation",
+   "group": "degradation",
+   "cls": "RECOVERABLE",
+   "recoverability": "partly",
+   "summed": false,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:degradation",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "9:LEDGER:remainder_in_claimed_periods",
+   "label": "Unexplained, during named causes",
+   "group": "remainder",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:remainder_claimed",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "9:LEDGER:remainder_unexplained",
+   "label": "Unexplained, other periods",
+   "group": "remainder",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:remainder_unexplained",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "own:MKT_02:negative_price_generation",
+   "label": "Sold while prices were below zero",
+   "group": "own_grain",
+   "cls": "RECOVERABLE",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "MKT_02",
+    "scope": "FLEET",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "own:FIN_05:parasitic_import",
+   "label": "Power drawn from the grid",
+   "group": "own_grain",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "FIN_05",
+    "scope": "FLEET",
+    "cls": "REALIZED"
+   }
+  }
+ ],
+ "by_cause": [
+  {
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 314079.0748758161,
+   "claimed_mwh_year": 3757.153316199089
+  },
+  {
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 60581.92535434525,
+   "claimed_mwh_year": 679.7334882140063
+  },
+  {
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value_year": 0.0,
+   "claimed_mwh_year": 325.71253379350713
+  },
+  {
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 34933.36328063514,
+   "claimed_mwh_year": 277.07832005290277
+  },
+  {
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 137028.7896304896,
+   "claimed_mwh_year": 1884.600149769758
+  },
+  {
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 31069.0459888533,
+   "claimed_mwh_year": 395.7486067006558
+  },
+  {
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 69.49581950110262,
+   "claimed_mwh_year": 39.17028308685386
+  },
+  {
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 929.2618038464689,
+   "claimed_mwh_year": 25.692685189892853
+  },
+  {
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 44188.065582067866,
+   "claimed_mwh_year": 490.26550658216314
+  },
+  {
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 3411.826858634866,
+   "claimed_mwh_year": 159.4467214006836
+  },
+  {
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 119041.23244240017,
+   "claimed_mwh_year": 1248.5821428740464
+  },
+  {
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 10490.344997251033,
+   "claimed_mwh_year": 141.49063027628816
+  },
+  {
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 23005.48491781652,
+   "claimed_mwh_year": 287.3387485015659
+  },
+  {
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -4899.93111235084,
+   "claimed_mwh_year": -200.87894292538644
+  },
+  {
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 243.00631931490025,
+   "claimed_mwh_year": 2.9685917854213617
+  },
+  {
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 586.8626018728498,
+   "claimed_mwh_year": 8.594961978811538
+  },
+  {
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -149443.68261767094,
+   "claimed_mwh_year": -2114.7905936971756
+  },
+  {
+   "cause": "8:LEDGER:degradation",
+   "value_year": -7867.752374091194,
+   "claimed_mwh_year": -154.37085502915747
+  },
+  {
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 113469.49724782775,
+   "claimed_mwh_year": 1509.4937613142022
+  },
+  {
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 58069.75473654267,
+   "claimed_mwh_year": 726.0778587068811
+  },
+  {
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 17719.12538807184,
+   "claimed_mwh_year": 238.02945655314235
+  },
+  {
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 16215.731730367197,
+   "claimed_mwh_year": 327.37096272600576
+  },
+  {
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -1031.9131497414387,
+   "claimed_mwh_year": -26.934015245456674
+  },
+  {
+   "cause": "own:FIN_05:parasitic_import",
+   "value_year": 9188.634322174346,
+   "claimed_mwh_year": 87.52174494530992
+  },
+  {
+   "cause": "own:MKT_02:negative_price_generation",
+   "value_year": 27426.195144182966,
+   "claimed_mwh_year": null
+  }
+ ],
+ "by_year": [
+  {
+   "year": 2016,
+   "cause": "2:MKT_03:curtailed",
+   "value": 4191.204715998581,
+   "claimed_mwh": 94.8560292020203,
+   "claims": 13692
+  },
+  {
+   "year": 2016,
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value": 92.41779666933519,
+   "claimed_mwh": 2.0849233629345725,
+   "claims": 24
+  },
+  {
+   "year": 2016,
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value": 0.0,
+   "claimed_mwh": 59.20336375353639,
+   "claims": 5723
+  },
+  {
+   "year": 2016,
+   "cause": "3:OPS_01:grid_outage",
+   "value": 274.6580819690418,
+   "claimed_mwh": 4.468746343977474,
+   "claims": 185
+  },
+  {
+   "year": 2016,
+   "cause": "4:OPS_01:downtime_fault",
+   "value": 12278.771607389257,
+   "claimed_mwh": 318.12412586239327,
+   "claims": 1861
+  },
+  {
+   "year": 2016,
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value": 4294.338392774355,
+   "claimed_mwh": 100.95826237857689,
+   "claims": 505
+  },
+  {
+   "year": 2016,
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value": 0.27411338836416266,
+   "claimed_mwh": 1.0120959795583484,
+   "claims": 40
+  },
+  {
+   "year": 2016,
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value": 76.55088813369272,
+   "claimed_mwh": 13.05241144391072,
+   "claims": 34
+  },
+  {
+   "year": 2016,
+   "cause": "4c:OPS_01:downtime_comms",
+   "value": 1532.2406221560418,
+   "claimed_mwh": 44.40218603882235,
+   "claims": 399
+  },
+  {
+   "year": 2016,
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value": 317.5422865227472,
+   "claimed_mwh": 24.534801686155074,
+   "claims": 2267
+  },
+  {
+   "year": 2016,
+   "cause": "6:OPS_01:downtime_unknown",
+   "value": 11897.15321922643,
+   "claimed_mwh": 227.3587592030154,
+   "claims": 4101
+  },
+  {
+   "year": 2016,
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value": 1920.5113154635205,
+   "claimed_mwh": 39.54468997475789,
+   "claims": 4103
+  },
+  {
+   "year": 2016,
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value": 3578.384994677408,
+   "claimed_mwh": 68.1921967903325,
+   "claims": 10986
+  },
+  {
+   "year": 2016,
+   "cause": "7:OPS_16:iced_running",
+   "value": -5707.362954745775,
+   "claimed_mwh": -135.19626107935974,
+   "claims": 23076
+  },
+  {
+   "year": 2016,
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value": 0.7703333516305473,
+   "claimed_mwh": 0.16050422813738074,
+   "claims": 2
+  },
+  {
+   "year": 2016,
+   "cause": "7c:OPS_08:heat_derate",
+   "value": 0.0,
+   "claimed_mwh": 0.09742035022198896,
+   "claims": 64
+  },
+  {
+   "year": 2016,
+   "cause": "8:LEDGER:above_peers",
+   "value": -28550.367543141198,
+   "claimed_mwh": -610.2688795520319,
+   "claims": 114580
+  },
+  {
+   "year": 2016,
+   "cause": "8:LEDGER:degradation",
+   "value": 1217.5650723964798,
+   "claimed_mwh": 26.97314949917705,
+   "claims": 238323
+  },
+  {
+   "year": 2016,
+   "cause": "8:LEDGER:peer_broadband",
+   "value": 19568.335463289528,
+   "claimed_mwh": 400.7065477855605,
+   "claims": 109997
+  },
+  {
+   "year": 2016,
+   "cause": "8:LEDGER:peer_recoverable",
+   "value": 8238.714143375446,
+   "claimed_mwh": 171.357181643732,
+   "claims": 59999
+  },
+  {
+   "year": 2016,
+   "cause": "8:LEDGER:peer_siting",
+   "value": 2751.9415133999128,
+   "claimed_mwh": 55.91624886811638,
+   "claims": 32154
+  },
+  {
+   "year": 2016,
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value": 5912.479459554324,
+   "claimed_mwh": 126.77663699421619,
+   "claims": 36584
+  },
+  {
+   "year": 2016,
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value": -7767.162144619181,
+   "claimed_mwh": -183.6546244159487,
+   "claims": 201739
+  },
+  {
+   "year": 2016,
+   "cause": "own:FIN_05:parasitic_import",
+   "value": 1105.0,
+   "claimed_mwh": 20.37,
+   "claims": null
+  },
+  {
+   "year": 2016,
+   "cause": "own:MKT_02:negative_price_generation",
+   "value": 0.0,
+   "claimed_mwh": null,
+   "claims": null
+  },
+  {
+   "year": 2017,
+   "cause": "2:MKT_03:curtailed",
+   "value": 10224.08173344287,
+   "claimed_mwh": 239.07782112014314,
+   "claims": 39395
+  },
+  {
+   "year": 2017,
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value": 570.825349184353,
+   "claimed_mwh": 12.701749261558323,
+   "claims": 133
+  },
+  {
+   "year": 2017,
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value": 0.0,
+   "claimed_mwh": 166.18412188303043,
+   "claims": 23874
+  },
+  {
+   "year": 2017,
+   "cause": "3:OPS_01:grid_outage",
+   "value": 16962.12702011145,
+   "claimed_mwh": 384.62809642769054,
+   "claims": 3248
+  },
+  {
+   "year": 2017,
+   "cause": "4:OPS_01:downtime_fault",
+   "value": 64851.62677642203,
+   "claimed_mwh": 1421.196853993962,
+   "claims": 12186
+  },
+  {
+   "year": 2017,
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value": 25899.728656230916,
+   "claimed_mwh": 535.6437739076289,
+   "claims": 3497
+  },
+  {
+   "year": 2017,
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value": 62.1741959304248,
+   "claimed_mwh": 81.57969010987657,
+   "claims": 1904
+  },
+  {
+   "year": 2017,
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value": 77.30076142059566,
+   "claimed_mwh": 9.208499682391047,
+   "claims": 24
+  },
+  {
+   "year": 2017,
+   "cause": "4c:OPS_01:downtime_comms",
+   "value": 36533.71163837007,
+   "claimed_mwh": 850.2531734577921,
+   "claims": 8472
+  },
+  {
+   "year": 2017,
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value": 3764.3432150458534,
+   "claimed_mwh": 113.99266742480353,
+   "claims": 7662
+  },
+  {
+   "year": 2017,
+   "cause": "6:OPS_01:downtime_unknown",
+   "value": 53420.762447739515,
+   "claimed_mwh": 1194.294418089509,
+   "claims": 13796
+  },
+  {
+   "year": 2017,
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value": 10178.283474373527,
+   "claimed_mwh": 229.2878613820522,
+   "claims": 25396
+  },
+  {
+   "year": 2017,
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value": 13319.249158293178,
+   "claimed_mwh": 293.41944653834946,
+   "claims": 55341
+  },
+  {
+   "year": 2017,
+   "cause": "7:OPS_16:iced_running",
+   "value": -60343.23357395969,
+   "claimed_mwh": -1174.946801838905,
+   "claims": 126062
+  },
+  {
+   "year": 2017,
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value": 1.7723624670707894,
+   "claimed_mwh": 1.3806668467530994,
+   "claims": 6
+  },
+  {
+   "year": 2017,
+   "cause": "7c:OPS_08:heat_derate",
+   "value": 181.6121000087948,
+   "claimed_mwh": 4.496987614609322,
+   "claims": 720
+  },
+  {
+   "year": 2017,
+   "cause": "8:LEDGER:above_peers",
+   "value": -101312.14421011004,
+   "claimed_mwh": -2290.0687325605845,
+   "claims": 432318
+  },
+  {
+   "year": 2017,
+   "cause": "8:LEDGER:degradation",
+   "value": -799.7181802746608,
+   "claimed_mwh": -16.497193905910134,
+   "claims": 909828
+  },
+  {
+   "year": 2017,
+   "cause": "8:LEDGER:peer_broadband",
+   "value": 68013.25741954135,
+   "claimed_mwh": 1524.5230753773094,
+   "claims": 419625
+  },
+  {
+   "year": 2017,
+   "cause": "8:LEDGER:peer_recoverable",
+   "value": 28829.352651522946,
+   "claimed_mwh": 644.2778525418307,
+   "claims": 228784
+  },
+  {
+   "year": 2017,
+   "cause": "8:LEDGER:peer_siting",
+   "value": 8793.952926071783,
+   "claimed_mwh": 199.51956596438316,
+   "claims": 114231
+  },
+  {
+   "year": 2017,
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value": 57432.03786420287,
+   "claimed_mwh": 1116.225302016042,
+   "claims": 165427
+  },
+  {
+   "year": 2017,
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value": -13028.72966360753,
+   "claimed_mwh": -239.57129603536507,
+   "claims": 744401
+  },
+  {
+   "year": 2017,
+   "cause": "own:FIN_05:parasitic_import",
+   "value": 1140.0,
+   "claimed_mwh": 25.386,
+   "claims": null
+  },
+  {
+   "year": 2017,
+   "cause": "own:MKT_02:negative_price_generation",
+   "value": 7607.0,
+   "claimed_mwh": null,
+   "claims": null
+  },
+  {
+   "year": 2018,
+   "cause": "2:MKT_03:curtailed",
+   "value": 9847.770005744986,
+   "claimed_mwh": 171.1807517126485,
+   "claims": 35787
+  },
+  {
+   "year": 2018,
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value": 143.54994621942092,
+   "claimed_mwh": 3.0348495038058876,
+   "claims": 97
+  },
+  {
+   "year": 2018,
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value": 0.0,
+   "claimed_mwh": 127.34269785614065,
+   "claims": 23877
+  },
+  {
+   "year": 2018,
+   "cause": "3:OPS_01:grid_outage",
+   "value": 11368.140641792857,
+   "claimed_mwh": 199.18060066849742,
+   "claims": 1907
+  },
+  {
+   "year": 2018,
+   "cause": "4:OPS_01:downtime_fault",
+   "value": 100248.74795606633,
+   "claimed_mwh": 1693.8428729855755,
+   "claims": 16150
+  },
+  {
+   "year": 2018,
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value": 32625.7143333736,
+   "claimed_mwh": 554.7894836716918,
+   "claims": 4800
+  },
+  {
+   "year": 2018,
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value": 53.45488299680589,
+   "claimed_mwh": 17.74715405050828,
+   "claims": 1315
+  },
+  {
+   "year": 2018,
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value": 151.2239778891084,
+   "claimed_mwh": 34.88901923740984,
+   "claims": 91
+  },
+  {
+   "year": 2018,
+   "cause": "4c:OPS_01:downtime_comms",
+   "value": 28053.41579822645,
+   "claimed_mwh": 565.4283952416405,
+   "claims": 4799
+  },
+  {
+   "year": 2018,
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value": 1565.3573857330243,
+   "claimed_mwh": 236.7222680425239,
+   "claims": 13337
+  },
+  {
+   "year": 2018,
+   "cause": "6:OPS_01:downtime_unknown",
+   "value": 51350.29999438908,
+   "claimed_mwh": 980.4674718470354,
+   "claims": 17197
+  },
+  {
+   "year": 2018,
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value": 9141.175151865325,
+   "claimed_mwh": 162.493457679525,
+   "claims": 18957
+  },
+  {
+   "year": 2018,
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value": 17070.420507583418,
+   "claimed_mwh": 299.6721117972085,
+   "claims": 73079
+  },
+  {
+   "year": 2018,
+   "cause": "7:OPS_16:iced_running",
+   "value": -69504.85560690578,
+   "claimed_mwh": -981.964471567213,
+   "claims": 135119
+  },
+  {
+   "year": 2018,
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value": 6.575689276789028,
+   "claimed_mwh": 2.801370226899948,
+   "claims": 17
+  },
+  {
+   "year": 2018,
+   "cause": "7c:OPS_08:heat_derate",
+   "value": 298.5834869501433,
+   "claimed_mwh": 5.551492620218782,
+   "claims": 590
+  },
+  {
+   "year": 2018,
+   "cause": "8:LEDGER:above_peers",
+   "value": -114679.47257057238,
+   "claimed_mwh": -2032.9951109831852,
+   "claims": 408323
+  },
+  {
+   "year": 2018,
+   "cause": "8:LEDGER:degradation",
+   "value": -10386.86928920955,
+   "claimed_mwh": -183.70511246873306,
+   "claims": 895269
+  },
+  {
+   "year": 2018,
+   "cause": "8:LEDGER:peer_broadband",
+   "value": 83191.48443301982,
+   "claimed_mwh": 1441.234038434191,
+   "claims": 410490
+  },
+  {
+   "year": 2018,
+   "cause": "8:LEDGER:peer_recoverable",
+   "value": 33054.06814861877,
+   "claimed_mwh": 582.4542508910962,
+   "claims": 222404
+  },
+  {
+   "year": 2018,
+   "cause": "8:LEDGER:peer_siting",
+   "value": 11392.434210457726,
+   "claimed_mwh": 193.93009104697163,
+   "claims": 121778
+  },
+  {
+   "year": 2018,
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value": 64593.89976938104,
+   "claimed_mwh": 1017.487052867277,
+   "claims": 171005
+  },
+  {
+   "year": 2018,
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value": -697.6289961900873,
+   "claimed_mwh": -33.21005440518773,
+   "claims": 724264
+  },
+  {
+   "year": 2018,
+   "cause": "own:FIN_05:parasitic_import",
+   "value": 4210.0,
+   "claimed_mwh": 74.899,
+   "claims": null
+  },
+  {
+   "year": 2018,
+   "cause": "own:MKT_02:negative_price_generation",
+   "value": 2278.0,
+   "claimed_mwh": null,
+   "claims": null
+  },
+  {
+   "year": 2019,
+   "cause": "2:MKT_03:curtailed",
+   "value": 7659.055161487827,
+   "claimed_mwh": 201.10966845879184,
+   "claims": 35702
+  },
+  {
+   "year": 2019,
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value": 85.78003935234483,
+   "claimed_mwh": 2.0797653070582154,
+   "claims": 94
+  },
+  {
+   "year": 2019,
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value": 0.0,
+   "claimed_mwh": 160.62507247752518,
+   "claims": 24687
+  },
+  {
+   "year": 2019,
+   "cause": "3:OPS_01:grid_outage",
+   "value": 2309.539092575241,
+   "claimed_mwh": 67.21408023689312,
+   "claims": 497
+  },
+  {
+   "year": 2019,
+   "cause": "4:OPS_01:downtime_fault",
+   "value": 21820.777219928077,
+   "claimed_mwh": 508.8640266047289,
+   "claims": 7160
+  },
+  {
+   "year": 2019,
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value": 34150.429317416085,
+   "claimed_mwh": 644.7041939744969,
+   "claims": 5024
+  },
+  {
+   "year": 2019,
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value": 42.392331377868935,
+   "claimed_mwh": 52.8834497807987,
+   "claims": 3005
+  },
+  {
+   "year": 2019,
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value": 3.186108917384691,
+   "claimed_mwh": 1.93754472340389,
+   "claims": 6
+  },
+  {
+   "year": 2019,
+   "cause": "4c:OPS_01:downtime_comms",
+   "value": 8826.316049575355,
+   "claimed_mwh": 200.1743699355784,
+   "claims": 1989
+  },
+  {
+   "year": 2019,
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value": 439.0053923548052,
+   "claimed_mwh": 38.55767851960579,
+   "claims": 7036
+  },
+  {
+   "year": 2019,
+   "cause": "6:OPS_01:downtime_unknown",
+   "value": 31458.815755031577,
+   "claimed_mwh": 814.123405517554,
+   "claims": 12665
+  },
+  {
+   "year": 2019,
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value": 4712.4664375319535,
+   "claimed_mwh": 110.2159013382029,
+   "claims": 15514
+  },
+  {
+   "year": 2019,
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value": 12415.283611408177,
+   "claimed_mwh": 293.6808491702037,
+   "claims": 71642
+  },
+  {
+   "year": 2019,
+   "cause": "7:OPS_16:iced_running",
+   "value": 12124.373548868152,
+   "claimed_mwh": 197.03826486012355,
+   "claims": 91608
+  },
+  {
+   "year": 2019,
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value": 0.6986954127890121,
+   "claimed_mwh": 0.3701597870388649,
+   "claims": 2
+  },
+  {
+   "year": 2019,
+   "cause": "7c:OPS_08:heat_derate",
+   "value": 397.082689754445,
+   "claimed_mwh": 11.52324606956616,
+   "claims": 1238
+  },
+  {
+   "year": 2019,
+   "cause": "8:LEDGER:above_peers",
+   "value": -87810.54902414844,
+   "claimed_mwh": -2168.0599999931405,
+   "claims": 423408
+  },
+  {
+   "year": 2019,
+   "cause": "8:LEDGER:degradation",
+   "value": -13075.40239615054,
+   "claimed_mwh": -336.8897495917936,
+   "claims": 930309
+  },
+  {
+   "year": 2019,
+   "cause": "8:LEDGER:peer_broadband",
+   "value": 61777.21556696177,
+   "claimed_mwh": 1503.5729578248552,
+   "claims": 432579
+  },
+  {
+   "year": 2019,
+   "cause": "8:LEDGER:peer_recoverable",
+   "value": 24807.49999157202,
+   "claimed_mwh": 599.1899826799731,
+   "claims": 232658
+  },
+  {
+   "year": 2019,
+   "cause": "8:LEDGER:peer_siting",
+   "value": 9490.88474477264,
+   "claimed_mwh": 236.23253042960627,
+   "claims": 131163
+  },
+  {
+   "year": 2019,
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value": 12547.170379081337,
+   "claimed_mwh": 244.04797368470656,
+   "claims": 128313
+  },
+  {
+   "year": 2019,
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value": 8642.758977288804,
+   "claimed_mwh": 269.9555362217418,
+   "claims": 801996
+  },
+  {
+   "year": 2019,
+   "cause": "own:FIN_05:parasitic_import",
+   "value": 2146.0,
+   "claimed_mwh": 49.706,
+   "claims": null
+  },
+  {
+   "year": 2019,
+   "cause": "own:MKT_02:negative_price_generation",
+   "value": 28262.0,
+   "claimed_mwh": null,
+   "claims": null
+  },
+  {
+   "year": 2020,
+   "cause": "2:MKT_03:curtailed",
+   "value": 6246.189852522768,
+   "claimed_mwh": 211.75208974499049,
+   "claims": 33753
+  },
+  {
+   "year": 2020,
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value": 146.49001760841168,
+   "claimed_mwh": 4.8419775830046206,
+   "claims": 121
+  },
+  {
+   "year": 2020,
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value": 0.0,
+   "claimed_mwh": 160.57948953892227,
+   "claims": 23639
+  },
+  {
+   "year": 2020,
+   "cause": "3:OPS_01:grid_outage",
+   "value": 649.1822752624071,
+   "claimed_mwh": 23.259207899967905,
+   "claims": 380
+  },
+  {
+   "year": 2020,
+   "cause": "4:OPS_01:downtime_fault",
+   "value": 79308.0813944226,
+   "claimed_mwh": 3032.4030400311435,
+   "claims": 22706
+  },
+  {
+   "year": 2020,
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value": 4841.809053920014,
+   "claimed_mwh": 158.7123220674904,
+   "claims": 2423
+  },
+  {
+   "year": 2020,
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value": 9.020191143398606,
+   "claimed_mwh": 18.029533571412106,
+   "claims": 633
+  },
+  {
+   "year": 2020,
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value": 0.11078621706942116,
+   "claimed_mwh": 4.20337366790479,
+   "claims": 11
+  },
+  {
+   "year": 2020,
+   "cause": "4c:OPS_01:downtime_comms",
+   "value": 4182.826143399306,
+   "claimed_mwh": 169.83688594679813,
+   "claims": 1914
+  },
+  {
+   "year": 2020,
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value": 1610.5000172176162,
+   "claimed_mwh": 277.88697501749186,
+   "claims": 11868
+  },
+  {
+   "year": 2020,
+   "cause": "6:OPS_01:downtime_unknown",
+   "value": 39740.545369632084,
+   "claimed_mwh": 1397.7343532877273,
+   "claims": 17681
+  },
+  {
+   "year": 2020,
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value": 3238.519530816338,
+   "claimed_mwh": 99.238177980897,
+   "claims": 15979
+  },
+  {
+   "year": 2020,
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value": 11184.048101864,
+   "claimed_mwh": 320.4327444126755,
+   "claims": 74623
+  },
+  {
+   "year": 2020,
+   "cause": "7:OPS_16:iced_running",
+   "value": -2061.743518221558,
+   "claimed_mwh": -146.09686554079727,
+   "claims": 83607
+  },
+  {
+   "year": 2020,
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value": 36.58596358579739,
+   "claimed_mwh": 0.8617540840078111,
+   "claims": 19
+  },
+  {
+   "year": 2020,
+   "cause": "7c:OPS_08:heat_derate",
+   "value": 118.12414435086707,
+   "claimed_mwh": 3.909908788516188,
+   "claims": 429
+  },
+  {
+   "year": 2020,
+   "cause": "8:LEDGER:above_peers",
+   "value": -66394.67663115499,
+   "claimed_mwh": -2110.4212985008394,
+   "claims": 416688
+  },
+  {
+   "year": 2020,
+   "cause": "8:LEDGER:degradation",
+   "value": -16092.710671360028,
+   "claimed_mwh": -519.261826595318,
+   "claims": 908804
+  },
+  {
+   "year": 2020,
+   "cause": "8:LEDGER:peer_broadband",
+   "value": 46234.40953625349,
+   "claimed_mwh": 1428.3288114535737,
+   "claims": 419387
+  },
+  {
+   "year": 2020,
+   "cause": "8:LEDGER:peer_recoverable",
+   "value": 20525.019980504596,
+   "claimed_mwh": 630.7343519488267,
+   "claims": 227950
+  },
+  {
+   "year": 2020,
+   "cause": "8:LEDGER:peer_siting",
+   "value": 6976.454268824136,
+   "claimed_mwh": 217.1730209497811,
+   "claims": 127439
+  },
+  {
+   "year": 2020,
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value": 6146.320216370379,
+   "claimed_mwh": 219.09109845794603,
+   "claims": 117416
+  },
+  {
+   "year": 2020,
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value": 4241.451795853326,
+   "claimed_mwh": 56.58555104787828,
+   "claims": 791388
+  },
+  {
+   "year": 2020,
+   "cause": "own:FIN_05:parasitic_import",
+   "value": 2515.0,
+   "claimed_mwh": 74.293,
+   "claims": null
+  },
+  {
+   "year": 2020,
+   "cause": "own:MKT_02:negative_price_generation",
+   "value": 54112.0,
+   "claimed_mwh": null,
+   "claims": null
+  },
+  {
+   "year": 2021,
+   "cause": "2:MKT_03:curtailed",
+   "value": 19998.20442931272,
+   "claimed_mwh": 200.57401743173486,
+   "claims": 32673
+  },
+  {
+   "year": 2021,
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value": 700.7961088498264,
+   "claimed_mwh": 4.996669505205994,
+   "claims": 143
+  },
+  {
+   "year": 2021,
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value": 0.0,
+   "claimed_mwh": 148.23265111809005,
+   "claims": 21679
+  },
+  {
+   "year": 2021,
+   "cause": "3:OPS_01:grid_outage",
+   "value": 2586.2821701540106,
+   "claimed_mwh": 17.811693470319366,
+   "claims": 762
+  },
+  {
+   "year": 2021,
+   "cause": "4:OPS_01:downtime_fault",
+   "value": 255051.65364617307,
+   "claimed_mwh": 1980.398941973755,
+   "claims": 17488
+  },
+  {
+   "year": 2021,
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value": 29655.240414637377,
+   "claimed_mwh": 290.15459380275473,
+   "claims": 4181
+  },
+  {
+   "year": 2021,
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value": 171.45049850261302,
+   "claimed_mwh": 36.08537761054053,
+   "claims": 2513
+  },
+  {
+   "year": 2021,
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value": 1745.3748389581986,
+   "claimed_mwh": 30.703039242877136,
+   "claims": 80
+  },
+  {
+   "year": 2021,
+   "cause": "4c:OPS_01:downtime_comms",
+   "value": 102012.82301991513,
+   "claimed_mwh": 830.7203131986346,
+   "claims": 6302
+  },
+  {
+   "year": 2021,
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value": 4648.450344038057,
+   "claimed_mwh": 130.5098307802092,
+   "claims": 18386
+  },
+  {
+   "year": 2021,
+   "cause": "6:OPS_01:downtime_unknown",
+   "value": 167893.17939511852,
+   "claimed_mwh": 1386.993918380749,
+   "claims": 23610
+  },
+  {
+   "year": 2021,
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value": 15969.969809596096,
+   "claimed_mwh": 136.2700807474279,
+   "claims": 16107
+  },
+  {
+   "year": 2021,
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value": 36912.04309069822,
+   "claimed_mwh": 314.9413822601705,
+   "claims": 81079
+  },
+  {
+   "year": 2021,
+   "cause": "7:OPS_16:iced_running",
+   "value": -1932.5542970830556,
+   "claimed_mwh": -150.44853858573452,
+   "claims": 143552
+  },
+  {
+   "year": 2021,
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value": 642.9072979671407,
+   "claimed_mwh": 5.4350427775119154,
+   "claims": 43
+  },
+  {
+   "year": 2021,
+   "cause": "7c:OPS_08:heat_derate",
+   "value": 645.491713593624,
+   "claimed_mwh": 7.905509828595668,
+   "claims": 1309
+  },
+  {
+   "year": 2021,
+   "cause": "8:LEDGER:above_peers",
+   "value": -193130.49239667345,
+   "claimed_mwh": -1794.830133070264,
+   "claims": 370983
+  },
+  {
+   "year": 2021,
+   "cause": "8:LEDGER:degradation",
+   "value": -47624.96412137656,
+   "claimed_mwh": -498.3197997651216,
+   "claims": 840001
+  },
+  {
+   "year": 2021,
+   "cause": "8:LEDGER:peer_broadband",
+   "value": 148042.0688685297,
+   "claimed_mwh": 1339.5286348814543,
+   "claims": 390982
+  },
+  {
+   "year": 2021,
+   "cause": "8:LEDGER:peer_recoverable",
+   "value": 64425.99849822193,
+   "claimed_mwh": 567.051627865789,
+   "claims": 211255
+  },
+  {
+   "year": 2021,
+   "cause": "8:LEDGER:peer_siting",
+   "value": 23352.64244567035,
+   "claimed_mwh": 226.11542122647458,
+   "claims": 123121
+  },
+  {
+   "year": 2021,
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value": 45516.74171032608,
+   "claimed_mwh": 528.0608562907938,
+   "claims": 176871
+  },
+  {
+   "year": 2021,
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value": 28836.874322596872,
+   "claimed_mwh": 218.5885617672796,
+   "claims": 663130
+  },
+  {
+   "year": 2021,
+   "cause": "own:FIN_05:parasitic_import",
+   "value": 21076.0,
+   "claimed_mwh": 159.519,
+   "claims": null
+  },
+  {
+   "year": 2021,
+   "cause": "own:MKT_02:negative_price_generation",
+   "value": 17762.0,
+   "claimed_mwh": null,
+   "claims": null
+  },
+  {
+   "year": 2022,
+   "cause": "2:MKT_03:curtailed",
+   "value": 1304131.4724401152,
+   "claimed_mwh": 11152.102446447549,
+   "claims": 82659
+  },
+  {
+   "year": 2022,
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value": 322587.0344219551,
+   "claimed_mwh": 2800.4461994419203,
+   "claims": 20397
+  },
+  {
+   "year": 2022,
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value": 0.0,
+   "claimed_mwh": 542.4741685916129,
+   "claims": 22338
+  },
+  {
+   "year": 2022,
+   "cause": "3:OPS_01:grid_outage",
+   "value": 232611.6390941962,
+   "claimed_mwh": 1227.400309363278,
+   "claims": 6861
+  },
+  {
+   "year": 2022,
+   "cause": "4:OPS_01:downtime_fault",
+   "value": 295122.6827506436,
+   "claimed_mwh": 1786.8007963916987,
+   "claims": 17269
+  },
+  {
+   "year": 2022,
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value": 41479.76020129991,
+   "claimed_mwh": 214.58158792025012,
+   "claims": 3051
+  },
+  {
+   "year": 2022,
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value": 108.83452622894889,
+   "claimed_mwh": 32.80243815165695,
+   "claims": 1570
+  },
+  {
+   "year": 2022,
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value": 3840.565843922801,
+   "claimed_mwh": 32.66625134071996,
+   "claims": 85
+  },
+  {
+   "year": 2022,
+   "cause": "4c:OPS_01:downtime_comms",
+   "value": 128371.54310453477,
+   "claimed_mwh": 623.0406461437608,
+   "claims": 9340
+  },
+  {
+   "year": 2022,
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value": 4668.720610434641,
+   "claimed_mwh": 234.28856588987227,
+   "claims": 13514
+  },
+  {
+   "year": 2022,
+   "cause": "6:OPS_01:downtime_unknown",
+   "value": 526078.8197142093,
+   "claimed_mwh": 2866.5896709073736,
+   "claims": 39828
+  },
+  {
+   "year": 2022,
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value": 18256.324972105333,
+   "claimed_mwh": 100.40081801007463,
+   "claims": 13420
+  },
+  {
+   "year": 2022,
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value": 52709.63441427598,
+   "claimed_mwh": 276.51231811079776,
+   "claims": 51491
+  },
+  {
+   "year": 2022,
+   "cause": "7:OPS_16:iced_running",
+   "value": 21470.11884599429,
+   "claimed_mwh": 39.62061473493542,
+   "claims": 102452
+  },
+  {
+   "year": 2022,
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value": 945.6628738728353,
+   "claimed_mwh": 6.400421765445159,
+   "claims": 49
+  },
+  {
+   "year": 2022,
+   "cause": "7c:OPS_08:heat_derate",
+   "value": 1390.7451523674047,
+   "claimed_mwh": 9.882292414726296,
+   "claims": 1022
+  },
+  {
+   "year": 2022,
+   "cause": "8:LEDGER:above_peers",
+   "value": -282935.96029448346,
+   "claimed_mwh": -1656.465320172486,
+   "claims": 304484
+  },
+  {
+   "year": 2022,
+   "cause": "8:LEDGER:degradation",
+   "value": -7230.379773680608,
+   "claimed_mwh": -35.836044497196625,
+   "claims": 637697
+  },
+  {
+   "year": 2022,
+   "cause": "8:LEDGER:peer_broadband",
+   "value": 233579.48532886556,
+   "claimed_mwh": 1266.7373183187497,
+   "claims": 333906
+  },
+  {
+   "year": 2022,
+   "cause": "8:LEDGER:peer_recoverable",
+   "value": 130207.50697324751,
+   "claimed_mwh": 730.4610592720912,
+   "claims": 191375
+  },
+  {
+   "year": 2022,
+   "cause": "8:LEDGER:peer_siting",
+   "value": 36530.14028871621,
+   "claimed_mwh": 218.94144895263543,
+   "claims": 94377
+  },
+  {
+   "year": 2022,
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value": -18655.516566982456,
+   "claimed_mwh": -50.33461352995268,
+   "claims": 161199
+  },
+  {
+   "year": 2022,
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value": -30949.03394801054,
+   "claimed_mwh": -240.55697794567288,
+   "claims": 520253
+  },
+  {
+   "year": 2022,
+   "cause": "own:FIN_05:parasitic_import",
+   "value": 23950.0,
+   "claimed_mwh": 95.02,
+   "claims": null
+  },
+  {
+   "year": 2022,
+   "cause": "own:MKT_02:negative_price_generation",
+   "value": 19481.0,
+   "claimed_mwh": null,
+   "claims": null
+  },
+  {
+   "year": 2023,
+   "cause": "2:MKT_03:curtailed",
+   "value": 866213.3224564495,
+   "claimed_mwh": 9993.739282181261,
+   "claims": 69158
+  },
+  {
+   "year": 2023,
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value": 119903.20883631204,
+   "claimed_mwh": 1266.0542205221075,
+   "claims": 6582
+  },
+  {
+   "year": 2023,
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value": 0.0,
+   "claimed_mwh": 642.5680160620865,
+   "claims": 18736
+  },
+  {
+   "year": 2023,
+   "cause": "3:OPS_01:grid_outage",
+   "value": 3606.9038989974824,
+   "claimed_mwh": 76.96337354966637,
+   "claims": 758
+  },
+  {
+   "year": 2023,
+   "cause": "4:OPS_01:downtime_fault",
+   "value": 122224.95657203009,
+   "claimed_mwh": 1560.4385691144473,
+   "claims": 12259
+  },
+  {
+   "year": 2023,
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value": 57071.01677142975,
+   "claimed_mwh": 446.13737987839437,
+   "claims": 5386
+  },
+  {
+   "year": 2023,
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value": 71.28321554464898,
+   "claimed_mwh": 59.78334846508804,
+   "claims": 3401
+  },
+  {
+   "year": 2023,
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value": 1017.9989021487446,
+   "claimed_mwh": 33.6176229122534,
+   "claims": 88
+  },
+  {
+   "year": 2023,
+   "cause": "4c:OPS_01:downtime_comms",
+   "value": 30574.45878223687,
+   "claimed_mwh": 328.7713412916168,
+   "claims": 3718
+  },
+  {
+   "year": 2023,
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value": 8994.516445420883,
+   "claimed_mwh": 130.9665089730161,
+   "claims": 16051
+  },
+  {
+   "year": 2023,
+   "cause": "6:OPS_01:downtime_unknown",
+   "value": 60897.535613373984,
+   "claimed_mwh": 739.7816267038014,
+   "claims": 16049
+  },
+  {
+   "year": 2023,
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value": 7932.3356407969995,
+   "claimed_mwh": 100.70386767432127,
+   "claims": 11475
+  },
+  {
+   "year": 2023,
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value": 24304.667717226377,
+   "claimed_mwh": 262.8613696922131,
+   "claims": 56475
+  },
+  {
+   "year": 2023,
+   "cause": "7:OPS_16:iced_running",
+   "value": 26874.52497924121,
+   "claimed_mwh": 250.29957981254464,
+   "claims": 79940
+  },
+  {
+   "year": 2023,
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value": 331.35813473273294,
+   "claimed_mwh": 6.052528935255591,
+   "claims": 58
+  },
+  {
+   "year": 2023,
+   "cause": "7c:OPS_08:heat_derate",
+   "value": 1331.7535054099903,
+   "claimed_mwh": 18.614229938984053,
+   "claims": 1408
+  },
+  {
+   "year": 2023,
+   "cause": "8:LEDGER:above_peers",
+   "value": -179459.02505177885,
+   "claimed_mwh": -2126.0563264216808,
+   "claims": 314542
+  },
+  {
+   "year": 2023,
+   "cause": "8:LEDGER:degradation",
+   "value": 30438.643275570874,
+   "claimed_mwh": 301.9575245494952,
+   "claims": 492862
+  },
+  {
+   "year": 2023,
+   "cause": "8:LEDGER:peer_broadband",
+   "value": 138419.8003890573,
+   "claimed_mwh": 1579.487432453432,
+   "claims": 355252
+  },
+  {
+   "year": 2023,
+   "cause": "8:LEDGER:peer_recoverable",
+   "value": 95610.44586266662,
+   "claimed_mwh": 1040.339765016252,
+   "claims": 216857
+  },
+  {
+   "year": 2023,
+   "cause": "8:LEDGER:peer_siting",
+   "value": 25249.134767485823,
+   "claimed_mwh": 295.79150548102945,
+   "claims": 97805
+  },
+  {
+   "year": 2023,
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value": -16575.120757652836,
+   "claimed_mwh": -187.5889463759653,
+   "claims": 117781
+  },
+  {
+   "year": 2023,
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value": -6776.383586384517,
+   "claimed_mwh": -37.88958711006006,
+   "claims": 594536
+  },
+  {
+   "year": 2023,
+   "cause": "own:FIN_05:parasitic_import",
+   "value": 12236.0,
+   "claimed_mwh": 128.687,
+   "claims": null
+  },
+  {
+   "year": 2023,
+   "cause": "own:MKT_02:negative_price_generation",
+   "value": 47807.0,
+   "claimed_mwh": null,
+   "claims": null
+  },
+  {
+   "year": 2024,
+   "cause": "2:MKT_03:curtailed",
+   "value": 365811.9542366495,
+   "claimed_mwh": 8770.054313886083,
+   "claims": 67525
+  },
+  {
+   "year": 2024,
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value": 56182.40616026148,
+   "claimed_mwh": 1518.4233934703973,
+   "claims": 9078
+  },
+  {
+   "year": 2024,
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value": 0.0,
+   "claimed_mwh": 683.2071591845202,
+   "claims": 22463
+  },
+  {
+   "year": 2024,
+   "cause": "3:OPS_01:grid_outage",
+   "value": 18184.45590475294,
+   "claimed_mwh": 287.76736664506944,
+   "claims": 2282
+  },
+  {
+   "year": 2024,
+   "cause": "4:OPS_01:downtime_fault",
+   "value": 180963.63517805334,
+   "claimed_mwh": 3264.9086015306166,
+   "claims": 25505
+  },
+  {
+   "year": 2024,
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value": 26615.2599112668,
+   "claimed_mwh": 323.239816268335,
+   "claims": 2781
+  },
+  {
+   "year": 2024,
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value": 55.1581733874786,
+   "claimed_mwh": 23.627204061636654,
+   "claims": 1272
+  },
+  {
+   "year": 2024,
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value": 763.4794384698766,
+   "claimed_mwh": 51.94627941348713,
+   "claims": 136
+  },
+  {
+   "year": 2024,
+   "cause": "4c:OPS_01:downtime_comms",
+   "value": 24910.320861021322,
+   "claimed_mwh": 437.01275269713216,
+   "claims": 2530
+  },
+  {
+   "year": 2024,
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value": 2173.5810931061305,
+   "claimed_mwh": 129.585901382578,
+   "claims": 13842
+  },
+  {
+   "year": 2024,
+   "cause": "6:OPS_01:downtime_unknown",
+   "value": 40554.87556512287,
+   "claimed_mwh": 706.0645213089497,
+   "claims": 14114
+  },
+  {
+   "year": 2024,
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value": 15301.66857972023,
+   "claimed_mwh": 190.57130960305275,
+   "claims": 12565
+  },
+  {
+   "year": 2024,
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value": 18533.778320612368,
+   "claimed_mwh": 243.7331780226394,
+   "claims": 50434
+  },
+  {
+   "year": 2024,
+   "cause": "7:OPS_16:iced_running",
+   "value": 38606.832053985425,
+   "claimed_mwh": 442.41516146069375,
+   "claims": 81066
+  },
+  {
+   "year": 2024,
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value": 40.924132900781665,
+   "claimed_mwh": 1.05840396117815,
+   "claims": 12
+  },
+  {
+   "year": 2024,
+   "cause": "7c:OPS_08:heat_derate",
+   "value": 484.14853501274666,
+   "claimed_mwh": 9.014121929864503,
+   "claims": 509
+  },
+  {
+   "year": 2024,
+   "cause": "8:LEDGER:above_peers",
+   "value": -180146.45110754223,
+   "claimed_mwh": -2679.207152022662,
+   "claims": 336573
+  },
+  {
+   "year": 2024,
+   "cause": "8:LEDGER:degradation",
+   "value": -1434.5524515297316,
+   "claimed_mwh": -13.539002318283165,
+   "claims": 479266
+  },
+  {
+   "year": 2024,
+   "cause": "8:LEDGER:peer_broadband",
+   "value": 138442.863450871,
+   "claimed_mwh": 1984.4442988300757,
+   "claims": 324058
+  },
+  {
+   "year": 2024,
+   "cause": "8:LEDGER:peer_recoverable",
+   "value": 73963.1323954426,
+   "claimed_mwh": 1031.6066173085412,
+   "claims": 186237
+  },
+  {
+   "year": 2024,
+   "cause": "8:LEDGER:peer_siting",
+   "value": 21824.088471323477,
+   "claimed_mwh": 322.5262873296821,
+   "claims": 101795
+  },
+  {
+   "year": 2024,
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value": -22974.514112561832,
+   "claimed_mwh": -309.6498380385769,
+   "claims": 137746
+  },
+  {
+   "year": 2024,
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value": 8974.151743360544,
+   "claimed_mwh": -32.72465599815674,
+   "claims": 563232
+  },
+  {
+   "year": 2024,
+   "cause": "own:FIN_05:parasitic_import",
+   "value": 7521.0,
+   "claimed_mwh": 95.05799999999999,
+   "claims": null
+  },
+  {
+   "year": 2024,
+   "cause": "own:MKT_02:negative_price_generation",
+   "value": 49234.0,
+   "claimed_mwh": null,
+   "claims": null
+  }
+ ],
+ "by_turbine": [
+  {
+   "turbine": "T01",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 14092.203205701917
+  },
+  {
+   "turbine": "T01",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 1799.609804484146
+  },
+  {
+   "turbine": "T01",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 442.02088397163476
+  },
+  {
+   "turbine": "T01",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 5226.855547412524
+  },
+  {
+   "turbine": "T01",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 2018.290990676128
+  },
+  {
+   "turbine": "T01",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 1.6022933031135584
+  },
+  {
+   "turbine": "T01",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 60.06931204216884
+  },
+  {
+   "turbine": "T01",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 1441.827504500111
+  },
+  {
+   "turbine": "T01",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 46.70351247158116
+  },
+  {
+   "turbine": "T01",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 5253.463492091198
+  },
+  {
+   "turbine": "T01",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 579.4653647034753
+  },
+  {
+   "turbine": "T01",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 786.5133520962396
+  },
+  {
+   "turbine": "T01",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": 2.7002004502848798
+  },
+  {
+   "turbine": "T01",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 6.067347728862984
+  },
+  {
+   "turbine": "T01",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 30.31862053236566
+  },
+  {
+   "turbine": "T01",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -97.15272596476277
+  },
+  {
+   "turbine": "T01",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 2257.8098614912474
+  },
+  {
+   "turbine": "T01",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 15128.715429139713
+  },
+  {
+   "turbine": "T01",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 15336.652315611063
+  },
+  {
+   "turbine": "T01",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 3200.626291229261
+  },
+  {
+   "turbine": "T01",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 587.3672326876487
+  },
+  {
+   "turbine": "T01",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -2191.394410557591
+  },
+  {
+   "turbine": "T02",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 17436.246592283227
+  },
+  {
+   "turbine": "T02",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 3612.624937700572
+  },
+  {
+   "turbine": "T02",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 636.5007403869208
+  },
+  {
+   "turbine": "T02",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 6496.468821695367
+  },
+  {
+   "turbine": "T02",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 906.4196329328794
+  },
+  {
+   "turbine": "T02",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 0.05435035974098077
+  },
+  {
+   "turbine": "T02",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 20.566997154259653
+  },
+  {
+   "turbine": "T02",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 809.6836893199307
+  },
+  {
+   "turbine": "T02",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 1.565763950802556
+  },
+  {
+   "turbine": "T02",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 3442.9859835520087
+  },
+  {
+   "turbine": "T02",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 530.9076728224288
+  },
+  {
+   "turbine": "T02",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 1230.499357470191
+  },
+  {
+   "turbine": "T02",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -1145.5150071882945
+  },
+  {
+   "turbine": "T02",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 2.811641786970746
+  },
+  {
+   "turbine": "T02",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 14.37404590906047
+  },
+  {
+   "turbine": "T02",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -6807.6035001397995
+  },
+  {
+   "turbine": "T02",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 2359.844783776606
+  },
+  {
+   "turbine": "T02",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 512.7965604415333
+  },
+  {
+   "turbine": "T02",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 1124.9084163269677
+  },
+  {
+   "turbine": "T02",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 33.40188530894955
+  },
+  {
+   "turbine": "T02",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -2793.933519333396
+  },
+  {
+   "turbine": "T02",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 474.21924359423593
+  },
+  {
+   "turbine": "T03",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 16128.467905995627
+  },
+  {
+   "turbine": "T03",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 3328.613032209313
+  },
+  {
+   "turbine": "T03",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 511.6095246687722
+  },
+  {
+   "turbine": "T03",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 5302.77014533673
+  },
+  {
+   "turbine": "T03",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 2302.1787615340595
+  },
+  {
+   "turbine": "T03",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 2.9675282250502906
+  },
+  {
+   "turbine": "T03",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 81.01069495262053
+  },
+  {
+   "turbine": "T03",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 1028.2759916927287
+  },
+  {
+   "turbine": "T03",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 106.08350993227319
+  },
+  {
+   "turbine": "T03",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 3453.1823193956925
+  },
+  {
+   "turbine": "T03",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 493.4411516543506
+  },
+  {
+   "turbine": "T03",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 627.3369907756689
+  },
+  {
+   "turbine": "T03",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -746.126981181337
+  },
+  {
+   "turbine": "T03",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 18.669169524654937
+  },
+  {
+   "turbine": "T03",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 42.93422631261522
+  },
+  {
+   "turbine": "T03",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -2288.849902624563
+  },
+  {
+   "turbine": "T03",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 1344.9663853156535
+  },
+  {
+   "turbine": "T03",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 5230.025144970545
+  },
+  {
+   "turbine": "T03",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 7464.309232150614
+  },
+  {
+   "turbine": "T03",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 263.6753088014951
+  },
+  {
+   "turbine": "T03",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 2130.937705543874
+  },
+  {
+   "turbine": "T03",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 1562.0783756149242
+  },
+  {
+   "turbine": "T04",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 15026.317724750532
+  },
+  {
+   "turbine": "T04",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 2332.167396012924
+  },
+  {
+   "turbine": "T04",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 577.3530730993732
+  },
+  {
+   "turbine": "T04",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 2412.0731023702483
+  },
+  {
+   "turbine": "T04",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 1485.624983821825
+  },
+  {
+   "turbine": "T04",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 1.2986518131907014
+  },
+  {
+   "turbine": "T04",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 2.410364215987011
+  },
+  {
+   "turbine": "T04",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 1391.4185205323488
+  },
+  {
+   "turbine": "T04",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 3.656748583864135
+  },
+  {
+   "turbine": "T04",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 2495.7716120393325
+  },
+  {
+   "turbine": "T04",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 392.68124920260885
+  },
+  {
+   "turbine": "T04",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 673.9988385729018
+  },
+  {
+   "turbine": "T04",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -144.90980339831003
+  },
+  {
+   "turbine": "T04",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 11.131620010840996
+  },
+  {
+   "turbine": "T04",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 33.5252319774909
+  },
+  {
+   "turbine": "T04",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -4138.601800760784
+  },
+  {
+   "turbine": "T04",
+   "cause": "8:LEDGER:degradation",
+   "value_year": -3429.722093936354
+  },
+  {
+   "turbine": "T04",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 2623.0561666275003
+  },
+  {
+   "turbine": "T04",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 1067.1248499343408
+  },
+  {
+   "turbine": "T04",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 1454.2008474415554
+  },
+  {
+   "turbine": "T04",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 2600.9039701639126
+  },
+  {
+   "turbine": "T04",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -105.7365306157991
+  },
+  {
+   "turbine": "T05",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 14172.360997123104
+  },
+  {
+   "turbine": "T05",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 3018.54059255533
+  },
+  {
+   "turbine": "T05",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 559.9898339866851
+  },
+  {
+   "turbine": "T05",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 3860.368000513064
+  },
+  {
+   "turbine": "T05",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 687.7814630476171
+  },
+  {
+   "turbine": "T05",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 0.13819375616309545
+  },
+  {
+   "turbine": "T05",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 55.42107365485948
+  },
+  {
+   "turbine": "T05",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 920.7842195935368
+  },
+  {
+   "turbine": "T05",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 11.439689052189363
+  },
+  {
+   "turbine": "T05",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 8265.025280956228
+  },
+  {
+   "turbine": "T05",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 460.9993106250165
+  },
+  {
+   "turbine": "T05",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 968.9333159698637
+  },
+  {
+   "turbine": "T05",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": 854.7751756333078
+  },
+  {
+   "turbine": "T05",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 30.75590521865795
+  },
+  {
+   "turbine": "T05",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 27.98770103037943
+  },
+  {
+   "turbine": "T05",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -7886.840922594632
+  },
+  {
+   "turbine": "T05",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 2312.9686037382903
+  },
+  {
+   "turbine": "T05",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 2854.380887228891
+  },
+  {
+   "turbine": "T05",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 1020.2747501488773
+  },
+  {
+   "turbine": "T05",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 1072.5271975613307
+  },
+  {
+   "turbine": "T05",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 193.58389778889926
+  },
+  {
+   "turbine": "T05",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 1335.4597552041128
+  },
+  {
+   "turbine": "T06",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 14137.573165248794
+  },
+  {
+   "turbine": "T06",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 3949.4520258748125
+  },
+  {
+   "turbine": "T06",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 391.53440362414045
+  },
+  {
+   "turbine": "T06",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 30607.688148724796
+  },
+  {
+   "turbine": "T06",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 527.4615364613186
+  },
+  {
+   "turbine": "T06",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 0.6413328056556649
+  },
+  {
+   "turbine": "T06",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 33.81451337007802
+  },
+  {
+   "turbine": "T06",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 10920.430760348414
+  },
+  {
+   "turbine": "T06",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 153.90686026653879
+  },
+  {
+   "turbine": "T06",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 33922.680120515935
+  },
+  {
+   "turbine": "T06",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 447.77697974452514
+  },
+  {
+   "turbine": "T06",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 1345.131006551428
+  },
+  {
+   "turbine": "T06",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": 125.56904818179665
+  },
+  {
+   "turbine": "T06",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 20.571130948423317
+  },
+  {
+   "turbine": "T06",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -2982.6834857372182
+  },
+  {
+   "turbine": "T06",
+   "cause": "8:LEDGER:degradation",
+   "value_year": -1103.4175274527847
+  },
+  {
+   "turbine": "T06",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 440.2619157452626
+  },
+  {
+   "turbine": "T06",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 874.9594177486978
+  },
+  {
+   "turbine": "T06",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 519.0155843032477
+  },
+  {
+   "turbine": "T06",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -68.50713609351718
+  },
+  {
+   "turbine": "T06",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -722.5678486857673
+  },
+  {
+   "turbine": "T07",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 13145.067288887054
+  },
+  {
+   "turbine": "T07",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 2007.8413742249393
+  },
+  {
+   "turbine": "T07",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 477.29316975309774
+  },
+  {
+   "turbine": "T07",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 3986.1595238027753
+  },
+  {
+   "turbine": "T07",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 2931.2687544883247
+  },
+  {
+   "turbine": "T07",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 3.579737885047546
+  },
+  {
+   "turbine": "T07",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 14.027265318386211
+  },
+  {
+   "turbine": "T07",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 752.1760577397702
+  },
+  {
+   "turbine": "T07",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 83.56427239423155
+  },
+  {
+   "turbine": "T07",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 6590.933607241406
+  },
+  {
+   "turbine": "T07",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 403.8641560974597
+  },
+  {
+   "turbine": "T07",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 589.0549882483587
+  },
+  {
+   "turbine": "T07",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -298.18752946974257
+  },
+  {
+   "turbine": "T07",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 12.72445950865931
+  },
+  {
+   "turbine": "T07",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 48.93880603657497
+  },
+  {
+   "turbine": "T07",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -85.89328696189159
+  },
+  {
+   "turbine": "T07",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 1737.155458104749
+  },
+  {
+   "turbine": "T07",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 24787.71473950349
+  },
+  {
+   "turbine": "T07",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 8301.390380678858
+  },
+  {
+   "turbine": "T07",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 315.4041569714632
+  },
+  {
+   "turbine": "T07",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 1784.1221757260091
+  },
+  {
+   "turbine": "T07",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 669.8709122083324
+  },
+  {
+   "turbine": "T08",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 12808.198069207196
+  },
+  {
+   "turbine": "T08",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 3717.7958450556025
+  },
+  {
+   "turbine": "T08",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 516.4483497221067
+  },
+  {
+   "turbine": "T08",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 2205.009174129662
+  },
+  {
+   "turbine": "T08",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 1600.3554845520846
+  },
+  {
+   "turbine": "T08",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 0.8891094128195705
+  },
+  {
+   "turbine": "T08",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 20.219027005963643
+  },
+  {
+   "turbine": "T08",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 1879.4559835670632
+  },
+  {
+   "turbine": "T08",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 16.910738746457625
+  },
+  {
+   "turbine": "T08",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 4671.906301930489
+  },
+  {
+   "turbine": "T08",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 422.61851474784993
+  },
+  {
+   "turbine": "T08",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 892.7052406726374
+  },
+  {
+   "turbine": "T08",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": 1184.966170993738
+  },
+  {
+   "turbine": "T08",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 13.20808937923695
+  },
+  {
+   "turbine": "T08",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 31.277691755494118
+  },
+  {
+   "turbine": "T08",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -687.9174487919012
+  },
+  {
+   "turbine": "T08",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 3562.252242032022
+  },
+  {
+   "turbine": "T08",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 4555.457900027351
+  },
+  {
+   "turbine": "T08",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 1467.7568171635596
+  },
+  {
+   "turbine": "T08",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 2221.261778893582
+  },
+  {
+   "turbine": "T08",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 1660.5667595059347
+  },
+  {
+   "turbine": "T08",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -435.68329898951384
+  },
+  {
+   "turbine": "T09",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 14742.886687118293
+  },
+  {
+   "turbine": "T09",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 2447.520317728498
+  },
+  {
+   "turbine": "T09",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 652.0020609396936
+  },
+  {
+   "turbine": "T09",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 4493.484756360337
+  },
+  {
+   "turbine": "T09",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 728.1671601245687
+  },
+  {
+   "turbine": "T09",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 0.17695650557987216
+  },
+  {
+   "turbine": "T09",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 45.41804613227783
+  },
+  {
+   "turbine": "T09",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 3385.494452692025
+  },
+  {
+   "turbine": "T09",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 34.21865403127149
+  },
+  {
+   "turbine": "T09",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 4127.314581043379
+  },
+  {
+   "turbine": "T09",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 460.0301818781662
+  },
+  {
+   "turbine": "T09",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 709.8199800227611
+  },
+  {
+   "turbine": "T09",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -93.85382889277103
+  },
+  {
+   "turbine": "T09",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 25.0038844650915
+  },
+  {
+   "turbine": "T09",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 0.4451169004968415
+  },
+  {
+   "turbine": "T09",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -19555.481386554013
+  },
+  {
+   "turbine": "T09",
+   "cause": "8:LEDGER:degradation",
+   "value_year": -2677.7333218195845
+  },
+  {
+   "turbine": "T09",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 271.24616066045127
+  },
+  {
+   "turbine": "T09",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 2743.2081768646904
+  },
+  {
+   "turbine": "T09",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 34.25957963673177
+  },
+  {
+   "turbine": "T09",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 1063.3060060322287
+  },
+  {
+   "turbine": "T09",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -996.9330335694793
+  },
+  {
+   "turbine": "T10",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 14122.63747960927
+  },
+  {
+   "turbine": "T10",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 4274.301397723197
+  },
+  {
+   "turbine": "T10",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 453.25675546893444
+  },
+  {
+   "turbine": "T10",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 2838.6236993257216
+  },
+  {
+   "turbine": "T10",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 1388.2819012557056
+  },
+  {
+   "turbine": "T10",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 2.159553672029032
+  },
+  {
+   "turbine": "T10",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 66.44550713440618
+  },
+  {
+   "turbine": "T10",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 1422.5403797222139
+  },
+  {
+   "turbine": "T10",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 112.26401530497569
+  },
+  {
+   "turbine": "T10",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 3239.4595727915903
+  },
+  {
+   "turbine": "T10",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 484.2260445663749
+  },
+  {
+   "turbine": "T10",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 1758.4137245367901
+  },
+  {
+   "turbine": "T10",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": 219.74968981901648
+  },
+  {
+   "turbine": "T10",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 1.971113859887406
+  },
+  {
+   "turbine": "T10",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 17.304682117336377
+  },
+  {
+   "turbine": "T10",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -5014.908952822078
+  },
+  {
+   "turbine": "T10",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 1785.920785039415
+  },
+  {
+   "turbine": "T10",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 524.2862138050067
+  },
+  {
+   "turbine": "T10",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 520.6310000374201
+  },
+  {
+   "turbine": "T10",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 323.36928420061594
+  },
+  {
+   "turbine": "T10",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 385.53633004240277
+  },
+  {
+   "turbine": "T10",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -282.74125370858957
+  },
+  {
+   "turbine": "T11",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 9797.541041008808
+  },
+  {
+   "turbine": "T11",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 972.7795065322409
+  },
+  {
+   "turbine": "T11",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 525.9986035605243
+  },
+  {
+   "turbine": "T11",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 5384.969147878013
+  },
+  {
+   "turbine": "T11",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 2078.232074196608
+  },
+  {
+   "turbine": "T11",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 18.187231510871694
+  },
+  {
+   "turbine": "T11",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 106.78304856030041
+  },
+  {
+   "turbine": "T11",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 2936.2833825973203
+  },
+  {
+   "turbine": "T11",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 862.7987482336978
+  },
+  {
+   "turbine": "T11",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 4646.239937128456
+  },
+  {
+   "turbine": "T11",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 462.82401907433547
+  },
+  {
+   "turbine": "T11",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 589.7261486152252
+  },
+  {
+   "turbine": "T11",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -368.95287365933314
+  },
+  {
+   "turbine": "T11",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 18.99373890307464
+  },
+  {
+   "turbine": "T11",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 44.856254147344586
+  },
+  {
+   "turbine": "T11",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -7603.197984811367
+  },
+  {
+   "turbine": "T11",
+   "cause": "8:LEDGER:degradation",
+   "value_year": -1551.1792210662866
+  },
+  {
+   "turbine": "T11",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 3478.317638990866
+  },
+  {
+   "turbine": "T11",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 1963.4981672536337
+  },
+  {
+   "turbine": "T11",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 535.6927555343445
+  },
+  {
+   "turbine": "T11",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 730.9244969512353
+  },
+  {
+   "turbine": "T11",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 194.52907584500133
+  },
+  {
+   "turbine": "T12",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 13704.555335736723
+  },
+  {
+   "turbine": "T12",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 1326.1159176132785
+  },
+  {
+   "turbine": "T12",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 760.6482393458767
+  },
+  {
+   "turbine": "T12",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 3341.1570775211953
+  },
+  {
+   "turbine": "T12",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 2994.2689816312522
+  },
+  {
+   "turbine": "T12",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 14.548958568113093
+  },
+  {
+   "turbine": "T12",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 4.946312370558953
+  },
+  {
+   "turbine": "T12",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 1926.593463709671
+  },
+  {
+   "turbine": "T12",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 393.9266579092945
+  },
+  {
+   "turbine": "T12",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 3583.458707324903
+  },
+  {
+   "turbine": "T12",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 336.0067575111718
+  },
+  {
+   "turbine": "T12",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 261.37182703587297
+  },
+  {
+   "turbine": "T12",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -1517.101507790081
+  },
+  {
+   "turbine": "T12",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 2.561919256438332
+  },
+  {
+   "turbine": "T12",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 51.75111546388813
+  },
+  {
+   "turbine": "T12",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -42.44860195770862
+  },
+  {
+   "turbine": "T12",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 1248.8800757109702
+  },
+  {
+   "turbine": "T12",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 30027.88853416125
+  },
+  {
+   "turbine": "T12",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 1254.459547009296
+  },
+  {
+   "turbine": "T12",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 4824.142741643828
+  },
+  {
+   "turbine": "T12",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 2414.2626960399803
+  },
+  {
+   "turbine": "T12",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -1119.1692741405225
+  },
+  {
+   "turbine": "T13",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 14238.808009148164
+  },
+  {
+   "turbine": "T13",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 884.294104421905
+  },
+  {
+   "turbine": "T13",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 533.3860839070163
+  },
+  {
+   "turbine": "T13",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 2698.884789325401
+  },
+  {
+   "turbine": "T13",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 2777.571441189907
+  },
+  {
+   "turbine": "T13",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 3.6120179974064093
+  },
+  {
+   "turbine": "T13",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 63.67569541374343
+  },
+  {
+   "turbine": "T13",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 3118.114320963338
+  },
+  {
+   "turbine": "T13",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 94.49614767168131
+  },
+  {
+   "turbine": "T13",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 4787.655738281904
+  },
+  {
+   "turbine": "T13",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 366.2997896183084
+  },
+  {
+   "turbine": "T13",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 359.56183126533836
+  },
+  {
+   "turbine": "T13",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": 2508.723050802933
+  },
+  {
+   "turbine": "T13",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 14.644144465396815
+  },
+  {
+   "turbine": "T13",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 6.096717845979711
+  },
+  {
+   "turbine": "T13",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -3491.333839676021
+  },
+  {
+   "turbine": "T13",
+   "cause": "8:LEDGER:degradation",
+   "value_year": -1956.638659160577
+  },
+  {
+   "turbine": "T13",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 7960.291989263897
+  },
+  {
+   "turbine": "T13",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 5881.216277224861
+  },
+  {
+   "turbine": "T13",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 38.97688633555029
+  },
+  {
+   "turbine": "T13",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 4187.153464687852
+  },
+  {
+   "turbine": "T13",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -1265.7189399922993
+  },
+  {
+   "turbine": "T14",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 13926.335210996762
+  },
+  {
+   "turbine": "T14",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 1543.7046147890937
+  },
+  {
+   "turbine": "T14",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 589.836987536964
+  },
+  {
+   "turbine": "T14",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 2452.5237175587918
+  },
+  {
+   "turbine": "T14",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 1761.1046993057187
+  },
+  {
+   "turbine": "T14",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 3.214750026986108
+  },
+  {
+   "turbine": "T14",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 43.80345419418043
+  },
+  {
+   "turbine": "T14",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 1596.0788866417497
+  },
+  {
+   "turbine": "T14",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 45.083524682576574
+  },
+  {
+   "turbine": "T14",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 1848.7210423991764
+  },
+  {
+   "turbine": "T14",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 339.58512144670016
+  },
+  {
+   "turbine": "T14",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 519.9205398571814
+  },
+  {
+   "turbine": "T14",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": 1232.2300644154989
+  },
+  {
+   "turbine": "T14",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 13.347174138465427
+  },
+  {
+   "turbine": "T14",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 26.82566592526073
+  },
+  {
+   "turbine": "T14",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -6278.76368493304
+  },
+  {
+   "turbine": "T14",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 971.7624161153889
+  },
+  {
+   "turbine": "T14",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 2247.016315079222
+  },
+  {
+   "turbine": "T14",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 5209.499517350598
+  },
+  {
+   "turbine": "T14",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 1613.2896364569049
+  },
+  {
+   "turbine": "T14",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 2802.7036298166795
+  },
+  {
+   "turbine": "T14",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -400.45773765883104
+  },
+  {
+   "turbine": "T15",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 15421.043948273373
+  },
+  {
+   "turbine": "T15",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 3158.781519748683
+  },
+  {
+   "turbine": "T15",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 23280.28090742397
+  },
+  {
+   "turbine": "T15",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 8526.769557521495
+  },
+  {
+   "turbine": "T15",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 339.7902169574712
+  },
+  {
+   "turbine": "T15",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 2.2704037355282765
+  },
+  {
+   "turbine": "T15",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 50.4772782498028
+  },
+  {
+   "turbine": "T15",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 1674.5686079379657
+  },
+  {
+   "turbine": "T15",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 749.6474541320866
+  },
+  {
+   "turbine": "T15",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 6316.784866074192
+  },
+  {
+   "turbine": "T15",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 656.2565881097945
+  },
+  {
+   "turbine": "T15",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 1960.7700156639835
+  },
+  {
+   "turbine": "T15",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": 438.29679077803615
+  },
+  {
+   "turbine": "T15",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 16.260532327128647
+  },
+  {
+   "turbine": "T15",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -22189.983981738245
+  },
+  {
+   "turbine": "T15",
+   "cause": "8:LEDGER:degradation",
+   "value_year": -5111.846614963622
+  },
+  {
+   "turbine": "T15",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 22.284959319095126
+  },
+  {
+   "turbine": "T15",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 23.452948379613485
+  },
+  {
+   "turbine": "T15",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 4.07920322896271
+  },
+  {
+   "turbine": "T15",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -90.98127702854492
+  },
+  {
+   "turbine": "T15",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 584.0346696970975
+  },
+  {
+   "turbine": "T16",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 28820.48404697899
+  },
+  {
+   "turbine": "T16",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 7168.804816403832
+  },
+  {
+   "turbine": "T16",
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T16",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 671.0458181877076
+  },
+  {
+   "turbine": "T16",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 3183.0946879828603
+  },
+  {
+   "turbine": "T16",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 321.56276903592817
+  },
+  {
+   "turbine": "T16",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 0.10066680059351399
+  },
+  {
+   "turbine": "T16",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 2.76637624827527
+  },
+  {
+   "turbine": "T16",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 1832.2402217781737
+  },
+  {
+   "turbine": "T16",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 47.87665593267171
+  },
+  {
+   "turbine": "T16",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 2104.7061990909797
+  },
+  {
+   "turbine": "T16",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 589.1825609065534
+  },
+  {
+   "turbine": "T16",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 1866.242329262413
+  },
+  {
+   "turbine": "T16",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -701.9405062948089
+  },
+  {
+   "turbine": "T16",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 16.84139936260829
+  },
+  {
+   "turbine": "T16",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 1.3198027960664047
+  },
+  {
+   "turbine": "T16",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -5475.763547031707
+  },
+  {
+   "turbine": "T16",
+   "cause": "8:LEDGER:degradation",
+   "value_year": -4250.955192549675
+  },
+  {
+   "turbine": "T16",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 581.4367218456134
+  },
+  {
+   "turbine": "T16",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 228.17220003307634
+  },
+  {
+   "turbine": "T16",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 19.408597855367294
+  },
+  {
+   "turbine": "T16",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -3302.4280783022564
+  },
+  {
+   "turbine": "T16",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -850.4231909236829
+  },
+  {
+   "turbine": "T17",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 14413.66556027479
+  },
+  {
+   "turbine": "T17",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 3535.4962810829406
+  },
+  {
+   "turbine": "T17",
+   "cause": "2:OPS_17:curtailed_sector_managed",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T17",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 496.71972407621655
+  },
+  {
+   "turbine": "T17",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 12134.853721145808
+  },
+  {
+   "turbine": "T17",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 2493.99188477433
+  },
+  {
+   "turbine": "T17",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 7.698247900171159
+  },
+  {
+   "turbine": "T17",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 13.117550744249959
+  },
+  {
+   "turbine": "T17",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 805.9346648691111
+  },
+  {
+   "turbine": "T17",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 177.06204454486732
+  },
+  {
+   "turbine": "T17",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 3768.021614332875
+  },
+  {
+   "turbine": "T17",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 770.9558967011388
+  },
+  {
+   "turbine": "T17",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 1645.9443615758848
+  },
+  {
+   "turbine": "T17",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -821.6751275415479
+  },
+  {
+   "turbine": "T17",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 14.322423110390542
+  },
+  {
+   "turbine": "T17",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 20.784606635071288
+  },
+  {
+   "turbine": "T17",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -7239.405780126801
+  },
+  {
+   "turbine": "T17",
+   "cause": "8:LEDGER:degradation",
+   "value_year": -1117.7857882426613
+  },
+  {
+   "turbine": "T17",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 1122.0500875202038
+  },
+  {
+   "turbine": "T17",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 370.7018986525212
+  },
+  {
+   "turbine": "T17",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 1002.4571182818758
+  },
+  {
+   "turbine": "T17",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 1927.874534334673
+  },
+  {
+   "turbine": "T17",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 340.4820766029263
+  },
+  {
+   "turbine": "T18",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 16992.635780280383
+  },
+  {
+   "turbine": "T18",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 3367.294193895058
+  },
+  {
+   "turbine": "T18",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 592.613362140923
+  },
+  {
+   "turbine": "T18",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 5886.594272675199
+  },
+  {
+   "turbine": "T18",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 447.78788976189276
+  },
+  {
+   "turbine": "T18",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 1.294579217524948
+  },
+  {
+   "turbine": "T18",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 42.53075917265558
+  },
+  {
+   "turbine": "T18",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 693.6041246592388
+  },
+  {
+   "turbine": "T18",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 155.6799970507981
+  },
+  {
+   "turbine": "T18",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 5067.847393706663
+  },
+  {
+   "turbine": "T18",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 888.5490394674446
+  },
+  {
+   "turbine": "T18",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 2786.2674354701862
+  },
+  {
+   "turbine": "T18",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -1620.1463529941345
+  },
+  {
+   "turbine": "T18",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 3.214854670712904
+  },
+  {
+   "turbine": "T18",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 8.056615215235919
+  },
+  {
+   "turbine": "T18",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -17955.5599293153
+  },
+  {
+   "turbine": "T18",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 617.9100841563339
+  },
+  {
+   "turbine": "T18",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 21.20721362675194
+  },
+  {
+   "turbine": "T18",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 27.292629021058318
+  },
+  {
+   "turbine": "T18",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 1.0952171123863517
+  },
+  {
+   "turbine": "T18",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -5269.720397362765
+  },
+  {
+   "turbine": "T18",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 277.2027284145153
+  },
+  {
+   "turbine": "T19",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 13558.711725373785
+  },
+  {
+   "turbine": "T19",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 1834.2439499418654
+  },
+  {
+   "turbine": "T19",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 594.9080845895065
+  },
+  {
+   "turbine": "T19",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 6725.065676985003
+  },
+  {
+   "turbine": "T19",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 1066.3885586800418
+  },
+  {
+   "turbine": "T19",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 0.7894288459754035
+  },
+  {
+   "turbine": "T19",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 93.65132010311737
+  },
+  {
+   "turbine": "T19",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 947.2471838224689
+  },
+  {
+   "turbine": "T19",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 47.0243718087732
+  },
+  {
+   "turbine": "T19",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 2222.765852152376
+  },
+  {
+   "turbine": "T19",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 532.0908391314966
+  },
+  {
+   "turbine": "T19",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 1280.5045165132753
+  },
+  {
+   "turbine": "T19",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -1565.798683274944
+  },
+  {
+   "turbine": "T19",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 11.389456485151456
+  },
+  {
+   "turbine": "T19",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 90.55366486712744
+  },
+  {
+   "turbine": "T19",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -1976.8077620597385
+  },
+  {
+   "turbine": "T19",
+   "cause": "8:LEDGER:degradation",
+   "value_year": -1363.7563742511566
+  },
+  {
+   "turbine": "T19",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 9785.349814558584
+  },
+  {
+   "turbine": "T19",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 927.9541490385178
+  },
+  {
+   "turbine": "T19",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 239.60799415581647
+  },
+  {
+   "turbine": "T19",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 1651.9346387200653
+  },
+  {
+   "turbine": "T19",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 2276.1537794005985
+  },
+  {
+   "turbine": "T20",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 13994.851576783496
+  },
+  {
+   "turbine": "T20",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 4043.6000616852753
+  },
+  {
+   "turbine": "T20",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 776.7972649233153
+  },
+  {
+   "turbine": "T20",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 5231.670640435916
+  },
+  {
+   "turbine": "T20",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 733.1533790118046
+  },
+  {
+   "turbine": "T20",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 1.7062681887511588
+  },
+  {
+   "turbine": "T20",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 61.0745728118372
+  },
+  {
+   "turbine": "T20",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 1323.6549830985834
+  },
+  {
+   "turbine": "T20",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 27.054089904871535
+  },
+  {
+   "turbine": "T20",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 5338.971816592094
+  },
+  {
+   "turbine": "T20",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 456.40887237421225
+  },
+  {
+   "turbine": "T20",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 1105.9849068558676
+  },
+  {
+   "turbine": "T20",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -777.7077142169323
+  },
+  {
+   "turbine": "T20",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 14.75783450359451
+  },
+  {
+   "turbine": "T20",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 3.344304239413078
+  },
+  {
+   "turbine": "T20",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -21316.670866353983
+  },
+  {
+   "turbine": "T20",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 362.88247374614474
+  },
+  {
+   "turbine": "T20",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 58.809516435561314
+  },
+  {
+   "turbine": "T20",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 82.17231350173653
+  },
+  {
+   "turbine": "T20",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 0.12209479232749978
+  },
+  {
+   "turbine": "T20",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 758.7269902575621
+  },
+  {
+   "turbine": "T20",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 513.7832920971591
+  },
+  {
+   "turbine": "T21",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 13398.483525035821
+  },
+  {
+   "turbine": "T21",
+   "cause": "2:MKT_03:curtailed_held_at_zero",
+   "value_year": 2258.3436646617424
+  },
+  {
+   "turbine": "T21",
+   "cause": "3:OPS_01:grid_outage",
+   "value_year": 893.1194093217551
+  },
+  {
+   "turbine": "T21",
+   "cause": "4:OPS_01:downtime_fault",
+   "value_year": 14033.70542178871
+  },
+  {
+   "turbine": "T21",
+   "cause": "4b:OPS_01:weather_environmental_stop",
+   "value_year": 1479.3634254138344
+  },
+  {
+   "turbine": "T21",
+   "cause": "4b:OPS_09:weather_cold_lockout",
+   "value_year": 2.565558970790538
+  },
+  {
+   "turbine": "T21",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 47.03263499674004
+  },
+  {
+   "turbine": "T21",
+   "cause": "4c:OPS_01:downtime_comms",
+   "value_year": 3381.6581822821054
+  },
+  {
+   "turbine": "T21",
+   "cause": "5:OPS_09:weather_cold_lockout",
+   "value_year": 240.86340202936157
+  },
+  {
+   "turbine": "T21",
+   "cause": "6:OPS_01:downtime_unknown",
+   "value_year": 3893.3364037592955
+  },
+  {
+   "turbine": "T21",
+   "cause": "6:OPS_01:stopped_unknown_idle_above_cut_in",
+   "value_year": 416.17488686762255
+  },
+  {
+   "turbine": "T21",
+   "cause": "6:OPS_01:stopped_unknown_near_cut_in",
+   "value_year": 1046.784210784452
+  },
+  {
+   "turbine": "T21",
+   "cause": "7:OPS_16:iced_running",
+   "value_year": -1665.025387523215
+  },
+  {
+   "turbine": "T21",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 10.590142936204556
+  },
+  {
+   "turbine": "T21",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 49.33606889009661
+  },
+  {
+   "turbine": "T21",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -6327.813226715405
+  },
+  {
+   "turbine": "T21",
+   "cause": "8:LEDGER:degradation",
+   "value_year": -3867.0707498753127
+  },
+  {
+   "turbine": "T21",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 1236.903338876954
+  },
+  {
+   "turbine": "T21",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 2180.1197324126706
+  },
+  {
+   "turbine": "T21",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 2.5112283262428083
+  },
+  {
+   "turbine": "T21",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": 2861.397610188719
+  },
+  {
+   "turbine": "T21",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": -888.9015395782661
+  }
+ ]
+}

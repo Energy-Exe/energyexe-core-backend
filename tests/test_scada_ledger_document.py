@@ -11,7 +11,7 @@ from app.schemas.scada_ledger import LedgerDocument
 from app.services.scada_ledger_service import build_document, status_keys
 
 SAMPLES = Path(__file__).resolve().parent / "fixtures" / "value_ledger"
-BUILDS = ("hot-b", "rg2-b", "hot-c")
+BUILDS = ("hot-b", "rg2-b", "hot-c", "hot-d", "rg2-d")
 
 
 def sample(build: str):
@@ -90,3 +90,12 @@ def test_status_keys_are_the_catalogs():
         "RECOVERABLE",
     ) in keys  # a company-wide line keeps the register's key
     assert all(scope == "FLEET" or scope.startswith("VL:") for _, scope, _ in keys)
+
+
+def test_the_default_build_d_shows_degradation_but_does_not_add_it():
+    """D, the default from rollout Stage 6: degradation is listed (summed false) and the headline leaves it out."""
+    for build, headline in (("hot-d", 866371.19), ("rg2-d", 1059084.95)):
+        rows, run, doc = sample(build)
+        assert round(run["headline_year"], 2) == headline
+        deg = [r for r in rows if r["cause"].endswith(":degradation")]
+        assert deg and not any(r["summed"] for r in deg)
