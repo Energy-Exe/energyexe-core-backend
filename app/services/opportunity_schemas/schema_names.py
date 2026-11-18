@@ -48,7 +48,7 @@ SCHEMA_ONE_LINERS: dict[SchemaCode, str] = {
     # Operational
     SchemaCode.OPS_01: "Recurring low-availability months (ODI proxy) — concentrated or structural disruption.",
     SchemaCode.OPS_02: "High-wind season underperforms low-wind season (HODI/SSR) — mechanical stress or maintenance timing.",
-    SchemaCode.OPS_03: "OEM/AM contract doesn't incentivise uptime. Inherits OPS-01 severity; only fires when OPS-01 exists.",
+    SchemaCode.OPS_03: "OEM/AM contract doesn't incentivise uptime. INACTIVE — switched off, the contract terms it needs are not held (emits no findings).",
     SchemaCode.OPS_04: "Statistically significant power-curve degradation slope (capped at INDICATIVE on placeholder baseline).",
     SchemaCode.OPS_05: "Curtailed energy as a share of available output (UK/ELEXON only — curtailment data unavailable elsewhere).",
     SchemaCode.OPS_06: "Consecutive months with wind-normalised index below threshold — persistent power-curve underperformance.",

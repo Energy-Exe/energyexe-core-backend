@@ -147,6 +147,9 @@ SCHEMA_STATUS: Dict[SchemaCode, str] = {code: "ACTIVE" for code in SchemaCode}
 # per-windfarm rows. Activation (flip back to "ACTIVE") tracked in #116.
 SCHEMA_STATUS[SchemaCode.MKT_05] = "INACTIVE"
 SCHEMA_STATUS[SchemaCode.MKT_07] = "INACTIVE"
+# EPR-95: OPS_03 (misaligned contracting) needs OEM/maintenance contract terms that
+# Perform will not hold, so it is switched off and emits no rows.
+SCHEMA_STATUS[SchemaCode.OPS_03] = "INACTIVE"
 
 
 # ─── DQ-01 suppression gate (#110, M6) ───

@@ -151,3 +151,38 @@ async def test_get_turbine_unit_by_code_serializes_relations(test_session):
 # can't be created on the SQLite test engine. The fix there mirrors the others
 # (selectinload windfarm + turbine_model before delete; relations survive the commit
 # because expire_on_commit=False) and is verified on staging.
+
+
+@pytest.mark.asyncio
+async def test_ground_elevation_round_trips_including_sea_level(test_session):
+    """EPR-96: height above sea level saves, updates (0 is a real value) and reaches the
+    admin detail page's hand-built with-relations response."""
+    from decimal import Decimal
+
+    from app.api.v1.endpoints.turbine_units import get_turbine_unit_with_relations
+    from app.models.generation_unit import GenerationUnit
+
+    windfarm_id, model_id = await _seed_windfarm_and_model(test_session)
+    created = await TurbineUnitService.create_turbine_unit(
+        test_session,
+        TurbineUnitCreate(
+            code="WF_TEST_TU_ELEV",
+            windfarm_id=windfarm_id,
+            turbine_model_id=model_id,
+            lat=71.0,
+            lng=24.6,
+            ground_elevation_m=Decimal("212.5"),
+        ),
+    )
+    assert TurbineUnitSchema.model_validate(created).ground_elevation_m == Decimal("212.5")
+
+    updated = await TurbineUnitService.update_turbine_unit(
+        test_session, created.id, TurbineUnitUpdate(ground_elevation_m=Decimal("0"))
+    )
+    assert updated.ground_elevation_m == 0
+
+    await (await test_session.connection()).run_sync(
+        lambda c: GenerationUnit.__table__.create(c, checkfirst=True)
+    )
+    detail = await get_turbine_unit_with_relations(created.id, db=test_session)
+    assert detail["ground_elevation_m"] == 0.0
