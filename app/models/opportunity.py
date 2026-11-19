@@ -94,7 +94,7 @@ class Opportunity(Base):
 
     # Cross-schema dependency
     triggered_by_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("opportunities.id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey("opportunities.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     # Detection context
