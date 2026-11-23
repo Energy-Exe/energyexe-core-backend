@@ -124,6 +124,34 @@ def _spearman_rho(xs: Sequence[float], ys: Sequence[float]) -> Optional[float]:
     return sum((rx[i] - mx) * (ry[i] - my) for i in range(n)) / (sx * sy)
 
 
+# A day's "production vs potential" is only shown when the wind offered something worth measuring
+# against: on a near-calm day the turbines' own power draw (negative output) over a tiny potential
+# gave figures like -935 %. Below this floor the day has no figure (the calendar draws it as no data).
+CALENDAR_MIN_POTENTIAL_MWH = 1.0
+CALENDAR_MIN_POTENTIAL_SHARE = 0.02
+
+
+def calendar_potential_floor(potentials: List[float]) -> float:
+    """The smallest daily potential (MWh) given a figure: 2 % of the year's highest day, at least 1 MWh."""
+    top = max(potentials, default=0.0)
+    return max(CALENDAR_MIN_POTENTIAL_MWH, CALENDAR_MIN_POTENTIAL_SHARE * top)
+
+
+def calendar_day(r: Any, floor: float) -> Dict[str, Any]:
+    """One calendar cell. Output below zero (the turbines drawing power) counts as nothing produced."""
+    act = float(r.act or 0)
+    pot = float(r.pot or 0)
+    causes = {"dt": float(r.dt or 0), "ct": float(r.ct or 0), "pf": float(r.pf or 0)}
+    dom = max(causes, key=lambda k: causes[k])
+    return {
+        "d": r.date_utc.isoformat(),
+        "act": round(act, 1),
+        "pot": round(pot, 1),
+        "perf": round(100.0 * max(act, 0.0) / pot, 1) if pot >= floor else None,
+        "cause": dom if causes[dom] > 0 else None,
+    }
+
+
 class ScadaService:
     """One method per dashboard chart; all read-only raw SQL over scada.*."""
 
@@ -2965,21 +2993,9 @@ class ScadaService:
             ),
             {"farm": farm, "start": date(year, 1, 1), "end": date(year, 12, 31)},
         )
-        days = []
-        for r in result.fetchall():
-            pot = float(r.pot or 0)
-            causes = {"dt": float(r.dt or 0), "ct": float(r.ct or 0), "pf": float(r.pf or 0)}
-            dom = max(causes, key=lambda k: causes[k])
-            days.append(
-                {
-                    "d": r.date_utc.isoformat(),
-                    "act": round(float(r.act or 0), 1),
-                    "pot": round(pot, 1),
-                    "perf": round(100.0 * float(r.act or 0) / pot, 1) if pot > 0 else None,
-                    "cause": dom if causes[dom] > 0 else None,
-                }
-            )
-        return {"days": days}
+        rows = result.fetchall()
+        floor = calendar_potential_floor([float(r.pot or 0) for r in rows])
+        return {"days": [calendar_day(r, floor) for r in rows]}
 
     async def turbine_losses(self, farm: str, turbine: str, year: int) -> Dict[str, Any]:
         """Monthly loss mix for one turbine — the dossier's cost strip."""
