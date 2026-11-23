@@ -146,3 +146,14 @@ Before migrating, compare `alembic current` with the tables that exist (`to_regc
 table is there but the revision is not, the table came from `create_all`. It is safe to drop only when it is empty and
 nothing on the deployed code uses it; then run the real migration, which also rehearses it on PostgreSQL before
 production. Production is not exposed to this, because no laptop API points at it.
+
+## 2026-11-03 — Promoting part of staging to production (one-off)
+
+The production deploy copies the image tagged `staging`, so it always ships everything that is on the staging branch. When the capacity-basis work was ready but two SCADA pages (EPR-202, EPR-203) had landed on staging after it and were still in testing, there was no clean way to promote only the first part:
+
+- Reverting the two pages on staging would have crashed staging: its database already carried the EPR-202 migration, and the container runs `alembic upgrade head` before starting, which fails when the code no longer knows the database's current revision.
+- The staging image built for the capacity-only commit had already been purged from the registry.
+
+What was done instead: a branch at the capacity-only commit (cc8ce7e) was merged into master with the promotion workflow paused, the image was rebuilt from that exact commit on a laptop (`docker buildx build --platform linux/amd64 --target production --build-arg GIT_SHA=…`), pushed to the production repository under its commit tag, retagged `latest`, and the service force-redeployed. The workflow was re-enabled straight after.
+
+Lessons: merge work to staging in the order you intend to promote it, or hold later work on its feature branch until the earlier piece has gone to production. If a partial promotion is unavoidable, rebuild from the commit rather than reverting on staging, and never revert a merge whose migration has already been applied to the staging database.
