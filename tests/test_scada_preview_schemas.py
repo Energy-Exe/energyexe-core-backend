@@ -182,8 +182,20 @@ def test_neither_version_carries_the_other_farm():
     with pytest.raises(ValidationError):
         SUMMARY_ADAPTER.validate_python(crossed)
     crossed = v2_payload()
-    crossed["farm"].update(slug="lutelandet", name="Lutelandet", windfarm_id=7197)
+    crossed["farm"].update(slug="kelmarsh", name="Kelmarsh", windfarm_id=1)
     with pytest.raises(ValidationError, match="unknown v2 farm"):
+        SUMMARY_ADAPTER.validate_python(crossed)
+    # Lutelandet is a v2 farm too (D-092), but only with its own rules: a Siemens-shaped
+    # payload (station ids, no row breakdown) relabelled as Lutelandet is refused.
+    crossed = v2_payload()
+    crossed["farm"].update(
+        slug="lutelandet", name="Lutelandet", windfarm_id=7197, installed_turbine_count=9
+    )
+    with pytest.raises(ValidationError, match="station ids are not used"):
+        SUMMARY_ADAPTER.validate_python(crossed)
+    for t in crossed["turbines"]:
+        t.pop("station_id")
+    with pytest.raises(ValidationError, match="must publish the row breakdown"):
         SUMMARY_ADAPTER.validate_python(crossed)
 
 
@@ -203,6 +215,129 @@ def test_farm_metadata_reads_both_versions():
         meta = farm_metadata(SUMMARY_ADAPTER.validate_python(payload))
         assert meta["profile"] == "measured_native"
         assert meta["run_id"] == payload["run_id"]
+
+
+def lut_v2_payload():
+    """Lutelandet's fleet shape (D-092): label-keyed turbines, a row breakdown,
+    yearly energy, held intervals per month and the outage events."""
+    p = v2_payload()
+    p["run_id"] = "lutelandet-1"
+    p["farm"].update(
+        slug="lutelandet",
+        name="Lutelandet",
+        windfarm_id=7197,
+        supplied_turbines=["T09"],
+        installed_turbine_count=9,
+        identity_status="confirmed",
+    )
+    p["source"].update(timezone="Europe/Oslo", interval_seconds=300, interval_label="start")
+    b = {"valid": 9, "held": 1, "blend": 0, "placeholder": 0, "other_invalid": 0, "absent": 0}
+    year = {
+        "year": 2025,
+        "energy_kwh": 1500.0,
+        "expected_intervals": 10,
+        "valid_intervals": 9,
+        "held_intervals": 1,
+        "partial": True,
+    }
+    p["coverage"]["breakdown"] = dict(b)
+    p["charts"]["yearly_energy"] = [year]
+    p["charts"]["monthly_energy"][0]["held_intervals"] = 1
+    t = p["turbines"][0]
+    t.pop("station_id")
+    t.update(label="T09", group="Lutelandet", model="Nordex N149/5700", rated_kw=5700.0)
+    t.update(breakdown=dict(b), yearly_energy=[year])
+    p["meters"] = []
+    p["outages"] = {
+        "rule": "held",
+        "events_total": 1,
+        "held_rows_total": 1,
+        "events": [
+            {
+                "start_utc": "2025-01-01T00:00:00Z",
+                "end_utc": "2025-01-01T00:05:00Z",
+                "turbines": ["T09"],
+                "held_rows": 1,
+            }
+        ],
+    }
+    return p
+
+
+def test_lutelandet_fleet_v2_validates_and_adds_up():
+    s = SUMMARY_ADAPTER.validate_python(lut_v2_payload())
+    assert isinstance(s, IngestionSummaryV2) and s.turbines[0].station_id is None
+    assert s.outages.held_rows_total == s.coverage.breakdown.held == 1
+    bad = lut_v2_payload()
+    bad["turbines"][0]["breakdown"]["valid"] = 8
+    with pytest.raises(ValidationError, match="does not sum"):
+        SUMMARY_ADAPTER.validate_python(bad)
+    bad = lut_v2_payload()
+    bad["outages"]["held_rows_total"] = 2
+    with pytest.raises(ValidationError):
+        SUMMARY_ADAPTER.validate_python(bad)
+    bad = lut_v2_payload()
+    bad["coverage"]["breakdown"].update(valid=8, held=2)
+    bad["turbines"][0]["breakdown"].update(valid=8, held=2)
+    with pytest.raises(ValidationError, match="breakdown.valid must equal"):
+        SUMMARY_ADAPTER.validate_python(bad)
+
+
+def test_raggovidda_still_needs_station_ids():
+    p = v2_payload()
+    p["turbines"][0].pop("station_id")
+    with pytest.raises(ValidationError, match="station ids are required"):
+        SUMMARY_ADAPTER.validate_python(p)
+
+
+def test_service_serves_lutelandet_v2_and_falls_back_to_v1_on_rollback():
+    for payload, kind in ((lut_v2_payload(), IngestionSummaryV2), (v1_payload(), IngestionSummary)):
+        db = _Session({"lutelandet": payload, "raggovidda": v2_payload()})
+        svc = IngestionSummaryService(db)
+        assert isinstance(asyncio.run(svc.get("lutelandet")), kind)
+        farms = {f["farm"]: f for f in asyncio.run(svc.farms())["farms"]}
+        assert farms["lutelandet"]["windfarm_id"] == 7197
+
+
+def test_worst_case_lutelandet_fleet_payload_fits_the_store_cap():
+    p = lut_v2_payload()
+    month = p["charts"]["monthly_energy"][0]
+    year = p["charts"]["yearly_energy"][0]
+    t = p["turbines"][0]
+    t["monthly_energy"] = [month] * 60
+    t["yearly_energy"] = [year] * 10
+    t["power_wind"] = [
+        {
+            "wind_bin_ms": 1.25,
+            "power_mean_kw": 1.0,
+            "power_p10_kw": 1.0,
+            "power_p90_kw": 1.0,
+            "count": 9,
+        }
+    ] * 150
+    p["turbines"] = [dict(copy.deepcopy(t), label=f"T{i:02d}") for i in range(1, 10)]
+    p["farm"]["supplied_turbines"] = [f"T{i:02d}" for i in range(1, 10)]
+    p["coverage"]["breakdown"] = {k: v * 9 for k, v in p["coverage"]["breakdown"].items()}
+    p["coverage"]["expected_rows"] = 90
+    p["coverage"]["power_valid_rows"] = p["energy"]["valid_intervals"] = 81
+    p["outages"]["held_rows_total"] = p["outages"]["events_total"] = 9
+    p["outages"]["events"] = [
+        dict(p["outages"]["events"][0], turbines=p["farm"]["supplied_turbines"], held_rows=1)
+    ] * 9
+    SUMMARY_ADAPTER.validate_python(p)
+    p["outages"]["events"] = p["outages"]["events"] * 55  # 495 events: size only
+    p["charts"]["monthly_energy"] = [month] * 60
+    p["charts"]["daily_trends"] = [
+        {
+            "date_utc": "2025-01-01",
+            "power_mean_kw": 1.0,
+            "wind_mean_ms": 1.0,
+            "power_count": 1,
+            "wind_count": 1,
+        }
+    ] * 1500
+    p["source"]["files"] = p["source"]["files"] * 120
+    assert len(json.dumps(p).encode()) < MAX_SUMMARY_BYTES
 
 
 @pytest.mark.skipif(not PIPELINE_V2.exists(), reason="pipeline checkout not alongside")

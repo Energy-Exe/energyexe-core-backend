@@ -6,7 +6,9 @@ checkout is present).
 v1 (schemas.py IngestionSummary) keeps describing the Lutelandet run. v2 serves a
 multi-turbine 10-minute measured farm (Raggovidda, pipeline D-053/D-054): farm and
 source identity checked against FARMS, the interval label's evidence source,
-longer bounded charts, turbines[] and meters[].
+longer bounded charts, turbines[] and meters[]. Lutelandet's full fleet (pipeline
+D-092) is a second v2 farm: turbines keyed by label, a row breakdown that sums to
+the expected rows, yearly energy and the data-system outage events.
 """
 
 from typing import Annotated, Literal
@@ -20,7 +22,12 @@ MAX_SUMMARY_BYTES = 1_500_000
 # slug -> fixed identity; a v2 payload for any other farm is refused
 FARMS = {
     "raggovidda": {"name": "Raggovidda", "windfarm_id": 7206, "installed_turbine_count": 27},
+    "lutelandet": {"name": "Lutelandet", "windfarm_id": 7197, "installed_turbine_count": 9},
 }
+# farms whose turbines are keyed by the vendor's station id (Siemens WPS)
+STATION_ID_FARMS = {"raggovidda"}
+# farms that must publish the D-092 outage evidence (row breakdown + outage events)
+OUTAGE_FARMS = {"lutelandet"}
 
 
 class Payload(BaseModel):
@@ -67,7 +74,7 @@ class Source(Payload):
     last_label_utc: str
     window_start_utc: str | None
     window_end_utc: str | None
-    files: list[SourceFile] = Field(min_length=1, max_length=60)
+    files: list[SourceFile] = Field(min_length=1, max_length=120)
 
     @field_validator("timezone")
     @classmethod
@@ -93,6 +100,19 @@ class Signal(Payload):
     nonfinite: Count
 
 
+class Breakdown(Payload):
+    """Every expected turbine-interval in exactly one class (D-092)."""
+    valid: Count
+    held: Count
+    blend: Count
+    placeholder: Count
+    other_invalid: Count
+    absent: Count
+
+    def total(self) -> int:
+        return self.valid + self.held + self.blend + self.placeholder + self.other_invalid + self.absent
+
+
 class Coverage(Payload):
     expected_rows: Count
     observed_rows: Count
@@ -100,6 +120,7 @@ class Coverage(Payload):
     signals: list[Signal] = Field(max_length=100)
     power_valid_rows: Count
     wind_valid_rows: Count
+    breakdown: Breakdown | None = None
 
 
 class Energy(Payload):
@@ -143,12 +164,44 @@ class MonthlyEnergy(Payload):
     expected_intervals: Count
     valid_intervals: Count
     partial: bool
+    held_intervals: Count | None = None
+
+
+class YearlyEnergy(Payload):
+    """One local calendar year (the delivery's timezone)."""
+    year: int = Field(ge=2000, le=2100)
+    energy_kwh: FiniteFloat | None
+    expected_intervals: Count
+    valid_intervals: Count
+    held_intervals: Count
+    partial: bool
+
+
+class Outage(Payload):
+    start_utc: str
+    end_utc: str
+    turbines: list[str] = Field(min_length=1, max_length=40)
+    held_rows: Count
+
+
+class Outages(Payload):
+    rule: str = Field(max_length=500)
+    events_total: Count
+    held_rows_total: Count
+    events: list[Outage] = Field(max_length=500)
+
+    @model_validator(mode="after")
+    def complete(self):
+        if len(self.events) != self.events_total or sum(e.held_rows for e in self.events) != self.held_rows_total:
+            raise ValueError("outages: events must list every event and sum to held_rows_total")
+        return self
 
 
 class Charts(Payload):
-    daily_trends: list[DailyTrend] = Field(max_length=600)
+    daily_trends: list[DailyTrend] = Field(max_length=1500)
     power_wind: list[PowerWind] = Field(max_length=500)
-    monthly_energy: list[MonthlyEnergy] = Field(max_length=24)
+    monthly_energy: list[MonthlyEnergy] = Field(max_length=60)
+    yearly_energy: list[YearlyEnergy] = Field(default_factory=list, max_length=10)
 
 
 class StatusValue(Payload):
@@ -164,7 +217,7 @@ class Status(Payload):
 
 
 class Turbine(Payload):
-    station_id: int
+    station_id: int | None = None
     label: str
     group: str = Field(max_length=40)
     model: str | None
@@ -175,8 +228,10 @@ class Turbine(Payload):
     wind_valid_rows: Count
     missing_days: Count
     energy_kwh: FiniteFloat | None
-    monthly_energy: list[MonthlyEnergy] = Field(max_length=24)
+    monthly_energy: list[MonthlyEnergy] = Field(max_length=60)
     power_wind: list[PowerWind] = Field(max_length=150)
+    breakdown: Breakdown | None = None
+    yearly_energy: list[YearlyEnergy] = Field(default_factory=list, max_length=10)
 
 
 class MeterMonth(Payload):
@@ -198,7 +253,7 @@ class Meter(Payload):
     expected_rows: Count
     observed_rows: Count
     counter_check: str = Field(max_length=500)
-    months: list[MeterMonth] = Field(max_length=24)
+    months: list[MeterMonth] = Field(max_length=60)
 
 
 class IngestionSummaryV2(Payload):
@@ -215,6 +270,7 @@ class IngestionSummaryV2(Payload):
     limitations: list[str] = Field(max_length=100)
     turbines: list[Turbine] = Field(min_length=1, max_length=40)
     meters: list[Meter] = Field(max_length=4)
+    outages: Outages | None = None
 
     @model_validator(mode="after")
     def respect_unconfirmed_intervals(self):
@@ -236,4 +292,37 @@ class IngestionSummaryV2(Payload):
         labels = [t.label for t in self.turbines]
         if labels != self.farm.supplied_turbines:
             raise ValueError("turbines[] must list exactly farm.supplied_turbines, in order")
+        return self
+
+    @model_validator(mode="after")
+    def station_ids_per_farm(self):
+        keyed = self.farm.slug in STATION_ID_FARMS
+        if any((t.station_id is None) == keyed for t in self.turbines):
+            raise ValueError(f"farm {self.farm.slug}: station ids are "
+                             + ("required" if keyed else "not used; key turbines by label"))
+        return self
+
+    @model_validator(mode="after")
+    def breakdowns_add_up(self):
+        if self.farm.slug in OUTAGE_FARMS and (
+            self.outages is None or self.coverage.breakdown is None
+            or any(t.breakdown is None for t in self.turbines)
+        ):
+            raise ValueError(f"farm {self.farm.slug} must publish the row breakdown and the outage events")
+        for t in self.turbines:
+            if t.breakdown is not None and t.breakdown.total() != t.expected_rows:
+                raise ValueError(f"turbine {t.label}: breakdown does not sum to expected_rows")
+        b = self.coverage.breakdown
+        if b is not None:
+            if b.total() != self.coverage.expected_rows:
+                raise ValueError("coverage breakdown does not sum to expected_rows")
+            parts = [t.breakdown for t in self.turbines]
+            if all(parts):
+                for f in ("valid", "held", "blend", "placeholder", "other_invalid", "absent"):
+                    if getattr(b, f) != sum(getattr(p, f) for p in parts):
+                        raise ValueError(f"coverage breakdown.{f} is not the sum of the turbines'")
+            if b.valid != self.coverage.power_valid_rows or b.valid != self.energy.valid_intervals:
+                raise ValueError("breakdown.valid must equal power_valid_rows and energy.valid_intervals")
+            if self.outages is not None and self.outages.held_rows_total != b.held:
+                raise ValueError("outage held rows must equal breakdown.held")
         return self
