@@ -8,6 +8,7 @@ carry the other's farm. The v2 module must stay identical to the pipeline's.
 import asyncio
 import copy
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,12 @@ from app.scada_preview.schemas import SUMMARY_ADAPTER, IngestionSummary, farm_me
 from app.scada_preview.schemas_v2 import IngestionSummaryV2
 from app.scada_preview.service import MAX_SUMMARY_BYTES, IngestionSummaryService
 
-PIPELINE_V2 = (
-    Path(__file__).resolve().parents[2]
+# The pipeline contract to mirror. Set SCADA_PIPELINE_CONTRACT to the pipeline branch's
+# file (a worktree or CI checkout); when it is set the file must exist, so the check can
+# never skip silently. Unset, it looks for the main pipeline checkout alongside.
+PIPELINE_V2 = Path(
+    os.environ.get("SCADA_PIPELINE_CONTRACT")
+    or Path(__file__).resolve().parents[2]
     / "energyexe-scada-pipeline/scada_pipeline/measured/summary_contract_v2.py"
 )
 SHA = "a" * 64
@@ -241,12 +246,14 @@ def lut_v2_payload():
         "partial": True,
     }
     p["coverage"]["breakdown"] = dict(b)
+    p["coverage"]["observed_rows"] = 10  # expected - absent
     p["charts"]["yearly_energy"] = [year]
     p["charts"]["monthly_energy"][0]["held_intervals"] = 1
     t = p["turbines"][0]
     t.pop("station_id")
     t.update(label="T09", group="Lutelandet", model="Nordex N149/5700", rated_kw=5700.0)
-    t.update(breakdown=dict(b), yearly_energy=[year])
+    t.update(breakdown=dict(b), yearly_energy=[year], observed_rows=10)
+    t["monthly_energy"] = [dict(t["monthly_energy"][0], held_intervals=1)]
     p["meters"] = []
     p["outages"] = {
         "rule": "held",
@@ -300,33 +307,37 @@ def test_service_serves_lutelandet_v2_and_falls_back_to_v1_on_rollback():
 
 
 def test_worst_case_lutelandet_fleet_payload_fits_the_store_cap():
+    # First a valid nine-turbine payload (every part adds up) ...
     p = lut_v2_payload()
     month = p["charts"]["monthly_energy"][0]
     year = p["charts"]["yearly_energy"][0]
     t = p["turbines"][0]
-    t["monthly_energy"] = [month] * 60
-    t["yearly_energy"] = [year] * 10
-    t["power_wind"] = [
-        {
-            "wind_bin_ms": 1.25,
-            "power_mean_kw": 1.0,
-            "power_p10_kw": 1.0,
-            "power_p90_kw": 1.0,
-            "count": 9,
-        }
-    ] * 150
     p["turbines"] = [dict(copy.deepcopy(t), label=f"T{i:02d}") for i in range(1, 10)]
     p["farm"]["supplied_turbines"] = [f"T{i:02d}" for i in range(1, 10)]
     p["coverage"]["breakdown"] = {k: v * 9 for k, v in p["coverage"]["breakdown"].items()}
-    p["coverage"]["expected_rows"] = 90
+    p["coverage"]["expected_rows"] = p["coverage"]["observed_rows"] = 90
     p["coverage"]["power_valid_rows"] = p["energy"]["valid_intervals"] = 81
+    p["charts"]["monthly_energy"] = [dict(month, held_intervals=9)]
+    p["charts"]["yearly_energy"] = [dict(year, held_intervals=9)]
     p["outages"]["held_rows_total"] = p["outages"]["events_total"] = 9
     p["outages"]["events"] = [
         dict(p["outages"]["events"][0], turbines=p["farm"]["supplied_turbines"], held_rows=1)
     ] * 9
     SUMMARY_ADAPTER.validate_python(p)
-    p["outages"]["events"] = p["outages"]["events"] * 55  # 495 events: size only
-    p["charts"]["monthly_energy"] = [month] * 60
+    # ... then every list at its contract limit (size only).
+    bin_ = {
+        "wind_bin_ms": 1.25,
+        "power_mean_kw": 1.0,
+        "power_p10_kw": 1.0,
+        "power_p90_kw": 1.0,
+        "count": 9,
+    }
+    for turbine in p["turbines"]:
+        turbine.update(monthly_energy=[month] * 72, yearly_energy=[year] * 10)
+        turbine["power_wind"] = [bin_] * 150
+    p["outages"]["events"] = p["outages"]["events"] * 112  # 1,008 events
+    p["charts"]["monthly_energy"] = [month] * 72
+    p["charts"]["power_wind"] = [bin_] * 500
     p["charts"]["daily_trends"] = [
         {
             "date_utc": "2025-01-01",
@@ -335,12 +346,15 @@ def test_worst_case_lutelandet_fleet_payload_fits_the_store_cap():
             "power_count": 1,
             "wind_count": 1,
         }
-    ] * 1500
+    ] * 2500
     p["source"]["files"] = p["source"]["files"] * 120
     assert len(json.dumps(p).encode()) < MAX_SUMMARY_BYTES
 
 
-@pytest.mark.skipif(not PIPELINE_V2.exists(), reason="pipeline checkout not alongside")
+@pytest.mark.skipif(
+    not PIPELINE_V2.exists() and not os.environ.get("SCADA_PIPELINE_CONTRACT"),
+    reason="pipeline checkout not alongside (set SCADA_PIPELINE_CONTRACT)",
+)
 def test_v2_contract_mirrors_the_pipeline():
     body = lambda text: text[text.index("from typing") :]  # noqa: E731
     assert body(Path(schemas_v2.__file__).read_text()) == body(PIPELINE_V2.read_text())

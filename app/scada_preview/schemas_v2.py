@@ -188,7 +188,7 @@ class Outages(Payload):
     rule: str = Field(max_length=500)
     events_total: Count
     held_rows_total: Count
-    events: list[Outage] = Field(max_length=500)
+    events: list[Outage] = Field(max_length=1000)
 
     @model_validator(mode="after")
     def complete(self):
@@ -198,9 +198,9 @@ class Outages(Payload):
 
 
 class Charts(Payload):
-    daily_trends: list[DailyTrend] = Field(max_length=1500)
+    daily_trends: list[DailyTrend] = Field(max_length=2500)
     power_wind: list[PowerWind] = Field(max_length=500)
-    monthly_energy: list[MonthlyEnergy] = Field(max_length=60)
+    monthly_energy: list[MonthlyEnergy] = Field(max_length=72)
     yearly_energy: list[YearlyEnergy] = Field(default_factory=list, max_length=10)
 
 
@@ -228,7 +228,7 @@ class Turbine(Payload):
     wind_valid_rows: Count
     missing_days: Count
     energy_kwh: FiniteFloat | None
-    monthly_energy: list[MonthlyEnergy] = Field(max_length=60)
+    monthly_energy: list[MonthlyEnergy] = Field(max_length=72)
     power_wind: list[PowerWind] = Field(max_length=150)
     breakdown: Breakdown | None = None
     yearly_energy: list[YearlyEnergy] = Field(default_factory=list, max_length=10)
@@ -253,7 +253,7 @@ class Meter(Payload):
     expected_rows: Count
     observed_rows: Count
     counter_check: str = Field(max_length=500)
-    months: list[MeterMonth] = Field(max_length=60)
+    months: list[MeterMonth] = Field(max_length=72)
 
 
 class IngestionSummaryV2(Payload):
@@ -309,13 +309,35 @@ class IngestionSummaryV2(Payload):
             or any(t.breakdown is None for t in self.turbines)
         ):
             raise ValueError(f"farm {self.farm.slug} must publish the row breakdown and the outage events")
+        if self.farm.slug in OUTAGE_FARMS and (
+            not self.charts.yearly_energy or any(not t.yearly_energy for t in self.turbines)
+        ):
+            raise ValueError(f"farm {self.farm.slug} must publish yearly energy")
+
+        def held_parts_agree(who, b, monthly, yearly):
+            held = [m.held_intervals for m in monthly]
+            if monthly and all(h is not None for h in held) and sum(held) != b.held:
+                raise ValueError(f"{who}: monthly held_intervals do not sum to breakdown.held")
+            if yearly and sum(y.held_intervals for y in yearly) != b.held:
+                raise ValueError(f"{who}: yearly held_intervals do not sum to breakdown.held")
+
         for t in self.turbines:
-            if t.breakdown is not None and t.breakdown.total() != t.expected_rows:
+            if t.breakdown is None:
+                continue
+            if t.breakdown.total() != t.expected_rows:
                 raise ValueError(f"turbine {t.label}: breakdown does not sum to expected_rows")
+            if t.breakdown.valid != t.power_valid_rows:
+                raise ValueError(f"turbine {t.label}: breakdown.valid must equal power_valid_rows")
+            if t.observed_rows != t.expected_rows - t.breakdown.absent:
+                raise ValueError(f"turbine {t.label}: observed_rows must equal expected_rows - absent")
+            held_parts_agree(f"turbine {t.label}", t.breakdown, t.monthly_energy, t.yearly_energy)
         b = self.coverage.breakdown
         if b is not None:
             if b.total() != self.coverage.expected_rows:
                 raise ValueError("coverage breakdown does not sum to expected_rows")
+            if self.coverage.observed_rows != self.coverage.expected_rows - b.absent:
+                raise ValueError("coverage observed_rows must equal expected_rows - absent")
+            held_parts_agree("farm", b, self.charts.monthly_energy, self.charts.yearly_energy)
             parts = [t.breakdown for t in self.turbines]
             if all(parts):
                 for f in ("valid", "held", "blend", "placeholder", "other_invalid", "absent"):
@@ -325,4 +347,8 @@ class IngestionSummaryV2(Payload):
                 raise ValueError("breakdown.valid must equal power_valid_rows and energy.valid_intervals")
             if self.outages is not None and self.outages.held_rows_total != b.held:
                 raise ValueError("outage held rows must equal breakdown.held")
+        if self.outages is not None:
+            supplied = set(self.farm.supplied_turbines)
+            if any(not set(e.turbines) <= supplied for e in self.outages.events):
+                raise ValueError("outage events may only name supplied turbines")
         return self
