@@ -44,7 +44,8 @@ from app.api.v1.endpoints import (
     report_commentary,
     reports,
     scada,
-    scada_ledger_preview,
+    scada_builder,
+    scada_ledger,
     scada_opportunities,
     scada_ppas,
     states,
@@ -199,6 +200,9 @@ api_router.include_router(
 # SCADA portal (14-chart dashboard over gold schema `scada`; 503s until the schema exists)
 api_router.include_router(scada.router, prefix="/scada", tags=["scada"])
 
+# SCADA Builder (EPR-221) — prompt → chart spec, and one dataset's rows; read-only.
+api_router.include_router(scada_builder.router, prefix="/scada/builder", tags=["scada-builder"])
+
 # SCADA opportunities — Revenue-at-Risk register (503s until the findings tables are populated)
 api_router.include_router(
     scada_opportunities.router, prefix="/scada/opportunities", tags=["scada-opportunities"]
@@ -208,11 +212,9 @@ api_router.include_router(
 # read-only /scada charts. Entirely separate from the Perform /ppas router above.
 api_router.include_router(scada_ppas.router, prefix="/scada/ppas", tags=["scada-ppas"])
 
-# SCADA ledger preview — the value-ledger sandbox's results, internal staff only, static files,
-# off on production by default (SCADA_LEDGER_PREVIEW_ENABLED).
-api_router.include_router(
-    scada_ledger_preview.router, prefix="/scada/ledger-preview", tags=["scada-ledger-preview"]
-)
+# SCADA value ledger — the new method's results over the scada.opportunity_ledger_* tables, internal
+# staff only; SCADA_LEDGER_ENABLED=false switches it off.
+api_router.include_router(scada_ledger.router, prefix="/scada/ledger", tags=["scada-ledger"])
 
 # Reports platform (EPR-81/82 — generated reports store + async two-pass pipeline)
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])

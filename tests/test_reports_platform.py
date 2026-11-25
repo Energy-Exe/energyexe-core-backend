@@ -1293,6 +1293,9 @@ class TestCoverageAwareMetrics:
         assert "CAST(opportunities.created_at AS DATE)" in session.sql(1)
         assert "CAST(opportunities.detection_period_end AS DATE)" not in session.sql(1)
         assert "ORDER BY opportunities.schema_code, opportunities.created_at DESC" in session.sql(1)
+        # EPR-95: switched-off schemas (OPS_03, MKT_05, MKT_07) never reach the digest.
+        assert "opportunities.schema_code NOT IN" in session.sql(0)
+        assert "opportunities.schema_code NOT IN" in session.sql(1)
 
     def test_clipped_window_compares_against_the_same_season(self):
         """A clipped window compares year-over-year, not against the span that

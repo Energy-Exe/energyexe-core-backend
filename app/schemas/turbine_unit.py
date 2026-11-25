@@ -37,6 +37,7 @@ class TurbineUnitBase(BaseModel):
     lng: float
     status: Optional[str] = Field(None, pattern="^(operational|installing|decommissioned)$")
     hub_height_m: Optional[Decimal] = None
+    ground_elevation_m: Optional[Decimal] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
 
@@ -53,6 +54,7 @@ class TurbineUnitUpdate(BaseModel):
     lng: Optional[float] = None
     status: Optional[str] = Field(None, pattern="^(operational|installing|decommissioned)$")
     hub_height_m: Optional[Decimal] = None
+    ground_elevation_m: Optional[Decimal] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
 

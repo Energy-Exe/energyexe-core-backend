@@ -137,6 +137,11 @@ async def get_turbine_unit_with_relations(turbine_unit_id: int, db: AsyncSession
         "lng": turbine_unit.lng,
         "status": turbine_unit.status,
         "hub_height_m": float(turbine_unit.hub_height_m) if turbine_unit.hub_height_m else None,
+        "ground_elevation_m": (
+            float(turbine_unit.ground_elevation_m)
+            if turbine_unit.ground_elevation_m is not None
+            else None
+        ),
         "start_date": turbine_unit.start_date.isoformat() if turbine_unit.start_date else None,
         "end_date": turbine_unit.end_date.isoformat() if turbine_unit.end_date else None,
         "created_at": turbine_unit.created_at.isoformat(),

@@ -1,11 +1,18 @@
 """Skill file templates — written to the agent sandbox for lazy-loading via `cat`."""
 
+from app.services.opportunity_schemas.registry import SCHEMA_STATUS
 from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES, format_schema_catalogue
 
 # Generated from SCHEMA_NAMES / SCHEMA_ONE_LINERS (single source of truth) so the
 # agent always sees the full, current schema set by NAME rather than a hand-kept
 # divergent list. Interpolated into SKILL_DOMAIN below.
 _SCHEMA_CATALOGUE = format_schema_catalogue()
+
+# Switched-off schemas, from the registry (EPR-95: OPS_03; #106: MKT_05, MKT_07), so
+# the agent's "never report these" list cannot drift from what the engine runs.
+_INACTIVE = [code for code in SCHEMA_NAMES if SCHEMA_STATUS.get(code) != "ACTIVE"]
+_INACTIVE_CODES = "/".join(code.value for code in _INACTIVE)
+_INACTIVE_NAMES = ", ".join(f"*{SCHEMA_NAMES[code]}*" for code in _INACTIVE)
 
 # Slash-joined list of every SchemaCode value (OPS_01/.../DQ_01), generated from
 # the same single source so the opportunities-table reference in SKILL_SCHEMA can
@@ -16,7 +23,8 @@ SKILL_SCHEMA = """# Database Schema Reference
 
 ## Core Tables
 
-**windfarms**: id, name, code, nameplate_capacity_mw (Float), location_type (onshore/offshore), foundation_type (fixed/floating), status (operational/decommissioned/under_installation/expanded), country_id, state_id, region_id, bidzone_id, lat, lng, commercial_operational_date, ramp_up_end_date, is_deleted (bool — soft-deleted windfarms, hidden from the client platform)
+**windfarms**: id, name, code, nameplate_capacity_mw (Float), location_type (onshore/offshore), foundation_type (fixed/floating), status (operational/decommissioned/under_installation/expanded), country_id, state_id, region_id, bidzone_id, lat, lng, commercial_operational_date, ramp_up_end_date, is_deleted (bool — soft-deleted windfarms, hidden from the client platform), notes (free text, up to 300 characters: ownership, co-investors, export limits and other context entered by the EnergyExe team; NULL when none)
+- When asked about a wind farm's background, ownership, export limit or anything "noted" about it, read `windfarms.notes` first and quote it as the platform's own note.
 
 **generation_data**: hour (timestamptz), windfarm_id, generation_unit_id, generation_mwh (Numeric 12,3), metered_mwh (Numeric 12,3), curtailed_mwh (Numeric 12,3), capacity_mw, capacity_factor (0-1 decimal), consumption_mwh, is_ramp_up (bool), source (ENTSOE/ELEXON/EIA/NVE), quality_flag, completeness
 - Unique: (hour, generation_unit_id, source)
@@ -35,13 +43,13 @@ SKILL_SCHEMA = """# Database Schema Reference
 ## Supporting Tables
 
 **turbine_models**: model, supplier, original_supplier, rated_power_kw, cut_in_wind_speed_ms, cut_out_wind_speed_ms, rated_wind_speed_ms, blade_length_m, rotor_diameter_m
-**turbine_units**: windfarm_id, turbine_model_id, lat, lng, hub_height_m, status, start_date, end_date
+**turbine_units**: windfarm_id, turbine_model_id, lat, lng, hub_height_m, ground_elevation_m (ground level at the turbine base, metres above sea level; NULL when unknown), status, start_date, end_date
 **windfarm_owners**: windfarm_id, owner_id, ownership_percentage
 **owners**: id, code, name, type (energy/institutional_investor/community_investors/municipality/private_individual/supply_chain_oem/other/unknown)
 **ppas**: windfarm_id, ppa_buyer, ppa_size_mw, ppa_duration_years, ppa_start_date, ppa_end_date, ppa_notes, contract_type (fixed_price/indexed/hybrid/merchant), ppa_status (active/expired/renegotiating), ppa_price_eur_mwh, has_availability_penalties (bool)
 **opportunities**: windfarm_id, schema_code (all 19: __OPPORTUNITY_SCHEMA_CODES__), severity (CONFIRMED/INDICATIVE/WATCH/SUPPRESSED), branch (A/B/C), status (ACTIVE/ACKNOWLEDGED/RESOLVED/SUPERSEDED/INACTIVE), data_slots (JSONB), missing_slots (JSONB list), suppression_reason, triggered_by_id, detection_period_start, detection_period_end, detection_run_id, created_at
 - `detection_period_start/end` = the window the finding was evaluated over: a rolling ~24 months (720 d) whose END is clipped per windfarm to its last day with metered generation (EPR-126) — for lagging feeds (NVE stops at 31 Dec 2025) the end sits months before the run. `created_at` is the run timestamp; the requested end is `import_job_executions.import_end_date` via `detection_run_id`. `data_slots->>'period'` repeats the effective window.
-- LIVE findings =`status='ACTIVE' AND severity != 'SUPPRESSED'`. A SUPPRESSED severity means the finding was gated off by a DQ-01 data gap — do NOT surface it as actionable. A schema with status INACTIVE is data-blocked (e.g. MKT_05/MKT_07) and produces no real findings. Resolve schema_code → human name via the catalogue in skill_domain.md.
+- LIVE findings =`status='ACTIVE' AND severity != 'SUPPRESSED'`. A SUPPRESSED severity means the finding was gated off by a DQ-01 data gap — do NOT surface it as actionable. A schema with status INACTIVE is switched off (__INACTIVE_CODES__) and produces no real findings — never report a row of one, whatever its status. Resolve schema_code → human name via the catalogue in skill_domain.md.
 **power_curve_bins**: windfarm_id, year (NULL=overall_clean), curve_type (raw/capability/overall_clean), wind_bin (Numeric 2.0-25.0 in 1.0 steps), q50_pu (median P50), q90_pu (90th pct P10), mean_pu, mad_pu, sample_count. Unique: (windfarm_id, year, curve_type, wind_bin)
 **performance_anomalies**: windfarm_id, hour, anomaly_type (underperformance/overperformance), actual_p_pu, expected_p_pu, wind_speed, wind_bin, lost_mwh, lost_eur, market_price, run_id. Unique: (windfarm_id, hour)
 **performance_summaries**: windfarm_id, period_type (month/year), year, month. ODI: odi_pct_underperf, lost_mwh, expected_mwh, odi_pct_loss_mwh, lost_eur, odi_pct_loss_eur, long_run_count, max_run_hours. Norm: norm_ratio_p50, norm_index_p50, norm_ratio_p10, norm_index_p10. Commercial: constraint_proxy_mwh, lost_value_eur
@@ -321,9 +329,8 @@ B=PPA-structure / C=zone-dynamics; MKT-03 A=zone-structural / B=portfolio-
 concentration / C=asset-anomaly.
 
 **Status semantics — read before narrating "active findings":**
-- A schema marked **INACTIVE** (currently *PPA Underpricing* and *Forecast
-  Deviation*) is blocked on missing data and emits NO per-windfarm rows — never
-  imply such a finding exists.
+- A schema marked **INACTIVE** (currently __INACTIVE_NAMES__) is switched off
+  and emits NO per-windfarm rows — never imply such a finding exists.
 - Rows with `status` ∈ {`ACKNOWLEDGED`, `RESOLVED`, `SUPERSEDED`} or
   `severity = SUPPRESSED` are NOT active findings — exclude them from
   active-findings narratives (query `status = 'ACTIVE'` and
@@ -404,11 +411,15 @@ Use `peer_group_aggregates` (metric keys `concentration_capture_ratio`, `concent
 # Inject the generated schema catalogue (all schemas, by NAME) into the domain
 # skill file. Done via replace (not an f-string) because SKILL_DOMAIN contains
 # literal `{...}` JSON examples that would break str.format.
-SKILL_DOMAIN = SKILL_DOMAIN.replace("__SCHEMA_CATALOGUE__", _SCHEMA_CATALOGUE)
+SKILL_DOMAIN = SKILL_DOMAIN.replace("__SCHEMA_CATALOGUE__", _SCHEMA_CATALOGUE).replace(
+    "__INACTIVE_NAMES__", _INACTIVE_NAMES
+)
 
 # Inject the full schema_code list (by CODE) into the opportunities-table row of
 # SKILL_SCHEMA, same single-source generation so it can't drift to a stale subset.
-SKILL_SCHEMA = SKILL_SCHEMA.replace("__OPPORTUNITY_SCHEMA_CODES__", _SCHEMA_CODES)
+SKILL_SCHEMA = SKILL_SCHEMA.replace("__OPPORTUNITY_SCHEMA_CODES__", _SCHEMA_CODES).replace(
+    "__INACTIVE_CODES__", _INACTIVE_CODES
+)
 
 # EnergyExe chart theme — seeded into the agent sandbox as eexe_style.py so
 # agent-generated matplotlib/Plotly charts come out on-brand by default (#161,

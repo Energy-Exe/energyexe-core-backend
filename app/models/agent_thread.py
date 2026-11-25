@@ -19,5 +19,8 @@ class AgentThread(Base):
     total_cost_usd = Column(Numeric(10, 4), nullable=True)
     total_turns = Column(Integer, default=0)
     is_streaming = Column(Boolean, default=False, nullable=False)
+    # Which client portal the chat belongs to: 'scada' or 'perform'. Null on chats from before the
+    # column (they list under Perform) and on admin-ui chats.
+    portal = Column(String(16), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

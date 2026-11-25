@@ -15,12 +15,21 @@ Semantics rules baked in (docs/ui/README.md):
 The scada schema is NOT on the search_path — every query is schema-qualified.
 """
 
-from datetime import date, datetime, timedelta
+import statistics
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.scada_data_quality import (
+    MIN_COVERAGE,
+    completeness_grid,
+    coverage_cards,
+    load_trigger_config,
+    trigger_table,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -114,6 +123,75 @@ def _spearman_rho(xs: Sequence[float], ys: Sequence[float]) -> Optional[float]:
     if sx == 0 or sy == 0:
         return None
     return sum((rx[i] - mx) * (ry[i] - my) for i in range(n)) / (sx * sy)
+
+
+# A day's "production vs potential" is only shown when the wind offered something worth measuring
+# against: on a near-calm day the turbines' own power draw (negative output) over a tiny potential
+# gave figures like -935 %. Below this floor the day has no figure (the calendar draws it as no data).
+CALENDAR_MIN_POTENTIAL_MWH = 1.0
+CALENDAR_MIN_POTENTIAL_SHARE = 0.02
+
+
+def calendar_potential_floor(potentials: List[float]) -> float:
+    """The smallest daily potential (MWh) given a figure: 2 % of the year's highest day, at least 1 MWh."""
+    top = max(potentials, default=0.0)
+    return max(CALENDAR_MIN_POTENTIAL_MWH, CALENDAR_MIN_POTENTIAL_SHARE * top)
+
+
+def calendar_day(r: Any, floor: float) -> Dict[str, Any]:
+    """One calendar cell. Output below zero (the turbines drawing power) counts as nothing produced."""
+    act = float(r.act or 0)
+    pot = float(r.pot or 0)
+    causes = {"dt": float(r.dt or 0), "ct": float(r.ct or 0), "pf": float(r.pf or 0)}
+    dom = max(causes, key=lambda k: causes[k])
+    return {
+        "d": r.date_utc.isoformat(),
+        "act": round(act, 1),
+        "pot": round(pot, 1),
+        "perf": round(100.0 * max(act, 0.0) / pot, 1) if pot >= floor else None,
+        "cause": dom if causes[dom] > 0 else None,
+    }
+
+
+def _year_span(year: Optional[int]) -> Tuple[date, date]:
+    """The calendar year's first and last day, or every date when ``year`` is None."""
+    if year is None:
+        return date(2000, 1, 1), date(2100, 12, 31)
+    return date(year, 1, 1), date(year, 12, 31)
+
+
+def power_curve_payload(
+    rows: List[Tuple[str, int, float, float]],
+    *,
+    turbine: str,
+    year: int,
+    rated_kw: Optional[float],
+) -> Dict[str, Any]:
+    """The power-curve chart payload from (turbine, year, ws_bin, mean kW) rows.
+
+    - ``years``: the picked turbine's curve for the year and up to four before.
+    - ``farm_ref``: the mean of every turbine's curve in ``year`` (kept for older clients).
+    - ``turbines`` (EPR-213): every turbine's curve in ``year``, for the whole-farm view.
+    - ``farm_median`` (EPR-213): the median of every turbine's curve in ``year``, per bin.
+    """
+    own: Dict[int, List[Dict[str, Any]]] = {}
+    ref: Dict[float, List[float]] = {}
+    each: Dict[str, List[Dict[str, Any]]] = {}
+    for t, yr, ws, p in rows:
+        if t == turbine:
+            own.setdefault(yr, []).append({"ws": ws, "p": round(p, 1)})
+        if yr == year:
+            ref.setdefault(ws, []).append(p)
+            each.setdefault(t, []).append({"ws": ws, "p": round(p, 1)})
+    return {
+        "years": [{"year": yr, "bins": bins} for yr, bins in sorted(own.items())],
+        "farm_ref": [{"ws": ws, "p": round(sum(v) / len(v), 1)} for ws, v in sorted(ref.items())],
+        "farm_median": [
+            {"ws": ws, "p": round(statistics.median(v), 1)} for ws, v in sorted(ref.items())
+        ],
+        "turbines": {t: sorted(bins, key=lambda b: b["ws"]) for t, bins in sorted(each.items())},
+        "rated_kw": rated_kw,
+    }
 
 
 class ScadaService:
@@ -265,28 +343,87 @@ class ScadaService:
             ),
             {"farm": farm},
         )
-        rows = result.fetchall()
-        turbines = sorted({r.turbine for r in rows})
-        present = sorted({r.mo for r in rows})
-        months: List[str] = []
-        if present:
-            # Full-year span (Jan of first data year → Dec of last) so farm-wide
-            # holes render as visible gaps instead of silently vanishing.
-            for y in range(int(present[0][:4]), int(present[-1][:4]) + 1):
-                months.extend(f"{y:04d}-{m:02d}" for m in range(1, 13))
-        m_idx = {m: i for i, m in enumerate(months)}
-        t_idx = {t: i for i, t in enumerate(turbines)}
-        grid: List[List[Optional[List[float]]]] = [[None] * len(months) for _ in turbines]
-        for r in rows:
-            ex = float(r.ex or 0)
-            if ex <= 0:
-                continue
-            grid[t_idx[r.turbine]][m_idx[r.mo]] = [
-                round(float(r.rv or 0) / ex * 100, 1),
-                1 if r.pre else 0,
-                round(float(r.rp or 0) / ex * 100, 1),
-            ]
-        return {"turbines": turbines, "months": months, "grid": grid}
+        cods = await self.db.execute(
+            text(
+                "SELECT turbine, TO_CHAR(cod, 'YYYY-MM') AS mo FROM scada.dim_turbine "
+                "WHERE farm = :farm AND cod IS NOT NULL"
+            ),
+            {"farm": farm},
+        )
+        return completeness_grid(result.fetchall(), {r.turbine: r.mo for r in cods.fetchall()})
+
+    async def data_quality(self, farm: str) -> Dict[str, Any]:
+        """Data Quality page (EPR-230): four coverage cards over the farm's whole data
+        period, and which priced Opportunity Schema triggers its data can feed."""
+        totals = (
+            await self.db.execute(
+                text(
+                    """
+                    SELECT SUM(expected_intervals) AS ex, SUM(rows_present) AS rp,
+                           MIN(date_utc) AS d0, MAX(date_utc) AS d1
+                    FROM scada.completeness_daily
+                    WHERE farm = :farm AND NOT pre_cod
+                    """
+                ),
+                {"farm": farm},
+            )
+        ).one()
+        nulls = {
+            r.signal: r.null_pct
+            for r in (
+                await self.db.execute(
+                    text(
+                        "SELECT signal, null_pct FROM scada.dim_signal_capability "
+                        "WHERE farm = :farm AND signal IN ('power_kw', 'wind_speed_ms')"
+                    ),
+                    {"farm": farm},
+                )
+            ).fetchall()
+        }
+        price_hours: Optional[int] = None
+        price_expected: Optional[int] = None
+        windfarm_id = (
+            await self.db.execute(
+                text("SELECT windfarm_id FROM scada.dim_farm WHERE farm = :farm"), {"farm": farm}
+            )
+        ).scalar()
+        if windfarm_id is not None and totals.d0 is not None:
+            start = datetime.combine(totals.d0, datetime.min.time())
+            end = datetime.combine(totals.d1 + timedelta(days=1), datetime.min.time())
+            price_expected = int((end - start).total_seconds() // 3600)
+            price_hours = (
+                await self.db.execute(
+                    text(
+                        "SELECT COUNT(DISTINCT hour) FROM price_data "
+                        "WHERE windfarm_id = :wf AND day_ahead_price IS NOT NULL "
+                        "AND hour >= :start AND hour < :end"
+                    ),
+                    {
+                        "wf": windfarm_id,
+                        "start": start.replace(tzinfo=timezone.utc),
+                        "end": end.replace(tzinfo=timezone.utc),
+                    },
+                )
+            ).scalar() or 0
+        cards = coverage_cards(
+            expected=int(totals.ex or 0),
+            present=int(totals.rp or 0),
+            power_null_pct=nulls.get("power_kw"),
+            wind_null_pct=nulls.get("wind_speed_ms"),
+            price_hours=price_hours,
+            price_expected=price_expected,
+        )
+        price = cards["price"]
+        price_ok = None if price is None else price["priced"] >= MIN_COVERAGE * price["expected"]
+        return {
+            "period": (
+                {"start": totals.d0.isoformat(), "end": totals.d1.isoformat()}
+                if totals.d0 is not None
+                else None
+            ),
+            "cards": cards,
+            "triggers": trigger_table(load_trigger_config(), farm, price_ok),
+        }
 
     async def _weighted_pi_by_turbine_year(self, farm: str) -> Dict[str, Dict[int, float]]:
         """performance_index interval-weighted across epoch-straddling configs."""
@@ -1212,7 +1349,10 @@ class ScadaService:
         ]
         return {"rows": rows}
 
-    async def layout_map(self, farm: str, year: int) -> Dict[str, Any]:
+    async def layout_map(self, farm: str, year: Optional[int]) -> Dict[str, Any]:
+        """Turbine positions with energy, availability and alarm hours for ``year``,
+        or summed over every year when ``year`` is None (the Map's "All years")."""
+        start, end = _year_span(year)
         result = await self.db.execute(
             text(
                 """
@@ -1242,7 +1382,7 @@ class ScadaService:
                 ORDER BY dt.turbine
                 """
             ),
-            {"farm": farm, "start": date(year, 1, 1), "end": date(year, 12, 31)},
+            {"farm": farm, "start": start, "end": end},
         )
         return {
             "turbines": [
@@ -1821,16 +1961,7 @@ class ScadaService:
             ),
             {"farm": farm, "y0": year - 4, "year": year},
         )
-        own: Dict[int, List[Dict[str, Any]]] = {}
-        ref: Dict[float, List[float]] = {}
-        for r in result.fetchall():
-            if r.p is None:
-                continue
-            ws = float(r.ws)
-            if r.turbine == turbine:
-                own.setdefault(int(r.year), []).append({"ws": ws, "p": round(float(r.p), 1)})
-            if int(r.year) == year:
-                ref.setdefault(ws, []).append(float(r.p))
+        rows = [r for r in result.fetchall() if r.p is not None]
         rated_res = await self.db.execute(
             text(
                 "SELECT rated_kw FROM scada.dim_turbine"
@@ -1839,13 +1970,12 @@ class ScadaService:
             {"farm": farm, "turbine": turbine},
         )
         rated = rated_res.scalar()
-        return {
-            "years": [{"year": yr, "bins": bins} for yr, bins in sorted(own.items())],
-            "farm_ref": [
-                {"ws": ws, "p": round(sum(v) / len(v), 1)} for ws, v in sorted(ref.items())
-            ],
-            "rated_kw": float(rated) if rated is not None else None,
-        }
+        return power_curve_payload(
+            [(r.turbine, int(r.year), float(r.ws), float(r.p)) for r in rows],
+            turbine=turbine,
+            year=year,
+            rated_kw=float(rated) if rated is not None else None,
+        )
 
     async def turbine_daily_rel(self, farm: str, turbine: str, year: int) -> Dict[str, Any]:
         """Calendar of daily energy relative to the fleet median that day."""
@@ -2574,12 +2704,29 @@ class ScadaService:
 
     # --- round-5: farm map (metrics / fingerprint / replay), review, tools ---
 
-    async def direction_map(self, farm: str, year: int) -> Dict[str, Any]:
+    async def direction_map(self, farm: str, year: Optional[int]) -> Dict[str, Any]:
         """Directional performance fingerprint: per turbine, mean power over
-        farm-median power by 30-degree sector (wake + terrain combined)."""
-        result = await self.db.execute(
-            text(
+        farm-median power by 30-degree sector (wake + terrain combined).
+
+        With ``year`` None (the Map's "All years"), each sector's ratio is the
+        mean of the yearly ratios weighted by their 10-minute counts, so a
+        year with more mid-wind moments counts for more."""
+        if year is None:
+            sql = """
+                SELECT v.turbine, v.sector,
+                       SUM(v.ratio * v.n) / NULLIF(SUM(v.n), 0) AS ratio,
+                       SUM(v.n) AS n, dt.lat, dt.lon
+                FROM scada.viz_direction_ratio_yearly v
+                JOIN scada.dim_turbine dt
+                  ON dt.farm = v.farm AND dt.turbine = v.turbine
+                WHERE v.farm = :farm AND dt.lat IS NOT NULL
+                GROUP BY v.turbine, v.sector, dt.lat, dt.lon
+                HAVING SUM(v.n) > 0
+                ORDER BY v.turbine, v.sector
                 """
+            params: Dict[str, Any] = {"farm": farm}
+        else:
+            sql = """
                 SELECT v.turbine, v.sector, v.ratio, v.n, dt.lat, dt.lon
                 FROM scada.viz_direction_ratio_yearly v
                 JOIN scada.dim_turbine dt
@@ -2587,9 +2734,8 @@ class ScadaService:
                 WHERE v.farm = :farm AND v.year = :year AND dt.lat IS NOT NULL
                 ORDER BY v.turbine, v.sector
                 """
-            ),
-            {"farm": farm, "year": year},
-        )
+            params = {"farm": farm, "year": year}
+        result = await self.db.execute(text(sql), params)
         by_turbine: Dict[str, Dict[str, Any]] = {}
         for r in result.fetchall():
             entry = by_turbine.setdefault(
@@ -2652,11 +2798,23 @@ class ScadaService:
             "series": series,
         }
 
-    async def map_metrics(self, farm: str, year: int) -> Dict[str, Any]:
-        """Per-turbine year scorecard for the map's metric switcher."""
-        result = await self.db.execute(
-            text(
-                """
+    async def map_metrics(self, farm: str, year: Optional[int]) -> Dict[str, Any]:
+        """Per-turbine year scorecard for the map's metric switcher.
+
+        With ``year`` None (the Map's "All years"): lost energy and availability
+        are ratios of sums over every year, fine pitch averages every year's
+        6-8 m/s bins, and error hours are an average a year (the total over the
+        years with data, divided by how many there are)."""
+        start, end = _year_span(year)
+        all_years = year is None
+        pitch_year = "TRUE" if all_years else "year = :year"
+        err_year = "TRUE" if all_years else "EXTRACT(YEAR FROM month_utc) = :year"
+        err_sum = (
+            "SUM(error_h) / NULLIF(COUNT(DISTINCT EXTRACT(YEAR FROM month_utc)), 0)"
+            if all_years
+            else "SUM(error_h)"
+        )
+        sql = """
                 WITH loss AS (
                     SELECT turbine,
                            SUM(loss_downtime_kwh + loss_curtailment_kwh
@@ -2676,13 +2834,13 @@ class ScadaService:
                 ), pitch AS (
                     SELECT turbine, AVG(pitch_med_deg) AS fine
                     FROM scada.viz_pitch_curve_yearly
-                    WHERE farm = :farm AND year = :year
+                    WHERE farm = :farm AND {pitch_year}
                       AND ws_bin >= 6.0 AND ws_bin < 8.0 AND n >= 30
                     GROUP BY 1
                 ), err AS (
-                    SELECT turbine, SUM(error_h) AS error_h
+                    SELECT turbine, {err_sum} AS error_h
                     FROM scada.viz_timers_monthly
-                    WHERE farm = :farm AND EXTRACT(YEAR FROM month_utc) = :year
+                    WHERE farm = :farm AND {err_year}
                     GROUP BY 1
                 )
                 SELECT dt.turbine, dt.lat, dt.lon, dt.rated_kw,
@@ -2694,9 +2852,12 @@ class ScadaService:
                 LEFT JOIN err ON err.turbine = dt.turbine
                 WHERE dt.farm = :farm AND dt.lat IS NOT NULL
                 ORDER BY dt.turbine
-                """
-            ),
-            {"farm": farm, "year": year, "start": date(year, 1, 1), "end": date(year, 12, 31)},
+                """.format(
+            pitch_year=pitch_year, err_sum=err_sum, err_year=err_year
+        )
+        result = await self.db.execute(
+            text(sql),
+            {"farm": farm, "year": year, "start": start, "end": end},
         )
         turbines = []
         for r in result.fetchall():
@@ -2898,21 +3059,9 @@ class ScadaService:
             ),
             {"farm": farm, "start": date(year, 1, 1), "end": date(year, 12, 31)},
         )
-        days = []
-        for r in result.fetchall():
-            pot = float(r.pot or 0)
-            causes = {"dt": float(r.dt or 0), "ct": float(r.ct or 0), "pf": float(r.pf or 0)}
-            dom = max(causes, key=lambda k: causes[k])
-            days.append(
-                {
-                    "d": r.date_utc.isoformat(),
-                    "act": round(float(r.act or 0), 1),
-                    "pot": round(pot, 1),
-                    "perf": round(100.0 * float(r.act or 0) / pot, 1) if pot > 0 else None,
-                    "cause": dom if causes[dom] > 0 else None,
-                }
-            )
-        return {"days": days}
+        rows = result.fetchall()
+        floor = calendar_potential_floor([float(r.pot or 0) for r in rows])
+        return {"days": [calendar_day(r, floor) for r in rows]}
 
     async def turbine_losses(self, farm: str, turbine: str, year: int) -> Dict[str, Any]:
         """Monthly loss mix for one turbine — the dossier's cost strip."""

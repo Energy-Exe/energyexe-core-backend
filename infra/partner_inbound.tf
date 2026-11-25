@@ -10,10 +10,10 @@
 # Why not AWS Transfer Family (SFTP): ~$216/mo for the endpoint alone vs $0 for
 # plain S3 access — revisit only if a partner's IT mandates SFTP.
 #
-# Layout: one top-level prefix per partner (sfe/, varanger-kraft/, ...). One
-# IAM user per partner, allowed to Put/Get/List ONLY under its own prefix; no
-# delete, so uploads are immutable from the uploader's side (versioning covers
-# overwrite).
+# Layout: one top-level prefix per partner (sfe/, varanger-kraft/, aura/,
+# statkraft/). One IAM user per partner, allowed to Put/Get/List ONLY under its
+# own prefix; no delete, so uploads are immutable from the uploader's side
+# (versioning covers overwrite).
 #
 # ⚠️ Access keys are created OUT-OF-BAND, never in Terraform (keys would land in
 # state): aws iam create-access-key --user-name <partner>-upload --profile energyexe
@@ -249,6 +249,154 @@ resource "aws_iam_user_policy" "varanger_kraft_upload" {
   })
 }
 
+# --- AURA uploader: Put/Get/List under aura/ only, no delete ---
+
+resource "aws_iam_user" "aura_upload" {
+  name = "aura-upload"
+}
+
+resource "aws_iam_user_policy" "aura_upload" {
+  name = "partner-inbound-aura-upload"
+  user = aws_iam_user.aura_upload.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "UploadToAuraPrefix"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts",
+        ]
+        Resource = "${aws_s3_bucket.partner_inbound.arn}/aura/*"
+      },
+      {
+        Sid    = "ListAuraPrefix"
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads",
+        ]
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          StringLike = { "s3:prefix" = ["aura/", "aura/*"] }
+        }
+      },
+      # GUI clients (Cyberduck/WinSCP) open the bucket root on connect; these two
+      # statements let that root view work — folder names only (delimiter "/"
+      # required, so a recursive no-delimiter dump of the bucket stays denied).
+      # Two statements because clients variously send prefix="" or omit it, and
+      # StringLike/StringEquals don't match an ABSENT context key.
+      {
+        Sid      = "ListRootFoldersEmptyPrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          StringEquals = {
+            "s3:prefix"    = ""
+            "s3:delimiter" = "/"
+          }
+        }
+      },
+      {
+        Sid      = "ListRootFoldersNoPrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          Null         = { "s3:prefix" = "true" }
+          StringEquals = { "s3:delimiter" = "/" }
+        }
+      },
+      {
+        Sid      = "BucketLocation" # Cyberduck/WinSCP resolve the region with this
+        Effect   = "Allow"
+        Action   = "s3:GetBucketLocation"
+        Resource = aws_s3_bucket.partner_inbound.arn
+      },
+    ]
+  })
+}
+
+# --- Statkraft uploader: Put/Get/List under statkraft/ only, no delete.
+# One subfolder per wind farm: statkraft/bjorkhojden/ (Björkhöjden) and
+# statkraft/smola/ (Smøla); ASCII names avoid encoding trouble in S3 clients.
+
+resource "aws_iam_user" "statkraft_upload" {
+  name = "statkraft-upload"
+}
+
+resource "aws_iam_user_policy" "statkraft_upload" {
+  name = "partner-inbound-statkraft-upload"
+  user = aws_iam_user.statkraft_upload.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "UploadToStatkraftPrefix"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts",
+        ]
+        Resource = "${aws_s3_bucket.partner_inbound.arn}/statkraft/*"
+      },
+      {
+        Sid    = "ListStatkraftPrefix"
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads",
+        ]
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          StringLike = { "s3:prefix" = ["statkraft/", "statkraft/*"] }
+        }
+      },
+      # GUI clients (Cyberduck/WinSCP) open the bucket root on connect; these two
+      # statements let that root view work — folder names only (delimiter "/"
+      # required, so a recursive no-delimiter dump of the bucket stays denied).
+      # Two statements because clients variously send prefix="" or omit it, and
+      # StringLike/StringEquals don't match an ABSENT context key.
+      {
+        Sid      = "ListRootFoldersEmptyPrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          StringEquals = {
+            "s3:prefix"    = ""
+            "s3:delimiter" = "/"
+          }
+        }
+      },
+      {
+        Sid      = "ListRootFoldersNoPrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.partner_inbound.arn
+        Condition = {
+          Null         = { "s3:prefix" = "true" }
+          StringEquals = { "s3:delimiter" = "/" }
+        }
+      },
+      {
+        Sid      = "BucketLocation" # Cyberduck/WinSCP resolve the region with this
+        Effect   = "Allow"
+        Action   = "s3:GetBucketLocation"
+        Resource = aws_s3_bucket.partner_inbound.arn
+      },
+    ]
+  })
+}
+
 # --- Aje (internal, methodology owner): Put/Get/List across ALL partner
 # prefixes, no delete. His own named user so mimic runs and data pulls never
 # borrow a partner's key (the SFE mimic forced a rotation for exactly that).
@@ -276,6 +424,8 @@ resource "aws_iam_user_policy" "aje_partner" {
         Resource = [
           "${aws_s3_bucket.partner_inbound.arn}/sfe/*",
           "${aws_s3_bucket.partner_inbound.arn}/varanger-kraft/*",
+          "${aws_s3_bucket.partner_inbound.arn}/aura/*",
+          "${aws_s3_bucket.partner_inbound.arn}/statkraft/*",
         ]
       },
       {
@@ -291,6 +441,8 @@ resource "aws_iam_user_policy" "aje_partner" {
             "s3:prefix" = [
               "sfe/", "sfe/*",
               "varanger-kraft/", "varanger-kraft/*",
+              "aura/", "aura/*",
+              "statkraft/", "statkraft/*",
             ]
           }
         }

@@ -6,12 +6,12 @@ import mimetypes
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.agent_access import is_internal_staff
@@ -446,16 +446,22 @@ async def get_agent_file(
 async def list_threads(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    portal: Optional[Literal["scada", "perform"]] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_brain_agent_user),
 ) -> List[ThreadListItem]:
-    """List the current user's chat threads (lightweight, no messages)."""
+    """List the current user's chat threads (lightweight, no messages).
+
+    ``portal`` keeps each client portal's chats apart; chats saved before the column list under
+    Perform. Left out (the admin UI), every chat is listed.
+    """
+    query = select(AgentThread).where(AgentThread.user_id == current_user.id)
+    if portal == "scada":
+        query = query.where(AgentThread.portal == "scada")
+    elif portal == "perform":
+        query = query.where(or_(AgentThread.portal.is_(None), AgentThread.portal == "perform"))
     result = await db.execute(
-        select(AgentThread)
-        .where(AgentThread.user_id == current_user.id)
-        .order_by(AgentThread.updated_at.desc())
-        .limit(limit)
-        .offset(offset)
+        query.order_by(AgentThread.updated_at.desc()).limit(limit).offset(offset)
     )
     threads = result.scalars().all()
     return [ThreadListItem.model_validate(t) for t in threads]
@@ -515,6 +521,9 @@ async def upsert_thread(
         if body.total_cost_usd is not None:
             thread.total_cost_usd = max(thread.total_cost_usd or 0, body.total_cost_usd)
         thread.total_turns = body.total_turns
+        # The run saves the thread server-side without a portal; the client's next PUT names it.
+        if body.portal and thread.portal is None:
+            thread.portal = body.portal
     else:
         thread = AgentThread(
             id=thread_id,
@@ -525,6 +534,7 @@ async def upsert_thread(
             message_count=body.message_count,
             total_cost_usd=body.total_cost_usd,
             total_turns=body.total_turns,
+            portal=body.portal,
         )
         db.add(thread)
 

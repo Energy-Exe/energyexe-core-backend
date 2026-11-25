@@ -1,0 +1,38 @@
+{
+  "_about": "Data sources each priced Opportunity Schema trigger needs, and which of them each SCADA farm has. Drives the triggers table on /scada/quality (EPR-230). PROVISIONAL until Aje confirms the list and the mapping. Copied by hand from energyexe-scada-pipeline at 16bbc4d: triggers from scada_pipeline/opportunities/assets/data/triggers/*.yaml (requires_signals), farm sources from assets/data/{HOT,RG2}/signal_bindings.csv with the 90% coverage refusals in RG2/assessment.toml applied (RG2 start counts and stop timers at 0%). Every trigger here is priced, so each also needs the day-ahead price, which is checked live from the price coverage (at least 90%) when the portal can measure it; otherwise the farm's list here decides (Raggovidda: the pipeline's price check found 35,040 of 35,040 periods priced). A farm not listed under farms is not set up for the Opportunity Schema.",
+  "provisional": true,
+  "sources": {
+    "active_power": "Active power",
+    "wind_speed": "Wind speed",
+    "wind_direction": "Wind direction",
+    "nacelle_position": "Nacelle position",
+    "ambient_temperature": "Ambient temperature",
+    "active_power_setpoint": "Power setpoint",
+    "operating_timer": "Operating timers",
+    "stop_cause_counter": "Stop-cause counters",
+    "external_stop": "External stop flag",
+    "day_ahead_price": "Day-ahead price"
+  },
+  "triggers": [
+    {"code": "OPS_01", "name": "Priced downtime losses", "sources": ["active_power", "wind_speed", "operating_timer", "stop_cause_counter", "external_stop", "day_ahead_price"]},
+    {"code": "OPS_02", "name": "Outage timing value", "sources": ["active_power", "wind_speed", "operating_timer", "stop_cause_counter", "day_ahead_price"]},
+    {"code": "OPS_03", "name": "Residual power-curve underperformance", "sources": ["active_power", "wind_speed", "wind_direction", "active_power_setpoint", "day_ahead_price"]},
+    {"code": "OPS_04", "name": "Turbine degradation slope", "sources": ["active_power", "wind_speed", "nacelle_position", "day_ahead_price"]},
+    {"code": "OPS_08", "name": "Thermal derate production loss", "sources": ["active_power", "wind_speed", "ambient_temperature", "active_power_setpoint", "day_ahead_price"]},
+    {"code": "OPS_09", "name": "Cold-weather attributable loss", "sources": ["active_power", "wind_speed", "ambient_temperature", "day_ahead_price"]},
+    {"code": "OPS_12", "name": "Storm control lost production", "sources": ["active_power", "wind_speed", "active_power_setpoint", "day_ahead_price"]},
+    {"code": "OPS_13", "name": "Start-stop cycling loss", "sources": ["active_power", "wind_speed", "operating_timer", "day_ahead_price"]},
+    {"code": "OPS_14", "name": "Sector wake loss vs model", "sources": ["active_power", "wind_speed", "wind_direction", "nacelle_position", "ambient_temperature", "day_ahead_price"]},
+    {"code": "OPS_15", "name": "Residual directional deficit", "sources": ["active_power", "wind_speed", "wind_direction", "nacelle_position", "ambient_temperature", "day_ahead_price"]},
+    {"code": "OPS_16", "name": "Icing loss", "sources": ["active_power", "wind_speed", "ambient_temperature", "day_ahead_price"]},
+    {"code": "OPS_17", "name": "Sector management loss", "sources": ["active_power", "active_power_setpoint", "wind_speed", "wind_direction", "nacelle_position", "day_ahead_price"]},
+    {"code": "MKT_02", "name": "Negative-price generation exposure", "sources": ["active_power", "wind_speed", "day_ahead_price"]},
+    {"code": "MKT_03", "name": "Curtailment value recovery", "sources": ["active_power", "active_power_setpoint", "wind_speed", "day_ahead_price"]},
+    {"code": "FIN_04", "name": "Grid-caused unavailability misattribution", "sources": ["active_power", "wind_speed", "stop_cause_counter", "external_stop", "day_ahead_price"]},
+    {"code": "FIN_05", "name": "Parasitic and standby import cost", "sources": ["active_power", "wind_speed", "day_ahead_price"]}
+  ],
+  "farms": {
+    "hill_of_towie": ["active_power", "wind_speed", "wind_direction", "nacelle_position", "ambient_temperature", "active_power_setpoint", "operating_timer", "stop_cause_counter", "external_stop"],
+    "raggovidda": ["active_power", "wind_speed", "wind_direction", "nacelle_position", "ambient_temperature", "active_power_setpoint", "external_stop", "day_ahead_price"]
+  }
+}

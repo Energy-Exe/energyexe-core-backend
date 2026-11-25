@@ -1,0 +1,1210 @@
+{
+ "format": "value-ledger/2",
+ "run": {
+  "farm": "raggovidda",
+  "asset_code": "RG2",
+  "run_id": "sample-rg2-d",
+  "register_run_id": "epr138-fresh-e6eeeecad396f4da5d6e034c",
+  "method_version": "rg2-d@557444a+v1",
+  "format": "value-ledger/2",
+  "currency": "NOK",
+  "window_from": "2025-01-01",
+  "window_to": "2025-12-31",
+  "years": 1.0,
+  "years_basis": "whole_calendar_years",
+  "years_detail": [
+   {
+    "year": 2025,
+    "days_covered": 365,
+    "partial_year": false
+   }
+  ],
+  "headline_year": 1059084.948954091,
+  "today_same_years_year": 979911.0,
+  "register_year": 979911.0,
+  "realised_year": 20006068.047380008,
+  "turbines": [
+   "T01",
+   "T02",
+   "T03",
+   "T04",
+   "T05",
+   "T06",
+   "T07",
+   "T08",
+   "T09",
+   "T10",
+   "T11",
+   "T12"
+  ],
+  "bridge": [
+   {
+    "key": "start",
+    "label": "Today's register",
+    "change": null,
+    "detail": [],
+    "headline_after": 979911.0
+   },
+   {
+    "key": "claims_method",
+    "label": "How claims are counted",
+    "change": -24142.599252343876,
+    "detail": [],
+    "headline_after": 955768.4007476561
+   },
+   {
+    "key": "wake_retired",
+    "label": "Today's wake line retired",
+    "change": -51122.0,
+    "detail": [],
+    "headline_after": 904646.4007476561
+   },
+   {
+    "key": "peers",
+    "label": "Against peers, signed",
+    "change": -5692.222418666508,
+    "detail": [],
+    "headline_after": 898954.1783289897
+   },
+   {
+    "key": "degradation",
+    "label": "Degradation",
+    "change": 0.0,
+    "detail": [],
+    "headline_after": 898954.1783289897
+   },
+   {
+    "key": "remainder",
+    "label": "Remainder, signed",
+    "change": 160130.7706251012,
+    "detail": [],
+    "headline_after": 1059084.948954091
+   },
+   {
+    "key": "own_grain_years",
+    "label": "Company-wide lines over the years covered",
+    "change": 0.0,
+    "detail": [],
+    "headline_after": 1059084.948954091
+   }
+  ],
+  "bridge_start_basis": "register",
+  "bridge_basis": {
+   "build": "rg2-d",
+   "window_from": "2025-01-01",
+   "window_to": "2025-12-31",
+   "headline_year": 1059084.948954091
+  },
+  "ranges": [
+   {
+    "key": "all defaults together",
+    "basis_build": "rg2-d",
+    "basis_headline_year": 1059084.95,
+    "default_change": 0.0,
+    "low_change": 0.0,
+    "high_change": 552737.05,
+    "rebuild": null
+   }
+  ],
+  "coverage": [
+   {
+    "year": 2025,
+    "share_valued": 0.8954492411702404,
+    "share_valued_unclaimed_stops_not_counted": 0.8954492411702404,
+    "share_data_gap": 0.0018201766903226,
+    "unexplained_share_of_expected": 0.0147962602749621,
+    "whole_remainder_share_of_expected": 0.0076281178208507,
+    "degradation": 10617.850398469856,
+    "degradation_lo": -16826.53209226839,
+    "degradation_hi": 38062.2328892081
+   }
+  ],
+  "checks": [
+   {
+    "n": 1,
+    "name": "Adds up",
+    "result": "passed",
+    "window": "full record",
+    "values": {}
+   },
+   {
+    "n": 2,
+    "name": "Counted once",
+    "result": "passed",
+    "window": "full record",
+    "values": {}
+   },
+   {
+    "n": 3,
+    "name": "Reconciled",
+    "result": "passed",
+    "window": "quotable",
+    "values": {
+     "tolerance_year": 6.0,
+     "ledger_year_by_line": {
+      "MKT_03": 828876.0,
+      "OPS_08": 101.0,
+      "OPS_12": 50442.0,
+      "MKT_02": 14563.0,
+      "FIN_05": 10664.0
+     }
+    }
+   },
+   {
+    "n": 8,
+    "name": "Coverage",
+    "result": "reported",
+    "window": "quotable",
+    "values": {}
+   }
+  ],
+  "lines": [
+   {
+    "line": "MKT_03",
+    "register_year": 852573.0,
+    "today_year": 852573.3354216274,
+    "ledger_year": 828875.6243277874
+   },
+   {
+    "line": "OPS_08",
+    "register_year": 164.0,
+    "today_year": 165.36505978107934,
+    "ledger_year": 101.38680196473403
+   },
+   {
+    "line": "OPS_12",
+    "register_year": 50825.0,
+    "today_year": 50824.57249038476,
+    "ledger_year": 50442.389617903995
+   },
+   {
+    "line": "MKT_02",
+    "register_year": 14563.0,
+    "today_year": 14563.0,
+    "ledger_year": 14563.0
+   },
+   {
+    "line": "FIN_05",
+    "register_year": 10664.0,
+    "today_year": 10664.0,
+    "ledger_year": 10664.0
+   }
+  ],
+  "realised": [
+   {
+    "year": 2025,
+    "value": 20006068.047380008,
+    "mwh": 177653.11835233078,
+    "unpriced_periods": 0
+   }
+  ]
+ },
+ "groups": [
+  {
+   "key": "curtailment",
+   "label": "Curtailment"
+  },
+  {
+   "key": "downtime",
+   "label": "Downtime"
+  },
+  {
+   "key": "weather",
+   "label": "Weather"
+  },
+  {
+   "key": "peers",
+   "label": "Against peers"
+  },
+  {
+   "key": "degradation",
+   "label": "Degradation"
+  },
+  {
+   "key": "remainder",
+   "label": "Unexplained"
+  },
+  {
+   "key": "own_grain",
+   "label": "Company-wide lines"
+  }
+ ],
+ "causes": [
+  {
+   "code": "2:MKT_03:curtailed",
+   "label": "Curtailed",
+   "group": "curtailment",
+   "cls": "CURTAILMENT",
+   "recoverability": "partly",
+   "summed": true,
+   "status_key": {
+    "trigger": "MKT_03",
+    "scope": "VL:curtailed",
+    "cls": "CURTAILMENT"
+   }
+  },
+  {
+   "code": "4b:OPS_12:weather_storm_stop",
+   "label": "Storm stop",
+   "group": "weather",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_12",
+    "scope": "VL:storm_stop",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "7b:OPS_12:weather_storm_derate",
+   "label": "Slowed in a storm",
+   "group": "weather",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_12",
+    "scope": "VL:storm_derate",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "7c:OPS_08:heat_derate",
+   "label": "Slowed by heat",
+   "group": "weather",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "OPS_08",
+    "scope": "VL:heat_derate",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "8:LEDGER:peer_siting",
+   "label": "Behind neighbours, siting",
+   "group": "peers",
+   "cls": "RECOVERABLE",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:peer_siting",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "8:LEDGER:peer_recoverable",
+   "label": "Behind neighbours, wake",
+   "group": "peers",
+   "cls": "RECOVERABLE",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:peer_recoverable",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "8:LEDGER:peer_broadband",
+   "label": "Behind neighbours, all winds",
+   "group": "peers",
+   "cls": "RECOVERABLE",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:peer_broadband",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "8:LEDGER:above_peers",
+   "label": "Ahead of its neighbours",
+   "group": "peers",
+   "cls": "RECOVERABLE",
+   "recoverability": "yes",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:above_peers",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "8:LEDGER:degradation",
+   "label": "Degradation",
+   "group": "degradation",
+   "cls": "RECOVERABLE",
+   "recoverability": "partly",
+   "summed": false,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:degradation",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "9:LEDGER:remainder_in_claimed_periods",
+   "label": "Unexplained, during named causes",
+   "group": "remainder",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:remainder_claimed",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "9:LEDGER:remainder_unexplained",
+   "label": "Unexplained, other periods",
+   "group": "remainder",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "LEDGER",
+    "scope": "VL:remainder_unexplained",
+    "cls": "REALIZED"
+   }
+  },
+  {
+   "code": "own:MKT_02:negative_price_generation",
+   "label": "Sold while prices were below zero",
+   "group": "own_grain",
+   "cls": "RECOVERABLE",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "MKT_02",
+    "scope": "FLEET",
+    "cls": "RECOVERABLE"
+   }
+  },
+  {
+   "code": "own:FIN_05:parasitic_import",
+   "label": "Power drawn from the grid",
+   "group": "own_grain",
+   "cls": "REALIZED",
+   "recoverability": "no",
+   "summed": true,
+   "status_key": {
+    "trigger": "FIN_05",
+    "scope": "FLEET",
+    "cls": "REALIZED"
+   }
+  }
+ ],
+ "by_cause": [
+  {
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 828875.6243277874,
+   "claimed_mwh_year": 26587.483867343108
+  },
+  {
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 48589.286250559766,
+   "claimed_mwh_year": 723.0383041830805
+  },
+  {
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 1853.1033673442273,
+   "claimed_mwh_year": 23.732957266666666
+  },
+  {
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 101.38680196473405,
+   "claimed_mwh_year": 4.030967516722756
+  },
+  {
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -188751.19333314814,
+   "claimed_mwh_year": -1939.0649837150295
+  },
+  {
+   "cause": "8:LEDGER:degradation",
+   "value_year": 10617.850398469855,
+   "claimed_mwh_year": 11.96798271958757
+  },
+  {
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 83457.26974099797,
+   "claimed_mwh_year": 852.8712425740836
+  },
+  {
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 78050.15591147824,
+   "claimed_mwh_year": 897.2928717188549
+  },
+  {
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 21551.545262005417,
+   "claimed_mwh_year": 222.60715947379833
+  },
+  {
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -150474.888050343,
+   "claimed_mwh_year": -3016.8103985677853
+  },
+  {
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 310605.6586754442,
+   "claimed_mwh_year": 12251.222556499675
+  },
+  {
+   "cause": "own:FIN_05:parasitic_import",
+   "value_year": 10664.0,
+   "claimed_mwh_year": 74.155
+  },
+  {
+   "cause": "own:MKT_02:negative_price_generation",
+   "value_year": 14563.0,
+   "claimed_mwh_year": null
+  }
+ ],
+ "by_year": [
+  {
+   "year": 2025,
+   "cause": "2:MKT_03:curtailed",
+   "value": 828875.6243277874,
+   "claimed_mwh": 26587.483867343108,
+   "claims": 133213
+  },
+  {
+   "year": 2025,
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value": 48589.286250559766,
+   "claimed_mwh": 723.0383041830805,
+   "claims": 1044
+  },
+  {
+   "year": 2025,
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value": 1853.1033673442273,
+   "claimed_mwh": 23.732957266666666,
+   "claims": 278
+  },
+  {
+   "year": 2025,
+   "cause": "7c:OPS_08:heat_derate",
+   "value": 101.38680196473405,
+   "claimed_mwh": 4.030967516722756,
+   "claims": 232
+  },
+  {
+   "year": 2025,
+   "cause": "8:LEDGER:above_peers",
+   "value": -188751.19333314814,
+   "claimed_mwh": -1939.0649837150295,
+   "claims": 284429
+  },
+  {
+   "year": 2025,
+   "cause": "8:LEDGER:degradation",
+   "value": 10617.850398469855,
+   "claimed_mwh": 11.96798271958757,
+   "claims": 141654
+  },
+  {
+   "year": 2025,
+   "cause": "8:LEDGER:peer_broadband",
+   "value": 83457.26974099797,
+   "claimed_mwh": 852.8712425740836,
+   "claims": 267325
+  },
+  {
+   "year": 2025,
+   "cause": "8:LEDGER:peer_recoverable",
+   "value": 78050.15591147824,
+   "claimed_mwh": 897.2928717188549,
+   "claims": 164410
+  },
+  {
+   "year": 2025,
+   "cause": "8:LEDGER:peer_siting",
+   "value": 21551.545262005417,
+   "claimed_mwh": 222.60715947379833,
+   "claims": 64532
+  },
+  {
+   "year": 2025,
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value": -150474.888050343,
+   "claimed_mwh": -3016.8103985677853,
+   "claims": 132683
+  },
+  {
+   "year": 2025,
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value": 310605.6586754442,
+   "claimed_mwh": 12251.222556499675,
+   "claims": 430052
+  },
+  {
+   "year": 2025,
+   "cause": "own:FIN_05:parasitic_import",
+   "value": 10664.0,
+   "claimed_mwh": 74.155,
+   "claims": null
+  },
+  {
+   "year": 2025,
+   "cause": "own:MKT_02:negative_price_generation",
+   "value": 14563.0,
+   "claimed_mwh": null,
+   "claims": null
+  }
+ ],
+ "by_turbine": [
+  {
+   "turbine": "T01",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 69044.42117362804
+  },
+  {
+   "turbine": "T01",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 2649.886152189975
+  },
+  {
+   "turbine": "T01",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 175.69190268960082
+  },
+  {
+   "turbine": "T01",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -16164.64876375562
+  },
+  {
+   "turbine": "T01",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 4000.328382834994
+  },
+  {
+   "turbine": "T01",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 4727.905276404413
+  },
+  {
+   "turbine": "T01",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 8505.183798963906
+  },
+  {
+   "turbine": "T01",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 944.324553131191
+  },
+  {
+   "turbine": "T01",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -11952.06841133901
+  },
+  {
+   "turbine": "T01",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 27142.58579748598
+  },
+  {
+   "turbine": "T02",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 64833.04325236499
+  },
+  {
+   "turbine": "T02",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 4116.233019596236
+  },
+  {
+   "turbine": "T02",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 252.28321019852123
+  },
+  {
+   "turbine": "T02",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 22.99515896824716
+  },
+  {
+   "turbine": "T02",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -12741.067097864778
+  },
+  {
+   "turbine": "T02",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 2622.7890822260456
+  },
+  {
+   "turbine": "T02",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 4002.6240441452615
+  },
+  {
+   "turbine": "T02",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 10427.838441189615
+  },
+  {
+   "turbine": "T02",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 12.201869927068376
+  },
+  {
+   "turbine": "T02",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -11421.496579181814
+  },
+  {
+   "turbine": "T02",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 18766.675317490306
+  },
+  {
+   "turbine": "T03",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 74383.38274652958
+  },
+  {
+   "turbine": "T03",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 3916.887849735355
+  },
+  {
+   "turbine": "T03",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 100.00809636093132
+  },
+  {
+   "turbine": "T03",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 21.350172317885786
+  },
+  {
+   "turbine": "T03",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -12598.533817704163
+  },
+  {
+   "turbine": "T03",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T03",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 6684.278301128605
+  },
+  {
+   "turbine": "T03",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 6550.300721570743
+  },
+  {
+   "turbine": "T03",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 1233.173662802817
+  },
+  {
+   "turbine": "T03",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -16479.058650446426
+  },
+  {
+   "turbine": "T03",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 30682.020175431582
+  },
+  {
+   "turbine": "T04",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 65800.99495627938
+  },
+  {
+   "turbine": "T04",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 3598.7929426878295
+  },
+  {
+   "turbine": "T04",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 204.3915395787805
+  },
+  {
+   "turbine": "T04",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 9.339165534126156
+  },
+  {
+   "turbine": "T04",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -37472.28285685475
+  },
+  {
+   "turbine": "T04",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T04",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 1651.8879328641042
+  },
+  {
+   "turbine": "T04",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 552.3364042698934
+  },
+  {
+   "turbine": "T04",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 876.5920901468616
+  },
+  {
+   "turbine": "T04",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -9806.062559564978
+  },
+  {
+   "turbine": "T04",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 32570.245867017875
+  },
+  {
+   "turbine": "T05",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 65259.594016650524
+  },
+  {
+   "turbine": "T05",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 4327.570676063264
+  },
+  {
+   "turbine": "T05",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 75.79627970584433
+  },
+  {
+   "turbine": "T05",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 0.5238071651619267
+  },
+  {
+   "turbine": "T05",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -7893.336923593746
+  },
+  {
+   "turbine": "T05",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T05",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 12102.779044268764
+  },
+  {
+   "turbine": "T05",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 2832.8250260747704
+  },
+  {
+   "turbine": "T05",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 7049.198117455788
+  },
+  {
+   "turbine": "T05",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -12619.8298275485
+  },
+  {
+   "turbine": "T05",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 28744.63651084116
+  },
+  {
+   "turbine": "T06",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 64023.26887080762
+  },
+  {
+   "turbine": "T06",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 5317.48266688004
+  },
+  {
+   "turbine": "T06",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 199.64999308055974
+  },
+  {
+   "turbine": "T06",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 2.546435264429452
+  },
+  {
+   "turbine": "T06",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -8235.798076872677
+  },
+  {
+   "turbine": "T06",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T06",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 11781.158506681608
+  },
+  {
+   "turbine": "T06",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 8485.566562141721
+  },
+  {
+   "turbine": "T06",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 1692.2973659471422
+  },
+  {
+   "turbine": "T06",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -6255.514259441917
+  },
+  {
+   "turbine": "T06",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 32904.899622950645
+  },
+  {
+   "turbine": "T07",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 65201.29595605976
+  },
+  {
+   "turbine": "T07",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 7791.636961010532
+  },
+  {
+   "turbine": "T07",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 120.8026940125761
+  },
+  {
+   "turbine": "T07",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -8640.499035706414
+  },
+  {
+   "turbine": "T07",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 3994.732933408815
+  },
+  {
+   "turbine": "T07",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 23046.535819228295
+  },
+  {
+   "turbine": "T07",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 6401.335540098792
+  },
+  {
+   "turbine": "T07",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 592.8007941757187
+  },
+  {
+   "turbine": "T07",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -10899.711867891447
+  },
+  {
+   "turbine": "T07",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 26431.060731191763
+  },
+  {
+   "turbine": "T08",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 82825.4927986851
+  },
+  {
+   "turbine": "T08",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 4489.317509755969
+  },
+  {
+   "turbine": "T08",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 129.90056187236115
+  },
+  {
+   "turbine": "T08",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -19248.043690560993
+  },
+  {
+   "turbine": "T08",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T08",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 2142.073058710396
+  },
+  {
+   "turbine": "T08",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 5260.3395545392905
+  },
+  {
+   "turbine": "T08",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 671.6293476487706
+  },
+  {
+   "turbine": "T08",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -18481.08779489496
+  },
+  {
+   "turbine": "T08",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 19382.017249293982
+  },
+  {
+   "turbine": "T09",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 69024.12921973152
+  },
+  {
+   "turbine": "T09",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 4683.77336295721
+  },
+  {
+   "turbine": "T09",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 125.38467424627942
+  },
+  {
+   "turbine": "T09",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 20.941032111357043
+  },
+  {
+   "turbine": "T09",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -17276.29129079112
+  },
+  {
+   "turbine": "T09",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T09",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 3019.1461400336866
+  },
+  {
+   "turbine": "T09",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 4925.7147202208935
+  },
+  {
+   "turbine": "T09",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 502.90321291809863
+  },
+  {
+   "turbine": "T09",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -10429.784298949302
+  },
+  {
+   "turbine": "T09",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 18068.647864147966
+  },
+  {
+   "turbine": "T10",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 76310.44087436325
+  },
+  {
+   "turbine": "T10",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 4413.059419013753
+  },
+  {
+   "turbine": "T10",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 103.04036194024299
+  },
+  {
+   "turbine": "T10",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 5.936704683828469
+  },
+  {
+   "turbine": "T10",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -9077.461160909526
+  },
+  {
+   "turbine": "T10",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T10",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 7432.216500675271
+  },
+  {
+   "turbine": "T10",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 10456.14645013802
+  },
+  {
+   "turbine": "T10",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 3450.223874000765
+  },
+  {
+   "turbine": "T10",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -14302.745546232492
+  },
+  {
+   "turbine": "T10",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 27434.006541904004
+  },
+  {
+   "turbine": "T11",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 68925.37316118692
+  },
+  {
+   "turbine": "T11",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 1048.257665915667
+  },
+  {
+   "turbine": "T11",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 209.84831140187117
+  },
+  {
+   "turbine": "T11",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 3.480852661724647
+  },
+  {
+   "turbine": "T11",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -15236.524976005321
+  },
+  {
+   "turbine": "T11",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T11",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 4998.8032499557
+  },
+  {
+   "turbine": "T11",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 9305.470194708134
+  },
+  {
+   "turbine": "T11",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 3745.6757989536213
+  },
+  {
+   "turbine": "T11",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -17423.703227272665
+  },
+  {
+   "turbine": "T11",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 22396.850482223315
+  },
+  {
+   "turbine": "T12",
+   "cause": "2:MKT_03:curtailed",
+   "value_year": 63244.18730150075
+  },
+  {
+   "turbine": "T12",
+   "cause": "4b:OPS_12:weather_storm_stop",
+   "value_year": 2236.3880247539373
+  },
+  {
+   "turbine": "T12",
+   "cause": "7b:OPS_12:weather_storm_derate",
+   "value_year": 156.30574225665848
+  },
+  {
+   "turbine": "T12",
+   "cause": "7c:OPS_08:heat_derate",
+   "value_year": 14.273473257973407
+  },
+  {
+   "turbine": "T12",
+   "cause": "8:LEDGER:above_peers",
+   "value_year": -24166.705642529025
+  },
+  {
+   "turbine": "T12",
+   "cause": "8:LEDGER:degradation",
+   "value_year": 0.0
+  },
+  {
+   "turbine": "T12",
+   "cause": "8:LEDGER:peer_broadband",
+   "value_year": 1867.8618669018647
+  },
+  {
+   "turbine": "T12",
+   "cause": "8:LEDGER:peer_recoverable",
+   "value_year": 4347.098497562469
+  },
+  {
+   "turbine": "T12",
+   "cause": "8:LEDGER:peer_siting",
+   "value_year": 780.5245748975751
+  },
+  {
+   "turbine": "T12",
+   "cause": "9:LEDGER:remainder_in_claimed_periods",
+   "value_year": -10403.82502757949
+  },
+  {
+   "turbine": "T12",
+   "cause": "9:LEDGER:remainder_unexplained",
+   "value_year": 26082.012515465627
+  }
+ ]
+}

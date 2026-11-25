@@ -23,6 +23,9 @@ from app.services.opportunity_schemas.evidence import format_evidence
 from app.services.opportunity_schemas.registry import SCHEMA_STATUS
 from app.services.opportunity_schemas.schema_names import SCHEMA_NAMES
 from app.services.reports.context import ReportContext
+
+# Switched-off schemas (EPR-95) never count, even if older rows remain.
+_INACTIVE_CODES = [c.value for c, s in SCHEMA_STATUS.items() if s != "ACTIVE"]
 from app.services.reports.data_builders.common import (  # noqa: F401  (re-exported for tests)
     FLAT_TOLERANCE as _FLAT_TOLERANCE,
 )
@@ -249,6 +252,7 @@ async def _severity_snapshot(ctx: ReportContext, as_of: date) -> Optional[dict]:
         select(Opportunity.schema_code, Opportunity.severity, Opportunity.created_at)
         .where(
             Opportunity.windfarm_id == ctx.windfarm_id,
+            Opportunity.schema_code.notin_(_INACTIVE_CODES),
             cast(Opportunity.created_at, Date) <= as_of,
             cast(Opportunity.created_at, Date) > cutoff,
         )
@@ -287,6 +291,7 @@ async def _current_findings(ctx: ReportContext, as_of: date) -> list[dict]:
         select(Opportunity)
         .where(
             Opportunity.windfarm_id == ctx.windfarm_id,
+            Opportunity.schema_code.notin_(_INACTIVE_CODES),
             # Run recency by created_at, not detection_period_end (EPR-126 clips
             # the latter to the farm's last metered day).
             cast(Opportunity.created_at, Date) <= as_of,

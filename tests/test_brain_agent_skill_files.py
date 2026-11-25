@@ -306,3 +306,27 @@ def test_lutelandet_never_reaches_the_client_surface():
 
     text = Path("app/prompts/brain_agent_system_client.md").read_text(encoding="utf-8")
     assert "measurements_5m" not in text and "status_observations" not in text
+
+
+def test_windfarm_notes_are_documented_for_the_agent():
+    """EPR-161: the agent was told windfarms had no notes column."""
+    from pathlib import Path
+
+    windfarms_row = next(l for l in SKILL_SCHEMA.splitlines() if l.startswith("**windfarms**"))
+    assert "notes (free text" in windfarms_row
+    for prompt in ("brain_agent_system.md", "brain_agent_system_client.md"):
+        text = (Path(__file__).parents[1] / "app" / "prompts" / prompt).read_text()
+        assert "`windfarms.notes`" in text
+
+
+def test_switched_off_schemas_come_from_the_registry():
+    """EPR-95: OPS-03 is named inactive everywhere the agent reads, with MKT-05/07."""
+    from pathlib import Path
+
+    assert "(OPS_03/MKT_05/MKT_07)" in SKILL_SCHEMA
+    assert "__INACTIVE" not in SKILL_SCHEMA + SKILL_DOMAIN
+    assert "*Misaligned Contracting Strategy*" in SKILL_DOMAIN
+    assert "INACTIVE — switched off" in SKILL_DOMAIN
+    for prompt in ("brain_agent_system.md", "brain_agent_system_client.md"):
+        text = (Path(__file__).parents[1] / "app" / "prompts" / prompt).read_text()
+        assert "INACTIVE schemas (OPS_03, MKT_05, MKT_07)" in text
