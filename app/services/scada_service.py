@@ -15,6 +15,7 @@ Semantics rules baked in (docs/ui/README.md):
 The scada schema is NOT on the search_path — every query is schema-qualified.
 """
 
+import statistics
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -149,6 +150,40 @@ def calendar_day(r: Any, floor: float) -> Dict[str, Any]:
         "pot": round(pot, 1),
         "perf": round(100.0 * max(act, 0.0) / pot, 1) if pot >= floor else None,
         "cause": dom if causes[dom] > 0 else None,
+    }
+
+
+def power_curve_payload(
+    rows: List[Tuple[str, int, float, float]],
+    *,
+    turbine: str,
+    year: int,
+    rated_kw: Optional[float],
+) -> Dict[str, Any]:
+    """The power-curve chart payload from (turbine, year, ws_bin, mean kW) rows.
+
+    - ``years``: the picked turbine's curve for the year and up to four before.
+    - ``farm_ref``: the mean of every turbine's curve in ``year`` (kept for older clients).
+    - ``turbines`` (EPR-213): every turbine's curve in ``year``, for the whole-farm view.
+    - ``farm_median`` (EPR-213): the median of every turbine's curve in ``year``, per bin.
+    """
+    own: Dict[int, List[Dict[str, Any]]] = {}
+    ref: Dict[float, List[float]] = {}
+    each: Dict[str, List[Dict[str, Any]]] = {}
+    for t, yr, ws, p in rows:
+        if t == turbine:
+            own.setdefault(yr, []).append({"ws": ws, "p": round(p, 1)})
+        if yr == year:
+            ref.setdefault(ws, []).append(p)
+            each.setdefault(t, []).append({"ws": ws, "p": round(p, 1)})
+    return {
+        "years": [{"year": yr, "bins": bins} for yr, bins in sorted(own.items())],
+        "farm_ref": [{"ws": ws, "p": round(sum(v) / len(v), 1)} for ws, v in sorted(ref.items())],
+        "farm_median": [
+            {"ws": ws, "p": round(statistics.median(v), 1)} for ws, v in sorted(ref.items())
+        ],
+        "turbines": {t: sorted(bins, key=lambda b: b["ws"]) for t, bins in sorted(each.items())},
+        "rated_kw": rated_kw,
     }
 
 
@@ -1916,16 +1951,7 @@ class ScadaService:
             ),
             {"farm": farm, "y0": year - 4, "year": year},
         )
-        own: Dict[int, List[Dict[str, Any]]] = {}
-        ref: Dict[float, List[float]] = {}
-        for r in result.fetchall():
-            if r.p is None:
-                continue
-            ws = float(r.ws)
-            if r.turbine == turbine:
-                own.setdefault(int(r.year), []).append({"ws": ws, "p": round(float(r.p), 1)})
-            if int(r.year) == year:
-                ref.setdefault(ws, []).append(float(r.p))
+        rows = [r for r in result.fetchall() if r.p is not None]
         rated_res = await self.db.execute(
             text(
                 "SELECT rated_kw FROM scada.dim_turbine"
@@ -1934,13 +1960,12 @@ class ScadaService:
             {"farm": farm, "turbine": turbine},
         )
         rated = rated_res.scalar()
-        return {
-            "years": [{"year": yr, "bins": bins} for yr, bins in sorted(own.items())],
-            "farm_ref": [
-                {"ws": ws, "p": round(sum(v) / len(v), 1)} for ws, v in sorted(ref.items())
-            ],
-            "rated_kw": float(rated) if rated is not None else None,
-        }
+        return power_curve_payload(
+            [(r.turbine, int(r.year), float(r.ws), float(r.p)) for r in rows],
+            turbine=turbine,
+            year=year,
+            rated_kw=float(rated) if rated is not None else None,
+        )
 
     async def turbine_daily_rel(self, farm: str, turbine: str, year: int) -> Dict[str, Any]:
         """Calendar of daily energy relative to the fleet median that day."""
