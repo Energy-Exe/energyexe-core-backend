@@ -1,7 +1,7 @@
 """SCADA value ledger endpoints: the new method's results per asset (rollout Stage 3).
 
-Read-only, internal staff only (superuser AND ``is_internal``, ``get_current_internal_user``). Off on production
-unless ``SCADA_LEDGER_ENABLED`` says otherwise (503). A farm without ledger tables or runs lists no assets, and an
+Read-only, internal staff only (superuser AND ``is_internal``, ``get_current_internal_user``). On by default;
+``SCADA_LEDGER_ENABLED=false`` switches it off (503). A farm without ledger tables or runs lists no assets, and an
 asset without a ledger run is a 404, which the portal shows as today's view. A stale ledger (built beside an
 older register run) is a 200 with ``status: "stale"`` and no document.
 """

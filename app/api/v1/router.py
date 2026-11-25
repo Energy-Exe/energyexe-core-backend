@@ -213,7 +213,7 @@ api_router.include_router(
 api_router.include_router(scada_ppas.router, prefix="/scada/ppas", tags=["scada-ppas"])
 
 # SCADA value ledger — the new method's results over the scada.opportunity_ledger_* tables, internal
-# staff only, off on production by default (SCADA_LEDGER_ENABLED).
+# staff only; SCADA_LEDGER_ENABLED=false switches it off.
 api_router.include_router(scada_ledger.router, prefix="/scada/ledger", tags=["scada-ledger"])
 
 # Reports platform (EPR-81/82 — generated reports store + async two-pass pipeline)

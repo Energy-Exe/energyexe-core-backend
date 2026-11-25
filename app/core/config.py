@@ -164,8 +164,8 @@ class Settings(BaseSettings):
     # Brain Agent default model (used as fallback when caller omits one)
     SCADA_INGESTION_ENABLED: bool = False
     # Value ledger (/scada/ledger, internal staff; also its status keys on PUT /scada/opportunities/actions).
-    # Unset means on everywhere except production (SENTRY_ENVIRONMENT), so staging gets it without an
-    # infra change and the promoted image stays dark on prod. Set it explicitly to override.
+    # On everywhere since the production release (value ledger Stage 9, 2026-11-26). Set it to false to
+    # switch the ledger off on an environment (the fast off-switch is the portal's VITE_SCADA_LEDGER).
     SCADA_LEDGER_ENABLED: Optional[bool] = None
     BRAIN_AGENT_ACCESS_POLICY: Literal["authenticated", "superusers"] = "authenticated"
 
@@ -204,7 +204,7 @@ class Settings(BaseSettings):
     def scada_ledger_enabled(self) -> bool:
         if self.SCADA_LEDGER_ENABLED is not None:
             return self.SCADA_LEDGER_ENABLED
-        return self.SENTRY_ENVIRONMENT != "production"
+        return True
 
     @property
     def s3_enabled(self) -> bool:

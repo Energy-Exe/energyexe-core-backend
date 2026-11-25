@@ -173,12 +173,13 @@ def test_off_switch_is_503(client, monkeypatch, ledgers):
     assert client.get(f"{PREFIX}/assets", params={"farm": "raggovidda"}).status_code == 503
 
 
-def test_default_is_off_on_production_only():
-    assert Settings(SENTRY_ENVIRONMENT="production").scada_ledger_enabled is False
+def test_default_is_on_everywhere_and_can_be_switched_off():
+    # Stage 9 (2026-11-26): the production exception is gone.
+    assert Settings(SENTRY_ENVIRONMENT="production").scada_ledger_enabled is True
     assert Settings(SENTRY_ENVIRONMENT="staging").scada_ledger_enabled is True
     assert (
-        Settings(SENTRY_ENVIRONMENT="production", SCADA_LEDGER_ENABLED=True).scada_ledger_enabled
-        is True
+        Settings(SENTRY_ENVIRONMENT="production", SCADA_LEDGER_ENABLED=False).scada_ledger_enabled
+        is False
     )
 
 
