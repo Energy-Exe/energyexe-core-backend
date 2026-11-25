@@ -8,7 +8,7 @@ ACL yet by explicit product decision; revisit before onboarding a second client.
 """
 
 from datetime import date
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -351,7 +351,6 @@ _FARM_YEAR_CHARTS = {
     "temp-cohort": "temp_cohort",
     "yaw-misalignment": "yaw_misalignment",
     "watchdog": "watchdog",
-    "layout-map": "layout_map",
     "wake": "wake",
     "wind-rose": "wind_rose",
     "turbulence": "turbulence",
@@ -372,8 +371,6 @@ _FARM_YEAR_CHARTS = {
     "density-curve": "density_curve",
     "ramps": "ramps",
     # round-5: farm map, year in review, analyst tools
-    "direction-map": "direction_map",
-    "map-metrics": "map_metrics",
     "alarm-explorer": "alarm_explorer",
     "year-summary": "year_summary",
     "calendar": "calendar",
@@ -395,6 +392,34 @@ def _register_farm_year_chart(path: str, method_name: str) -> None:
 
 for _path, _method in _FARM_YEAR_CHARTS.items():
     _register_farm_year_chart(_path, _method)
+
+
+# The farm map's three views: one year, or every year at once (EPR-213, "All years" on the Map).
+_MAP_CHARTS = {
+    "layout-map": "layout_map",
+    "direction-map": "direction_map",
+    "map-metrics": "map_metrics",
+}
+
+
+def _register_map_chart(path: str, method_name: str) -> None:
+    @router.get(f"/{path}", name=f"get_{method_name}")
+    async def _endpoint(
+        farm: str = Query(DEFAULT_FARM),
+        year: Optional[int] = Query(None, ge=2015, le=2100),
+        all_years: bool = Query(False),
+        current_user: User = Depends(get_current_active_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> Dict[str, Any]:
+        if year is None and not all_years:
+            raise HTTPException(status_code=422, detail="Give a year, or all_years=true")
+        service = await _service(db)
+        await _validated_farm(service, farm)
+        return await getattr(service, method_name)(farm=farm, year=None if all_years else year)
+
+
+for _path, _method in _MAP_CHARTS.items():
+    _register_map_chart(_path, _method)
 
 
 @router.get("/wind-index")
