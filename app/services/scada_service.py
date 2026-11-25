@@ -153,6 +153,13 @@ def calendar_day(r: Any, floor: float) -> Dict[str, Any]:
     }
 
 
+def _year_span(year: Optional[int]) -> Tuple[date, date]:
+    """The calendar year's first and last day, or every date when ``year`` is None."""
+    if year is None:
+        return date(2000, 1, 1), date(2100, 12, 31)
+    return date(year, 1, 1), date(year, 12, 31)
+
+
 def power_curve_payload(
     rows: List[Tuple[str, int, float, float]],
     *,
@@ -1342,7 +1349,10 @@ class ScadaService:
         ]
         return {"rows": rows}
 
-    async def layout_map(self, farm: str, year: int) -> Dict[str, Any]:
+    async def layout_map(self, farm: str, year: Optional[int]) -> Dict[str, Any]:
+        """Turbine positions with energy, availability and alarm hours for ``year``,
+        or summed over every year when ``year`` is None (the Map's "All years")."""
+        start, end = _year_span(year)
         result = await self.db.execute(
             text(
                 """
@@ -1372,7 +1382,7 @@ class ScadaService:
                 ORDER BY dt.turbine
                 """
             ),
-            {"farm": farm, "start": date(year, 1, 1), "end": date(year, 12, 31)},
+            {"farm": farm, "start": start, "end": end},
         )
         return {
             "turbines": [
@@ -2694,12 +2704,29 @@ class ScadaService:
 
     # --- round-5: farm map (metrics / fingerprint / replay), review, tools ---
 
-    async def direction_map(self, farm: str, year: int) -> Dict[str, Any]:
+    async def direction_map(self, farm: str, year: Optional[int]) -> Dict[str, Any]:
         """Directional performance fingerprint: per turbine, mean power over
-        farm-median power by 30-degree sector (wake + terrain combined)."""
-        result = await self.db.execute(
-            text(
+        farm-median power by 30-degree sector (wake + terrain combined).
+
+        With ``year`` None (the Map's "All years"), each sector's ratio is the
+        mean of the yearly ratios weighted by their 10-minute counts, so a
+        year with more mid-wind moments counts for more."""
+        if year is None:
+            sql = """
+                SELECT v.turbine, v.sector,
+                       SUM(v.ratio * v.n) / NULLIF(SUM(v.n), 0) AS ratio,
+                       SUM(v.n) AS n, dt.lat, dt.lon
+                FROM scada.viz_direction_ratio_yearly v
+                JOIN scada.dim_turbine dt
+                  ON dt.farm = v.farm AND dt.turbine = v.turbine
+                WHERE v.farm = :farm AND dt.lat IS NOT NULL
+                GROUP BY v.turbine, v.sector, dt.lat, dt.lon
+                HAVING SUM(v.n) > 0
+                ORDER BY v.turbine, v.sector
                 """
+            params: Dict[str, Any] = {"farm": farm}
+        else:
+            sql = """
                 SELECT v.turbine, v.sector, v.ratio, v.n, dt.lat, dt.lon
                 FROM scada.viz_direction_ratio_yearly v
                 JOIN scada.dim_turbine dt
@@ -2707,9 +2734,8 @@ class ScadaService:
                 WHERE v.farm = :farm AND v.year = :year AND dt.lat IS NOT NULL
                 ORDER BY v.turbine, v.sector
                 """
-            ),
-            {"farm": farm, "year": year},
-        )
+            params = {"farm": farm, "year": year}
+        result = await self.db.execute(text(sql), params)
         by_turbine: Dict[str, Dict[str, Any]] = {}
         for r in result.fetchall():
             entry = by_turbine.setdefault(
@@ -2772,11 +2798,23 @@ class ScadaService:
             "series": series,
         }
 
-    async def map_metrics(self, farm: str, year: int) -> Dict[str, Any]:
-        """Per-turbine year scorecard for the map's metric switcher."""
-        result = await self.db.execute(
-            text(
-                """
+    async def map_metrics(self, farm: str, year: Optional[int]) -> Dict[str, Any]:
+        """Per-turbine year scorecard for the map's metric switcher.
+
+        With ``year`` None (the Map's "All years"): lost energy and availability
+        are ratios of sums over every year, fine pitch averages every year's
+        6-8 m/s bins, and error hours are an average a year (the total over the
+        years with data, divided by how many there are)."""
+        start, end = _year_span(year)
+        all_years = year is None
+        pitch_year = "TRUE" if all_years else "year = :year"
+        err_year = "TRUE" if all_years else "EXTRACT(YEAR FROM month_utc) = :year"
+        err_sum = (
+            "SUM(error_h) / NULLIF(COUNT(DISTINCT EXTRACT(YEAR FROM month_utc)), 0)"
+            if all_years
+            else "SUM(error_h)"
+        )
+        sql = """
                 WITH loss AS (
                     SELECT turbine,
                            SUM(loss_downtime_kwh + loss_curtailment_kwh
@@ -2796,13 +2834,13 @@ class ScadaService:
                 ), pitch AS (
                     SELECT turbine, AVG(pitch_med_deg) AS fine
                     FROM scada.viz_pitch_curve_yearly
-                    WHERE farm = :farm AND year = :year
+                    WHERE farm = :farm AND {pitch_year}
                       AND ws_bin >= 6.0 AND ws_bin < 8.0 AND n >= 30
                     GROUP BY 1
                 ), err AS (
-                    SELECT turbine, SUM(error_h) AS error_h
+                    SELECT turbine, {err_sum} AS error_h
                     FROM scada.viz_timers_monthly
-                    WHERE farm = :farm AND EXTRACT(YEAR FROM month_utc) = :year
+                    WHERE farm = :farm AND {err_year}
                     GROUP BY 1
                 )
                 SELECT dt.turbine, dt.lat, dt.lon, dt.rated_kw,
@@ -2814,9 +2852,12 @@ class ScadaService:
                 LEFT JOIN err ON err.turbine = dt.turbine
                 WHERE dt.farm = :farm AND dt.lat IS NOT NULL
                 ORDER BY dt.turbine
-                """
-            ),
-            {"farm": farm, "year": year, "start": date(year, 1, 1), "end": date(year, 12, 31)},
+                """.format(
+            pitch_year=pitch_year, err_sum=err_sum, err_year=err_year
+        )
+        result = await self.db.execute(
+            text(sql),
+            {"farm": farm, "year": year, "start": start, "end": end},
         )
         turbines = []
         for r in result.fetchall():

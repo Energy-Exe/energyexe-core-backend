@@ -122,6 +122,25 @@ def test_viz_charts_require_year(app_client, schema_present):
     assert app_client.get("/scada/temp-cohort").status_code == 422
 
 
+def test_map_charts_take_a_year_or_all_years(app_client, schema_present, known_farms, monkeypatch):
+    """EPR-213: the Map's three views take one year, or all_years=true (year None)."""
+    for path, method in endpoint_module._MAP_CHARTS.items():
+        seen = []
+
+        async def _fake(self, farm, year, **kwargs):
+            seen.append(year)
+            return {"turbines": []}
+
+        monkeypatch.setattr(scada_service.ScadaService, method, _fake)
+        ok = app_client.get(f"/scada/{path}", params={"farm": "kelmarsh", "year": 2023})
+        assert ok.status_code == 200, path
+        every = app_client.get(f"/scada/{path}", params={"farm": "kelmarsh", "all_years": "true"})
+        assert every.status_code == 200, path
+        assert seen == [2023, None], path
+        # neither: refused
+        assert app_client.get(f"/scada/{path}", params={"farm": "kelmarsh"}).status_code == 422
+
+
 def test_viz_farm_scoped_charts(app_client, schema_present, known_farms, monkeypatch):
     for path, method in (
         ("wind-index", "wind_index"),
