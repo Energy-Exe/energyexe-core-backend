@@ -1,6 +1,7 @@
 """SCADA value ledger endpoints: the new method's results per asset (rollout Stage 3).
 
-Read-only, internal staff only (superuser AND ``is_internal``, ``get_current_internal_user``). On by default;
+Read-only. Internal staff (superuser AND ``is_internal``), or a farm-limited SCADA grant for its own farms only
+(``get_ledger_reader``; the router's farm guard holds it to them, see app/core/scada_access.py). On by default;
 ``SCADA_LEDGER_ENABLED=false`` switches it off (503). A farm without ledger tables or runs lists no assets, and an
 asset without a ledger run is a 404, which the portal shows as today's view. A stale ledger (built beside an
 older register run) is a 200 with ``status: "stale"`` and no document.
@@ -12,7 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.deps import get_current_internal_user, get_db
+from app.core.deps import get_db
+from app.core.scada_access import get_ledger_reader
 from app.models.user import User
 from app.schemas.scada_ledger import LedgerAsset, LedgerResponse
 from app.services.scada_ledger_service import ScadaLedgerService, scada_ledger_present
@@ -33,7 +35,7 @@ def _enabled() -> None:
 @router.get("/assets", response_model=List[LedgerAsset])
 async def list_ledger_assets(
     farm: str = FARM,
-    current_user: User = Depends(get_current_internal_user),
+    current_user: User = Depends(get_ledger_reader),
     db: AsyncSession = Depends(get_db),
 ) -> List[dict]:
     """The farm's assets with a ledger run, each ``ok`` or ``stale`` (empty when none)."""
@@ -47,7 +49,7 @@ async def list_ledger_assets(
 async def get_ledger(
     farm: str = FARM,
     asset: str = ASSET,
-    current_user: User = Depends(get_current_internal_user),
+    current_user: User = Depends(get_ledger_reader),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """One asset's ledger document (format ``value-ledger/2``) and the finding statuses on its causes."""

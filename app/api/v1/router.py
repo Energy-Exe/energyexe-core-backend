@@ -1,6 +1,6 @@
 """Main API router."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.v1.endpoints import (
     admin,
@@ -60,6 +60,7 @@ from app.api.v1.endpoints import (
     windfarm_timeline,
     windfarms,
 )
+from app.core.scada_access import enforce_scada_farm_scope
 
 api_router = APIRouter()
 
@@ -198,14 +199,28 @@ api_router.include_router(
 )
 
 # SCADA portal (14-chart dashboard over gold schema `scada`; 503s until the schema exists)
-api_router.include_router(scada.router, prefix="/scada", tags=["scada"])
+# Every SCADA router below carries the per-user farm guard (a farm-limited demo / pilot login may
+# only name its own farms; see app/core/scada_access.py). It is a no-op for unrestricted users.
+_SCADA_FARM_GUARD = [Depends(enforce_scada_farm_scope)]
+
+api_router.include_router(
+    scada.router, prefix="/scada", tags=["scada"], dependencies=_SCADA_FARM_GUARD
+)
 
 # SCADA Builder (EPR-221) — prompt → chart spec, and one dataset's rows; read-only.
-api_router.include_router(scada_builder.router, prefix="/scada/builder", tags=["scada-builder"])
+api_router.include_router(
+    scada_builder.router,
+    prefix="/scada/builder",
+    tags=["scada-builder"],
+    dependencies=_SCADA_FARM_GUARD,
+)
 
 # SCADA opportunities — Revenue-at-Risk register (503s until the findings tables are populated)
 api_router.include_router(
-    scada_opportunities.router, prefix="/scada/opportunities", tags=["scada-opportunities"]
+    scada_opportunities.router,
+    prefix="/scada/opportunities",
+    tags=["scada-opportunities"],
+    dependencies=_SCADA_FARM_GUARD,
 )
 
 # SCADA PPAs — EPR-97's detailed offtake structure. Superadmin-gated and audited, unlike the
@@ -213,8 +228,13 @@ api_router.include_router(
 api_router.include_router(scada_ppas.router, prefix="/scada/ppas", tags=["scada-ppas"])
 
 # SCADA value ledger — the new method's results over the scada.opportunity_ledger_* tables, internal
-# staff only; SCADA_LEDGER_ENABLED=false switches it off.
-api_router.include_router(scada_ledger.router, prefix="/scada/ledger", tags=["scada-ledger"])
+# staff (or a farm-limited SCADA grant, for its own farms); SCADA_LEDGER_ENABLED=false switches it off.
+api_router.include_router(
+    scada_ledger.router,
+    prefix="/scada/ledger",
+    tags=["scada-ledger"],
+    dependencies=_SCADA_FARM_GUARD,
+)
 
 # Reports platform (EPR-81/82 — generated reports store + async two-pass pipeline)
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
