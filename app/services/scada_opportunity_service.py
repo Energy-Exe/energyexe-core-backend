@@ -284,11 +284,15 @@ class ScadaOpportunityService:
         self.include_internal = include_internal
 
     async def farm_slugs(self, include_internal: Optional[bool] = None) -> List[str]:
-        """Farms that have a persisted register (the ones this feature can serve), internal farms only for staff."""
+        """Farms that have a persisted register run (the ones this feature can serve), internal farms only for staff.
+
+        Read from ``opportunity_run`` (one row per published asset), not from the register rows: an asset whose every
+        line is declared not assessed publishes a run, its statement and its line records but no register row
+        (Lutelandet, D-093), and must still be served as "not assessed", not as an unknown farm."""
         every = self.include_internal if include_internal is None else include_internal
         result = await self.db.execute(
             text(
-                "SELECT DISTINCT r.farm FROM scada.opportunity_register r "
+                "SELECT DISTINCT r.farm FROM scada.opportunity_run r "
                 "LEFT JOIN scada.dim_farm d ON d.farm = r.farm "
                 "WHERE :every OR NOT COALESCE(d.internal, false) ORDER BY r.farm"
             ),
