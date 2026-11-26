@@ -1,4 +1,4 @@
-"""/scada/ledger endpoints: internal-only gate, off switch, absent tables, 404, stale, validation and the typed
+"""/scada/ledger endpoints: reader gate (internal staff or a farm-limited SCADA grant), off switch, absent tables, 404, stale, validation and the typed
 document (service stubbed; the SQL is covered by test_scada_ledger_postgres.py)."""
 
 import pytest
@@ -13,6 +13,7 @@ from app.core.deps import (
     get_current_superuser,
     get_db,
 )
+from app.core.scada_access import get_ledger_reader
 from app.services.scada_ledger_service import ScadaLedgerService, build_document
 from tests.test_scada_ledger_document import close, sample
 
@@ -97,7 +98,7 @@ def client():
         yield None
 
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[get_current_internal_user] = lambda: _FakeUser()
+    app.dependency_overrides[get_ledger_reader] = lambda: _FakeUser()
     with TestClient(app) as c:
         yield c
 
@@ -191,8 +192,9 @@ def test_without_a_login_every_route_is_refused():
         assert c.get(f"{PREFIX}/assets", params={"farm": "x"}).status_code in (401, 403)
 
 
-def test_routes_use_the_internal_user_dependency():
+def test_routes_use_the_ledger_reader_dependency():
     for route in endpoint_module.router.routes:
         deps = {d.call for d in route.dependant.dependencies}
-        assert get_current_internal_user in deps, route.path
+        assert get_ledger_reader in deps, route.path
+        assert get_current_internal_user not in deps
         assert get_current_superuser not in deps and get_current_active_user not in deps

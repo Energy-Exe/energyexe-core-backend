@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.api.v1.endpoints import scada as endpoint_module
 from app.core.deps import get_current_active_user, get_db
+from app.core.scada_access import scada_farm_scope
 from app.services import scada_service
 
 
@@ -33,6 +34,7 @@ def app_client(monkeypatch):
 
     app.dependency_overrides[get_db] = _db
     app.dependency_overrides[get_current_active_user] = lambda: _FakeUser()
+    app.dependency_overrides[scada_farm_scope] = lambda: None  # not farm-limited (test_scada_access.py)
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
@@ -295,6 +297,7 @@ def _client_as(user_cls):
     app.dependency_overrides[get_db] = _db
     app.dependency_overrides[get_current_active_user] = lambda: user_cls()
     app.dependency_overrides[get_current_superuser] = lambda: user_cls()
+    app.dependency_overrides[scada_farm_scope] = lambda: None
     return TestClient(app)
 
 

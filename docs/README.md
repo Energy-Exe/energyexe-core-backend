@@ -33,6 +33,7 @@ repos is `../../docs/README.md`.
 | [operations/partner-upload-statkraft.md](operations/partner-upload-statkraft.md) | Same, for Statkraft (Björkhöjden and Smøla, one subfolder each) |
 | [operations/sfe-local-preview.md](operations/sfe-local-preview.md) | The isolated local-only preview API for measured SCADA runs (`app/scada_preview/`) |
 | [operations/EPR-143-internal-users-grant.md](operations/EPR-143-internal-users-grant.md) | Granting `users.is_internal` per environment by hand |
+| [operations/scada-demo-access.md](operations/scada-demo-access.md) | Demo and pilot logins: SCADA and Predict for chosen farms only, read-only, never an administrator |
 | [../.github/workflows/README.md](../.github/workflows/README.md) | The deploy workflows and the manual import trigger; why GitHub `schedule:` was retired |
 
 ### Features

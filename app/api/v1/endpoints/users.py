@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_active_user, get_current_superuser, get_db
 from app.core.exceptions import NotFoundException, ValidationException
+from app.core.scada_access import load_scada_grant
 from app.models.user import User
 from app.schemas.user import UserResponse, UserUpdate
 from app.services.user import UserService
@@ -17,12 +18,25 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
+async def _me(db: AsyncSession, user: User) -> UserResponse:
+    """The caller's profile plus its role and SCADA grant, which the portal gates on."""
+    grant = await load_scada_grant(db, user)
+    return UserResponse.model_validate(user).model_copy(
+        update={
+            "role": user.role,
+            "can_access_scada": grant.can_access,
+            "scada_farms": sorted(grant.farms) if grant.farms is not None else None,
+        }
+    )
+
+
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_profile(
     current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get current user profile."""
-    return current_user
+    return await _me(db, current_user)
 
 
 @router.put("/me", response_model=UserResponse)
@@ -32,12 +46,18 @@ async def update_current_user_profile(
     db: AsyncSession = Depends(get_db),
 ):
     """Update current user profile."""
+    # A farm-limited SCADA login is a shared demo / pilot account: nobody using it may change its
+    # email, username or password and lock the others out (app/core/scada_access.py).
+    if (await load_scada_grant(db, current_user)).farms is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="This account is read-only"
+        )
     user_service = UserService(db)
 
     try:
         updated_user = await user_service.update(current_user.id, user_data)
         logger.info("User profile updated", user_id=current_user.id)
-        return updated_user
+        return await _me(db, updated_user)
     except (NotFoundException, ValidationException) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
 

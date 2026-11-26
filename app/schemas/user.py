@@ -57,6 +57,11 @@ class UserResponse(UserBase):
     is_internal: bool = False
     created_at: datetime
     updated_at: datetime
+    # Per-user SCADA grant (app/core/scada_access.py), filled in by /users/me only; the defaults keep
+    # every other UserResponse unchanged. scada_farms None = not farm-limited.
+    role: Optional[str] = None
+    can_access_scada: bool = False
+    scada_farms: Optional[List[str]] = None
 
     class Config:
         """Pydantic config."""

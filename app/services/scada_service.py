@@ -813,17 +813,22 @@ class ScadaService:
             "gbp": {str(int(r.y)): int(r.k or 0) for r in gbp.fetchall()},
         }
 
-    async def method_mix(self) -> List[Dict[str, Any]]:
+    async def method_mix(self, farms: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Monthly settlement-method counts summed over every farm, or over ``farms`` only
+        (a farm-limited login, app/core/scada_access.py)."""
+        where = "WHERE farm = ANY(:farms)" if farms is not None else ""
         result = await self.db.execute(
             text(
-                """
+                f"""
                 SELECT TO_CHAR(DATE_TRUNC('month', date_utc), 'YYYY-MM') AS mo,
                        SUM(n_meter) AS m, SUM(n_integral) AS i, SUM(n_mixed) AS x
                 FROM scada.farm_kpis_daily
+                {where}
                 GROUP BY 1
                 ORDER BY 1
                 """
-            )
+            ),
+            {"farms": farms} if farms is not None else {},
         )
         return [
             {"mo": r.mo, "m": int(r.m or 0), "i": int(r.i or 0), "x": int(r.x or 0)}
