@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.agent_access import is_internal_staff
 from app.core.deps import get_current_active_user, get_db
+from app.core.scada_access import scada_farm_scope
 from app.models.scada_finding_action import SCADA_FINDING_WRITABLE_STATUSES
 from app.models.user import User
 from app.schemas.scada_opportunity import (
@@ -258,6 +259,7 @@ async def list_conditions(
 async def set_finding_action(
     payload: ScadaFindingActionUpdate,
     current_user: User = Depends(get_current_active_user),
+    scope: Optional[frozenset[str]] = Depends(scada_farm_scope),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     """Record the human lifecycle state of a finding (Phase 7b).
@@ -267,6 +269,10 @@ async def set_finding_action(
     Upserts the ``scada_finding_action`` row and attributes it to the caller. The lifecycle then rides
     on the register rows via the list/detail read joins.
     """
+    # A finding's status is one shared row every user reads, so a farm-limited login (demo / pilot,
+    # app/core/scada_access.py) is read-only here: it must never change what real users see.
+    if scope is not None:
+        raise HTTPException(status_code=403, detail="This account is read-only")
     if payload.status not in SCADA_FINDING_WRITABLE_STATUSES:
         raise HTTPException(
             status_code=400,

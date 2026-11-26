@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.agent_access import is_internal_staff
 from app.core.config import get_settings
 from app.core.deps import get_current_active_user, get_current_internal_user, get_db
+from app.core.scada_access import filter_rows, scada_farm_scope
 from app.models.user import User
 from app.scada_preview.schemas import AnyIngestionSummary
 from app.scada_preview.service import IngestionSummaryService
@@ -64,6 +65,7 @@ async def _validated_farm(service: ScadaService, farm: str) -> str:
 @router.get("/farms", response_model=ScadaFarmsResponse)
 async def get_farms(
     current_user: User = Depends(get_current_active_user),
+    scope: frozenset[str] | None = Depends(scada_farm_scope),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     """Farm metadata + data-through dates for the freshness header."""
@@ -79,6 +81,7 @@ async def get_farms(
                 by_farm[row["farm"]]["ingestion"] = row["ingestion"]
             else:
                 result["farms"].append(row)
+    result["farms"] = filter_rows(result["farms"], scope)
     return result
 
 
@@ -86,10 +89,12 @@ async def get_farms(
 async def get_heartbeat(
     days: int = Query(90, ge=7, le=365),
     current_user: User = Depends(get_current_active_user),
+    scope: frozenset[str] | None = Depends(scada_farm_scope),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     service = await _service(db)
-    return await service.heartbeat(days=days)
+    out = await service.heartbeat(days=days)
+    return out if scope is None else {farm: v for farm, v in out.items() if farm in scope}
 
 
 @router.get("/energy-waterfall")
@@ -241,21 +246,29 @@ async def get_annual_cost(
     start_year: int = Query(2022, ge=2015, le=2100),
     end_year: int = Query(2024, ge=2015, le=2100),
     current_user: User = Depends(get_current_active_user),
+    scope: frozenset[str] | None = Depends(scada_farm_scope),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     if end_year < start_year:
         raise HTTPException(status_code=422, detail="end_year must be >= start_year")
     service = await _service(db)
-    return await service.annual_cost(start_year=start_year, end_year=end_year)
+    out = await service.annual_cost(start_year=start_year, end_year=end_year)
+    if scope is not None:
+        out["rows"] = filter_rows(out["rows"], scope)
+        # The £ labels are Hill of Towie's (the one priced farm in this chart).
+        if "hill_of_towie" not in scope:
+            out["gbp"] = {}
+    return out
 
 
 @router.get("/method-mix")
 async def get_method_mix(
     current_user: User = Depends(get_current_active_user),
+    scope: frozenset[str] | None = Depends(scada_farm_scope),
     db: AsyncSession = Depends(get_db),
 ) -> List[Dict[str, Any]]:
     service = await _service(db)
-    return await service.method_mix()
+    return await service.method_mix(farms=None if scope is None else sorted(scope))
 
 
 @router.get("/league")
@@ -448,12 +461,15 @@ async def get_midwind_fade(
 @router.get("/portfolio")
 async def get_portfolio(
     current_user: User = Depends(get_current_active_user),
+    scope: frozenset[str] | None = Depends(scada_farm_scope),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """All farms on one monthly strip: CF, availability and the day-ahead-priced
     revenue loss (``rev_loss_gbp``, null for unpriced months)."""
     service = await _service(db)
-    return await service.portfolio()
+    out = await service.portfolio()
+    out["farms"] = filter_rows(out["farms"], scope)
+    return out
 
 
 @router.get("/replay-days")
