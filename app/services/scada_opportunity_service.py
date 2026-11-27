@@ -56,6 +56,17 @@ _LIFECYCLE_JOIN = """
 # of the persisted run, in the export form (a reserved-window value is null with withheld = true). The lifecycle
 # key a record shows is (farm, action_trigger, action_scope, action_cls): a line's and a condition's own register
 # key, a finding's parent line key; actions are never transferred to findings.
+# D-095: the register row's own run carries the wording the asset published for its line (the pipeline's line record,
+# one per (farm, asset_code, trigger); ``name`` is the trigger declaration's name). It is preferred over the global
+# catalogue name, which is derived from the v7 spreadsheet and is the same for every asset. Joined only where the
+# interpretation tables exist; the run_id match keeps a register row from borrowing another run's wording.
+_LINE_NAME_SELECT = ", ln.name AS line_name"
+_LINE_NAME_JOIN = """
+    LEFT JOIN scada.opportunity_record ln
+      ON ln.farm = r.farm AND ln.asset_code = r.asset_code AND ln.run_id = r.run_id
+      AND ln.record_kind = 'line' AND ln.record_key = r.trigger
+"""
+
 _RECORD_SELECT = """
     x.record_kind, x.record_key, x.asset_code, x.run_id, x.trigger, x.name, x.scope_kind, x.scope_id, x.parent_line,
     x.cls, x.additive, x.applicability, x.tier, x.magnitude_tier, x.branch, x.status, x.resolved, x.confounded,
@@ -190,6 +201,23 @@ async def scada_asset_keys_present(db: AsyncSession) -> bool:
     return present
 
 
+def run_wording(row: Dict[str, Any]) -> Dict[str, Any]:
+    """A register row with the wording of its own run (D-095).
+
+    ``trigger_name`` is the name the run's line record carries, the catalogue name when the run has none. A row that
+    is CONTEXT and not additive is a description, not a loss to act on, so the catalogue's action type and commercial
+    upside (written for the trigger as a priced opportunity) are not served with it. The rule reads the row's own
+    class and additivity; no trigger code is named here."""
+    out = dict(row)
+    line_name = (out.pop("line_name", None) or "").strip()
+    if line_name:
+        out["trigger_name"] = line_name
+    if out.get("cls") == "CONTEXT" and not out.get("additive"):
+        out["action_type"] = None
+        out["commercial_upside"] = None
+    return out
+
+
 def parse_statement(row: Dict[str, Any]) -> Dict[str, Any]:
     """The statement row with its JSON text parsed (stored as text so the pipeline writes it verbatim)."""
     out = dict(row)
@@ -311,6 +339,12 @@ class ScadaOpportunityService:
         )
         return [dict(r._mapping) for r in rows.fetchall()]
 
+    async def _register_sql(self) -> tuple[str, str]:
+        """The register select list and its joins; the run's line name is read where the record table exists."""
+        if await scada_records_present(self.db):
+            return _REGISTER_SELECT + _LINE_NAME_SELECT, _LIFECYCLE_JOIN + _LINE_NAME_JOIN
+        return _REGISTER_SELECT, _LIFECYCLE_JOIN
+
     def _filters(
         self, farm: str, asset: str, cls, domain, trigger, additive_only, min_gbp
     ) -> tuple[str, Dict[str, Any]]:
@@ -347,21 +381,24 @@ class ScadaOpportunityService:
     ) -> Dict[str, Any]:
         where, params = self._filters(farm, asset, cls, domain, trigger, additive_only, min_gbp)
         join = "scada.opportunity_register r LEFT JOIN scada.dim_opportunity_trigger t ON t.code = r.trigger"
+        select, joins = await self._register_sql()
         rows = await self.db.execute(
             text(
-                f"SELECT {_REGISTER_SELECT} FROM {join} {_LIFECYCLE_JOIN} WHERE {where} "
+                f"SELECT {select} FROM {join} {joins} WHERE {where} "
                 "ORDER BY r.rank_gbp DESC, r.id ASC LIMIT :limit OFFSET :offset"
             ),
             {**params, "limit": limit, "offset": offset},
         )
         summary = await self.summary(farm, asset)
         currency = summary["currency"] if summary else None
-        items = [{**dict(row._mapping), "currency": currency} for row in rows.fetchall()]
+        items = [
+            {**run_wording(dict(row._mapping)), "currency": currency} for row in rows.fetchall()
+        ]
         labels = (
             await self.condition_labels(farm, asset) if await scada_records_present(self.db) else []
         )
         attach_condition_labels(items, labels)
-        # COUNT stays on the base join — the lifecycle LEFT JOIN is 1:1 so it can't change the count.
+        # COUNT stays on the base join — the lifecycle and line-name LEFT JOINs are 1:1 so they can't change it.
         total = (
             await self.db.execute(text(f"SELECT COUNT(*) FROM {join} WHERE {where}"), params)
         ).scalar() or 0
@@ -424,18 +461,19 @@ class ScadaOpportunityService:
         return out
 
     async def get(self, farm: str, id: int, asset: str) -> Optional[Dict[str, Any]]:
+        select, joins = await self._register_sql()
         row = await self.db.execute(
             text(
-                f"SELECT {_REGISTER_SELECT}, run.currency FROM scada.opportunity_register r "
+                f"SELECT {select}, run.currency FROM scada.opportunity_register r "
                 "LEFT JOIN scada.dim_opportunity_trigger t ON t.code = r.trigger "
                 "JOIN scada.opportunity_run run ON run.farm = r.farm AND run.asset_code = r.asset_code "
-                f"{_LIFECYCLE_JOIN} "
+                f"{joins} "
                 "WHERE r.farm = :farm AND r.asset_code = :asset AND r.id = :id"
             ),
             {"farm": farm, "asset": asset, "id": id},
         )
         found = row.fetchone()
-        return dict(found._mapping) if found else None
+        return run_wording(dict(found._mapping)) if found else None
 
     async def by_year(self, farm: str, asset: str) -> Optional[Dict[str, Any]]:
         """The per-year view (EPR-131): run provenance + (year, trigger) rows + totals + trend.
