@@ -36,7 +36,9 @@ async def test_register_queries_return_analysis_metadata(detail, metadata):
             assert actual.pop(key) is None
 
     assert actual == row
-    query = str(db.execute.call_args_list[0].args[0])
+    # the register read itself: since D-095 a check for the interpretation tables can precede it
+    queries = [str(call.args[0]) for call in db.execute.call_args_list]
+    query = next(q for q in queries if "FROM scada.opportunity_register r" in q)
     assert "r.asset_code = :asset" in query  # D-081: every read is scoped to one asset
     assert "r.price_basis" in query and "r.offtake_regime" in query
     assert "scada.opportunity_register" in query
